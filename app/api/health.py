@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.llm.grok import llm_provider_label
+from app.llm.provider import llm_provider_label
 from app.rag.embeddings import embedding_provider_label
 
 router = APIRouter(tags=["health"])

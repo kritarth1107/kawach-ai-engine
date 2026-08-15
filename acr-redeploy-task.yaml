@@ -1,0 +1,9 @@
+version: v1.1.0
+trigger:
+  baseImages:
+    - registry: kavachprodacr.azurecr.io
+      repository: kawach-ai-engine
+      tag: latest
+steps:
+  - cmd: az login --identity --output none
+  - cmd: az containerapp update --name kawach-ai-engine --resource-group kavach-prod-rg --image kavachprodacr.azurecr.io/kawach-ai-engine:latest

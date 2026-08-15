@@ -16,13 +16,27 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = 120
     rag_top_k: int = 8
 
-    # Grok / xAI (primary)
+    # LLM provider: azure | ollama | xai
+    llm_provider: str = "azure"
+
+    # Azure AI Foundry / OpenAI-compatible (chat + embeddings)
+    azure_openai_api_key: str = ""
+    azure_openai_base_url: str = ""
+    azure_chat_deployment: str = ""
+    azure_embedding_deployment: str = "text-embedding-3-small"
+    azure_embedding_model: str = "text-embedding-3-small"
+
+    # Self-hosted Gemma via Ollama (OpenAI-compatible /v1)
+    ollama_base_url: str = ""
+    ollama_model: str = "gemma2:9b"
+
+    # Legacy xAI / Grok (optional fallback)
     xai_api_key: str = ""
     grok_chat_model: str = "grok-3-mini"
     grok_embedding_model: str = "text-embedding-3-large"
     grok_cli_timeout_seconds: int = 120
 
-    # Optional OpenAI fallback (embeddings only)
+    # Legacy OpenAI fallback (embeddings only)
     openai_api_key: str = ""
     openai_embedding_model: str = "text-embedding-3-small"
 

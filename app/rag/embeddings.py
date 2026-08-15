@@ -1,4 +1,4 @@
-"""Embedding clients — xAI Grok embeddings preferred, OpenAI optional fallback."""
+"""Embedding clients — Azure Foundry preferred, xAI/OpenAI optional fallback."""
 
 from langchain_openai import OpenAIEmbeddings
 
@@ -20,11 +20,22 @@ def _valid_api_key(key: str) -> bool:
 
 def embeddings_available() -> bool:
     settings = get_settings()
-    return _valid_api_key(settings.xai_api_key) or _valid_api_key(settings.openai_api_key)
+    return (
+        _valid_api_key(settings.azure_openai_api_key)
+        and bool(settings.azure_embedding_deployment)
+    ) or _valid_api_key(settings.xai_api_key) or _valid_api_key(settings.openai_api_key)
 
 
 def get_embeddings() -> OpenAIEmbeddings:
     settings = get_settings()
+
+    if _valid_api_key(settings.azure_openai_api_key) and settings.azure_embedding_deployment:
+        return OpenAIEmbeddings(
+            model=settings.azure_embedding_model,
+            api_key=settings.azure_openai_api_key,
+            base_url=settings.azure_openai_base_url,
+            deployment=settings.azure_embedding_deployment,
+        )
 
     if _valid_api_key(settings.xai_api_key):
         return OpenAIEmbeddings(
@@ -40,12 +51,15 @@ def get_embeddings() -> OpenAIEmbeddings:
         )
 
     raise RuntimeError(
-        "RAG embeddings need XAI_API_KEY (Grok embeddings) or OPENAI_API_KEY as fallback."
+        "RAG embeddings need Azure Foundry (AZURE_OPENAI_API_KEY + AZURE_EMBEDDING_DEPLOYMENT) "
+        "or XAI_API_KEY / OPENAI_API_KEY as fallback."
     )
 
 
 def embedding_provider_label() -> str:
     settings = get_settings()
+    if _valid_api_key(settings.azure_openai_api_key) and settings.azure_embedding_deployment:
+        return f"azure:{settings.azure_embedding_deployment}"
     if _valid_api_key(settings.xai_api_key):
         return f"xai:{settings.grok_embedding_model}"
     if _valid_api_key(settings.openai_api_key):

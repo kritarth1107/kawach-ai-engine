@@ -8,7 +8,7 @@ from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.llm.grok import chat_invoke
+from app.llm.provider import chat_invoke
 from app.models.entities import Conversation, Elder, Message, MessageRole
 from app.rag.ingest import ingest_chat_snippet
 from app.rag.embeddings import embeddings_available
