@@ -14,9 +14,17 @@ async def create_family_with_owner(
     owner_email: str | None = None,
     owner_name: str | None = None,
 ) -> tuple[Family, User]:
-    user = User(external_id=owner_external_id, email=owner_email, name=owner_name)
-    session.add(user)
-    await session.flush()
+    result = await session.execute(select(User).where(User.external_id == owner_external_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(external_id=owner_external_id, email=owner_email, name=owner_name)
+        session.add(user)
+        await session.flush()
+    else:
+        if owner_email and not user.email:
+            user.email = owner_email
+        if owner_name and not user.name:
+            user.name = owner_name
 
     family = Family(name=family_name)
     session.add(family)

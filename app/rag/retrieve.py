@@ -114,33 +114,37 @@ async def _vector_retrieve(
     k: int,
 ) -> list[RetrievedChunk]:
     query_vector = await embed_text(query)
+    qv = "[" + ",".join(str(x) for x in query_vector) + "]"
 
-    doc_sql = text("""
-        SELECT content, metadata, 1 - (embedding <=> CAST(:qv AS vector)) AS score
-        FROM document_chunks
-        WHERE family_id = CAST(:family_id AS uuid)
-          AND (
-            (:elder_id IS NULL AND elder_id IS NULL)
-            OR (
-              :elder_id IS NOT NULL
+    if elder_id is None:
+        doc_sql = text("""
+            SELECT content, metadata, 1 - (embedding <=> CAST(:qv AS vector)) AS score
+            FROM document_chunks
+            WHERE family_id = CAST(:family_id AS uuid)
+              AND elder_id IS NULL
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:qv AS vector)
+            LIMIT :limit
+        """)
+        doc_params = {"qv": qv, "family_id": str(family_id), "limit": k}
+    else:
+        doc_sql = text("""
+            SELECT content, metadata, 1 - (embedding <=> CAST(:qv AS vector)) AS score
+            FROM document_chunks
+            WHERE family_id = CAST(:family_id AS uuid)
               AND (elder_id IS NULL OR elder_id = CAST(:elder_id AS uuid))
-            )
-          )
-          AND embedding IS NOT NULL
-        ORDER BY embedding <=> CAST(:qv AS vector)
-        LIMIT :limit
-    """)
-    doc_rows = (
-        await session.execute(
-            doc_sql,
-            {
-                "qv": query_vector,
-                "family_id": str(family_id),
-                "elder_id": str(elder_id) if elder_id else None,
-                "limit": k,
-            },
-        )
-    ).mappings().all()
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:qv AS vector)
+            LIMIT :limit
+        """)
+        doc_params = {
+            "qv": qv,
+            "family_id": str(family_id),
+            "elder_id": str(elder_id),
+            "limit": k,
+        }
+
+    doc_rows = (await session.execute(doc_sql, doc_params)).mappings().all()
 
     snippet_rows = []
     if elder_id:
@@ -157,7 +161,7 @@ async def _vector_retrieve(
             await session.execute(
                 snippet_sql,
                 {
-                    "qv": query_vector,
+                    "qv": qv,
                     "family_id": str(family_id),
                     "elder_id": str(elder_id),
                     "limit": k,
