@@ -1,6 +1,6 @@
 FROM ollama/ollama:latest
 
-ENV OLLAMA_MODEL=gemma2:9b
+ENV OLLAMA_MODEL=gemma4:e4b
 
 COPY start.sh /start.sh
 RUN chmod +x /start.sh

@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     # Self-hosted Gemma via Ollama (OpenAI-compatible /v1)
     ollama_base_url: str = ""
-    ollama_model: str = "gemma2:9b"
+    ollama_model: str = "gemma4:e4b"
 
     # Legacy xAI / Grok (optional fallback)
     xai_api_key: str = ""

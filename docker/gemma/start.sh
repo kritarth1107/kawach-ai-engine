@@ -12,8 +12,9 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-echo "Pulling ${OLLAMA_MODEL:-gemma2:9b}..."
-ollama pull "${OLLAMA_MODEL:-gemma2:9b}"
+MODEL="${OLLAMA_MODEL:-gemma4:e4b}"
+echo "Pulling ${MODEL} (this can take 10-20 minutes on first start)..."
+ollama pull "${MODEL}"
 
 echo "Gemma ready."
 wait "$pid"
