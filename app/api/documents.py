@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.entities import DocumentKind, MemoryDocument
 from app.rag.ingest import ingest_document
 from app.rag.retrieve import retrieve_context
+from app.services.document_analysis import analyze_document_text
 from app.services.tenant import scope_document_request
 
 router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(verify_api_secret)])
@@ -25,6 +26,7 @@ class IngestDocumentRequest(BaseModel):
     source: str = "upload"
     record_date: str | None = None
     summary: str | None = None
+    highlights: dict | list | None = None
 
 
 class SearchRequest(BaseModel):
@@ -32,6 +34,22 @@ class SearchRequest(BaseModel):
     elder_id: uuid.UUID | None = None
     query: str
     top_k: int = Field(default=8, ge=1, le=20)
+
+
+class AnalyzeDocumentRequest(BaseModel):
+    title: str
+    raw_text: str
+    file_name: str | None = None
+
+
+@router.post("/analyze")
+async def analyze(body: AnalyzeDocumentRequest):
+    result = await analyze_document_text(
+        title=body.title,
+        raw_text=body.raw_text,
+        file_name=body.file_name,
+    )
+    return result
 
 
 @router.post("/ingest")
@@ -47,6 +65,7 @@ async def ingest(body: IngestDocumentRequest, db: Annotated[AsyncSession, Depend
         source=body.source,
         record_date=body.record_date,
         summary=body.summary,
+        highlights=body.highlights,
     )
     return {
         "document_id": str(doc.id),

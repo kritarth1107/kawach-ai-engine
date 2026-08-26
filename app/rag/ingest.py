@@ -19,6 +19,7 @@ async def ingest_document(
     source: str = "upload",
     record_date: str | None = None,
     summary: str | None = None,
+    highlights: dict | list | None = None,
 ) -> MemoryDocument:
     doc = MemoryDocument(
         family_id=family_id,
@@ -29,6 +30,7 @@ async def ingest_document(
         raw_text=raw_text,
         summary=summary,
         record_date=record_date,
+        highlights=highlights,
     )
     session.add(doc)
     await session.flush()
