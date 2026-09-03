@@ -32,6 +32,9 @@ class DocumentKind(str, enum.Enum):
     prescription = "prescription"
     note = "note"
     chat_export = "chat_export"
+    vitals = "vitals"
+    symptom = "symptom"
+    pharmacy = "pharmacy"
 
 
 class Family(Base):

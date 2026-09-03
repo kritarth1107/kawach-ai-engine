@@ -33,6 +33,7 @@ class CheckInRequest(BaseModel):
     elder_id: uuid.UUID
     conversation_id: uuid.UUID | None = None
     schedule_items: list[ScheduleItemIn] = Field(default_factory=list)
+    care_record_context: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -151,6 +152,7 @@ async def check_in(body: CheckInRequest, db: Annotated[AsyncSession, Depends(get
         elder_id=body.elder_id,
         conversation_id=conv.id,
         schedule_items=[item.model_dump() for item in body.schedule_items],
+        care_record_context=body.care_record_context,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))
 

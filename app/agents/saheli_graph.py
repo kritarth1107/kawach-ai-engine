@@ -348,6 +348,7 @@ async def run_saheli_check_in(
     elder_id: uuid.UUID,
     conversation_id: uuid.UUID,
     schedule_items: list[dict] | None = None,
+    care_record_context: str | None = None,
 ) -> str:
     """Prompt Papa about today's list. Never stored as an elder message."""
     items = schedule_items or []
@@ -373,6 +374,9 @@ async def run_saheli_check_in(
 You are starting a scheduled check-in. The elder has NOT spoken yet.
 Do not invent that they already took medicines or feel a certain way.
 Do not write as the elder.
+
+Care Record timeline (reported only):
+{care_record_context or "(No Care Record events yet.)"}
 
 Today's care list — ask haan/nahi, warmly, in Hinglish. Medicines first if present:
 {schedule_block}
