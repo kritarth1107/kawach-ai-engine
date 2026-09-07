@@ -1,31 +1,32 @@
+import random
 import uuid
-from typing import Annotated, TypedDict
-
 from datetime import datetime, timezone
+from typing import Annotated, Any, TypedDict
 
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.prompts import (
+    OUTREACH_TOPIC_HINTS,
+    SAHELI_CARE_RULES,
+    build_elder_system_prompt,
+    build_family_share_system_prompt,
+    build_outreach_system_prompt,
+    CAREGIVER_SAHELI_SYSTEM,
+)
 from app.llm.provider import chat_invoke
 from app.models.entities import Conversation, Elder, Message, MessageRole
-from app.rag.ingest import ingest_chat_snippet
-from app.rag.embeddings import embeddings_available
-from app.rag.retrieve import get_elder_thread_context, get_recent_messages, retrieve_context
-from app.services.family import get_primary_conversation
-
-SAHELI_SYSTEM = """You are Saheli (सहेली) — a warm companion for Indian elders.
-
-The elder may write Hindi, English, or Hinglish. Examples:
-- "Maine Shelcal le liya" = they took Shelcal (their tablet).
-- "theek hoon" = they feel okay.
-
-Rules (non-negotiable):
-- Report what the elder said faithfully. Never diagnose, interpret health, or invent facts.
-- Acknowledge medicines they name only as something they reported taking — not as a clinical event you verified.
-- You are a companion, not a clinician or monitor.
-"""
+from app.rag.memory_extract import process_elder_message_memories
+from app.rag.retrieve import (
+    format_family_memories,
+    get_elder_thread_context,
+    get_recent_messages,
+    retrieve_context,
+    retrieve_family_memories,
+)
+from app.services.family import get_caregiver_conversation, get_primary_conversation
 
 
 class SaheliState(TypedDict):
@@ -35,9 +36,11 @@ class SaheliState(TypedDict):
     conversation_id: str
     user_message: str
     rag_context: str
+    family_memories: str
     recent_chat: str
+    companion_profile: dict[str, Any]
+    care_record_context: str
     reply: str
-    save_snippet: bool
 
 
 async def node_retrieve(state: SaheliState, session: AsyncSession) -> dict:
@@ -49,6 +52,11 @@ async def node_retrieve(state: SaheliState, session: AsyncSession) -> dict:
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
 
+    memories = await retrieve_family_memories(
+        session, family_id=family_id, elder_id=elder_id, query=query, limit=10
+    )
+    family_memories = format_family_memories(memories)
+
     primary = await get_primary_conversation(session, family_id, elder_id)
     recent = await get_recent_messages(
         session,
@@ -59,21 +67,19 @@ async def node_retrieve(state: SaheliState, session: AsyncSession) -> dict:
     )
     recent_chat = "\n".join(f"{role}: {content}" for role, content, _ts in recent)
 
-    return {"rag_context": rag_context, "recent_chat": recent_chat}
+    return {"rag_context": rag_context, "family_memories": family_memories, "recent_chat": recent_chat}
 
 
 async def node_generate(state: SaheliState) -> dict:
-    system = f"""{SAHELI_SYSTEM}
-
-Retrieved family memory (RAG — reported only):
-{state["rag_context"]}
-
-Recent cross-chat history for this elder:
-{state["recent_chat"]}
-"""
+    system = build_elder_system_prompt(
+        rag_context=state["rag_context"],
+        recent_chat=state["recent_chat"],
+        family_memories=state["family_memories"],
+        companion_profile=state.get("companion_profile"),
+        care_record_context=state.get("care_record_context") or None,
+    )
     reply = await chat_invoke(system, state["user_message"])
-    save = len(state["user_message"].strip()) >= 12 and len(state["user_message"]) < 200
-    return {"reply": reply, "save_snippet": save, "messages": [AIMessage(content=reply)]}
+    return {"reply": reply, "messages": [AIMessage(content=reply)]}
 
 
 async def node_persist(state: SaheliState, session: AsyncSession) -> dict:
@@ -103,14 +109,13 @@ async def node_persist(state: SaheliState, session: AsyncSession) -> dict:
     session.add(saheli_msg)
     await session.flush()
 
-    if state.get("save_snippet") and embeddings_available() and not is_legacy_checkin:
-        await ingest_chat_snippet(
+    if not is_legacy_checkin and incoming_role == MessageRole.elder:
+        await process_elder_message_memories(
             session,
             family_id=family_id,
             elder_id=elder_id,
-            content=state["user_message"],
+            message=state["user_message"],
             source_message_id=elder_msg.id,
-            commit=False,
         )
 
     conv = await session.get(Conversation, conversation_id)
@@ -133,12 +138,10 @@ def build_saheli_graph(session: AsyncSession):
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", node_generate)
     graph.add_node("persist", persist_node)
-
     graph.set_entry_point("retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", "persist")
     graph.add_edge("persist", END)
-
     return graph.compile()
 
 
@@ -149,6 +152,8 @@ async def run_saheli_chat(
     elder_id: uuid.UUID,
     conversation_id: uuid.UUID,
     message: str,
+    companion_profile: dict[str, Any] | None = None,
+    care_record_context: str | None = None,
 ) -> str:
     app = build_saheli_graph(session)
     result = await app.ainvoke(
@@ -159,25 +164,14 @@ async def run_saheli_chat(
             "conversation_id": str(conversation_id),
             "user_message": message,
             "rag_context": "",
+            "family_memories": "",
             "recent_chat": "",
+            "companion_profile": companion_profile or {},
+            "care_record_context": care_record_context or "",
             "reply": "",
-            "save_snippet": False,
         }
     )
     return result["reply"]
-
-
-CAREGIVER_SAHELI_SYSTEM = """You are Saheli (सहेली) — a family companion. The person messaging you is a caregiver, not the elder.
-
-You DO have family memory in this request: retrieved documents and what the elder told Saheli. That is not a hospital EMR. It is text the family pasted or the elder said.
-
-Rules (non-negotiable):
-- Never diagnose or say if a lab is high/low/normal.
-- If retrieved memory includes a printed lab value, quote the title, date, and numbers. Do not refuse. Do not say you cannot access records.
-- If the elder reported taking a medicine or how they feel, repeat that as reported — not as a verified medical event.
-- If memory is empty, say you have not heard from them yet. Do not invent.
-- Use Hindi, English, or Hinglish naturally.
-"""
 
 
 class CaregiverSaheliState(TypedDict):
@@ -188,6 +182,7 @@ class CaregiverSaheliState(TypedDict):
     elder_display_name: str
     user_message: str
     rag_context: str
+    family_memories: str
     elder_thread: str
     recent_chat: str
     reply: str
@@ -202,6 +197,16 @@ async def node_caregiver_retrieve(state: CaregiverSaheliState, session: AsyncSes
     chunks = await retrieve_context(session, family_id=family_id, elder_id=elder_id, query=query)
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
+
+    memories = await retrieve_family_memories(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        query=query,
+        limit=12,
+        shareable_only=False,
+    )
+    family_memories = format_family_memories(memories)
 
     primary = await get_primary_conversation(session, family_id, elder_id)
     elder_thread = await get_elder_thread_context(
@@ -219,7 +224,12 @@ async def node_caregiver_retrieve(state: CaregiverSaheliState, session: AsyncSes
     )
     recent_chat = "\n".join(f"{role}: {content}" for role, content, _ts in recent)
 
-    return {"rag_context": rag_context, "elder_thread": elder_thread, "recent_chat": recent_chat}
+    return {
+        "rag_context": rag_context,
+        "family_memories": family_memories,
+        "elder_thread": elder_thread,
+        "recent_chat": recent_chat,
+    }
 
 
 async def node_caregiver_generate(state: CaregiverSaheliState) -> dict:
@@ -228,7 +238,10 @@ async def node_caregiver_generate(state: CaregiverSaheliState) -> dict:
 
 Care recipient: {elder_name}
 
-Retrieved family memory (RAG — reported only):
+Structured family memories (what they shared with Saheli):
+{state["family_memories"]}
+
+Retrieved documents & snippets (RAG — reported only):
 {state["rag_context"]}
 
 What {elder_name} has reported to Saheli recently:
@@ -246,22 +259,24 @@ async def node_caregiver_persist(state: CaregiverSaheliState, session: AsyncSess
     elder_id = uuid.UUID(state["elder_id"])
     conversation_id = uuid.UUID(state["conversation_id"])
 
-    family_msg = Message(
-        conversation_id=conversation_id,
-        family_id=family_id,
-        elder_id=elder_id,
-        role=MessageRole.family,
-        content=state["user_message"],
+    session.add(
+        Message(
+            conversation_id=conversation_id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.family,
+            content=state["user_message"],
+        )
     )
-    saheli_msg = Message(
-        conversation_id=conversation_id,
-        family_id=family_id,
-        elder_id=elder_id,
-        role=MessageRole.saheli,
-        content=state["reply"],
+    session.add(
+        Message(
+            conversation_id=conversation_id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.saheli,
+            content=state["reply"],
+        )
     )
-    session.add(family_msg)
-    session.add(saheli_msg)
 
     conv = await session.get(Conversation, conversation_id)
     if conv:
@@ -283,12 +298,10 @@ def build_caregiver_saheli_graph(session: AsyncSession):
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", node_caregiver_generate)
     graph.add_node("persist", persist_node)
-
     graph.set_entry_point("retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_edge("generate", "persist")
     graph.add_edge("persist", END)
-
     return graph.compile()
 
 
@@ -313,6 +326,7 @@ async def run_saheli_caregiver_chat(
             "elder_display_name": elder_display_name,
             "user_message": message,
             "rag_context": "",
+            "family_memories": "",
             "elder_thread": "",
             "recent_chat": "",
             "reply": "",
@@ -341,6 +355,13 @@ def _format_schedule_lines(schedule_items: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _pick_outreach_topic(outreach_topics: list[str] | None = None) -> tuple[str, str]:
+    pool = outreach_topics or list(OUTREACH_TOPIC_HINTS.keys())
+    bucket = random.choice(pool) if pool else "day_life"
+    hints = OUTREACH_TOPIC_HINTS.get(bucket, OUTREACH_TOPIC_HINTS["day_life"])
+    return bucket, random.choice(hints)
+
+
 async def run_saheli_check_in(
     session: AsyncSession,
     *,
@@ -349,16 +370,23 @@ async def run_saheli_check_in(
     conversation_id: uuid.UUID,
     schedule_items: list[dict] | None = None,
     care_record_context: str | None = None,
+    companion_profile: dict[str, Any] | None = None,
 ) -> str:
-    """Prompt Papa about today's list. Never stored as an elder message."""
     items = schedule_items or []
     schedule_block = _format_schedule_lines(items)
+    elder = await session.get(Elder, elder_id)
+    display_name = elder.display_name if elder else "Care recipient"
 
     chunks = await retrieve_context(
         session, family_id=family_id, elder_id=elder_id, query="check-in medicines today"
     )
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
+
+    memories = await retrieve_family_memories(
+        session, family_id=family_id, elder_id=elder_id, query="today health mood", limit=8
+    )
+    family_memories = format_family_memories(memories)
 
     recent = await get_recent_messages(
         session,
@@ -369,33 +397,27 @@ async def run_saheli_check_in(
     )
     recent_chat = "\n".join(f"{role}: {content}" for role, content, _ts in recent)
 
-    system = f"""{SAHELI_SYSTEM}
-
-You are starting a scheduled check-in. The elder has NOT spoken yet.
-Do not invent that they already took medicines or feel a certain way.
-Do not write as the elder.
-
-Care Record timeline (reported only):
-{care_record_context or "(No Care Record events yet.)"}
-
-Today's care list — ask haan/nahi, warmly, in Hinglish. Medicines first if present:
-{schedule_block}
-
-Retrieved family memory (RAG — reported only):
-{rag_context}
-
-Recent thread (for tone only):
-{recent_chat}
-"""
-    reply = await chat_invoke(
-        system,
-        "Start today's check-in. Ask about the care list. Do not speak as the elder.",
+    system = build_outreach_system_prompt(
+        elder_display_name=display_name,
+        rag_context=rag_context,
+        family_memories=family_memories,
+        recent_chat=recent_chat,
+        topic_hint="Today's care list — ask warmly in Hinglish",
+        companion_profile=companion_profile,
+        schedule_block=schedule_block,
+        care_record_context=care_record_context,
+        outreach_kind="care",
     )
 
-    system_note = "Check-in started"
+    reply = await chat_invoke(
+        system,
+        "Start today's care check-in. Ask about the care list warmly. Do not speak as the elder.",
+    )
+
+    system_note = "Care check-in started"
     if items:
         titles = ", ".join(str(i.get("title") or "item") for i in items[:8])
-        system_note = f"Check-in started · today's list: {titles}"
+        system_note = f"Care check-in started · today's list: {titles}"
 
     session.add(
         Message(
@@ -404,7 +426,7 @@ Recent thread (for tone only):
             elder_id=elder_id,
             role=MessageRole.system,
             content=system_note,
-            metadata_={"kind": "check_in"},
+            metadata_={"kind": "check_in", "outreach_kind": "care"},
         )
     )
     session.add(
@@ -419,5 +441,157 @@ Recent thread (for tone only):
     conv = await session.get(Conversation, conversation_id)
     if conv:
         conv.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+    return reply
+
+
+async def run_saheli_outreach(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    outreach_kind: str = "casual",
+    topic_bucket: str | None = None,
+    topic_hint: str | None = None,
+    care_record_context: str | None = None,
+    companion_profile: dict[str, Any] | None = None,
+    schedule_items: list[dict] | None = None,
+) -> dict[str, Any]:
+    """Proactive outreach — Saheli initiates like a child calling to chat."""
+    elder = await session.get(Elder, elder_id)
+    display_name = elder.display_name if elder else "Care recipient"
+    profile = companion_profile or {}
+
+    if topic_bucket and topic_hint:
+        bucket, hint = topic_bucket, topic_hint
+    else:
+        topics = profile.get("outreach_topics") or profile.get("outreachTopics")
+        bucket, hint = _pick_outreach_topic(topics if isinstance(topics, list) else None)
+
+    query = f"{bucket} {hint} day life family"
+    chunks = await retrieve_context(session, family_id=family_id, elder_id=elder_id, query=query)
+    rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
+    rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
+
+    memories = await retrieve_family_memories(
+        session, family_id=family_id, elder_id=elder_id, query=query, limit=10
+    )
+    family_memories = format_family_memories(memories)
+
+    recent = await get_recent_messages(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        limit=12,
+        conversation_id=conversation_id,
+    )
+    recent_chat = "\n".join(f"{role}: {content}" for role, content, _ts in recent)
+
+    schedule_block = _format_schedule_lines(schedule_items or []) if outreach_kind == "mixed" else None
+
+    system = build_outreach_system_prompt(
+        elder_display_name=display_name,
+        rag_context=rag_context,
+        family_memories=family_memories,
+        recent_chat=recent_chat,
+        topic_hint=hint,
+        companion_profile=profile,
+        schedule_block=schedule_block,
+        care_record_context=care_record_context,
+        outreach_kind=outreach_kind,
+    )
+
+    reply = await chat_invoke(
+        system,
+        f"Reach out to {display_name} now. Start a warm conversation about: {hint}",
+    )
+
+    session.add(
+        Message(
+            conversation_id=conversation_id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.system,
+            content=f"Saheli reached out · {bucket}: {hint}",
+            metadata_={"kind": "outreach", "outreach_kind": outreach_kind, "topic_bucket": bucket},
+        )
+    )
+    session.add(
+        Message(
+            conversation_id=conversation_id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.saheli,
+            content=reply,
+        )
+    )
+    conv = await session.get(Conversation, conversation_id)
+    if conv:
+        conv.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    return {
+        "reply": reply,
+        "topic_bucket": bucket,
+        "topic_hint": hint,
+        "outreach_kind": outreach_kind,
+    }
+
+
+async def run_saheli_family_share(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    share_summary: str,
+    memory_ids: list[uuid.UUID] | None = None,
+) -> str:
+    """Post a family update to the caregiver thread — initiates family conversation."""
+    elder = await session.get(Elder, elder_id)
+    display_name = elder.display_name if elder else "Care recipient"
+
+    memories = await retrieve_family_memories(
+        session, family_id=family_id, elder_id=elder_id, limit=8, shareable_only=True
+    )
+    if memory_ids:
+        memories = [m for m in memories if m.id in memory_ids] or memories
+
+    family_memories = format_family_memories(memories)
+    system = build_family_share_system_prompt(
+        elder_display_name=display_name,
+        share_summary=share_summary,
+        family_memories=family_memories,
+    )
+    reply = await chat_invoke(system, "Write the family update message.")
+
+    caregiver_conv = await get_caregiver_conversation(session, family_id, elder_id)
+    session.add(
+        Message(
+            conversation_id=caregiver_conv.id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.system,
+            content=f"Family update · from {display_name}'s conversation",
+            metadata_={"kind": "family_share"},
+        )
+    )
+    session.add(
+        Message(
+            conversation_id=caregiver_conv.id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=MessageRole.saheli,
+            content=reply,
+            metadata_={"kind": "family_share"},
+        )
+    )
+
+    now = datetime.now(timezone.utc)
+    for mem in memories:
+        if mem.share_with_family and not mem.shared_at:
+            mem.shared_at = now
+
+    caregiver_conv.updated_at = now
     await session.commit()
     return reply

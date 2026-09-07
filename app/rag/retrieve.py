@@ -7,7 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.entities import DocumentChunk, MemorySnippet, Message, MessageRole
+from app.models.entities import DocumentChunk, FamilyMemory, MemorySnippet, Message, MessageRole
 from app.rag.embeddings import embed_text, embeddings_available
 
 
@@ -192,6 +192,72 @@ async def _vector_retrieve(
 
     results.sort(key=lambda r: r.score, reverse=True)
     return results[:k]
+
+
+async def retrieve_family_memories(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    query: str | None = None,
+    limit: int = 12,
+    shareable_only: bool = False,
+) -> list[FamilyMemory]:
+    stmt = select(FamilyMemory).where(
+        FamilyMemory.family_id == family_id,
+        FamilyMemory.elder_id == elder_id,
+    )
+    if shareable_only:
+        stmt = stmt.where(FamilyMemory.share_with_family.is_(True))
+
+    if query and embeddings_available():
+        query_vector = await embed_text(query)
+        qv = "[" + ",".join(str(x) for x in query_vector) + "]"
+        sql = text("""
+            SELECT id FROM family_memories
+            WHERE family_id = CAST(:family_id AS uuid)
+              AND elder_id = CAST(:elder_id AS uuid)
+              AND embedding IS NOT NULL
+            ORDER BY embedding <=> CAST(:qv AS vector)
+            LIMIT :limit
+        """)
+        params: dict = {
+            "qv": qv,
+            "family_id": str(family_id),
+            "elder_id": str(elder_id),
+            "limit": limit,
+        }
+        if shareable_only:
+            sql = text("""
+                SELECT id FROM family_memories
+                WHERE family_id = CAST(:family_id AS uuid)
+                  AND elder_id = CAST(:elder_id AS uuid)
+                  AND share_with_family = true
+                  AND embedding IS NOT NULL
+                ORDER BY embedding <=> CAST(:qv AS vector)
+                LIMIT :limit
+            """)
+        rows = (await session.execute(sql, params)).all()
+        if rows:
+            ids = [uuid.UUID(str(r[0])) for r in rows]
+            found = (
+                await session.execute(select(FamilyMemory).where(FamilyMemory.id.in_(ids)))
+            ).scalars().all()
+            by_id = {m.id: m for m in found}
+            return [by_id[i] for i in ids if i in by_id]
+
+    stmt = stmt.order_by(FamilyMemory.created_at.desc()).limit(limit)
+    return list((await session.execute(stmt)).scalars().all())
+
+
+def format_family_memories(memories: list[FamilyMemory]) -> str:
+    if not memories:
+        return "(Nothing saved yet.)"
+    lines: list[str] = []
+    for m in memories:
+        cat = m.category.value if hasattr(m.category, "value") else str(m.category)
+        lines.append(f"[{cat}:{m.topic}] {m.content}")
+    return "\n".join(lines)
 
 
 async def get_recent_messages(

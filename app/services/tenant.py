@@ -115,3 +115,13 @@ async def scope_document_request(
     await assert_family_exists(session, family_id)
     if elder_id is not None:
         await assert_elder_in_family(session, family_id, elder_id)
+
+
+async def scope_elder(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+) -> Elder:
+    await assert_family_exists(session, family_id)
+    return await assert_elder_in_family(session, family_id, elder_id)

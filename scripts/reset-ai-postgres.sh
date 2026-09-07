@@ -24,6 +24,7 @@ PSQL_URL="${PSQL_URL//&ssl=require/&sslmode=require}"
 
 psql "$PSQL_URL" -v ON_ERROR_STOP=1 <<'SQL'
 TRUNCATE TABLE
+  family_memories,
   memory_snippets,
   document_chunks,
   messages,

@@ -37,6 +37,15 @@ class DocumentKind(str, enum.Enum):
     pharmacy = "pharmacy"
 
 
+class MemoryCategory(str, enum.Enum):
+    casual = "casual"
+    health = "health"
+    family = "family"
+    preference = "preference"
+    mood = "mood"
+    story = "story"
+
+
 class Family(Base):
     __tablename__ = "families"
 
@@ -171,4 +180,25 @@ class MemorySnippet(Base):
     source: Mapped[str] = mapped_column(String(64), default="elder_message")
     source_message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FamilyMemory(Base):
+    """Structured episodic memory — casual life facts the elder shared with Saheli."""
+
+    __tablename__ = "family_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"))
+    elder_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("elders.id", ondelete="CASCADE"))
+    category: Mapped[MemoryCategory] = mapped_column(Enum(MemoryCategory), default=MemoryCategory.casual)
+    topic: Mapped[str] = mapped_column(String(64), default="general")
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
+    source_message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    share_with_family: Mapped[bool] = mapped_column(default=False)
+    shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    importance: Mapped[int] = mapped_column(default=3)
+    last_referenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

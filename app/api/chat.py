@@ -5,7 +5,13 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.saheli_graph import run_saheli_caregiver_chat, run_saheli_chat, run_saheli_check_in
+from app.agents.saheli_graph import (
+    run_saheli_caregiver_chat,
+    run_saheli_chat,
+    run_saheli_check_in,
+    run_saheli_family_share,
+    run_saheli_outreach,
+)
 from app.core.security import verify_api_secret
 from app.db.session import get_db
 from app.rag.retrieve import get_recent_messages
@@ -26,6 +32,8 @@ class ChatRequest(BaseModel):
     elder_id: uuid.UUID
     message: str
     conversation_id: uuid.UUID | None = None
+    companion_profile: dict | None = None
+    care_record_context: str | None = None
 
 
 class CheckInRequest(BaseModel):
@@ -34,11 +42,39 @@ class CheckInRequest(BaseModel):
     conversation_id: uuid.UUID | None = None
     schedule_items: list[ScheduleItemIn] = Field(default_factory=list)
     care_record_context: str | None = None
+    companion_profile: dict | None = None
+
+
+class OutreachRequest(BaseModel):
+    family_id: uuid.UUID
+    elder_id: uuid.UUID
+    conversation_id: uuid.UUID | None = None
+    outreach_kind: str = Field(default="casual", pattern="^(casual|care|mixed)$")
+    topic_bucket: str | None = None
+    topic_hint: str | None = None
+    care_record_context: str | None = None
+    companion_profile: dict | None = None
+    schedule_items: list[ScheduleItemIn] = Field(default_factory=list)
+
+
+class FamilyShareRequest(BaseModel):
+    family_id: uuid.UUID
+    elder_id: uuid.UUID
+    share_summary: str = Field(min_length=8, max_length=2000)
+    memory_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: str
+
+
+class OutreachResponse(BaseModel):
+    reply: str
+    conversation_id: str
+    topic_bucket: str
+    topic_hint: str
+    outreach_kind: str
 
 
 class ChatMessageOut(BaseModel):
@@ -134,6 +170,8 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
         elder_id=body.elder_id,
         conversation_id=conv.id,
         message=body.message.strip(),
+        companion_profile=body.companion_profile,
+        care_record_context=body.care_record_context,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))
 
@@ -153,8 +191,62 @@ async def check_in(body: CheckInRequest, db: Annotated[AsyncSession, Depends(get
         conversation_id=conv.id,
         schedule_items=[item.model_dump() for item in body.schedule_items],
         care_record_context=body.care_record_context,
+        companion_profile=body.companion_profile,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))
+
+
+@router.post("/outreach", response_model=OutreachResponse)
+async def outreach(body: OutreachRequest, db: Annotated[AsyncSession, Depends(get_db)]):
+    conv = await scope_chat_request(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=body.conversation_id,
+    )
+    result = await run_saheli_outreach(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=conv.id,
+        outreach_kind=body.outreach_kind,
+        topic_bucket=body.topic_bucket,
+        topic_hint=body.topic_hint,
+        care_record_context=body.care_record_context,
+        companion_profile=body.companion_profile,
+        schedule_items=[item.model_dump() for item in body.schedule_items],
+    )
+    return OutreachResponse(
+        reply=result["reply"],
+        conversation_id=str(conv.id),
+        topic_bucket=result["topic_bucket"],
+        topic_hint=result["topic_hint"],
+        outreach_kind=result["outreach_kind"],
+    )
+
+
+@router.post("/family-share", response_model=ChatResponse)
+async def family_share(body: FamilyShareRequest, db: Annotated[AsyncSession, Depends(get_db)]):
+    await scope_chat_request(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=None,
+    )
+    reply = await run_saheli_family_share(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        share_summary=body.share_summary.strip(),
+        memory_ids=body.memory_ids or None,
+    )
+    caregiver_conv = await scope_caregiver_chat_request(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=None,
+    )
+    return ChatResponse(reply=reply, conversation_id=str(caregiver_conv.id))
 
 
 @router.post("/caregiver", response_model=ChatResponse)
