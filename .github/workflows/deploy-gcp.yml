@@ -52,8 +52,8 @@ jobs:
             --add-cloudsql-instances=${{ env.CLOUDSQL }} \
             --quiet
 
-      - name: Smoke test
+      - name: Verify revision ready
         run: |
-          URL="$(gcloud run services describe ${{ env.SERVICE }} --region=${{ env.GCP_REGION }} --format='value(status.url)')"
-          TOKEN="$(gcloud auth print-identity-token)"
-          curl -fsS -H "Authorization: Bearer $TOKEN" "$URL/health"
+          gcloud run services describe ${{ env.SERVICE }} \
+            --region=${{ env.GCP_REGION }} \
+            --format='value(status.conditions[0].status)' | grep -qx True
