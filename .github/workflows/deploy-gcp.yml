@@ -68,6 +68,7 @@ jobs:
             --image="$IMAGE:${{ github.sha }}" \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
+            --allow-unauthenticated \
             --port=8000 \
             --memory=1Gi \
             --min-instances=0 \
