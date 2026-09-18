@@ -50,7 +50,7 @@ jobs:
             --min-instances=0 \
             --max-instances=3 \
             --add-cloudsql-instances=${{ env.CLOUDSQL }} \
-            --set-env-vars="LLM_PROVIDER=vertex,GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GCP_REGION=${{ env.GCP_REGION }},VERTEX_CHAT_MODEL=gemini-2.5-flash-lite,VERTEX_EMBEDDING_MODEL=text-multilingual-embedding-002,EMBED_DIM=768" \
+            --update-env-vars="LLM_PROVIDER=vertex,GCP_PROJECT_ID=${{ env.GCP_PROJECT_ID }},GCP_REGION=${{ env.GCP_REGION }},VERTEX_CHAT_MODEL=gemini-2.5-flash-lite,VERTEX_EMBEDDING_MODEL=text-multilingual-embedding-002,EMBED_DIM=768" \
             --quiet
 
       - name: Verify revision ready
