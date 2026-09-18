@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +16,12 @@ from app.agents.prompts import (
     build_outreach_system_prompt,
     CAREGIVER_SAHELI_SYSTEM,
 )
-from app.llm.provider import chat_invoke
+from app.agents.caregiver_agent import run_caregiver_agent
+from app.llm.provider import chat_invoke, chat_invoke_messages
 from app.models.entities import Conversation, Elder, Message, MessageRole
 from app.rag.memory_extract import process_elder_message_memories
 from app.rag.retrieve import (
+    db_messages_to_langchain,
     format_family_memories,
     get_elder_thread_context,
     get_recent_messages,
@@ -40,6 +42,7 @@ class SaheliState(TypedDict):
     recent_chat: str
     companion_profile: dict[str, Any]
     care_record_context: str
+    order_context: str
     reply: str
 
 
@@ -70,15 +73,30 @@ async def node_retrieve(state: SaheliState, session: AsyncSession) -> dict:
     return {"rag_context": rag_context, "family_memories": family_memories, "recent_chat": recent_chat}
 
 
-async def node_generate(state: SaheliState) -> dict:
+async def node_generate(state: SaheliState, session: AsyncSession) -> dict:
     system = build_elder_system_prompt(
         rag_context=state["rag_context"],
-        recent_chat=state["recent_chat"],
+        recent_chat="",
         family_memories=state["family_memories"],
         companion_profile=state.get("companion_profile"),
         care_record_context=state.get("care_record_context") or None,
     )
-    reply = await chat_invoke(system, state["user_message"])
+    family_id = uuid.UUID(state["family_id"])
+    elder_id = uuid.UUID(state["elder_id"])
+    conversation_id = uuid.UUID(state["conversation_id"])
+    recent = await get_recent_messages(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        limit=12,
+        conversation_id=conversation_id,
+    )
+    history = db_messages_to_langchain(recent)
+    messages = [SystemMessage(content=system), *history, HumanMessage(content=state["user_message"])]
+    if state.get("order_context"):
+        messages.insert(-1, HumanMessage(content=state["order_context"]))
+    response = await chat_invoke_messages(messages)
+    reply = response.content if isinstance(response.content, str) else str(response.content)
     return {"reply": reply, "messages": [AIMessage(content=reply)]}
 
 
@@ -135,8 +153,11 @@ def build_saheli_graph(session: AsyncSession):
     async def persist_node(state: SaheliState):
         return await node_persist(state, session)
 
+    async def generate_node(state: SaheliState):
+        return await node_generate(state, session)
+
     graph.add_node("retrieve", retrieve_node)
-    graph.add_node("generate", node_generate)
+    graph.add_node("generate", generate_node)
     graph.add_node("persist", persist_node)
     graph.set_entry_point("retrieve")
     graph.add_edge("retrieve", "generate")
@@ -154,6 +175,7 @@ async def run_saheli_chat(
     message: str,
     companion_profile: dict[str, Any] | None = None,
     care_record_context: str | None = None,
+    order_context: str | None = None,
 ) -> str:
     app = build_saheli_graph(session)
     result = await app.ainvoke(
@@ -168,6 +190,7 @@ async def run_saheli_chat(
             "recent_chat": "",
             "companion_profile": companion_profile or {},
             "care_record_context": care_record_context or "",
+            "order_context": order_context or "",
             "reply": "",
         }
     )
@@ -325,7 +348,58 @@ async def run_saheli_caregiver_chat(
     elder_thread_context: str | None = None,
     labs_context: str | None = None,
     session_context: str | None = None,
-) -> str:
+    order_context: str | None = None,
+    use_agent: bool = True,
+    actor_user_id: str | None = None,
+) -> dict:
+    recent = await get_recent_messages(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        limit=16,
+        conversation_id=conversation_id,
+    )
+    history = db_messages_to_langchain(recent)
+
+    if use_agent and actor_user_id:
+        agent_result = await run_caregiver_agent(
+            session,
+            family_id=family_id,
+            elder_id=elder_id,
+            message=message,
+            care_record_context=care_record_context,
+            elder_thread_context=elder_thread_context,
+            labs_context=labs_context,
+            session_context=session_context,
+            order_context=order_context,
+            history_messages=history,
+            actor_user_id=actor_user_id,
+        )
+        reply = agent_result["reply"]
+        session.add(
+            Message(
+                conversation_id=conversation_id,
+                family_id=family_id,
+                elder_id=elder_id,
+                role=MessageRole.family,
+                content=message,
+            )
+        )
+        session.add(
+            Message(
+                conversation_id=conversation_id,
+                family_id=family_id,
+                elder_id=elder_id,
+                role=MessageRole.saheli,
+                content=reply,
+            )
+        )
+        conv = await session.get(Conversation, conversation_id)
+        if conv:
+            conv.updated_at = datetime.now(timezone.utc)
+        await session.commit()
+        return agent_result
+
     elder = await session.get(Elder, elder_id)
     elder_display_name = elder.display_name if elder else "Care recipient"
 
@@ -349,7 +423,7 @@ async def run_saheli_caregiver_chat(
             "reply": "",
         }
     )
-    return result["reply"]
+    return {"reply": result["reply"], "order": None, "connect": None, "tool_trace": []}
 
 
 def _format_schedule_lines(schedule_items: list[dict]) -> str:

@@ -280,6 +280,70 @@ async def get_recent_messages(
     return [(r[0].value, r[1], r[2]) for r in reversed(rows)]
 
 
+def db_messages_to_langchain(rows: list[tuple[str, str, datetime | None]]) -> list:
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    out: list = []
+    for role, content, _ts in rows:
+        if role in ("elder", "family"):
+            out.append(HumanMessage(content=content))
+        elif role == "saheli":
+            out.append(AIMessage(content=content))
+    return out
+
+
+async def sync_conversation_history(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    conversation_id: uuid.UUID,
+    thread: str,
+    messages: list[dict],
+) -> int:
+    from sqlalchemy import select
+
+    synced = 0
+    for row in messages:
+        external_id = row.get("external_id")
+        if not external_id:
+            continue
+        existing = (
+            await session.execute(
+                select(Message).where(
+                    Message.conversation_id == conversation_id,
+                    Message.metadata_.contains({"external_id": external_id}),
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            continue
+        role_raw = str(row.get("role") or "family")
+        if thread == "elder":
+            role = MessageRole.elder if role_raw in ("elder", "family") else MessageRole.saheli
+        else:
+            role = MessageRole.family if role_raw == "family" else MessageRole.saheli
+            if role_raw == "elder":
+                role = MessageRole.family
+        content = str(row.get("content") or "")[:8000]
+        if not content:
+            continue
+        session.add(
+            Message(
+                conversation_id=conversation_id,
+                family_id=family_id,
+                elder_id=elder_id,
+                role=role,
+                content=content,
+                metadata_={"external_id": external_id, "synced": True},
+            )
+        )
+        synced += 1
+    if synced:
+        await session.commit()
+    return synced
+
+
 async def get_elder_thread_context(
     session: AsyncSession,
     *,

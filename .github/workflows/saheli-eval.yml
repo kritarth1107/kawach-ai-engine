@@ -1,0 +1,25 @@
+name: Saheli eval
+
+on:
+  pull_request:
+    paths:
+      - "app/agents/**"
+      - "app/api/chat.py"
+      - "eval/**"
+  push:
+    branches: [main]
+    paths:
+      - "app/agents/**"
+      - "app/api/chat.py"
+      - "eval/**"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run Saheli fixture eval
+        run: python eval/saheli_eval.py

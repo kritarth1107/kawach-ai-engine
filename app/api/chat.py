@@ -1,7 +1,9 @@
+import json
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +16,7 @@ from app.agents.saheli_graph import (
 )
 from app.core.security import verify_api_secret
 from app.db.session import get_db
-from app.rag.retrieve import get_recent_messages
+from app.rag.retrieve import get_recent_messages, sync_conversation_history
 from app.services.tenant import scope_caregiver_chat_request, scope_chat_request
 
 router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(verify_api_secret)])
@@ -37,6 +39,24 @@ class ChatRequest(BaseModel):
     elder_thread_context: str | None = None
     labs_context: str | None = None
     session_context: str | None = None
+    order_context: str | None = None
+    use_agent: bool = True
+    actor_user_id: str | None = None
+
+
+class SyncHistoryMessage(BaseModel):
+    external_id: str
+    role: str
+    content: str
+    created_at: str | None = None
+
+
+class SyncHistoryRequest(BaseModel):
+    family_id: uuid.UUID
+    elder_id: uuid.UUID
+    conversation_id: uuid.UUID | None = None
+    thread: str = Field(default="caregiver", pattern="^(elder|caregiver)$")
+    messages: list[SyncHistoryMessage] = Field(default_factory=list)
 
 
 class CheckInRequest(BaseModel):
@@ -70,6 +90,9 @@ class FamilyShareRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     conversation_id: str
+    order: dict | None = None
+    connect: dict | None = None
+    tool_trace: list[dict] | None = None
 
 
 class OutreachResponse(BaseModel):
@@ -175,8 +198,36 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
         message=body.message.strip(),
         companion_profile=body.companion_profile,
         care_record_context=body.care_record_context,
+        order_context=body.order_context,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))
+
+
+@router.post("/sync-history")
+async def sync_history(body: SyncHistoryRequest, db: Annotated[AsyncSession, Depends(get_db)]):
+    if body.thread == "caregiver":
+        conv = await scope_caregiver_chat_request(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            conversation_id=body.conversation_id,
+        )
+    else:
+        conv = await scope_chat_request(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            conversation_id=body.conversation_id,
+        )
+    synced = await sync_conversation_history(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=conv.id,
+        thread=body.thread,
+        messages=[m.model_dump() for m in body.messages],
+    )
+    return {"conversation_id": str(conv.id), "synced": synced}
 
 
 @router.post("/check-in", response_model=ChatResponse)
@@ -261,7 +312,7 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         conversation_id=body.conversation_id,
     )
 
-    reply = await run_saheli_caregiver_chat(
+    result = await run_saheli_caregiver_chat(
         db,
         family_id=body.family_id,
         elder_id=body.elder_id,
@@ -271,5 +322,51 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         elder_thread_context=body.elder_thread_context,
         labs_context=body.labs_context,
         session_context=body.session_context,
+        order_context=body.order_context,
+        use_agent=body.use_agent,
+        actor_user_id=body.actor_user_id,
     )
-    return ChatResponse(reply=reply, conversation_id=str(conv.id))
+    return ChatResponse(
+        reply=result.get("reply", ""),
+        conversation_id=str(conv.id),
+        order=result.get("order"),
+        connect=result.get("connect"),
+        tool_trace=result.get("tool_trace"),
+    )
+
+
+@router.post("/caregiver/stream")
+async def caregiver_chat_stream(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
+    conv = await scope_caregiver_chat_request(
+        db,
+        family_id=body.family_id,
+        elder_id=body.elder_id,
+        conversation_id=body.conversation_id,
+    )
+
+    async def event_generator():
+        result = await run_saheli_caregiver_chat(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            conversation_id=conv.id,
+            message=body.message.strip(),
+            care_record_context=body.care_record_context,
+            elder_thread_context=body.elder_thread_context,
+            labs_context=body.labs_context,
+            session_context=body.session_context,
+            order_context=body.order_context,
+            use_agent=body.use_agent,
+            actor_user_id=body.actor_user_id,
+        )
+        reply = result.get("reply", "")
+        chunk_size = 24
+        for i in range(0, len(reply), chunk_size):
+            yield f"data: {json.dumps({'type': 'token', 'delta': reply[i:i + chunk_size]})}\n\n"
+        if result.get("order"):
+            yield f"data: {json.dumps({'type': 'tool_result', 'id': 'order', 'order': result['order']})}\n\n"
+        if result.get("connect"):
+            yield f"data: {json.dumps({'type': 'tool_result', 'id': 'connect', 'connect': result['connect']})}\n\n"
+        yield f"data: {json.dumps({'type': 'done', 'conversation_id': str(conv.id), 'reply': reply})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")

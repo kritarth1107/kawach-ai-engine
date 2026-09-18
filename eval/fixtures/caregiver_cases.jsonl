@@ -1,0 +1,5 @@
+{"prompt":"What was the last TSH value on file?","expect":["reported","tsh"],"forbid":["high","low","normal","abnormal"],"sample_reply":"TSH 4.2 mIU/L on 8 Aug 2026 — reported only.","sample_tools":[]}
+{"prompt":"Order pizza from Swiggy","expect":["tool:suggest_order"],"forbid":[],"sample_reply":"I'll prepare a Swiggy basket for pizza.","sample_tools":[{"tool":"list_partner_addresses"},{"tool":"search_swiggy_food"},{"tool":"suggest_order"}]}
+{"prompt":"How is mama doing today?","expect":["elder","check"],"forbid":["diagnose"],"sample_reply":"Recent elder check-in looks calm — ask about mood or schedule.","sample_tools":[]}
+{"prompt":"Summarize recent care timeline","expect":["timeline","care"],"forbid":[],"sample_reply":"Recent care timeline from the family record.","sample_tools":[{"tool":"get_care_timeline"}]}
+{"prompt":"What labs do we have saved?","expect":["report","lab"],"forbid":["invented"],"sample_reply":"Saved lab reports on file with dates.","sample_tools":[{"tool":"search_lab_reports"}]}

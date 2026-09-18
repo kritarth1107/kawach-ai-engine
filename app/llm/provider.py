@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from app.core.config import get_settings
@@ -31,6 +31,27 @@ def _ollama_chat_llm() -> ChatOpenAI:
         temperature=0.6,
         max_retries=2,
     )
+
+
+def get_caregiver_chat_llm():
+    settings = get_settings()
+    if vertex_provider.vertex_configured():
+        return vertex_provider.get_vertex_caregiver_llm()
+    if settings.azure_openai_api_key and settings.azure_chat_deployment:
+        return _azure_chat_llm()
+    if settings.ollama_base_url:
+        return _ollama_chat_llm()
+    raise RuntimeError("No LLM provider configured for caregiver agent with tools")
+
+
+async def chat_invoke_messages(messages: list[BaseMessage]) -> AIMessage:
+    settings = get_settings()
+    if vertex_provider.vertex_configured():
+        result = await vertex_provider.chat_invoke_messages(messages)
+        return result if isinstance(result, AIMessage) else AIMessage(content=str(result))
+    llm = _azure_chat_llm() if settings.azure_openai_api_key else _ollama_chat_llm()
+    response = await llm.ainvoke(messages)
+    return response if isinstance(response, AIMessage) else AIMessage(content=str(response))
 
 
 async def chat_invoke(system: str, user: str) -> str:
