@@ -22,8 +22,15 @@ class Settings(BaseSettings):
     rag_chunk_overlap: int = 120
     rag_top_k: int = 8
 
-    # LLM provider: azure | ollama | xai
-    llm_provider: str = "azure"
+    # LLM provider: vertex | azure | ollama | xai
+    llm_provider: str = "vertex"
+
+    # Google Cloud / Vertex AI (preferred on GCP)
+    gcp_project_id: str = ""
+    gcp_region: str = "asia-south1"
+    vertex_chat_model: str = "gemini-2.5-flash-lite"
+    vertex_embedding_model: str = "text-multilingual-embedding-002"
+    embed_dim: int = 768
 
     # Azure AI Foundry / OpenAI-compatible (chat + embeddings)
     azure_openai_api_key: str = ""

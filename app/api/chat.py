@@ -34,6 +34,9 @@ class ChatRequest(BaseModel):
     conversation_id: uuid.UUID | None = None
     companion_profile: dict | None = None
     care_record_context: str | None = None
+    elder_thread_context: str | None = None
+    labs_context: str | None = None
+    session_context: str | None = None
 
 
 class CheckInRequest(BaseModel):
@@ -264,5 +267,9 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         elder_id=body.elder_id,
         conversation_id=conv.id,
         message=body.message.strip(),
+        care_record_context=body.care_record_context,
+        elder_thread_context=body.elder_thread_context,
+        labs_context=body.labs_context,
+        session_context=body.session_context,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))

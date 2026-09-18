@@ -1,5 +1,6 @@
-"""Embedding clients — Azure Foundry preferred, xAI/OpenAI optional fallback."""
+"""Embedding clients — Vertex AI (GCP), Azure Foundry, xAI/OpenAI fallback."""
 
+from langchain_google_vertexai import VertexAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 
 from app.core.config import get_settings
@@ -18,16 +19,34 @@ def _valid_api_key(key: str) -> bool:
     return True
 
 
+def _vertex_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.gcp_project_id.strip())
+
+
 def embeddings_available() -> bool:
     settings = get_settings()
     return (
-        _valid_api_key(settings.azure_openai_api_key)
-        and bool(settings.azure_embedding_deployment)
-    ) or _valid_api_key(settings.xai_api_key) or _valid_api_key(settings.openai_api_key)
+        _vertex_configured()
+        or (
+            _valid_api_key(settings.azure_openai_api_key)
+            and bool(settings.azure_embedding_deployment)
+        )
+        or _valid_api_key(settings.xai_api_key)
+        or _valid_api_key(settings.openai_api_key)
+    )
 
 
-def get_embeddings() -> OpenAIEmbeddings:
+def get_embeddings() -> OpenAIEmbeddings | VertexAIEmbeddings:
     settings = get_settings()
+    provider = settings.llm_provider.strip().lower()
+
+    if (provider == "vertex" or _vertex_configured()) and _vertex_configured():
+        return VertexAIEmbeddings(
+            model_name=settings.vertex_embedding_model,
+            project=settings.gcp_project_id,
+            location=settings.gcp_region,
+        )
 
     if _valid_api_key(settings.azure_openai_api_key) and settings.azure_embedding_deployment:
         return OpenAIEmbeddings(
@@ -51,13 +70,14 @@ def get_embeddings() -> OpenAIEmbeddings:
         )
 
     raise RuntimeError(
-        "RAG embeddings need Azure Foundry (AZURE_OPENAI_API_KEY + AZURE_EMBEDDING_DEPLOYMENT) "
-        "or XAI_API_KEY / OPENAI_API_KEY as fallback."
+        "RAG embeddings need GCP_PROJECT_ID (Vertex), Azure Foundry, or XAI/OPENAI API keys."
     )
 
 
 def embedding_provider_label() -> str:
     settings = get_settings()
+    if _vertex_configured():
+        return f"vertex:{settings.vertex_embedding_model}"
     if _valid_api_key(settings.azure_openai_api_key) and settings.azure_embedding_deployment:
         return f"azure:{settings.azure_embedding_deployment}"
     if _valid_api_key(settings.xai_api_key):

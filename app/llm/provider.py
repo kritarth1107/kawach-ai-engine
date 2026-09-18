@@ -1,4 +1,4 @@
-"""Unified chat provider — Azure Foundry, self-hosted Gemma (Ollama), or xAI fallback."""
+"""Unified chat provider — Vertex AI (GCP), Azure Foundry, Ollama, or xAI fallback."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from langchain_openai import ChatOpenAI
 
 from app.core.config import get_settings
 from app.llm import grok as grok_provider
+from app.llm import vertex as vertex_provider
 
 
 def _azure_chat_llm() -> ChatOpenAI:
@@ -36,10 +37,14 @@ async def chat_invoke(system: str, user: str) -> str:
     settings = get_settings()
     provider = settings.llm_provider.strip().lower()
 
+    if provider == "vertex" and vertex_provider.vertex_configured():
+        return await vertex_provider.chat_invoke(system, user)
     if provider == "ollama" and settings.ollama_base_url:
         llm = _ollama_chat_llm()
     elif provider == "azure" and settings.azure_openai_api_key and settings.azure_chat_deployment:
         llm = _azure_chat_llm()
+    elif vertex_provider.vertex_configured():
+        return await vertex_provider.chat_invoke(system, user)
     elif settings.ollama_base_url:
         llm = _ollama_chat_llm()
     elif settings.azure_openai_api_key and settings.azure_chat_deployment:
@@ -56,10 +61,14 @@ def llm_provider_label() -> str:
     settings = get_settings()
     provider = settings.llm_provider.strip().lower()
 
+    if provider == "vertex" and vertex_provider.vertex_configured():
+        return vertex_provider.llm_provider_label()
     if provider == "ollama" and settings.ollama_base_url:
         return f"ollama:{settings.ollama_model}"
     if provider == "azure" and settings.azure_chat_deployment:
         return f"azure:{settings.azure_chat_deployment}"
+    if vertex_provider.vertex_configured():
+        return vertex_provider.llm_provider_label()
     if settings.ollama_base_url:
         return f"ollama:{settings.ollama_model}"
     if settings.azure_chat_deployment:

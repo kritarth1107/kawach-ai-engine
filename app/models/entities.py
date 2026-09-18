@@ -1,4 +1,5 @@
 import enum
+import os
 import uuid
 from datetime import datetime
 
@@ -9,7 +10,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
-EMBED_DIM = 1536
+# Vertex multilingual = 768; Azure text-embedding-3-small = 1536
+EMBED_DIM = int(os.getenv("EMBED_DIM", "768"))
 
 
 class MemberRole(str, enum.Enum):

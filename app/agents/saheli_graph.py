@@ -185,6 +185,10 @@ class CaregiverSaheliState(TypedDict):
     family_memories: str
     elder_thread: str
     recent_chat: str
+    care_record_context: str
+    platform_elder_thread: str
+    platform_labs: str
+    session_context: str
     reply: str
 
 
@@ -234,21 +238,26 @@ async def node_caregiver_retrieve(state: CaregiverSaheliState, session: AsyncSes
 
 async def node_caregiver_generate(state: CaregiverSaheliState) -> dict:
     elder_name = state["elder_display_name"]
+    platform_block = ""
+    if state.get("care_record_context"):
+        platform_block += f"\n- Kavach care timeline:\n{state['care_record_context'][:4000]}"
+    if state.get("platform_elder_thread"):
+        platform_block += f"\n- Elder messages (platform):\n{state['platform_elder_thread'][:2000]}"
+    if state.get("platform_labs"):
+        platform_block += f"\n- Saved lab documents:\n{state['platform_labs'][:3000]}"
+    if state.get("session_context"):
+        platform_block += f"\n- This dashboard chat session:\n{state['session_context'][:1500]}"
+
     system = f"""{CAREGIVER_SAHELI_SYSTEM}
 
 Care recipient: {elder_name}
 
-Structured family memories (what they shared with Saheli):
-{state["family_memories"]}
-
-Retrieved documents & snippets (RAG — reported only):
-{state["rag_context"]}
-
-What {elder_name} has reported to Saheli recently:
-{state["elder_thread"]}
-
-Your recent conversation with this family member:
-{state["recent_chat"]}
+Reference data (use only when relevant to the caregiver's question):
+- Family memories: {state["family_memories"]}
+- Documents & labs (RAG): {state["rag_context"]}
+- Recent elder Saheli thread: {state["elder_thread"]}
+- Caregiver chat history: {state["recent_chat"]}
+{platform_block}
 """
     reply = await chat_invoke(system, state["user_message"])
     return {"reply": reply, "messages": [AIMessage(content=reply)]}
@@ -312,6 +321,10 @@ async def run_saheli_caregiver_chat(
     elder_id: uuid.UUID,
     conversation_id: uuid.UUID,
     message: str,
+    care_record_context: str | None = None,
+    elder_thread_context: str | None = None,
+    labs_context: str | None = None,
+    session_context: str | None = None,
 ) -> str:
     elder = await session.get(Elder, elder_id)
     elder_display_name = elder.display_name if elder else "Care recipient"
@@ -329,6 +342,10 @@ async def run_saheli_caregiver_chat(
             "family_memories": "",
             "elder_thread": "",
             "recent_chat": "",
+            "care_record_context": care_record_context or "",
+            "platform_elder_thread": elder_thread_context or "",
+            "platform_labs": labs_context or "",
+            "session_context": session_context or "",
             "reply": "",
         }
     )
