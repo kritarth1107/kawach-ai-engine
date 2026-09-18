@@ -15,29 +15,71 @@ from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
 
 
+def _parse_tool_result(raw: object) -> dict | None:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _tool_inner(result: dict) -> dict:
+    inner = result.get("result")
+    return inner if isinstance(inner, dict) else result
+
+
+def _stringify_ai_content(content: object) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str) and block.strip():
+                parts.append(block.strip())
+                continue
+            if isinstance(block, dict):
+                text = block.get("text")
+                if block.get("type") == "text" and isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        return "\n".join(parts).strip()
+    return str(content).strip()
+
+
 def _extract_order_connect(tool_results: list[dict]) -> tuple[dict | None, dict | None]:
     order_payload = None
     connect_payload = None
     for row in tool_results:
         if not isinstance(row, dict):
             continue
-        result = row.get("result")
-        if isinstance(result, str):
-            try:
-                result = json.loads(result)
-            except json.JSONDecodeError:
-                continue
-        if not isinstance(result, dict):
+        result = _parse_tool_result(row.get("result"))
+        if not result:
             continue
-        inner = result.get("result") if isinstance(result.get("result"), dict) else result
-        if not isinstance(inner, dict):
-            continue
+        inner = _tool_inner(result)
         kind = inner.get("kind") or result.get("status")
         if kind == "order" and inner.get("orderId"):
             order_payload = inner
         elif kind in ("connect_required", "connect") or result.get("status") == "connect_required":
             connect_payload = inner if inner.get("connectPartner") else result
     return order_payload, connect_payload
+
+
+def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
+    for row in reversed(tool_results):
+        if not isinstance(row, dict):
+            continue
+        result = _parse_tool_result(row.get("result"))
+        if not result:
+            continue
+        inner = _tool_inner(result)
+        if inner.get("kind") == "prompt" and isinstance(inner.get("message"), str):
+            return inner["message"].strip()
+        if result.get("status") == "prompt" and isinstance(inner.get("message"), str):
+            return inner["message"].strip()
+    return None
 
 
 async def run_caregiver_agent(
@@ -98,7 +140,10 @@ Quote lab values with dates only — never say high/low/normal.
     for _ in range(max_iterations):
         response: AIMessage = await llm.ainvoke(messages)
         if not getattr(response, "tool_calls", None):
-            reply = response.content if isinstance(response.content, str) else str(response.content)
+            reply = _stringify_ai_content(response.content)
+            prompt_message = _prompt_message_from_tools(tool_results_raw)
+            if prompt_message:
+                reply = prompt_message
             order_payload, connect_payload = _extract_order_connect(tool_results_raw)
             return {
                 "reply": reply.strip(),
@@ -128,10 +173,13 @@ Quote lab values with dates only — never say high/low/normal.
             )
 
     fallback = await chat_invoke_messages(messages)
-    content = fallback.content if isinstance(fallback.content, str) else str(fallback.content)
+    reply = _stringify_ai_content(fallback.content)
+    prompt_message = _prompt_message_from_tools(tool_results_raw)
+    if prompt_message:
+        reply = prompt_message
     order_payload, connect_payload = _extract_order_connect(tool_results_raw)
     return {
-        "reply": content.strip(),
+        "reply": reply.strip(),
         "order": order_payload,
         "connect": connect_payload,
         "tool_trace": tool_trace,
