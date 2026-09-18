@@ -77,7 +77,8 @@ async def run_caregiver_agent(
 Care recipient: {elder_name}
 {platform_block}
 
-When the caregiver wants food or groceries, call list_partner_addresses first if needed, then search_swiggy_food or search_instamart, then suggest_order with their exact request.
+When the caregiver wants food or groceries, immediately call suggest_order with their full message (e.g. "order pizza" must search pizza — never ask them to repeat the dish).
+Use list_partner_addresses or search_swiggy_food first only if suggest_order returns an address or catalog error.
 Quote lab values with dates only — never say high/low/normal.
 """
 
