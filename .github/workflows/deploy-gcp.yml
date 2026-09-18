@@ -79,13 +79,12 @@ jobs:
 
       - name: Grant backend service account invoker access
         run: |
-          PROJECT_NUMBER="$(gcloud projects describe ${{ env.GCP_PROJECT_ID }} --format='value(projectNumber)')"
           BACKEND_SA="$(gcloud run services describe kavach-backend \
             --region=${{ env.GCP_REGION }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --format='value(spec.template.spec.serviceAccountName)' 2>/dev/null || true)"
-          if [ -z "$BACKEND_SA" ]; then
-            BACKEND_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+          if [ -z "$BACKEND_SA" ] || [ "$BACKEND_SA" = "null" ]; then
+            BACKEND_SA="303943038694-compute@developer.gserviceaccount.com"
           fi
           gcloud run services add-iam-policy-binding ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
