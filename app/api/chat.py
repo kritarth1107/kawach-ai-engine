@@ -95,6 +95,7 @@ class ChatResponse(BaseModel):
     conversation_id: str
     order: dict | None = None
     connect: dict | None = None
+    order_preview: dict | None = None
     tool_trace: list[dict] | None = None
 
 
@@ -336,6 +337,7 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         conversation_id=str(conv.id),
         order=result.get("order"),
         connect=result.get("connect"),
+        order_preview=result.get("order_preview"),
         tool_trace=result.get("tool_trace"),
     )
 

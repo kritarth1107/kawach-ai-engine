@@ -40,6 +40,26 @@ class PartnerOnlyArgs(BaseModel):
     partner: str = Field(default="swiggy")
 
 
+class ResolvePartnerArgs(BaseModel):
+    message: str = Field(description="Caregiver order message")
+
+
+class PreviewOrderItem(BaseModel):
+    name: str
+    quantity: int = Field(default=1, ge=1, le=20)
+
+
+class PreviewOrderArgs(BaseModel):
+    partner: str = Field(description="swiggy or instamart")
+    addressId: str = Field(description="Partner address id from list_partner_addresses")
+    items: list[PreviewOrderItem] = Field(description="Cart lines with live catalog names")
+    notes: str | None = Field(default=None)
+
+
+class PlaceCodArgs(BaseModel):
+    previewId: str = Field(description="Preview id from preview_order")
+
+
 def build_caregiver_tools(
     family_id: str,
     elder_id: str,
@@ -70,14 +90,33 @@ def build_caregiver_tools(
     async def list_partner_addresses(partner: str = "swiggy") -> str:
         return await _run("list_partner_addresses", {"partner": partner})
 
+    async def resolve_order_partner(message: str) -> str:
+        return await _run("resolve_order_partner", {"message": message})
+
     async def search_swiggy_food(query: str, addressId: str | None = None) -> str:
         return await _run("search_swiggy_food", {"query": query, "addressId": addressId})
 
     async def search_instamart(query: str, addressId: str | None = None) -> str:
         return await _run("search_instamart", {"query": query, "addressId": addressId})
 
-    async def suggest_order(message: str) -> str:
-        return await _run("suggest_order", {"message": message})
+    async def preview_order(
+        partner: str,
+        addressId: str,
+        items: list[PreviewOrderItem],
+        notes: str | None = None,
+    ) -> str:
+        return await _run(
+            "preview_order",
+            {
+                "partner": partner,
+                "addressId": addressId,
+                "items": [item.model_dump() for item in items],
+                "notes": notes,
+            },
+        )
+
+    async def place_cod_order(previewId: str) -> str:
+        return await _run("place_cod_order", {"previewId": previewId})
 
     async def recall_memories(limit: int = 10) -> str:
         return await _run("recall_memories", {"limit": limit})
@@ -87,9 +126,11 @@ def build_caregiver_tools(
         StructuredTool.from_function(coroutine=search_lab_reports, name="search_lab_reports", description="Search saved lab reports.", args_schema=QueryArgs),
         StructuredTool.from_function(coroutine=get_lab_value, name="get_lab_value", description="Get specific lab value with date.", args_schema=LabNameArgs),
         StructuredTool.from_function(coroutine=get_elder_messages, name="get_elder_messages", description="Recent elder Saheli messages.", args_schema=LimitArgs),
-        StructuredTool.from_function(coroutine=list_partner_addresses, name="list_partner_addresses", description="List Swiggy/Instamart addresses.", args_schema=PartnerOnlyArgs),
-        StructuredTool.from_function(coroutine=search_swiggy_food, name="search_swiggy_food", description="Search Swiggy food catalog.", args_schema=SwiggySearchArgs),
-        StructuredTool.from_function(coroutine=search_instamart, name="search_instamart", description="Search Instamart products.", args_schema=InstamartSearchArgs),
-        StructuredTool.from_function(coroutine=suggest_order, name="suggest_order", description="Create order basket for approval.", args_schema=OrderArgs),
+        StructuredTool.from_function(coroutine=resolve_order_partner, name="resolve_order_partner", description="Pick Swiggy Food vs Instamart from caregiver message.", args_schema=ResolvePartnerArgs),
+        StructuredTool.from_function(coroutine=list_partner_addresses, name="list_partner_addresses", description="List saved delivery addresses for swiggy or instamart.", args_schema=PartnerOnlyArgs),
+        StructuredTool.from_function(coroutine=search_swiggy_food, name="search_swiggy_food", description="Search Swiggy Food dishes/restaurants. Requires addressId.", args_schema=SwiggySearchArgs),
+        StructuredTool.from_function(coroutine=search_instamart, name="search_instamart", description="Search Instamart grocery products. Requires addressId.", args_schema=InstamartSearchArgs),
+        StructuredTool.from_function(coroutine=preview_order, name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
+        StructuredTool.from_function(coroutine=place_cod_order, name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
         StructuredTool.from_function(coroutine=recall_memories, name="recall_memories", description="Recall elder family memories.", args_schema=LimitArgs),
     ]

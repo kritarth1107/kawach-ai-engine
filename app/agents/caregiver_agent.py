@@ -50,9 +50,25 @@ def _stringify_ai_content(content: object) -> str:
     return str(content).strip()
 
 
-def _extract_order_connect(tool_results: list[dict]) -> tuple[dict | None, dict | None]:
+ORDER_AGENT_PLAYBOOK = """
+You handle food and grocery ordering conversationally for the caregiver.
+
+Ordering playbook:
+1. Call resolve_order_partner when the caregiver wants to order.
+2. Swiggy Food = restaurant meals. Instamart = groceries/products — never call Instamart a restaurant.
+3. Call list_partner_addresses for that partner. Pick address (ask if multiple).
+4. Call search_swiggy_food or search_instamart with addressId. Quote real prices from results only — never guess ₹50.
+5. When cart is ready, call preview_order — tell caregiver to confirm on the card.
+6. Only call place_cod_order after they explicitly confirm on the card (not from chat text alone).
+
+If partner not connected, explain they must connect Swiggy Food or Instamart separately in Integrations.
+"""
+
+
+def _extract_tool_payloads(tool_results: list[dict]) -> tuple[dict | None, dict | None, dict | None]:
     order_payload = None
     connect_payload = None
+    order_preview = None
     for row in tool_results:
         if not isinstance(row, dict):
             continue
@@ -61,11 +77,15 @@ def _extract_order_connect(tool_results: list[dict]) -> tuple[dict | None, dict 
             continue
         inner = _tool_inner(result)
         kind = inner.get("kind") or result.get("status")
-        if kind == "order" and inner.get("orderId"):
+        if kind == "order_preview" or inner.get("previewId"):
+            order_preview = inner
+        elif kind == "order_placed" and inner.get("orderId"):
+            order_payload = inner
+        elif kind == "order" and inner.get("orderId"):
             order_payload = inner
         elif kind in ("connect_required", "connect") or result.get("status") == "connect_required":
             connect_payload = inner if inner.get("connectPartner") else result
-    return order_payload, connect_payload
+    return order_payload, connect_payload, order_preview
 
 
 def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
@@ -131,9 +151,7 @@ Care recipient: {elder_name}
 {memory_block}
 {platform_block}
 
-Food and grocery ordering is handled by the order flow UI in chat (address → browse → cart → approve).
-Do NOT call suggest_order, list_partner_addresses, or search_swiggy_food unless the caregiver explicitly asks you to restart ordering or debug a failed flow.
-When an order flow is active, briefly explain the current step (pick address, browse dishes, review cart) in plain language.
+{ORDER_AGENT_PLAYBOOK}
 Quote lab values with dates only — never say high/low/normal.
 """
 
@@ -157,11 +175,12 @@ Quote lab values with dates only — never say high/low/normal.
             prompt_message = _prompt_message_from_tools(tool_results_raw)
             if prompt_message:
                 reply = prompt_message
-            order_payload, connect_payload = _extract_order_connect(tool_results_raw)
+            order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
             return {
                 "reply": reply.strip(),
                 "order": order_payload,
                 "connect": connect_payload,
+                "order_preview": order_preview,
                 "tool_trace": tool_trace,
             }
 
@@ -190,11 +209,12 @@ Quote lab values with dates only — never say high/low/normal.
     prompt_message = _prompt_message_from_tools(tool_results_raw)
     if prompt_message:
         reply = prompt_message
-    order_payload, connect_payload = _extract_order_connect(tool_results_raw)
+    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
     return {
         "reply": reply.strip(),
         "order": order_payload,
         "connect": connect_payload,
+        "order_preview": order_preview,
         "tool_trace": tool_trace,
     }
 
@@ -241,9 +261,7 @@ Care recipient: {elder_name}
 {memory_block}
 {platform_block}
 
-Food and grocery ordering is handled by the order flow UI in chat (address → browse → cart → approve).
-Do NOT call suggest_order, list_partner_addresses, or search_swiggy_food unless the caregiver explicitly asks you to restart ordering or debug a failed flow.
-When an order flow is active, briefly explain the current step (pick address, browse dishes, review cart) in plain language.
+{ORDER_AGENT_PLAYBOOK}
 Quote lab values with dates only — never say high/low/normal.
 """
 
@@ -314,9 +332,17 @@ Quote lab values with dates only — never say high/low/normal.
         if prompt_message:
             reply = prompt_message
 
-    order_payload, connect_payload = _extract_order_connect(tool_results_raw)
+    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
     if order_payload:
         yield {"type": "tool_result", "id": "order", "order": order_payload}
     if connect_payload:
         yield {"type": "tool_result", "id": "connect", "connect": connect_payload}
-    yield {"type": "done", "reply": reply.strip()}
+    if order_preview:
+        yield {"type": "tool_result", "id": "order_preview", "order_preview": order_preview}
+    yield {
+        "type": "done",
+        "reply": reply.strip(),
+        "order": order_payload,
+        "connect": connect_payload,
+        "order_preview": order_preview,
+    }
