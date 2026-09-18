@@ -33,84 +33,13 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Resolve runtime env (preserve DB + API secret)
-        id: runtime
-        run: |
-          set -euo pipefail
-          DATABASE_URL=""
-          KAWACH_API_SECRET=""
-
-          EXISTING_JSON="$(gcloud run services describe "${{ env.SERVICE }}" \
-            --project="${{ env.GCP_PROJECT_ID }}" \
-            --region="${{ env.GCP_REGION }}" \
-            --format=json 2>/dev/null || echo '{}')"
-
-          DATABASE_URL="$(python3 - <<'PY' "$EXISTING_JSON"
-          import json, sys
-          doc = json.loads(sys.argv[1])
-          env = doc.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0].get("env", [])
-          for item in env:
-              if item.get("name") == "DATABASE_URL" and item.get("value"):
-                  print(item["value"])
-                  break
-          PY
-          )"
-
-          KAWACH_API_SECRET="$(python3 - <<'PY' "$EXISTING_JSON"
-          import json, sys
-          doc = json.loads(sys.argv[1])
-          env = doc.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [{}])[0].get("env", [])
-          for item in env:
-              if item.get("name") == "KAWACH_API_SECRET" and item.get("value"):
-                  print(item["value"])
-                  break
-          PY
-          )"
-
-          if [ -z "$DATABASE_URL" ]; then
-            for SECRET_NAME in KAWACH_PG_PASSWORD kawach-pg-password KAWACH_AI_DATABASE_URL; do
-              PG_PASS="$(gcloud secrets versions access latest --secret="$SECRET_NAME" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null || true)"
-              if [ -n "$PG_PASS" ] && [[ "$PG_PASS" == postgresql* ]]; then
-                DATABASE_URL="$PG_PASS"
-                break
-              fi
-              if [ -n "$PG_PASS" ]; then
-                DATABASE_URL="postgresql+asyncpg://kawach:${PG_PASS}@/kawach_ai?host=/cloudsql/${{ env.CLOUDSQL }}"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$KAWACH_API_SECRET" ]; then
-            for SECRET_NAME in KAWACH_API_SECRET kawach-api-secret; do
-              KAWACH_API_SECRET="$(gcloud secrets versions access latest --secret="$SECRET_NAME" --project="${{ env.GCP_PROJECT_ID }}" 2>/dev/null || true)"
-              if [ -n "$KAWACH_API_SECRET" ]; then break; fi
-            done
-          fi
-
-          if [ -z "$DATABASE_URL" ]; then
-            echo "::error::DATABASE_URL missing — set on Cloud Run or in Secret Manager"
-            exit 1
-          fi
-          if [ -z "$KAWACH_API_SECRET" ]; then
-            echo "::error::KAWACH_API_SECRET missing — set on Cloud Run or in Secret Manager"
-            exit 1
-          fi
-
-          {
-            echo "database_url<<EOF"
-            echo "$DATABASE_URL"
-            echo "EOF"
-            echo "api_secret<<EOF"
-            echo "$KAWACH_API_SECRET"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
       - name: Build, push, and deploy
         env:
-          DATABASE_URL: ${{ steps.runtime.outputs.database_url }}
-          KAWACH_API_SECRET: ${{ steps.runtime.outputs.api_secret }}
+          KAWACH_PG_PASSWORD: ${{ secrets.KAWACH_PG_PASSWORD }}
+          KAWACH_API_SECRET: ${{ secrets.KAWACH_API_SECRET }}
         run: |
+          set -euo pipefail
+          DATABASE_URL="postgresql+asyncpg://kawach:${KAWACH_PG_PASSWORD}@/kawach_ai?host=/cloudsql/${{ env.CLOUDSQL }}"
           gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
           IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
           docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
@@ -126,7 +55,7 @@ jobs:
           DEBUG: "false"
           CORS_ORIGINS: "*"
           DATABASE_URL: "${DATABASE_URL}"
-          KAWACH_API_SECRET: "${KAWACH_API_SECRET}"
+          KAWACH_API_SECRET: "${KAWACH_API_SECRET:-}"
           EOF
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
