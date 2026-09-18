@@ -13,6 +13,7 @@ from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM
 from app.agents.tools import build_caregiver_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
+from app.rag.retrieve import format_family_memories, retrieve_family_memories
 
 
 def _parse_tool_result(raw: object) -> dict | None:
@@ -102,6 +103,15 @@ async def run_caregiver_agent(
     elder = await session.get(Elder, elder_id)
     elder_name = elder.display_name if elder else "Care recipient"
 
+    memories = await retrieve_family_memories(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        query=message,
+        limit=12,
+    )
+    memory_block = format_family_memories(memories)
+
     platform_block = ""
     if care_record_context:
         platform_block += f"\n- Kavach care timeline:\n{care_record_context[:4000]}"
@@ -117,10 +127,13 @@ async def run_caregiver_agent(
     system = f"""{CAREGIVER_SAHELI_SYSTEM}
 
 Care recipient: {elder_name}
+- Long-term memories about {elder_name}:
+{memory_block}
 {platform_block}
 
-When the caregiver wants food or groceries, immediately call suggest_order with their full message (e.g. "order pizza" must search pizza — never ask them to repeat the dish).
-Use list_partner_addresses or search_swiggy_food first only if suggest_order returns an address or catalog error.
+Food and grocery ordering is handled by the order flow UI in chat (address → browse → cart → approve).
+Do NOT call suggest_order, list_partner_addresses, or search_swiggy_food unless the caregiver explicitly asks you to restart ordering or debug a failed flow.
+When an order flow is active, briefly explain the current step (pick address, browse dishes, review cart) in plain language.
 Quote lab values with dates only — never say high/low/normal.
 """
 
@@ -184,3 +197,126 @@ Quote lab values with dates only — never say high/low/normal.
         "connect": connect_payload,
         "tool_trace": tool_trace,
     }
+
+
+async def stream_caregiver_agent(session: AsyncSession, **kwargs):
+    """Run caregiver agent; emit tool events and stream final LLM tokens via astream."""
+    elder_id = kwargs["elder_id"]
+    family_id = kwargs["family_id"]
+    message = kwargs["message"]
+    actor_user_id = kwargs["actor_user_id"]
+    kavach_family_id = kwargs.get("kavach_family_id")
+    kavach_recipient_user_id = kwargs.get("kavach_recipient_user_id")
+    care_record_context = kwargs.get("care_record_context")
+    elder_thread_context = kwargs.get("elder_thread_context")
+    labs_context = kwargs.get("labs_context")
+    session_context = kwargs.get("session_context")
+    order_context = kwargs.get("order_context")
+    history_messages = kwargs.get("history_messages")
+    max_iterations = kwargs.get("max_iterations", 5)
+
+    elder = await session.get(Elder, elder_id)
+    elder_name = elder.display_name if elder else "Care recipient"
+    memories = await retrieve_family_memories(
+        session, family_id=family_id, elder_id=elder_id, query=message, limit=12,
+    )
+    memory_block = format_family_memories(memories)
+
+    platform_block = ""
+    if care_record_context:
+        platform_block += f"\n- Kavach care timeline:\n{care_record_context[:4000]}"
+    if elder_thread_context:
+        platform_block += f"\n- Elder messages:\n{elder_thread_context[:2000]}"
+    if labs_context:
+        platform_block += f"\n- Saved labs:\n{labs_context[:3000]}"
+    if session_context:
+        platform_block += f"\n- Session:\n{session_context[:1500]}"
+    if order_context:
+        platform_block += f"\n- Ordering note:\n{order_context[:1000]}"
+
+    system = f"""{CAREGIVER_SAHELI_SYSTEM}
+
+Care recipient: {elder_name}
+- Long-term memories about {elder_name}:
+{memory_block}
+{platform_block}
+
+Food and grocery ordering is handled by the order flow UI in chat (address → browse → cart → approve).
+Do NOT call suggest_order, list_partner_addresses, or search_swiggy_food unless the caregiver explicitly asks you to restart ordering or debug a failed flow.
+When an order flow is active, briefly explain the current step (pick address, browse dishes, review cart) in plain language.
+Quote lab values with dates only — never say high/low/normal.
+"""
+
+    platform_family_id = kavach_family_id or str(family_id)
+    platform_recipient_id = kavach_recipient_user_id or str(elder_id)
+    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    llm = get_caregiver_chat_llm().bind_tools(tools)
+
+    messages: list = [SystemMessage(content=system)]
+    if history_messages:
+        messages.extend(history_messages)
+    messages.append(HumanMessage(content=message))
+
+    tool_results_raw: list[dict] = []
+    reply = ""
+
+    for _ in range(max_iterations):
+        response: AIMessage | None = None
+        if hasattr(llm, "astream"):
+            accumulated = ""
+            async for chunk in llm.astream(messages):
+                if getattr(chunk, "tool_calls", None):
+                    response = chunk if isinstance(chunk, AIMessage) else AIMessage(content=accumulated, tool_calls=chunk.tool_calls)
+                    break
+                delta = _stringify_ai_content(getattr(chunk, "content", chunk))
+                if delta:
+                    accumulated += delta
+                    yield {"type": "token", "delta": delta}
+            if response is None and accumulated:
+                response = AIMessage(content=accumulated)
+        else:
+            response = await llm.ainvoke(messages)
+
+        if not response or not getattr(response, "tool_calls", None):
+            reply = _stringify_ai_content(response.content if response else "")
+            prompt_message = _prompt_message_from_tools(tool_results_raw)
+            if prompt_message:
+                reply = prompt_message
+            break
+
+        messages.append(response)
+        for call in response.tool_calls:
+            tool_name = call["name"]
+            tool_args = call.get("args") or {}
+            yield {"type": "tool_start", "id": tool_name, "name": tool_name}
+            selected = next((t for t in tools if t.name == tool_name), None)
+            if not selected:
+                result_str = json.dumps({"error": f"Unknown tool {tool_name}"})
+            else:
+                try:
+                    result = await selected.ainvoke(tool_args)
+                    result_str = result if isinstance(result, str) else json.dumps(result)
+                    tool_results_raw.append(
+                        {
+                            "tool": tool_name,
+                            "result": json.loads(result_str) if result_str.startswith("{") else result_str,
+                        }
+                    )
+                except Exception as exc:
+                    result_str = json.dumps({"error": str(exc)})
+            yield {"type": "tool_result", "id": tool_name, "name": tool_name}
+            messages.append(ToolMessage(content=result_str, tool_call_id=call["id"]))
+
+    if not reply:
+        fallback = await chat_invoke_messages(messages)
+        reply = _stringify_ai_content(fallback.content)
+        prompt_message = _prompt_message_from_tools(tool_results_raw)
+        if prompt_message:
+            reply = prompt_message
+
+    order_payload, connect_payload = _extract_order_connect(tool_results_raw)
+    if order_payload:
+        yield {"type": "tool_result", "id": "order", "order": order_payload}
+    if connect_payload:
+        yield {"type": "tool_result", "id": "connect", "connect": connect_payload}
+    yield {"type": "done", "reply": reply.strip()}

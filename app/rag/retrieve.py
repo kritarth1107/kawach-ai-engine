@@ -244,10 +244,23 @@ async def retrieve_family_memories(
                 await session.execute(select(FamilyMemory).where(FamilyMemory.id.in_(ids)))
             ).scalars().all()
             by_id = {m.id: m for m in found}
-            return [by_id[i] for i in ids if i in by_id]
+            ordered = [by_id[i] for i in ids if i in by_id]
+            await _touch_memories(session, ordered)
+            return ordered
 
-    stmt = stmt.order_by(FamilyMemory.created_at.desc()).limit(limit)
-    return list((await session.execute(stmt)).scalars().all())
+    stmt = stmt.order_by(FamilyMemory.importance.desc(), FamilyMemory.created_at.desc()).limit(limit)
+    rows = list((await session.execute(stmt)).scalars().all())
+    await _touch_memories(session, rows)
+    return rows
+
+
+async def _touch_memories(session: AsyncSession, memories: list[FamilyMemory]) -> None:
+    if not memories:
+        return
+    now = datetime.utcnow()
+    for mem in memories:
+        mem.last_referenced_at = now
+    await session.commit()
 
 
 def format_family_memories(memories: list[FamilyMemory]) -> str:
@@ -328,17 +341,27 @@ async def sync_conversation_history(
         content = str(row.get("content") or "")[:8000]
         if not content:
             continue
-        session.add(
-            Message(
-                conversation_id=conversation_id,
+        msg = Message(
+            conversation_id=conversation_id,
+            family_id=family_id,
+            elder_id=elder_id,
+            role=role,
+            content=content,
+            metadata_={"external_id": external_id, "synced": True},
+        )
+        session.add(msg)
+        synced += 1
+        if role_raw in ("elder", "family"):
+            from app.rag.memory_extract import process_elder_message_memories
+
+            await session.flush()
+            await process_elder_message_memories(
+                session,
                 family_id=family_id,
                 elder_id=elder_id,
-                role=role,
-                content=content,
-                metadata_={"external_id": external_id, "synced": True},
+                message=content,
+                source_message_id=msg.id,
             )
-        )
-        synced += 1
     if synced:
         await session.commit()
     return synced

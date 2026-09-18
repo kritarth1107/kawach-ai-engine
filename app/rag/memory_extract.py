@@ -99,9 +99,22 @@ async def persist_family_memories(
     source_message_id: uuid.UUID | None = None,
     commit: bool = True,
 ) -> list[FamilyMemory]:
+    from sqlalchemy import select
+
     saved: list[FamilyMemory] = []
     for mem in memories:
         content = mem["content"]
+        existing = (
+            await session.execute(
+                select(FamilyMemory.id).where(
+                    FamilyMemory.family_id == family_id,
+                    FamilyMemory.elder_id == elder_id,
+                    FamilyMemory.content == content,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing:
+            continue
         vector = None
         if embeddings_available():
             try:

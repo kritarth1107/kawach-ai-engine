@@ -7,6 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.caregiver_agent import stream_caregiver_agent
 from app.agents.saheli_graph import (
     run_saheli_caregiver_chat,
     run_saheli_chat,
@@ -349,6 +350,26 @@ async def caregiver_chat_stream(body: ChatRequest, db: Annotated[AsyncSession, D
     )
 
     async def event_generator():
+        if body.use_agent and body.actor_user_id:
+            async for event in stream_caregiver_agent(
+                db,
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                message=body.message.strip(),
+                care_record_context=body.care_record_context,
+                elder_thread_context=body.elder_thread_context,
+                labs_context=body.labs_context,
+                session_context=body.session_context,
+                order_context=body.order_context,
+                actor_user_id=body.actor_user_id,
+                kavach_family_id=body.kavach_family_id,
+                kavach_recipient_user_id=body.kavach_recipient_user_id,
+            ):
+                if event.get("type") == "done":
+                    event["conversation_id"] = str(conv.id)
+                yield f"data: {json.dumps(event)}\n\n"
+            return
+
         result = await run_saheli_caregiver_chat(
             db,
             family_id=body.family_id,
