@@ -351,6 +351,8 @@ async def run_saheli_caregiver_chat(
     order_context: str | None = None,
     use_agent: bool = True,
     actor_user_id: str | None = None,
+    kavach_family_id: str | None = None,
+    kavach_recipient_user_id: str | None = None,
 ) -> dict:
     recent = await get_recent_messages(
         session,
@@ -374,6 +376,8 @@ async def run_saheli_caregiver_chat(
             order_context=order_context,
             history_messages=history,
             actor_user_id=actor_user_id,
+            kavach_family_id=kavach_family_id,
+            kavach_recipient_user_id=kavach_recipient_user_id,
         )
         reply = agent_result["reply"]
         session.add(

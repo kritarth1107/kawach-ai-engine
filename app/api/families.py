@@ -59,6 +59,14 @@ async def get_families(external_id: str, db: Annotated[AsyncSession, Depends(get
     return {"families": [{"id": str(f.id), "name": f.name} for f in families]}
 
 
+@router.get("/{family_id}")
+async def get_family(family_id: uuid.UUID, db: Annotated[AsyncSession, Depends(get_db)]):
+    from app.services.tenant import assert_family_exists
+
+    family = await assert_family_exists(db, family_id)
+    return {"family": {"id": str(family.id), "name": family.name}}
+
+
 @router.post("/{family_id}/members")
 async def add_member(
     family_id: uuid.UUID,

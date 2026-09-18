@@ -42,6 +42,8 @@ class ChatRequest(BaseModel):
     order_context: str | None = None
     use_agent: bool = True
     actor_user_id: str | None = None
+    kavach_family_id: str | None = None
+    kavach_recipient_user_id: str | None = None
 
 
 class SyncHistoryMessage(BaseModel):
@@ -325,6 +327,8 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         order_context=body.order_context,
         use_agent=body.use_agent,
         actor_user_id=body.actor_user_id,
+        kavach_family_id=body.kavach_family_id,
+        kavach_recipient_user_id=body.kavach_recipient_user_id,
     )
     return ChatResponse(
         reply=result.get("reply", ""),
@@ -358,6 +362,8 @@ async def caregiver_chat_stream(body: ChatRequest, db: Annotated[AsyncSession, D
             order_context=body.order_context,
             use_agent=body.use_agent,
             actor_user_id=body.actor_user_id,
+            kavach_family_id=body.kavach_family_id,
+            kavach_recipient_user_id=body.kavach_recipient_user_id,
         )
         reply = result.get("reply", "")
         chunk_size = 24

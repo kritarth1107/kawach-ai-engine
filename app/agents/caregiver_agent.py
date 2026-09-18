@@ -53,6 +53,8 @@ async def run_caregiver_agent(
     order_context: str | None = None,
     history_messages: list | None = None,
     actor_user_id: str,
+    kavach_family_id: str | None = None,
+    kavach_recipient_user_id: str | None = None,
     max_iterations: int = 5,
 ) -> dict[str, Any]:
     elder = await session.get(Elder, elder_id)
@@ -79,7 +81,9 @@ When the caregiver wants food or groceries, call list_partner_addresses first if
 Quote lab values with dates only — never say high/low/normal.
 """
 
-    tools = build_caregiver_tools(str(family_id), str(elder_id), actor_user_id)
+    platform_family_id = kavach_family_id or str(family_id)
+    platform_recipient_id = kavach_recipient_user_id or str(elder_id)
+    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
     messages: list = [SystemMessage(content=system)]
