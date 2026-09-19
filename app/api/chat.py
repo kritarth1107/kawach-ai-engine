@@ -98,6 +98,7 @@ class ChatResponse(BaseModel):
     order: dict | None = None
     connect: dict | None = None
     order_preview: dict | None = None
+    order_flow: dict | None = None
     tool_trace: list[dict] | None = None
 
 
@@ -254,6 +255,7 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
             order=result.get("order"),
             connect=result.get("connect"),
             order_preview=result.get("order_preview"),
+            order_flow=result.get("order_flow"),
             tool_trace=result.get("tool_trace"),
         )
 

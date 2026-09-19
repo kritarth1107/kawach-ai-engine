@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     # Google Cloud / Vertex AI (preferred on GCP)
     gcp_project_id: str = ""
     gcp_region: str = "asia-south1"
-    vertex_chat_model: str = "gemini-2.5-flash"
-    vertex_caregiver_chat_model: str = "gemini-2.5-flash"
+    vertex_chat_model: str = "gemini-2.5-pro"
+    vertex_caregiver_chat_model: str = "gemini-2.5-pro"
     kavach_backend_url: str = "http://localhost:5000"
     vertex_embedding_model: str = "text-multilingual-embedding-002"
     embed_dim: int = 768

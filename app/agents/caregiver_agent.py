@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM, ELDER_WHATSAPP_AGENT_SYSTEM
-from app.agents.tools import build_caregiver_tools
+from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
 from app.rag.retrieve import format_family_memories, retrieve_family_memories
@@ -65,10 +65,13 @@ If partner not connected, explain they must connect Swiggy Food or Instamart sep
 """
 
 
-def _extract_tool_payloads(tool_results: list[dict]) -> tuple[dict | None, dict | None, dict | None]:
+def _extract_tool_payloads(
+    tool_results: list[dict],
+) -> tuple[dict | None, dict | None, dict | None, dict | None]:
     order_payload = None
     connect_payload = None
     order_preview = None
+    order_flow = None
     for row in tool_results:
         if not isinstance(row, dict):
             continue
@@ -77,7 +80,9 @@ def _extract_tool_payloads(tool_results: list[dict]) -> tuple[dict | None, dict 
             continue
         inner = _tool_inner(result)
         kind = inner.get("kind") or result.get("status")
-        if kind == "order_preview" or inner.get("previewId"):
+        if kind == "order_flow" or result.get("status") in ("order_flow", "added", "disambiguation_required"):
+            order_flow = inner.get("orderFlow") or inner.get("order_flow") or inner
+        elif kind == "order_preview" or inner.get("previewId"):
             order_preview = inner
         elif kind == "order_placed" and inner.get("orderId"):
             order_payload = inner
@@ -85,7 +90,7 @@ def _extract_tool_payloads(tool_results: list[dict]) -> tuple[dict | None, dict 
             order_payload = inner
         elif kind in ("connect_required", "connect") or result.get("status") == "connect_required":
             connect_payload = inner if inner.get("connectPartner") else result
-    return order_payload, connect_payload, order_preview
+    return order_payload, connect_payload, order_preview, order_flow
 
 
 def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
@@ -99,6 +104,27 @@ def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
         if inner.get("kind") == "prompt" and isinstance(inner.get("message"), str):
             return inner["message"].strip()
         if result.get("status") == "prompt" and isinstance(inner.get("message"), str):
+            return inner["message"].strip()
+        if inner.get("kind") == "order_flow" or result.get("status") == "order_flow":
+            msg = inner.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+        if result.get("status") == "disambiguation_required":
+            msg = inner.get("message") or result.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+            query = inner.get("query") or result.get("query")
+            candidates = inner.get("candidates") or result.get("candidates")
+            if isinstance(candidates, list) and candidates:
+                lines = [f'Which "{query}" did you mean?']
+                for i, row in enumerate(candidates[:5], start=1):
+                    if isinstance(row, dict):
+                        name = row.get("name", "Option")
+                        price = row.get("pricePaise")
+                        price_txt = f" ₹{int(price) // 100}" if isinstance(price, (int, float)) and price else ""
+                        lines.append(f"{i}. {name}{price_txt}")
+                return "\n".join(lines)
+        if result.get("status") == "added" and isinstance(inner.get("message"), str):
             return inner["message"].strip()
     return None
 
@@ -139,12 +165,19 @@ async def run_elder_whatsapp_agent(
 You are {child_name}. Language preference: {lang}.
 {platform_block}
 
-{ORDER_AGENT_PLAYBOOK.replace("caregiver", "elder").replace("Caregiver", "Elder")}
+Ordering playbook:
+1. resolve_order_partner → list_partner_addresses
+2. ensure_order_session(message) → keep sessionId
+3. select_order_address if needed
+4. add_to_order_cart with all items in one batch call
+5. If disambiguation_required, ask elder to pick 1/2/3 then add with candidateIndex
+6. get_order_cart → elder confirms → submit_order_cart
+Never order for check-ins or "anything you want to know?".
 """
 
     platform_family_id = kavach_family_id or str(family_id)
     platform_recipient_id = kavach_recipient_user_id or str(elder_id)
-    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    tools = build_elder_whatsapp_tools(platform_family_id, platform_recipient_id, actor_user_id)
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
     messages: list = [SystemMessage(content=system)]
@@ -162,12 +195,15 @@ You are {child_name}. Language preference: {lang}.
             prompt_message = _prompt_message_from_tools(tool_results_raw)
             if prompt_message:
                 reply = prompt_message
-            order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+            order_payload, connect_payload, order_preview, order_flow = _extract_tool_payloads(
+                tool_results_raw,
+            )
             return {
                 "reply": reply.strip(),
                 "order": order_payload,
                 "connect": connect_payload,
                 "order_preview": order_preview,
+                "order_flow": order_flow,
                 "tool_trace": tool_trace,
             }
 
@@ -193,12 +229,15 @@ You are {child_name}. Language preference: {lang}.
 
     fallback = await chat_invoke_messages(messages)
     reply = _stringify_ai_content(fallback.content)
-    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+    order_payload, connect_payload, order_preview, order_flow = _extract_tool_payloads(
+        tool_results_raw,
+    )
     return {
         "reply": reply.strip(),
         "order": order_payload,
         "connect": connect_payload,
         "order_preview": order_preview,
+        "order_flow": order_flow,
         "tool_trace": tool_trace,
     }
 
@@ -275,7 +314,9 @@ Quote lab values with dates only — never say high/low/normal.
             prompt_message = _prompt_message_from_tools(tool_results_raw)
             if prompt_message:
                 reply = prompt_message
-            order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+            order_payload, connect_payload, order_preview, _order_flow = _extract_tool_payloads(
+                tool_results_raw,
+            )
             return {
                 "reply": reply.strip(),
                 "order": order_payload,
@@ -309,7 +350,9 @@ Quote lab values with dates only — never say high/low/normal.
     prompt_message = _prompt_message_from_tools(tool_results_raw)
     if prompt_message:
         reply = prompt_message
-    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+    order_payload, connect_payload, order_preview, _order_flow = _extract_tool_payloads(
+        tool_results_raw,
+    )
     return {
         "reply": reply.strip(),
         "order": order_payload,
@@ -432,7 +475,9 @@ Quote lab values with dates only — never say high/low/normal.
         if prompt_message:
             reply = prompt_message
 
-    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+    order_payload, connect_payload, order_preview, _order_flow = _extract_tool_payloads(
+        tool_results_raw,
+    )
     if order_payload:
         yield {"type": "tool_result", "id": "order", "order": order_payload}
     if connect_payload:

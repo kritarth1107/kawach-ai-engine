@@ -1,4 +1,4 @@
-"""Saheli caregiver agent tools — executed on kavach-backend."""
+"""Saheli agent tools — executed on kavach-backend."""
 
 from __future__ import annotations
 
@@ -19,7 +19,40 @@ class LabNameArgs(BaseModel):
 
 
 class OrderArgs(BaseModel):
-    message: str = Field(description="Full order request from the caregiver")
+    message: str = Field(description="Full order request from the user")
+
+
+class SessionQueryArgs(BaseModel):
+    sessionId: str = Field(description="Active order session id from ensure_order_session")
+    query: str = Field(description="Product or dish search query")
+
+
+class SessionOnlyArgs(BaseModel):
+    sessionId: str = Field(description="Active order session id")
+
+
+class ResolveCatalogArgs(BaseModel):
+    sessionId: str
+    query: str | None = Field(default=None)
+    candidateIndex: int | None = Field(default=None, description="0-based index from search_catalog results")
+    candidateId: str | None = Field(default=None)
+
+
+class CartLineItem(BaseModel):
+    query: str | None = Field(default=None, description="Product name to resolve and add")
+    candidateIndex: int | None = Field(default=None)
+    candidateId: str | None = Field(default=None)
+    quantity: int = Field(default=1, ge=1, le=20)
+
+
+class AddToCartArgs(BaseModel):
+    sessionId: str
+    items: list[CartLineItem] = Field(description="One or more items to add in a single call")
+
+
+class SelectAddressArgs(BaseModel):
+    sessionId: str
+    addressId: str = Field(description="Partner address id from list_partner_addresses")
 
 
 class SwiggySearchArgs(BaseModel):
@@ -41,7 +74,7 @@ class PartnerOnlyArgs(BaseModel):
 
 
 class ResolvePartnerArgs(BaseModel):
-    message: str = Field(description="Caregiver order message")
+    message: str = Field(description="Order message")
 
 
 class PreviewOrderItem(BaseModel):
@@ -60,11 +93,32 @@ class PlaceCodArgs(BaseModel):
     previewId: str = Field(description="Preview id from preview_order")
 
 
-def build_caregiver_tools(
+class ScheduleTitleArgs(BaseModel):
+    title: str | None = Field(default=None, description="Schedule item title hint")
+    scheduleId: str | None = Field(default=None)
+    dateKey: str | None = Field(default=None, description="YYYY-MM-DD in IST")
+    note: str | None = Field(default=None)
+
+
+class LogCheckInArgs(BaseModel):
+    mood: str | None = Field(default=None)
+    meals: str | None = Field(default=None)
+    sleep: str | None = Field(default=None)
+    pain: str | None = Field(default=None)
+    note: str | None = Field(default=None)
+
+
+class LogDoseArgs(BaseModel):
+    medicineName: str = Field(description="Medicine name")
+    quantity: str | None = Field(default=None)
+    note: str | None = Field(default=None)
+
+
+def _backend_tools(
     family_id: str,
     elder_id: str,
     actor_user_id: str,
-) -> list[StructuredTool]:
+):
     async def _run(tool: str, args: dict) -> str:
         result = await execute_backend_tool(
             tool=tool,
@@ -121,16 +175,213 @@ def build_caregiver_tools(
     async def recall_memories(limit: int = 10) -> str:
         return await _run("recall_memories", {"limit": limit})
 
+    async def suggest_order(message: str) -> str:
+        return await _run("suggest_order", {"message": message})
+
+    async def ensure_order_session(message: str) -> str:
+        return await _run("ensure_order_session", {"message": message})
+
+    async def search_catalog(sessionId: str, query: str) -> str:
+        return await _run("search_catalog", {"sessionId": sessionId, "query": query})
+
+    async def resolve_catalog_item(
+        sessionId: str,
+        query: str | None = None,
+        candidateIndex: int | None = None,
+        candidateId: str | None = None,
+    ) -> str:
+        return await _run(
+            "resolve_catalog_item",
+            {
+                "sessionId": sessionId,
+                "query": query,
+                "candidateIndex": candidateIndex,
+                "candidateId": candidateId,
+            },
+        )
+
+    async def add_to_order_cart(sessionId: str, items: list[CartLineItem]) -> str:
+        return await _run(
+            "add_to_order_cart",
+            {
+                "sessionId": sessionId,
+                "items": [item.model_dump() for item in items],
+            },
+        )
+
+    async def get_order_cart(sessionId: str) -> str:
+        return await _run("get_order_cart", {"sessionId": sessionId})
+
+    async def submit_order_cart(sessionId: str) -> str:
+        return await _run("submit_order_cart", {"sessionId": sessionId})
+
+    async def select_order_address(sessionId: str, addressId: str) -> str:
+        return await _run(
+            "select_order_address",
+            {"sessionId": sessionId, "addressId": addressId},
+        )
+
+    async def get_today_schedule(dateKey: str | None = None) -> str:
+        return await _run("get_today_schedule", {"dateKey": dateKey} if dateKey else {})
+
+    async def get_missed_tasks(dateKey: str | None = None) -> str:
+        return await _run("get_missed_tasks", {"dateKey": dateKey} if dateKey else {})
+
+    async def log_check_in(
+        mood: str | None = None,
+        meals: str | None = None,
+        sleep: str | None = None,
+        pain: str | None = None,
+        note: str | None = None,
+    ) -> str:
+        return await _run(
+            "log_check_in",
+            {"mood": mood, "meals": meals, "sleep": sleep, "pain": pain, "note": note},
+        )
+
+    async def log_dose(
+        medicineName: str,
+        quantity: str | None = None,
+        note: str | None = None,
+    ) -> str:
+        return await _run(
+            "log_dose",
+            {"medicineName": medicineName, "quantity": quantity, "note": note},
+        )
+
+    async def mark_schedule_completed(
+        title: str | None = None,
+        scheduleId: str | None = None,
+        dateKey: str | None = None,
+        note: str | None = None,
+    ) -> str:
+        return await _run(
+            "mark_schedule_completed",
+            {"title": title, "scheduleId": scheduleId, "dateKey": dateKey, "note": note},
+        )
+
+    return locals()
+
+
+def build_caregiver_tools(
+    family_id: str,
+    elder_id: str,
+    actor_user_id: str,
+) -> list[StructuredTool]:
+    tools = _backend_tools(family_id, elder_id, actor_user_id)
+
     return [
-        StructuredTool.from_function(coroutine=get_care_timeline, name="get_care_timeline", description="Fetch care timeline.", args_schema=LimitArgs),
-        StructuredTool.from_function(coroutine=search_lab_reports, name="search_lab_reports", description="Search saved lab reports.", args_schema=QueryArgs),
-        StructuredTool.from_function(coroutine=get_lab_value, name="get_lab_value", description="Get specific lab value with date.", args_schema=LabNameArgs),
-        StructuredTool.from_function(coroutine=get_elder_messages, name="get_elder_messages", description="Recent elder Saheli messages.", args_schema=LimitArgs),
-        StructuredTool.from_function(coroutine=resolve_order_partner, name="resolve_order_partner", description="Pick Swiggy Food vs Instamart from caregiver message.", args_schema=ResolvePartnerArgs),
-        StructuredTool.from_function(coroutine=list_partner_addresses, name="list_partner_addresses", description="List saved delivery addresses for swiggy or instamart.", args_schema=PartnerOnlyArgs),
-        StructuredTool.from_function(coroutine=search_swiggy_food, name="search_swiggy_food", description="Search Swiggy Food dishes/restaurants. Requires addressId.", args_schema=SwiggySearchArgs),
-        StructuredTool.from_function(coroutine=search_instamart, name="search_instamart", description="Search Instamart grocery products. Requires addressId.", args_schema=InstamartSearchArgs),
-        StructuredTool.from_function(coroutine=preview_order, name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
-        StructuredTool.from_function(coroutine=place_cod_order, name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
-        StructuredTool.from_function(coroutine=recall_memories, name="recall_memories", description="Recall elder family memories.", args_schema=LimitArgs),
+        StructuredTool.from_function(coroutine=tools["get_care_timeline"], name="get_care_timeline", description="Fetch care timeline.", args_schema=LimitArgs),
+        StructuredTool.from_function(coroutine=tools["search_lab_reports"], name="search_lab_reports", description="Search saved lab reports.", args_schema=QueryArgs),
+        StructuredTool.from_function(coroutine=tools["get_lab_value"], name="get_lab_value", description="Get specific lab value with date.", args_schema=LabNameArgs),
+        StructuredTool.from_function(coroutine=tools["get_elder_messages"], name="get_elder_messages", description="Recent elder Saheli messages.", args_schema=LimitArgs),
+        StructuredTool.from_function(coroutine=tools["resolve_order_partner"], name="resolve_order_partner", description="Pick Swiggy Food vs Instamart from caregiver message.", args_schema=ResolvePartnerArgs),
+        StructuredTool.from_function(coroutine=tools["list_partner_addresses"], name="list_partner_addresses", description="List saved delivery addresses for swiggy or instamart.", args_schema=PartnerOnlyArgs),
+        StructuredTool.from_function(coroutine=tools["search_swiggy_food"], name="search_swiggy_food", description="Search Swiggy Food dishes/restaurants. Requires addressId.", args_schema=SwiggySearchArgs),
+        StructuredTool.from_function(coroutine=tools["search_instamart"], name="search_instamart", description="Search Instamart grocery products. Requires addressId.", args_schema=InstamartSearchArgs),
+        StructuredTool.from_function(coroutine=tools["preview_order"], name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
+        StructuredTool.from_function(coroutine=tools["place_cod_order"], name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
+        StructuredTool.from_function(coroutine=tools["recall_memories"], name="recall_memories", description="Recall elder family memories.", args_schema=LimitArgs),
+    ]
+
+
+def build_elder_whatsapp_tools(
+    family_id: str,
+    elder_id: str,
+    actor_user_id: str,
+) -> list[StructuredTool]:
+    tools = _backend_tools(family_id, elder_id, actor_user_id)
+
+    return [
+        StructuredTool.from_function(
+            coroutine=tools["get_today_schedule"],
+            name="get_today_schedule",
+            description="Today's medicines, meals, and appointments for the elder.",
+            args_schema=ScheduleTitleArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["get_missed_tasks"],
+            name="get_missed_tasks",
+            description="Schedule items still due or missed today.",
+            args_schema=ScheduleTitleArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["log_check_in"],
+            name="log_check_in",
+            description="Log a wellness check-in when the elder shares mood, meals, sleep, or how they feel.",
+            args_schema=LogCheckInArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["log_dose"],
+            name="log_dose",
+            description="Log that the elder took a medicine.",
+            args_schema=LogDoseArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["mark_schedule_completed"],
+            name="mark_schedule_completed",
+            description="Mark a schedule item done (medicine, meal, task).",
+            args_schema=ScheduleTitleArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["resolve_order_partner"],
+            name="resolve_order_partner",
+            description="Pick Swiggy (food) vs Instamart (groceries) from the elder's message.",
+            args_schema=ResolvePartnerArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["list_partner_addresses"],
+            name="list_partner_addresses",
+            description="List saved delivery addresses. Call after resolve_order_partner.",
+            args_schema=PartnerOnlyArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["ensure_order_session"],
+            name="ensure_order_session",
+            description=(
+                "Start or resume an order session when the elder clearly wants to order. "
+                "Pass their full request (e.g. 'diet coke from instamart'). Returns sessionId."
+            ),
+            args_schema=OrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["select_order_address"],
+            name="select_order_address",
+            description="Select delivery address for an order session when multiple addresses exist.",
+            args_schema=SelectAddressArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["search_catalog"],
+            name="search_catalog",
+            description="Search live catalog within an order session. Returns ranked candidates with confidence.",
+            args_schema=SessionQueryArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["add_to_order_cart"],
+            name="add_to_order_cart",
+            description=(
+                "Add one or more items to the order cart. Pass query per item; "
+                "if ambiguous, ask the elder to pick from disambiguation options. "
+                "Supports batch: milk + bread + eggs in one call."
+            ),
+            args_schema=AddToCartArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["get_order_cart"],
+            name="get_order_cart",
+            description="Show current cart contents and total before submitting.",
+            args_schema=SessionOnlyArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["submit_order_cart"],
+            name="submit_order_cart",
+            description="Submit the cart for approval/checkout after elder confirms.",
+            args_schema=SessionOnlyArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["recall_memories"],
+            name="recall_memories",
+            description="Recall saved family memories about the elder.",
+            args_schema=LimitArgs,
+        ),
     ]
