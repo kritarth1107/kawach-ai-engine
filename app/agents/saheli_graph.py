@@ -42,6 +42,8 @@ class SaheliState(TypedDict):
     recent_chat: str
     companion_profile: dict[str, Any]
     care_record_context: str
+    schedule_context: str
+    channel_context: str
     order_context: str
     reply: str
 
@@ -93,6 +95,11 @@ async def node_generate(state: SaheliState, session: AsyncSession) -> dict:
     )
     history = db_messages_to_langchain(recent)
     messages = [SystemMessage(content=system), *history, HumanMessage(content=state["user_message"])]
+    if state.get("schedule_context"):
+        system += f"\n\nToday's schedule (use only if they asked):\n{state['schedule_context'][:2500]}"
+    if state.get("channel_context"):
+        system += f"\n\n{state['channel_context'][:1200]}"
+    messages[0] = SystemMessage(content=system)
     if state.get("order_context"):
         messages.insert(-1, HumanMessage(content=state["order_context"]))
     response = await chat_invoke_messages(messages)
@@ -175,6 +182,8 @@ async def run_saheli_chat(
     message: str,
     companion_profile: dict[str, Any] | None = None,
     care_record_context: str | None = None,
+    schedule_context: str | None = None,
+    channel_context: str | None = None,
     order_context: str | None = None,
 ) -> str:
     app = build_saheli_graph(session)
@@ -190,6 +199,8 @@ async def run_saheli_chat(
             "recent_chat": "",
             "companion_profile": companion_profile or {},
             "care_record_context": care_record_context or "",
+            "schedule_context": schedule_context or "",
+            "channel_context": channel_context or "",
             "order_context": order_context or "",
             "reply": "",
         }

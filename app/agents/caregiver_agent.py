@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM
+from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM, ELDER_WHATSAPP_AGENT_SYSTEM
 from app.agents.tools import build_caregiver_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
@@ -101,6 +101,106 @@ def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
         if result.get("status") == "prompt" and isinstance(inner.get("message"), str):
             return inner["message"].strip()
     return None
+
+
+async def run_elder_whatsapp_agent(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    message: str,
+    care_record_context: str | None = None,
+    schedule_context: str | None = None,
+    channel_context: str | None = None,
+    order_context: str | None = None,
+    companion_profile: dict[str, Any] | None = None,
+    history_messages: list | None = None,
+    actor_user_id: str,
+    kavach_family_id: str | None = None,
+    kavach_recipient_user_id: str | None = None,
+    max_iterations: int = 5,
+) -> dict[str, Any]:
+    profile = companion_profile or {}
+    child_name = profile.get("child_name") or profile.get("childName") or "Saheli"
+    lang = profile.get("preferred_language") or profile.get("preferredLanguage") or "english"
+
+    platform_block = ""
+    if schedule_context:
+        platform_block += f"\n- Today's schedule:\n{schedule_context[:2500]}"
+    if care_record_context:
+        platform_block += f"\n- Care timeline:\n{care_record_context[:2500]}"
+    if order_context:
+        platform_block += f"\n- Ordering note:\n{order_context[:800]}"
+    if channel_context:
+        platform_block += f"\n- Channel rules:\n{channel_context[:1200]}"
+
+    system = f"""{ELDER_WHATSAPP_AGENT_SYSTEM}
+
+You are {child_name}. Language preference: {lang}.
+{platform_block}
+
+{ORDER_AGENT_PLAYBOOK.replace("caregiver", "elder").replace("Caregiver", "Elder")}
+"""
+
+    platform_family_id = kavach_family_id or str(family_id)
+    platform_recipient_id = kavach_recipient_user_id or str(elder_id)
+    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    llm = get_caregiver_chat_llm().bind_tools(tools)
+
+    messages: list = [SystemMessage(content=system)]
+    if history_messages:
+        messages.extend(history_messages)
+    messages.append(HumanMessage(content=message))
+
+    tool_trace: list[dict] = []
+    tool_results_raw: list[dict] = []
+
+    for _ in range(max_iterations):
+        response: AIMessage = await llm.ainvoke(messages)
+        if not getattr(response, "tool_calls", None):
+            reply = _stringify_ai_content(response.content)
+            prompt_message = _prompt_message_from_tools(tool_results_raw)
+            if prompt_message:
+                reply = prompt_message
+            order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+            return {
+                "reply": reply.strip(),
+                "order": order_payload,
+                "connect": connect_payload,
+                "order_preview": order_preview,
+                "tool_trace": tool_trace,
+            }
+
+        messages.append(response)
+        for call in response.tool_calls:
+            tool_name = call["name"]
+            tool_args = call.get("args") or {}
+            tool_trace.append({"tool": tool_name, "status": "started"})
+            selected = next((t for t in tools if t.name == tool_name), None)
+            if not selected:
+                result_str = json.dumps({"error": f"Unknown tool {tool_name}"})
+            else:
+                try:
+                    result = await selected.ainvoke(tool_args)
+                    result_str = result if isinstance(result, str) else json.dumps(result)
+                    tool_results_raw.append({"tool": tool_name, "result": json.loads(result_str) if result_str.startswith("{") else result_str})
+                except Exception as exc:
+                    result_str = json.dumps({"error": str(exc)})
+            tool_trace.append({"tool": tool_name, "status": "done"})
+            messages.append(
+                ToolMessage(content=result_str, tool_call_id=call["id"]),
+            )
+
+    fallback = await chat_invoke_messages(messages)
+    reply = _stringify_ai_content(fallback.content)
+    order_payload, connect_payload, order_preview = _extract_tool_payloads(tool_results_raw)
+    return {
+        "reply": reply.strip(),
+        "order": order_payload,
+        "connect": connect_payload,
+        "order_preview": order_preview,
+        "tool_trace": tool_trace,
+    }
 
 
 async def run_caregiver_agent(

@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.caregiver_agent import stream_caregiver_agent
+from app.agents.caregiver_agent import run_elder_whatsapp_agent, stream_caregiver_agent
 from app.agents.saheli_graph import (
     run_saheli_caregiver_chat,
     run_saheli_chat,
@@ -41,6 +41,8 @@ class ChatRequest(BaseModel):
     labs_context: str | None = None
     session_context: str | None = None
     order_context: str | None = None
+    schedule_context: str | None = None
+    channel_context: str | None = None
     use_agent: bool = True
     actor_user_id: str | None = None
     kavach_family_id: str | None = None
@@ -194,6 +196,67 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
         conversation_id=body.conversation_id,
     )
 
+    care_context = body.care_record_context
+    if body.schedule_context:
+        care_context = "\n\n".join(filter(None, [body.schedule_context, care_context]))
+
+    if body.use_agent and body.actor_user_id:
+        from app.models.entities import Message, MessageRole
+
+        recent = await get_recent_messages(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            limit=10,
+            conversation_id=conv.id,
+        )
+        from app.rag.retrieve import db_messages_to_langchain
+
+        history = db_messages_to_langchain(recent)
+        result = await run_elder_whatsapp_agent(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            message=body.message.strip(),
+            care_record_context=care_context,
+            schedule_context=body.schedule_context,
+            channel_context=body.channel_context,
+            order_context=body.order_context,
+            companion_profile=body.companion_profile,
+            history_messages=history,
+            actor_user_id=body.actor_user_id,
+            kavach_family_id=body.kavach_family_id,
+            kavach_recipient_user_id=body.kavach_recipient_user_id,
+        )
+        reply = result.get("reply", "")
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                role=MessageRole.elder,
+                content=body.message.strip(),
+            )
+        )
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                role=MessageRole.saheli,
+                content=reply,
+            )
+        )
+        await db.commit()
+        return ChatResponse(
+            reply=reply,
+            conversation_id=str(conv.id),
+            order=result.get("order"),
+            connect=result.get("connect"),
+            order_preview=result.get("order_preview"),
+            tool_trace=result.get("tool_trace"),
+        )
+
     reply = await run_saheli_chat(
         db,
         family_id=body.family_id,
@@ -201,7 +264,9 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
         conversation_id=conv.id,
         message=body.message.strip(),
         companion_profile=body.companion_profile,
-        care_record_context=body.care_record_context,
+        care_record_context=care_context,
+        schedule_context=body.schedule_context,
+        channel_context=body.channel_context,
         order_context=body.order_context,
     )
     return ChatResponse(reply=reply, conversation_id=str(conv.id))
