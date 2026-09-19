@@ -114,6 +114,21 @@ class LogDoseArgs(BaseModel):
     note: str | None = Field(default=None)
 
 
+class SaveMemoryArgs(BaseModel):
+    content: str = Field(description="Family news or detail worth remembering")
+
+
+class LogVitalsArgs(BaseModel):
+    kind: str = Field(description="Vital type e.g. Blood pressure, Blood sugar")
+    value: str = Field(description="Reading e.g. 140/90 or 110")
+    unit: str | None = Field(default=None)
+    note: str | None = Field(default=None)
+
+
+class GetOrderStatusArgs(BaseModel):
+    orderId: str | None = Field(default=None, description="Optional order id; latest order if omitted")
+
+
 def _backend_tools(
     family_id: str,
     elder_id: str,
@@ -260,6 +275,24 @@ def _backend_tools(
             {"title": title, "scheduleId": scheduleId, "dateKey": dateKey, "note": note},
         )
 
+    async def get_order_status(orderId: str | None = None) -> str:
+        args = {"orderId": orderId} if orderId else {}
+        return await _run("get_order_status", args)
+
+    async def log_vitals(
+        kind: str,
+        value: str,
+        unit: str | None = None,
+        note: str | None = None,
+    ) -> str:
+        return await _run(
+            "log_vitals",
+            {"kind": kind, "value": value, "unit": unit, "note": note},
+        )
+
+    async def save_memory(content: str) -> str:
+        return await _run("save_memory", {"content": content})
+
     return locals()
 
 
@@ -383,5 +416,29 @@ def build_elder_whatsapp_tools(
             name="recall_memories",
             description="Recall saved family memories about the elder.",
             args_schema=LimitArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["get_order_status"],
+            name="get_order_status",
+            description="Latest order status when elder asks where their order is.",
+            args_schema=GetOrderStatusArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["log_vitals"],
+            name="log_vitals",
+            description="Log BP, sugar, or other vitals the elder reports in chat.",
+            args_schema=LogVitalsArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["save_memory"],
+            name="save_memory",
+            description="Save family news or personal updates the elder shares.",
+            args_schema=SaveMemoryArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["resolve_catalog_item"],
+            name="resolve_catalog_item",
+            description="Pick a numbered catalog option after disambiguation (candidateIndex 0-based).",
+            args_schema=ResolveCatalogArgs,
         ),
     ]

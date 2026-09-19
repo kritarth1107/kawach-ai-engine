@@ -93,6 +93,19 @@ def _extract_tool_payloads(
     return order_payload, connect_payload, order_preview, order_flow
 
 
+def _friendly_tool_error(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        raw = str(raw)
+    lower = raw.lower()
+    if "timeout" in lower or "timed out" in lower:
+        return "That search timed out — please try again in a minute."
+    if "not connected" in lower:
+        return "That delivery partner isn't connected yet — your caregiver can link it in Integrations."
+    if raw.strip():
+        return f"Sorry — {raw.strip()}"
+    return None
+
+
 def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
     for row in reversed(tool_results):
         if not isinstance(row, dict):
@@ -101,6 +114,14 @@ def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
         if not result:
             continue
         inner = _tool_inner(result)
+        err = inner.get("error") or result.get("error")
+        if err:
+            msg = inner.get("message") or result.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+            friendly = _friendly_tool_error(err)
+            if friendly:
+                return friendly
         if inner.get("kind") == "prompt" and isinstance(inner.get("message"), str):
             return inner["message"].strip()
         if result.get("status") == "prompt" and isinstance(inner.get("message"), str):
@@ -166,12 +187,15 @@ You are {child_name}. Language preference: {lang}.
 {platform_block}
 
 Ordering playbook:
-1. resolve_order_partner → list_partner_addresses
-2. ensure_order_session(message) → keep sessionId
+1. resolve_order_partner FIRST — speak its message field verbatim when partner unavailable
+2. list_partner_addresses → ensure_order_session(message) → keep sessionId
 3. select_order_address if needed
 4. add_to_order_cart with all items in one batch call
-5. If disambiguation_required, ask elder to pick 1/2/3 then add with candidateIndex
+5. If disambiguation_required, ask elder to pick 1/2/3 then resolve_catalog_item or add with candidateIndex
 6. get_order_cart → elder confirms → submit_order_cart
+7. get_order_status when elder asks where their order is
+8. log_vitals for BP/sugar; save_memory for family news worth remembering
+Never re-ask what to order when item + partner are already stated.
 Never order for check-ins or "anything you want to know?".
 """
 
@@ -219,9 +243,16 @@ Never order for check-ins or "anything you want to know?".
                 try:
                     result = await selected.ainvoke(tool_args)
                     result_str = result if isinstance(result, str) else json.dumps(result)
-                    tool_results_raw.append({"tool": tool_name, "result": json.loads(result_str) if result_str.startswith("{") else result_str})
+                    parsed = (
+                        json.loads(result_str)
+                        if isinstance(result_str, str) and result_str.startswith("{")
+                        else result_str
+                    )
+                    tool_results_raw.append({"tool": tool_name, "result": parsed})
                 except Exception as exc:
-                    result_str = json.dumps({"error": str(exc)})
+                    parsed = {"error": str(exc)}
+                    result_str = json.dumps(parsed)
+                    tool_results_raw.append({"tool": tool_name, "result": parsed})
             tool_trace.append({"tool": tool_name, "status": "done"})
             messages.append(
                 ToolMessage(content=result_str, tool_call_id=call["id"]),
@@ -229,6 +260,9 @@ Never order for check-ins or "anything you want to know?".
 
     fallback = await chat_invoke_messages(messages)
     reply = _stringify_ai_content(fallback.content)
+    prompt_message = _prompt_message_from_tools(tool_results_raw)
+    if prompt_message:
+        reply = prompt_message
     order_payload, connect_payload, order_preview, order_flow = _extract_tool_payloads(
         tool_results_raw,
     )

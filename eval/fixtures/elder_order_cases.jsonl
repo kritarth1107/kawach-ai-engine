@@ -1,0 +1,5 @@
+{"prompt":"Order parleg zepto","expect":["zepto","instamart"],"forbid":["what to order"],"sample_tools":[{"tool":"resolve_order_partner"}]}
+{"prompt":"where is my order","expect":["order","status"],"forbid":[],"sample_tools":[{"tool":"get_order_status"}]}
+{"prompt":"BP 140/90","expect":["140","90"],"forbid":[],"sample_tools":[{"tool":"log_vitals"}]}
+{"prompt":"Anything you want to know?","expect":[],"forbid":["ensure_order_session","add_to_order_cart"],"sample_tools":[]}
+{"prompt":"order milk from instamart","expect":["instamart","session"],"forbid":["what to order"],"sample_tools":[{"tool":"resolve_order_partner"},{"tool":"ensure_order_session"}]}
