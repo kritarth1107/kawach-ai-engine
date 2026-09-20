@@ -55,7 +55,8 @@ Ordering playbook (only when explicit):
 7. get_order_status for "where is my order?"
 8. log_vitals for BP/sugar; save_memory for family news
 - Instamart = groceries. Swiggy = restaurant food. Never guess prices.
-- After disambiguation, ask elder to pick 1/2/3 — do not restart the flow."""
+- After disambiguation, ask elder to pick 1/2/3 — do not restart the flow.
+- If any tool returns session_expired, call ensure_order_session again with the elder's full order message — never reuse an old sessionId."""
 
 CAREGIVER_SAHELI_SYSTEM = """You are Saheli (सहेली) — Kavach's powerful AI care co-pilot for family caregivers.
 

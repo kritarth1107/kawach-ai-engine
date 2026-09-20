@@ -13,11 +13,12 @@ def _vertex_chat_llm(model_name: str | None = None) -> ChatVertexAI:
     project = settings.gcp_project_id
     if not project:
         raise RuntimeError("GCP_PROJECT_ID is required for Vertex AI")
+    is_agent_model = model_name == settings.vertex_caregiver_chat_model
     return ChatVertexAI(
         model_name=model_name or settings.vertex_chat_model,
         project=project,
         location=settings.gcp_region,
-        temperature=0.6,
+        temperature=0.35 if is_agent_model else 0.5,
         max_retries=2,
     )
 

@@ -101,6 +101,8 @@ def _friendly_tool_error(raw: object) -> str | None:
         return "That search timed out — please try again in a minute."
     if "not connected" in lower:
         return "That delivery partner isn't connected yet — your caregiver can link it in Integrations."
+    if "session expired" in lower or ("timed out" in lower and "basket" in lower):
+        return "That order basket timed out — tell me again what you'd like to order and I'll start fresh."
     if raw.strip():
         return f"Sorry — {raw.strip()}"
     return None
@@ -122,6 +124,10 @@ def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
             friendly = _friendly_tool_error(err)
             if friendly:
                 return friendly
+        if result.get("status") == "session_expired":
+            msg = inner.get("message") or result.get("message")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
         if inner.get("kind") == "prompt" and isinstance(inner.get("message"), str):
             return inner["message"].strip()
         if result.get("status") == "prompt" and isinstance(inner.get("message"), str):
@@ -196,6 +202,7 @@ Ordering playbook:
 7. get_order_status when elder asks where their order is
 8. log_vitals for BP/sugar; save_memory for family news worth remembering
 Never re-ask what to order when item + partner are already stated.
+If a tool returns session_expired, call ensure_order_session again with the full order request — never reuse old sessionIds.
 Never order for check-ins or "anything you want to know?".
 """
 
