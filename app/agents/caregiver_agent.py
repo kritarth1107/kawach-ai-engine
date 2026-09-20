@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Any
 
@@ -14,6 +15,46 @@ from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
 from app.rag.retrieve import format_family_memories, retrieve_family_memories
+
+_CASUAL_OFFER = re.compile(
+    r"\banything you (want|need) to know\b|\bdo you need (any|some)? (info|information|help)\b",
+    re.I,
+)
+_ORDER_HINT = re.compile(r"\b(order|swiggy|instamart|zepto)\b", re.I)
+_GENERIC_ORDER_REPLY = re.compile(
+    r"tell me what to order|what would you like to order|what do you want to order|from swiggy, instamart",
+    re.I,
+)
+_ORDER_TOOL_NAMES = {
+    "resolve_order_partner",
+    "ensure_order_session",
+    "search_catalog",
+    "add_to_order_cart",
+    "get_order_cart",
+    "submit_order_cart",
+    "select_order_address",
+    "list_partner_addresses",
+    "resolve_catalog_item",
+}
+
+
+def _sanitize_elder_reply_without_tools(
+    message: str,
+    reply: str,
+    tool_trace: list[dict],
+) -> str:
+    """Strip hallucinated order replies when no ordering tools ran."""
+    tool_names = {row.get("tool") for row in tool_trace if row.get("status") == "done"}
+    had_order_tools = bool(tool_names & _ORDER_TOOL_NAMES)
+    if _CASUAL_OFFER.search(message) and _ORDER_HINT.search(reply):
+        return (
+            "That's sweet of you to ask! I don't need anything right now — "
+            "tell me how you're doing or share any news."
+        )
+    if not had_order_tools and _ORDER_HINT.search(message):
+        if _GENERIC_ORDER_REPLY.search(reply) or "₹" in reply:
+            return ""
+    return reply
 
 
 def _parse_tool_result(raw: object) -> dict | None:
@@ -226,6 +267,7 @@ Never order for check-ins or "anything you want to know?".
             prompt_message = _prompt_message_from_tools(tool_results_raw)
             if prompt_message:
                 reply = prompt_message
+            reply = _sanitize_elder_reply_without_tools(message, reply, tool_trace)
             order_payload, connect_payload, order_preview, order_flow = _extract_tool_payloads(
                 tool_results_raw,
             )
@@ -270,6 +312,7 @@ Never order for check-ins or "anything you want to know?".
     prompt_message = _prompt_message_from_tools(tool_results_raw)
     if prompt_message:
         reply = prompt_message
+    reply = _sanitize_elder_reply_without_tools(message, reply, tool_trace)
     order_payload, connect_payload, order_preview, order_flow = _extract_tool_payloads(
         tool_results_raw,
     )
