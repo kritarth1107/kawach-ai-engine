@@ -190,6 +190,9 @@ def _backend_tools(
     async def recall_memories(limit: int = 10) -> str:
         return await _run("recall_memories", {"limit": limit})
 
+    async def get_family_members() -> str:
+        return await _run("get_family_members", {})
+
     async def suggest_order(message: str) -> str:
         return await _run("suggest_order", {"message": message})
 
@@ -315,6 +318,12 @@ def build_caregiver_tools(
         StructuredTool.from_function(coroutine=tools["preview_order"], name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
         StructuredTool.from_function(coroutine=tools["place_cod_order"], name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
         StructuredTool.from_function(coroutine=tools["recall_memories"], name="recall_memories", description="Recall elder family memories.", args_schema=LimitArgs),
+        StructuredTool.from_function(
+            coroutine=tools["get_family_members"],
+            name="get_family_members",
+            description="List family members with saved phone numbers, roles, and relationships.",
+            args_schema=LimitArgs,
+        ),
     ]
 
 
