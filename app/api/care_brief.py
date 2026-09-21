@@ -24,6 +24,7 @@ End with: Reported only — nothing invented."""
 class CareBriefRequest(BaseModel):
     subject_name: str = Field(..., min_length=1)
     timeline: str = Field(..., min_length=1)
+    stale_health: str = ""
 
 
 class CareBriefResponse(BaseModel):
@@ -32,6 +33,12 @@ class CareBriefResponse(BaseModel):
 
 @router.post("/generate", response_model=CareBriefResponse)
 async def generate_care_brief(body: CareBriefRequest):
-    user = f"Care recipient: {body.subject_name}\n\nTimeline:\n{body.timeline[:12000]}"
+    stale_block = ""
+    if body.stale_health.strip():
+        stale_block = (
+            "\n\nHealth memory flagged for review (include in brief, not as diagnosis):\n"
+            f"{body.stale_health[:4000]}"
+        )
+    user = f"Care recipient: {body.subject_name}\n\nTimeline:\n{body.timeline[:12000]}{stale_block}"
     text = await chat_invoke(SYSTEM_PROMPT, user)
     return CareBriefResponse(brief=text.strip())

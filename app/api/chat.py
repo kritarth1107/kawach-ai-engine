@@ -77,7 +77,8 @@ class OutreachRequest(BaseModel):
     family_id: uuid.UUID
     elder_id: uuid.UUID
     conversation_id: uuid.UUID | None = None
-    outreach_kind: str = Field(default="casual", pattern="^(casual|care|mixed)$")
+    outreach_kind: str = Field(default="casual", pattern="^(casual|care|mixed|memory)$")
+    memory_hint: str | None = None
     topic_bucket: str | None = None
     topic_hint: str | None = None
     care_record_context: str | None = None
@@ -230,15 +231,14 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
             kavach_recipient_user_id=body.kavach_recipient_user_id,
         )
         reply = result.get("reply", "")
-        db.add(
-            Message(
-                conversation_id=conv.id,
-                family_id=body.family_id,
-                elder_id=body.elder_id,
-                role=MessageRole.elder,
-                content=body.message.strip(),
-            )
+        elder_msg = Message(
+            conversation_id=conv.id,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            role=MessageRole.elder,
+            content=body.message.strip(),
         )
+        db.add(elder_msg)
         db.add(
             Message(
                 conversation_id=conv.id,
@@ -247,6 +247,16 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
                 role=MessageRole.saheli,
                 content=reply,
             )
+        )
+        await db.flush()
+        from app.rag.memory_queue import schedule_memory_extract
+
+        schedule_memory_extract(
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            message=body.message.strip(),
+            source_message_id=elder_msg.id,
+            source_role="elder",
         )
         await db.commit()
         return ChatResponse(
@@ -340,6 +350,7 @@ async def outreach(body: OutreachRequest, db: Annotated[AsyncSession, Depends(ge
         care_record_context=body.care_record_context,
         companion_profile=body.companion_profile,
         schedule_items=[item.model_dump() for item in body.schedule_items],
+        memory_hint=body.memory_hint,
     )
     return OutreachResponse(
         reply=result["reply"],

@@ -62,6 +62,8 @@ jobs:
           DATABASE_URL: "${DATABASE_URL}"
           KAWACH_API_SECRET: "${KAWACH_API_SECRET:-}"
           KAVACH_BACKEND_URL: "https://kavach-backend-303943038694.asia-south1.run.app"
+          MEMORY_GCS_BUCKET: "${MEMORY_GCS_BUCKET:-kavach-memory-exports}"
+          KAVACH_JOB_SECRET: "${HEALTH_SECRET:-}"
           EOF
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
@@ -71,7 +73,7 @@ jobs:
             --allow-unauthenticated \
             --port=8000 \
             --memory=1Gi \
-            --min-instances=0 \
+            --min-instances=1 \
             --max-instances=3 \
             --add-cloudsql-instances=${{ env.CLOUDSQL }} \
             --env-vars-file=/tmp/ai-engine-env.yaml \

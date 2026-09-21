@@ -1,10 +1,23 @@
 import enum
 import os
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    ARRAY,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -46,6 +59,25 @@ class MemoryCategory(str, enum.Enum):
     preference = "preference"
     mood = "mood"
     story = "story"
+
+
+class EntityKind(str, enum.Enum):
+    person = "person"
+    medication = "medication"
+    condition = "condition"
+    symptom = "symptom"
+    preference = "preference"
+    procedure = "procedure"
+    organisation = "organisation"
+    visit = "visit"
+    episode = "episode"
+
+
+class EntityStatus(str, enum.Enum):
+    active = "active"
+    needs_review = "needs-review"
+    resolved = "resolved"
+    archived = "archived"
 
 
 class Family(Base):
@@ -190,6 +222,13 @@ class FamilyMemory(Base):
     """Structured episodic memory — casual life facts the elder shared with Saheli."""
 
     __tablename__ = "family_memories"
+    __table_args__ = (
+        Index(
+            "ix_family_memories_inbox",
+            "elder_id",
+            postgresql_where=text("entity_id IS NULL AND forgotten_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"))
@@ -197,10 +236,76 @@ class FamilyMemory(Base):
     category: Mapped[MemoryCategory] = mapped_column(Enum(MemoryCategory), default=MemoryCategory.casual)
     topic: Mapped[str] = mapped_column(String(64), default="general")
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    source_role: Mapped[str] = mapped_column(String(32), default="elder")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
     source_message_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("messages.id", ondelete="SET NULL"))
+    superseded_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("family_memories.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    forgotten_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    forgotten_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    entity_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memory_entities.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     share_with_family: Mapped[bool] = mapped_column(default=False)
     shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     importance: Mapped[int] = mapped_column(default=3)
     last_referenced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MemoryEntity(Base):
+    """Instinct-style curated memory file per entity (person, medication, etc.)."""
+
+    __tablename__ = "memory_entities"
+    __table_args__ = (UniqueConstraint("elder_id", "slug", name="uq_elder_entity_slug"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"))
+    elder_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("elders.id", ondelete="CASCADE"))
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    aliases: Mapped[list[str] | None] = mapped_column(ARRAY(Text), default=list)
+    status: Mapped[str] = mapped_column(String(32), default=EntityStatus.active.value)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_by: Mapped[date | None] = mapped_column(Date, nullable=True)
+    body_md: Mapped[str] = mapped_column(Text, default="")
+    body_embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBED_DIM))
+    sources: Mapped[list | None] = mapped_column(JSONB, default=list)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    dirty: Mapped[bool] = mapped_column(default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MemoryEntityLink(Base):
+    __tablename__ = "memory_entity_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    from_entity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memory_entities.id", ondelete="CASCADE"),
+    )
+    to_entity_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("memory_entities.id", ondelete="CASCADE"),
+    )
+    relation: Mapped[str] = mapped_column(String(64), default="related")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MemoryProfile(Base):
+    __tablename__ = "memory_profiles"
+    __table_args__ = (UniqueConstraint("family_id", "elder_id", name="uq_memory_profile_elder"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("families.id", ondelete="CASCADE"))
+    elder_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("elders.id", ondelete="CASCADE"))
+    body_md: Mapped[str] = mapped_column(Text, default="")
+    token_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    rendered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -14,7 +14,9 @@ from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM, ELDER_WHATSAPP_AGENT_SYS
 from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
-from app.rag.retrieve import format_family_memories, retrieve_family_memories
+from app.agents.prompt_fence import MEMORY_FENCE_INSTRUCTION, fence_memory_block, new_memory_nonce
+from app.rag.profile_render import load_memory_profile_text
+from app.rag.retrieve import load_instinct_context
 
 _CASUAL_OFFER = re.compile(
     r"\banything you (want|need) to know\b|\bdo you need (any|some)? (info|information|help)\b",
@@ -228,9 +230,31 @@ async def run_elder_whatsapp_agent(
     if channel_context:
         platform_block += f"\n- Channel rules:\n{channel_context[:1200]}"
 
+    memory_profile = await load_memory_profile_text(session, family_id=family_id, elder_id=elder_id)
+    if memory_profile:
+        nonce = new_memory_nonce()
+        platform_block += (
+            f"\n- Memory profile:\n{fence_memory_block(memory_profile[:3000], nonce)}"
+        )
+
+    memory_context = await load_instinct_context(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        query=message.strip(),
+        entity_limit=3,
+    )
+    if memory_context and memory_context != "(Nothing saved yet.)":
+        ctx_nonce = new_memory_nonce()
+        platform_block += (
+            f"\n- Relevant memory for this message:\n"
+            f"{fence_memory_block(memory_context[:2500], ctx_nonce)}"
+        )
+
     system = f"""{ELDER_WHATSAPP_AGENT_SYSTEM}
 
 You are {child_name}. Language preference: {lang}.
+{MEMORY_FENCE_INSTRUCTION}
 {platform_block}
 
 Ordering playbook:
@@ -241,7 +265,11 @@ Ordering playbook:
 5. If disambiguation_required, ask elder to pick 1/2/3 then resolve_catalog_item or add with candidateIndex
 6. get_order_cart → elder confirms → submit_order_cart
 7. get_order_status when elder asks where their order is
-8. log_vitals for BP/sugar; save_memory for family news worth remembering
+8. log_vitals for BP/sugar
+Memory (important on WhatsApp):
+- Before answering about people, medicines, preferences, or the past, call memory_grep or memory_read_entity.
+- Use saved memory naturally — "Pichhli baar aapne bataya tha…" — only from tool results or memory blocks above.
+- If memory has nothing, say you don't have that saved yet — do not invent.
 Never re-ask what to order when item + partner are already stated.
 If a tool returns session_expired, call ensure_order_session again with the full order request — never reuse old sessionIds.
 Never order for check-ins or "anything you want to know?".
@@ -249,7 +277,12 @@ Never order for check-ins or "anything you want to know?".
 
     platform_family_id = kavach_family_id or str(family_id)
     platform_recipient_id = kavach_recipient_user_id or str(elder_id)
-    tools = build_elder_whatsapp_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    from app.agents.memory_tools import build_memory_read_tools
+
+    tools = [
+        *build_elder_whatsapp_tools(platform_family_id, platform_recipient_id, actor_user_id),
+        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+    ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
     messages: list = [SystemMessage(content=system)]
@@ -346,14 +379,11 @@ async def run_caregiver_agent(
     elder = await session.get(Elder, elder_id)
     elder_name = elder.display_name if elder else "Care recipient"
 
-    memories = await retrieve_family_memories(
-        session,
-        family_id=family_id,
-        elder_id=elder_id,
-        query=message,
-        limit=12,
+    memory_block = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=message, entity_limit=3
     )
-    memory_block = format_family_memories(memories)
+    memory_nonce = new_memory_nonce()
+    fenced_memory = fence_memory_block(memory_block, memory_nonce)
 
     platform_block = ""
     if care_record_context:
@@ -369,9 +399,10 @@ async def run_caregiver_agent(
 
     system = f"""{CAREGIVER_SAHELI_SYSTEM}
 
+{MEMORY_FENCE_INSTRUCTION}
 Care recipient: {elder_name}
 - Long-term memories about {elder_name}:
-{memory_block}
+{fenced_memory}
 {platform_block}
 
 {ORDER_AGENT_PLAYBOOK}
@@ -380,7 +411,12 @@ Quote lab values with dates only — never say high/low/normal.
 
     platform_family_id = kavach_family_id or str(family_id)
     platform_recipient_id = kavach_recipient_user_id or str(elder_id)
-    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    from app.agents.memory_tools import build_memory_read_tools
+
+    tools = [
+        *build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id),
+        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+    ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
     messages: list = [SystemMessage(content=system)]
@@ -464,10 +500,11 @@ async def stream_caregiver_agent(session: AsyncSession, **kwargs):
 
     elder = await session.get(Elder, elder_id)
     elder_name = elder.display_name if elder else "Care recipient"
-    memories = await retrieve_family_memories(
-        session, family_id=family_id, elder_id=elder_id, query=message, limit=12,
+    memory_block = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=message, entity_limit=3
     )
-    memory_block = format_family_memories(memories)
+    memory_nonce = new_memory_nonce()
+    fenced_memory = fence_memory_block(memory_block, memory_nonce)
 
     platform_block = ""
     if care_record_context:
@@ -483,9 +520,10 @@ async def stream_caregiver_agent(session: AsyncSession, **kwargs):
 
     system = f"""{CAREGIVER_SAHELI_SYSTEM}
 
+{MEMORY_FENCE_INSTRUCTION}
 Care recipient: {elder_name}
 - Long-term memories about {elder_name}:
-{memory_block}
+{fenced_memory}
 {platform_block}
 
 {ORDER_AGENT_PLAYBOOK}
@@ -494,7 +532,12 @@ Quote lab values with dates only — never say high/low/normal.
 
     platform_family_id = kavach_family_id or str(family_id)
     platform_recipient_id = kavach_recipient_user_id or str(elder_id)
-    tools = build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id)
+    from app.agents.memory_tools import build_memory_read_tools
+
+    tools = [
+        *build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id),
+        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+    ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
     messages: list = [SystemMessage(content=system)]

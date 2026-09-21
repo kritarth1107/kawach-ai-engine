@@ -19,14 +19,13 @@ from app.agents.prompts import (
 from app.agents.caregiver_agent import run_caregiver_agent
 from app.llm.provider import chat_invoke, chat_invoke_messages
 from app.models.entities import Conversation, Elder, Message, MessageRole
-from app.rag.memory_extract import process_elder_message_memories
+from app.rag.memory_queue import schedule_memory_extract
 from app.rag.retrieve import (
     db_messages_to_langchain,
-    format_family_memories,
     get_elder_thread_context,
     get_recent_messages,
+    load_instinct_context,
     retrieve_context,
-    retrieve_family_memories,
 )
 from app.services.family import get_caregiver_conversation, get_primary_conversation
 
@@ -57,10 +56,9 @@ async def node_retrieve(state: SaheliState, session: AsyncSession) -> dict:
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
 
-    memories = await retrieve_family_memories(
-        session, family_id=family_id, elder_id=elder_id, query=query, limit=10
+    family_memories = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=query
     )
-    family_memories = format_family_memories(memories)
 
     primary = await get_primary_conversation(session, family_id, elder_id)
     recent = await get_recent_messages(
@@ -135,12 +133,12 @@ async def node_persist(state: SaheliState, session: AsyncSession) -> dict:
     await session.flush()
 
     if not is_legacy_checkin and incoming_role == MessageRole.elder:
-        await process_elder_message_memories(
-            session,
+        schedule_memory_extract(
             family_id=family_id,
             elder_id=elder_id,
             message=state["user_message"],
             source_message_id=elder_msg.id,
+            source_role="elder",
         )
 
     conv = await session.get(Conversation, conversation_id)
@@ -236,15 +234,9 @@ async def node_caregiver_retrieve(state: CaregiverSaheliState, session: AsyncSes
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
 
-    memories = await retrieve_family_memories(
-        session,
-        family_id=family_id,
-        elder_id=elder_id,
-        query=query,
-        limit=12,
-        shareable_only=False,
+    family_memories = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=query, entity_limit=3
     )
-    family_memories = format_family_memories(memories)
 
     primary = await get_primary_conversation(session, family_id, elder_id)
     elder_thread = await get_elder_thread_context(
@@ -489,10 +481,13 @@ async def run_saheli_check_in(
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
 
-    memories = await retrieve_family_memories(
-        session, family_id=family_id, elder_id=elder_id, query="today health mood", limit=8
+    family_memories = await load_instinct_context(
+        session,
+        family_id=family_id,
+        elder_id=elder_id,
+        query="today health mood medicines",
+        entity_limit=3,
     )
-    family_memories = format_family_memories(memories)
 
     recent = await get_recent_messages(
         session,
@@ -563,27 +558,29 @@ async def run_saheli_outreach(
     care_record_context: str | None = None,
     companion_profile: dict[str, Any] | None = None,
     schedule_items: list[dict] | None = None,
+    memory_hint: str | None = None,
 ) -> dict[str, Any]:
     """Proactive outreach — Saheli initiates like a child calling to chat."""
     elder = await session.get(Elder, elder_id)
     display_name = elder.display_name if elder else "Care recipient"
     profile = companion_profile or {}
 
-    if topic_bucket and topic_hint:
+    if outreach_kind == "memory":
+        bucket, hint = "memory_recall", memory_hint or "Ask warmly about something you remember"
+    elif topic_bucket and topic_hint:
         bucket, hint = topic_bucket, topic_hint
     else:
         topics = profile.get("outreach_topics") or profile.get("outreachTopics")
         bucket, hint = _pick_outreach_topic(topics if isinstance(topics, list) else None)
 
-    query = f"{bucket} {hint} day life family"
+    query = memory_hint or f"{bucket} {hint} day life family"
     chunks = await retrieve_context(session, family_id=family_id, elder_id=elder_id, query=query)
     rag_lines = [f"[{c.kind}:{c.source}] {c.content}" for c in chunks]
     rag_context = "\n".join(rag_lines) if rag_lines else "(No matching memory yet.)"
 
-    memories = await retrieve_family_memories(
-        session, family_id=family_id, elder_id=elder_id, query=query, limit=10
+    family_memories = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=query, entity_limit=3
     )
-    family_memories = format_family_memories(memories)
 
     recent = await get_recent_messages(
         session,
@@ -594,7 +591,8 @@ async def run_saheli_outreach(
     )
     recent_chat = "\n".join(f"{role}: {content}" for role, content, _ts in recent)
 
-    schedule_block = _format_schedule_lines(schedule_items or []) if outreach_kind == "mixed" else None
+    schedule_block = _format_schedule_lines(schedule_items or []) if outreach_kind in ("mixed", "care") else None
+    effective_kind = "casual" if outreach_kind == "memory" else outreach_kind
 
     system = build_outreach_system_prompt(
         elder_display_name=display_name,
@@ -605,13 +603,18 @@ async def run_saheli_outreach(
         companion_profile=profile,
         schedule_block=schedule_block,
         care_record_context=care_record_context,
-        outreach_kind=outreach_kind,
+        outreach_kind=effective_kind,
+        memory_recall=(outreach_kind == "memory" or bucket == "memory_recall"),
     )
 
-    reply = await chat_invoke(
-        system,
-        f"Reach out to {display_name} now. Start a warm conversation about: {hint}",
-    )
+    user_prompt = f"Reach out to {display_name} now. Start a warm conversation about: {hint}"
+    if outreach_kind == "memory" and family_memories and family_memories != "(Nothing saved yet.)":
+        user_prompt += (
+            "\nPick ONE specific detail from saved memory and ask a gentle follow-up question "
+            "that makes them feel remembered and cared for."
+        )
+
+    reply = await chat_invoke(system, user_prompt)
 
     session.add(
         Message(
@@ -657,13 +660,9 @@ async def run_saheli_family_share(
     elder = await session.get(Elder, elder_id)
     display_name = elder.display_name if elder else "Care recipient"
 
-    memories = await retrieve_family_memories(
-        session, family_id=family_id, elder_id=elder_id, limit=8, shareable_only=True
+    family_memories = await load_instinct_context(
+        session, family_id=family_id, elder_id=elder_id, query=share_summary, entity_limit=3
     )
-    if memory_ids:
-        memories = [m for m in memories if m.id in memory_ids] or memories
-
-    family_memories = format_family_memories(memories)
     system = build_family_share_system_prompt(
         elder_display_name=display_name,
         share_summary=share_summary,

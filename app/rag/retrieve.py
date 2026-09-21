@@ -7,7 +7,14 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.models.entities import DocumentChunk, FamilyMemory, MemorySnippet, Message, MessageRole
+from app.models.entities import (
+    DocumentChunk,
+    FamilyMemory,
+    MemoryEntity,
+    MemorySnippet,
+    Message,
+    MessageRole,
+)
 from app.rag.embeddings import embed_text, embeddings_available
 
 
@@ -43,7 +50,17 @@ async def retrieve_context(
 
 
 def _query_tokens(query: str) -> list[str]:
-    return [t for t in re.findall(r"[a-zA-Z0-9]{2,}", query.lower())]
+    tokens = [t for t in re.findall(r"[a-zA-Z0-9\u0900-\u097F\u0C80-\u0CFF]{2,}", query.lower())]
+    if tokens:
+        return tokens
+    return [t for t in re.findall(r"\w{2,}", query.lower(), flags=re.UNICODE)]
+
+
+def _active_memory_filters(stmt):
+    return stmt.where(
+        FamilyMemory.forgotten_at.is_(None),
+        FamilyMemory.superseded_by.is_(None),
+    )
 
 
 async def _keyword_retrieve(
@@ -203,9 +220,11 @@ async def retrieve_family_memories(
     limit: int = 12,
     shareable_only: bool = False,
 ) -> list[FamilyMemory]:
-    stmt = select(FamilyMemory).where(
-        FamilyMemory.family_id == family_id,
-        FamilyMemory.elder_id == elder_id,
+    stmt = _active_memory_filters(
+        select(FamilyMemory).where(
+            FamilyMemory.family_id == family_id,
+            FamilyMemory.elder_id == elder_id,
+        )
     )
     if shareable_only:
         stmt = stmt.where(FamilyMemory.share_with_family.is_(True))
@@ -217,6 +236,8 @@ async def retrieve_family_memories(
             SELECT id FROM family_memories
             WHERE family_id = CAST(:family_id AS uuid)
               AND elder_id = CAST(:elder_id AS uuid)
+              AND forgotten_at IS NULL
+              AND superseded_by IS NULL
               AND embedding IS NOT NULL
             ORDER BY embedding <=> CAST(:qv AS vector)
             LIMIT :limit
@@ -232,6 +253,8 @@ async def retrieve_family_memories(
                 SELECT id FROM family_memories
                 WHERE family_id = CAST(:family_id AS uuid)
                   AND elder_id = CAST(:elder_id AS uuid)
+                  AND forgotten_at IS NULL
+                  AND superseded_by IS NULL
                   AND share_with_family = true
                   AND embedding IS NOT NULL
                 ORDER BY embedding <=> CAST(:qv AS vector)
@@ -271,6 +294,38 @@ def format_family_memories(memories: list[FamilyMemory]) -> str:
         cat = m.category.value if hasattr(m.category, "value") else str(m.category)
         lines.append(f"[{cat}:{m.topic}] {m.content}")
     return "\n".join(lines)
+
+
+async def load_instinct_context(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    query: str | None = None,
+    entity_limit: int = 3,
+    empty_label: str = "(Nothing saved yet.)",
+) -> str:
+    from app.rag.profile_render import load_memory_profile_text
+
+    profile = await load_memory_profile_text(session, family_id=family_id, elder_id=elder_id)
+    entity_blocks: list[str] = []
+    q = (query or "").strip()
+    if q:
+        grep_hits = await memory_grep(
+            session,
+            family_id=family_id,
+            elder_id=elder_id,
+            query=q,
+            limit=entity_limit,
+        )
+        for hit in grep_hits:
+            entity = await load_entity_body(session, elder_id=elder_id, slug=hit.slug)
+            if entity and entity.body_md:
+                entity_blocks.append(entity.body_md[:2000])
+    text = profile
+    if entity_blocks:
+        text = (profile + "\n\n" + "\n\n".join(entity_blocks)).strip()
+    return text or empty_label
 
 
 async def get_recent_messages(
@@ -351,20 +406,166 @@ async def sync_conversation_history(
         )
         session.add(msg)
         synced += 1
-        if role_raw in ("elder", "family"):
-            from app.rag.memory_extract import process_elder_message_memories
-
-            await session.flush()
-            await process_elder_message_memories(
-                session,
-                family_id=family_id,
-                elder_id=elder_id,
-                message=content,
-                source_message_id=msg.id,
-            )
     if synced:
         await session.commit()
     return synced
+
+
+@dataclass
+class MemoryGrepHit:
+    slug: str
+    kind: str
+    title: str
+    snippet: str
+    score: float
+    match_type: str
+
+
+async def memory_grep(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+    query: str,
+    limit: int = 5,
+) -> list[MemoryGrepHit]:
+    tokens = _query_tokens(query)
+    q_lower = query.lower().strip()
+    entities = (
+        await session.execute(
+            select(MemoryEntity).where(
+                MemoryEntity.family_id == family_id,
+                MemoryEntity.elder_id == elder_id,
+            )
+        )
+    ).scalars().all()
+
+    scored: list[MemoryGrepHit] = []
+    for entity in entities:
+        aliases = [a.lower() for a in (entity.aliases or [])]
+        body = (entity.body_md or "").lower()
+        score = 0.0
+        match_type = "alias"
+        if q_lower and q_lower in body:
+            score += 2.0
+        for token in tokens:
+            if any(token in alias for alias in aliases):
+                score += 1.5
+            if token in body:
+                score += 1.0
+            if token in entity.slug:
+                score += 0.8
+        if score <= 0:
+            continue
+        snippet = (entity.body_md or "")[:400]
+        scored.append(
+            MemoryGrepHit(
+                slug=entity.slug,
+                kind=entity.kind,
+                title=entity.title,
+                snippet=snippet,
+                score=score,
+                match_type=match_type,
+            )
+        )
+
+    scored.sort(key=lambda row: row.score, reverse=True)
+    if scored:
+        return scored[:limit]
+
+    if embeddings_available() and query.strip():
+        query_vector = await embed_text(query)
+        qv = "[" + ",".join(str(x) for x in query_vector) + "]"
+        sql = text("""
+            SELECT slug, kind, title, body_md,
+                   1 - (body_embedding <=> CAST(:qv AS vector)) AS score
+            FROM memory_entities
+            WHERE family_id = CAST(:family_id AS uuid)
+              AND elder_id = CAST(:elder_id AS uuid)
+              AND body_embedding IS NOT NULL
+            ORDER BY body_embedding <=> CAST(:qv AS vector)
+            LIMIT :limit
+        """)
+        rows = (
+            await session.execute(
+                sql,
+                {
+                    "qv": qv,
+                    "family_id": str(family_id),
+                    "elder_id": str(elder_id),
+                    "limit": limit,
+                },
+            )
+        ).mappings().all()
+        return [
+            MemoryGrepHit(
+                slug=row["slug"],
+                kind=row["kind"],
+                title=row["title"],
+                snippet=(row["body_md"] or "")[:400],
+                score=float(row["score"] or 0),
+                match_type="vector",
+            )
+            for row in rows
+        ]
+    return []
+
+
+async def load_entity_body(
+    session: AsyncSession,
+    *,
+    elder_id: uuid.UUID,
+    slug: str,
+) -> MemoryEntity | None:
+    return (
+        await session.execute(
+            select(MemoryEntity).where(
+                MemoryEntity.elder_id == elder_id,
+                MemoryEntity.slug == slug,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def get_fact_history(
+    session: AsyncSession,
+    *,
+    fact_id: uuid.UUID,
+) -> list[FamilyMemory]:
+    chain: list[FamilyMemory] = []
+    current = await session.get(FamilyMemory, fact_id)
+    while current:
+        chain.append(current)
+        if not current.superseded_by:
+            break
+        next_fact = await session.get(FamilyMemory, current.superseded_by)
+        if not next_fact or next_fact.id == current.id:
+            break
+        current = next_fact
+    return chain
+
+
+async def list_stale_health_entities(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+) -> list[MemoryEntity]:
+    from datetime import date
+
+    return list(
+        (
+            await session.execute(
+                select(MemoryEntity).where(
+                    MemoryEntity.family_id == family_id,
+                    MemoryEntity.elder_id == elder_id,
+                    MemoryEntity.review_by.isnot(None),
+                    MemoryEntity.review_by < date.today(),
+                    MemoryEntity.kind.in_(["medication", "condition", "symptom"]),
+                )
+            )
+        ).scalars().all()
+    )
 
 
 async def get_elder_thread_context(

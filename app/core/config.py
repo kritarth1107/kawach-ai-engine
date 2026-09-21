@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     vertex_chat_model: str = "gemini-2.5-pro"
     vertex_caregiver_chat_model: str = "gemini-2.5-pro"
     kavach_backend_url: str = "http://localhost:5000"
+    kavach_job_secret: str = ""
+    memory_gcs_bucket: str = ""
     vertex_embedding_model: str = "text-multilingual-embedding-002"
     embed_dim: int = 768
 

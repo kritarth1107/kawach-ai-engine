@@ -55,7 +55,8 @@ Ordering playbook (only when explicit):
 5. If disambiguation_required → ask which option (1/2/3)
 6. get_order_cart → elder confirms → submit_order_cart
 7. get_order_status for "where is my order?"
-8. log_vitals for BP/sugar; save_memory for family news
+8. log_vitals for BP/sugar
+- Memory is read-only in chat: use memory_grep / memory_read_entity before answering about people, medicines, or history. If nothing matches, say you don't have that saved yet.
 - Instamart = groceries. Swiggy = restaurant food. Never guess prices.
 - After disambiguation, ask elder to pick 1/2/3 — do not restart the flow.
 - If any tool returns session_expired, call ensure_order_session again with the elder's full order message — never reuse an old sessionId."""
@@ -157,6 +158,7 @@ def build_outreach_system_prompt(
     schedule_block: str | None = None,
     care_record_context: str | None = None,
     outreach_kind: str = "casual",
+    memory_recall: bool = False,
 ) -> str:
     profile = companion_profile or {}
     child_name = profile.get("child_name") or profile.get("childName") or "Saheli"
@@ -182,6 +184,14 @@ Guidelines:
 - If outreach_kind is "care", weave in today's care list naturally after a warm hello.
 - Reference a saved memory if relevant — shows you remember.
 - Do not write as the elder. Do not invent what they did today."""
+
+    if memory_recall:
+        outreach_rules += """
+Memory-recall outreach (this turn):
+- Open with warmth, then ask about ONE specific person, preference, hobby, or story from saved memory.
+- Example tone: "Maa, pichhli baar aapne bataya tha… ab kaisa chal raha hai?"
+- If memory block is empty, ask a gentle random life question (food, TV, walk, family call).
+- Never mention medicines or schedule unless outreach_kind is care/mixed."""
 
     schedule_section = ""
     if schedule_block and outreach_kind == "care":

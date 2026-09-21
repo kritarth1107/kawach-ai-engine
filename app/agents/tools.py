@@ -421,12 +421,6 @@ def build_elder_whatsapp_tools(
             args_schema=SessionOnlyArgs,
         ),
         StructuredTool.from_function(
-            coroutine=tools["recall_memories"],
-            name="recall_memories",
-            description="Recall saved family memories about the elder.",
-            args_schema=LimitArgs,
-        ),
-        StructuredTool.from_function(
             coroutine=tools["get_order_status"],
             name="get_order_status",
             description="Latest order status when elder asks where their order is.",
@@ -437,12 +431,6 @@ def build_elder_whatsapp_tools(
             name="log_vitals",
             description="Log BP, sugar, or other vitals the elder reports in chat.",
             args_schema=LogVitalsArgs,
-        ),
-        StructuredTool.from_function(
-            coroutine=tools["save_memory"],
-            name="save_memory",
-            description="Save family news or personal updates the elder shares.",
-            args_schema=SaveMemoryArgs,
         ),
         StructuredTool.from_function(
             coroutine=tools["resolve_catalog_item"],

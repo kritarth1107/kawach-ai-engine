@@ -6,13 +6,14 @@ from sqlalchemy import text
 
 from app.api import care_brief, chat, documents, families, health, memory
 from app.core.config import get_settings
+from app.db.migrate import run_instinct_migrations
 from app.db.session import Base, engine
 from app.models import entities  # noqa: F401
 
 
 async def ensure_database_schema() -> None:
     async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        await run_instinct_migrations(conn)
         await conn.run_sync(Base.metadata.create_all)
 
 
