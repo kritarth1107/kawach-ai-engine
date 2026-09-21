@@ -49,6 +49,12 @@ jobs:
             exit 1
           fi
           IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
+          TAG="${{ github.sha }}"
+          if ! gcloud artifacts docker tags list "$IMAGE" --filter="tag:$TAG" --format="value(tag)" 2>/dev/null | grep -q "$TAG"; then
+            echo "Image tag $TAG not found — using latest from main engine deploy"
+            TAG=latest
+          fi
+          JOB_IMAGE="$IMAGE:$TAG"
           DATABASE_URL="postgresql+asyncpg://kawach:${KAWACH_PG_PASSWORD}@/kawach_ai?host=/cloudsql/${{ env.CLOUDSQL }}"
           cat > /tmp/dream-job-env.yaml <<EOF
           LLM_PROVIDER: vertex
@@ -69,7 +75,7 @@ jobs:
             gcloud run jobs update ${{ env.JOB_NAME }} \
               --project=${{ env.GCP_PROJECT_ID }} \
               --region=${{ env.GCP_REGION }} \
-              --image="$IMAGE:${{ github.sha }}" \
+              --image="$JOB_IMAGE" \
               --command=python \
               --args=-m,app.jobs.dream,--all \
               --memory=1Gi \
@@ -82,7 +88,7 @@ jobs:
             gcloud run jobs create ${{ env.JOB_NAME }} \
               --project=${{ env.GCP_PROJECT_ID }} \
               --region=${{ env.GCP_REGION }} \
-              --image="$IMAGE:${{ github.sha }}" \
+              --image="$JOB_IMAGE" \
               --command=python \
               --args=-m,app.jobs.dream,--all \
               --memory=1Gi \
