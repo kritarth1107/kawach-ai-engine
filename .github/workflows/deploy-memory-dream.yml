@@ -5,18 +5,20 @@ on:
   push:
     branches: [master, main]
     paths:
-      - "app/jobs/dream.py"
-      - "app/jobs/memory_context.py"
-      - "app/rag/**"
-      - "app/models/entities.py"
-      - "Dockerfile"
+      - "app/jobs/**"
       - ".github/workflows/deploy-memory-dream.yml"
 
+concurrency:
+  group: deploy-memory-dream-gcp
+  cancel-in-progress: true
+
 env:
-  GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_PROJECT_ID: kavach-care
   GCP_REGION: asia-south1
+  ARTIFACT_REPO: kavach
+  SERVICE: kawach-ai-engine
   JOB_NAME: kawach-memory-dream
-  IMAGE: asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/kavach/kawach-ai-engine
+  CLOUDSQL: kavach-care:asia-south1:kavach-ai-pg
 
 jobs:
   deploy:
@@ -29,65 +31,84 @@ jobs:
 
       - uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_SA_EMAIL }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Build and push image
+      - name: Deploy Cloud Run Job (reuse engine image)
+        env:
+          KAWACH_PG_PASSWORD: ${{ secrets.KAWACH_PG_PASSWORD }}
+          KAWACH_API_SECRET: ${{ secrets.KAWACH_API_SECRET }}
+          HEALTH_SECRET: ${{ secrets.HEALTH_SECRET }}
+          MEMORY_GCS_BUCKET: ${{ secrets.MEMORY_GCS_BUCKET }}
         run: |
-          gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
-          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" .
-          docker push "$IMAGE:${{ github.sha }}"
-          docker push "$IMAGE:latest"
-
-      - name: Deploy Cloud Run Job
-        run: |
+          set -euo pipefail
+          if [ -z "${KAWACH_PG_PASSWORD:-}" ] || [ -z "${KAWACH_API_SECRET:-}" ]; then
+            echo "::error::Missing KAWACH_PG_PASSWORD or KAWACH_API_SECRET repo secrets"
+            exit 1
+          fi
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.SERVICE }}
+          DATABASE_URL="postgresql+asyncpg://kawach:${KAWACH_PG_PASSWORD}@/kawach_ai?host=/cloudsql/${{ env.CLOUDSQL }}"
           cat > /tmp/dream-job-env.yaml <<EOF
           LLM_PROVIDER: vertex
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
           GCP_REGION: ${{ env.GCP_REGION }}
           VERTEX_CHAT_MODEL: gemini-2.5-flash-lite
-          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
-          KAWACH_API_SECRET: "${{ secrets.KAWACH_API_SECRET }}"
+          VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
+          EMBED_DIM: "768"
+          DATABASE_URL: "${DATABASE_URL}"
+          KAWACH_API_SECRET: "${KAWACH_API_SECRET}"
           KAVACH_BACKEND_URL: "https://kavach-backend-303943038694.asia-south1.run.app"
-          KAVACH_JOB_SECRET: "${{ secrets.HEALTH_SECRET }}"
-          MEMORY_GCS_BUCKET: "${{ secrets.MEMORY_GCS_BUCKET }}"
+          KAVACH_JOB_SECRET: "${HEALTH_SECRET:-}"
+          MEMORY_GCS_BUCKET: "${MEMORY_GCS_BUCKET:-kavach-memory-exports}"
           EOF
-          gcloud run jobs deploy ${{ env.JOB_NAME }} \
+          if gcloud run jobs describe ${{ env.JOB_NAME }} \
             --project=${{ env.GCP_PROJECT_ID }} \
-            --region=${{ env.GCP_REGION }} \
-            --image="$IMAGE:${{ github.sha }}" \
-            --command=python \
-            --args=-m,app.jobs.dream,--all \
-            --memory=1Gi \
-            --max-retries=1 \
-            --task-timeout=3600 \
-            --env-vars-file=/tmp/dream-job-env.yaml \
-            --quiet || \
-          gcloud run jobs create ${{ env.JOB_NAME }} \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --region=${{ env.GCP_REGION }} \
-            --image="$IMAGE:${{ github.sha }}" \
-            --command=python \
-            --args=-m,app.jobs.dream,--all \
-            --memory=1Gi \
-            --max-retries=1 \
-            --task-timeout=3600 \
-            --env-vars-file=/tmp/dream-job-env.yaml \
-            --quiet
+            --region=${{ env.GCP_REGION }} >/dev/null 2>&1; then
+            gcloud run jobs update ${{ env.JOB_NAME }} \
+              --project=${{ env.GCP_PROJECT_ID }} \
+              --region=${{ env.GCP_REGION }} \
+              --image="$IMAGE:${{ github.sha }}" \
+              --command=python \
+              --args=-m,app.jobs.dream,--all \
+              --memory=1Gi \
+              --max-retries=1 \
+              --task-timeout=3600 \
+              --set-cloudsql-instances=${{ env.CLOUDSQL }} \
+              --env-vars-file=/tmp/dream-job-env.yaml \
+              --quiet
+          else
+            gcloud run jobs create ${{ env.JOB_NAME }} \
+              --project=${{ env.GCP_PROJECT_ID }} \
+              --region=${{ env.GCP_REGION }} \
+              --image="$IMAGE:${{ github.sha }}" \
+              --command=python \
+              --args=-m,app.jobs.dream,--all \
+              --memory=1Gi \
+              --max-retries=1 \
+              --task-timeout=3600 \
+              --set-cloudsql-instances=${{ env.CLOUDSQL }} \
+              --env-vars-file=/tmp/dream-job-env.yaml \
+              --quiet
+          fi
 
       - name: Ensure nightly scheduler (02:00 IST)
         run: |
-          gcloud scheduler jobs describe kawach-memory-dream-nightly \
+          set -euo pipefail
+          SA="${{ secrets.GCP_SERVICE_ACCOUNT }}"
+          if gcloud scheduler jobs describe kawach-memory-dream-nightly \
             --project=${{ env.GCP_PROJECT_ID }} \
-            --location=${{ env.GCP_REGION }} 2>/dev/null || \
-          gcloud scheduler jobs create http kawach-memory-dream-nightly \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --location=${{ env.GCP_REGION }} \
-            --schedule="0 2 * * *" \
-            --time-zone="Asia/Kolkata" \
-            --uri="https://${{ env.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ env.GCP_PROJECT_ID }}/jobs/${{ env.JOB_NAME }}:run" \
-            --http-method=POST \
-            --oauth-service-account-email="${{ secrets.GCP_SA_EMAIL }}" \
-            --quiet
+            --location=${{ env.GCP_REGION }} >/dev/null 2>&1; then
+            echo "Scheduler already exists"
+          else
+            gcloud scheduler jobs create http kawach-memory-dream-nightly \
+              --project=${{ env.GCP_PROJECT_ID }} \
+              --location=${{ env.GCP_REGION }} \
+              --schedule="0 2 * * *" \
+              --time-zone="Asia/Kolkata" \
+              --uri="https://${{ env.GCP_REGION }}-run.googleapis.com/v2/projects/${{ env.GCP_PROJECT_ID }}/locations/${{ env.GCP_REGION }}/jobs/${{ env.JOB_NAME }}:run" \
+              --http-method=POST \
+              --oauth-service-account-email="${SA}" \
+              --quiet
+          fi
