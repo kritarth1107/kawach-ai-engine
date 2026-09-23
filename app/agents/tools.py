@@ -296,6 +296,12 @@ def _backend_tools(
     async def save_memory(content: str) -> str:
         return await _run("save_memory", {"content": content})
 
+    async def quick_order(message: str) -> str:
+        return await _run("quick_order", {"message": message})
+
+    async def confirm_and_place_order(sessionId: str) -> str:
+        return await _run("confirm_and_place_order", {"sessionId": sessionId})
+
     return locals()
 
 
@@ -366,9 +372,28 @@ def build_elder_whatsapp_tools(
             args_schema=ScheduleTitleArgs,
         ),
         StructuredTool.from_function(
+            coroutine=tools["quick_order"],
+            name="quick_order",
+            description=(
+                "Phase-2 one-shot order: pass the elder's full order message. "
+                "Returns confirm card data (items, price, partner, address, sessionId). "
+                "Never invent prices — only read tool output."
+            ),
+            args_schema=OrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["confirm_and_place_order"],
+            name="confirm_and_place_order",
+            description=(
+                "After elder says haan/confirm/yes on a quick_order card, place the order "
+                "with the sessionId from quick_order."
+            ),
+            args_schema=SessionOnlyArgs,
+        ),
+        StructuredTool.from_function(
             coroutine=tools["resolve_order_partner"],
             name="resolve_order_partner",
-            description="Pick Swiggy (food) vs Instamart (groceries) from the elder's message.",
+            description="Fallback only: pick Swiggy (food) vs Instamart (groceries) from the elder's message.",
             args_schema=ResolvePartnerArgs,
         ),
         StructuredTool.from_function(

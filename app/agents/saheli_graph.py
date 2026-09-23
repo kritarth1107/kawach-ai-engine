@@ -18,7 +18,7 @@ from app.agents.prompts import (
 )
 from app.agents.caregiver_agent import run_caregiver_agent
 from app.llm.provider import chat_invoke, chat_invoke_messages
-from app.models.entities import Conversation, Elder, Message, MessageRole
+from app.models.entities import Conversation, Elder, FamilyMemory, Message, MessageRole
 from app.rag.memory_queue import schedule_memory_extract
 from app.rag.retrieve import (
     db_messages_to_langchain,
@@ -693,9 +693,11 @@ async def run_saheli_family_share(
     )
 
     now = datetime.now(timezone.utc)
-    for mem in memories:
-        if mem.share_with_family and not mem.shared_at:
-            mem.shared_at = now
+    if memory_ids:
+        for mem_id in memory_ids:
+            mem = await session.get(FamilyMemory, mem_id)
+            if mem and mem.share_with_family and not mem.shared_at:
+                mem.shared_at = now
 
     caregiver_conv.updated_at = now
     await session.commit()

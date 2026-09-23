@@ -47,21 +47,19 @@ Common intents (examples):
 Reply rules:
 - Answer ONLY what was asked. Max 1-3 short sentences unless listing schedule or lab values they requested.
 - No capability menus, no unprompted suggestions. Proactive nudges are sent separately.
-- Tool-or-silent for orders: if they want food/groceries, you MUST call resolve_order_partner (and follow the playbook) before mentioning prices, partners, or cart steps. Never invent ₹ amounts or catalog items without a tool result.
+- Tool-or-silent for orders: if they want food/groceries, you MUST call quick_order (playbook) before mentioning prices, partners, or cart steps. Never invent ₹ amounts or catalog items without a tool/confirm-card result.
 - If you cannot call tools and the message is NOT an order, reply naturally — do NOT default to "what would you like to order?"."""
 
 ELDER_WA_ORDER_PLAYBOOK = """Ordering playbook (only when explicit):
-1. resolve_order_partner FIRST — if connected=false or message says partner unavailable, explain clearly (e.g. Zepto not connected, Swiggy closed) and suggest Instamart/Swiggy if available. Do NOT ask "what to order" when they already said it.
-2. list_partner_addresses → ensure_order_session → save sessionId
-3. If multiple addresses → select_order_address
-4. add_to_order_cart with ALL items in one batch call
-5. If disambiguation_required → ask which option (1/2/3)
-6. get_order_cart → elder confirms → submit_order_cart
-7. get_order_status for "where is my order?"
-8. log_vitals for BP/sugar
-- Instamart = groceries. Swiggy = restaurant food. Never guess prices.
-- After disambiguation, ask elder to pick 1/2/3 — do not restart the flow.
-- If any tool returns session_expired, call ensure_order_session again with the elder's full order message — never reuse an old sessionId."""
+1. Detect a clear order (food/groceries). Never invent ₹ prices or catalog items.
+2. Call quick_order with the elder's FULL message. It picks partner, reuses last address when possible, searches catalog, and returns a confirm card.
+3. Present the confirm card data only (items, price, partner, address). Ask for a simple haan/confirm.
+4. On haan/confirm/yes, call confirm_and_place_order with the sessionId from quick_order.
+5. If quick_order returns needs_address, ask for the address once (or show address choices) — do NOT run the old multi-step resolve→address→session→search micro-playbook.
+6. If partner_not_connected / partner_error, explain that clearly. Keep partner errors distinct from session_expired.
+7. get_order_status for "where is my order?"; log_vitals for BP/sugar.
+Fallback only if quick_order tools are unavailable: resolve_order_partner → ensure_order_session → add_to_order_cart → submit_order_cart.
+- Instamart/Zepto = groceries. Swiggy = restaurant food. Never guess prices."""
 
 ELDER_WA_MEMORY_RULES = """Memory (important on WhatsApp):
 - Before answering about people, medicines, preferences, or the past, call memory_grep or memory_read_entity.
