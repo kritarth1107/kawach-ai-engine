@@ -1,7 +1,7 @@
 import json
 import logging
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -262,15 +262,29 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
             )
         )
         await db.flush()
-        from app.rag.memory_queue import schedule_memory_extract
-
-        schedule_memory_extract(
-            family_id=body.family_id,
-            elder_id=body.elder_id,
-            message=body.message.strip(),
-            source_message_id=elder_msg.id,
-            source_role="elder",
+        from app.rag.memory_queue import (
+            eager_memory_extract,
+            is_high_value_message,
+            schedule_memory_extract,
         )
+
+        msg_text = body.message.strip()
+        if is_high_value_message(msg_text):
+            await eager_memory_extract(
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                message=msg_text,
+                source_message_id=elder_msg.id,
+                source_role="elder",
+            )
+        else:
+            schedule_memory_extract(
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                message=msg_text,
+                source_message_id=elder_msg.id,
+                source_role="elder",
+            )
         await db.commit()
         return ChatResponse(
             reply=reply,

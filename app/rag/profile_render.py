@@ -9,7 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.prompt_fence import fence_memory_block, new_memory_nonce
-from app.models.entities import EntityStatus, FamilyMemory, MemoryEntity, MemoryProfile
+from app.models.entities import (
+    EntityStatus,
+    FamilyMemory,
+    MemoryEntity,
+    MemoryProfile,
+)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -125,12 +130,80 @@ async def render_memory_profile(
     return profile
 
 
+async def bootstrap_memory_onepager(
+    session: AsyncSession,
+    *,
+    family_id: uuid.UUID,
+    elder_id: uuid.UUID,
+) -> str:
+    """Generate an on-the-fly memory one-pager from inbox facts when no profile exists.
+
+    This ensures every elder WA turn gets a non-empty memory context even if the
+    nightly dream job hasn't run yet.
+    """
+    entities = (
+        await session.execute(
+            select(MemoryEntity)
+            .where(
+                MemoryEntity.family_id == family_id,
+                MemoryEntity.elder_id == elder_id,
+                MemoryEntity.status.in_([EntityStatus.active.value, EntityStatus.needs_review.value]),
+            )
+            .order_by(MemoryEntity.updated_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+
+    inbox = (
+        await session.execute(
+            select(FamilyMemory)
+            .where(
+                FamilyMemory.family_id == family_id,
+                FamilyMemory.elder_id == elder_id,
+                FamilyMemory.entity_id.is_(None),
+                FamilyMemory.forgotten_at.is_(None),
+                FamilyMemory.superseded_by.is_(None),
+            )
+            .order_by(FamilyMemory.importance.desc(), FamilyMemory.created_at.desc())
+            .limit(15)
+        )
+    ).scalars().all()
+
+    if not entities and not inbox:
+        return "(Nothing saved yet — this is our first conversation.)"
+
+    sections: list[str] = ["## What Saheli knows"]
+
+    if entities:
+        sections.append("")
+        sections.append("### Saved entities")
+        for entity in entities[:10]:
+            first_line = (entity.body_md or "").split("\n")
+            gist = next((ln for ln in first_line if ln.startswith("-")), entity.title)
+            sections.append(f"- `{entity.slug}` ({entity.kind}): {gist[:100]}")
+
+    if inbox:
+        sections.append("")
+        sections.append("### Recent facts (not yet consolidated)")
+        for fact in inbox:
+            cat = fact.category.value if hasattr(fact.category, "value") else str(fact.category)
+            sections.append(f"- [{cat}] {fact.content[:150]}")
+
+    sections.append("")
+    sections.append("Use memory_grep before answering about people, medicines, or history.")
+
+    body = "\n".join(sections)
+    nonce = new_memory_nonce()
+    return fence_memory_block(body, nonce)
+
+
 async def load_memory_profile_text(
     session: AsyncSession,
     *,
     family_id: uuid.UUID,
     elder_id: uuid.UUID,
 ) -> str:
+    """Load the rendered memory profile, or bootstrap one on-the-fly if none exists."""
     row = (
         await session.execute(
             select(MemoryProfile).where(
@@ -139,4 +212,10 @@ async def load_memory_profile_text(
             )
         )
     ).scalar_one_or_none()
-    return row.body_md if row and row.body_md else ""
+
+    if row and row.body_md and row.body_md.strip():
+        return row.body_md
+
+    return await bootstrap_memory_onepager(
+        session, family_id=family_id, elder_id=elder_id
+    )

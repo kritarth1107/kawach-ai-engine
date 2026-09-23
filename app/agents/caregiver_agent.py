@@ -10,7 +10,14 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agents.prompts import CAREGIVER_SAHELI_SYSTEM, ELDER_WHATSAPP_AGENT_SYSTEM
+from app.agents.prompts import (
+    CAREGIVER_SAHELI_SYSTEM,
+    ELDER_WA_ANTI_HALLUCINATION,
+    ELDER_WA_INTENT_RULES,
+    ELDER_WA_MEMORY_RULES,
+    ELDER_WA_ORDER_PLAYBOOK,
+    build_elder_wa_persona,
+)
 from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
@@ -217,30 +224,20 @@ async def run_elder_whatsapp_agent(
     max_iterations: int = 5,
 ) -> dict[str, Any]:
     profile = companion_profile or {}
-    child_name = profile.get("child_name") or profile.get("childName") or "Saheli"
     lang = profile.get("preferred_language") or profile.get("preferredLanguage") or "english"
 
-    platform_block = ""
-    if schedule_context:
-        platform_block += f"\n- Today's schedule:\n{schedule_context[:2500]}"
-    if care_record_context:
-        platform_block += f"\n- Care timeline:\n{care_record_context[:2500]}"
-    if order_context:
-        platform_block += f"\n- Ordering note:\n{order_context[:800]}"
-    if channel_context:
-        platform_block += f"\n- Channel rules:\n{channel_context[:1200]}"
+    persona = build_elder_wa_persona(companion_profile)
 
+    memory_block = ""
     try:
         memory_profile = await load_memory_profile_text(
             session, family_id=family_id, elder_id=elder_id
         )
     except Exception:
         memory_profile = ""
+
     if memory_profile:
-        nonce = new_memory_nonce()
-        platform_block += (
-            f"\n- Memory profile:\n{fence_memory_block(memory_profile[:3000], nonce)}"
-        )
+        memory_block += f"\n## Memory profile\n{memory_profile[:3000]}"
 
     memory_context = await load_instinct_context(
         session,
@@ -251,32 +248,37 @@ async def run_elder_whatsapp_agent(
     )
     if memory_context and memory_context != "(Nothing saved yet.)":
         ctx_nonce = new_memory_nonce()
-        platform_block += (
-            f"\n- Relevant memory for this message:\n"
+        memory_block += (
+            f"\n\n## Relevant memory for this message\n"
             f"{fence_memory_block(memory_context[:2500], ctx_nonce)}"
         )
 
-    system = f"""{ELDER_WHATSAPP_AGENT_SYSTEM}
+    platform_block = ""
+    if schedule_context:
+        platform_block += f"\n## Today's schedule\n{schedule_context[:2500]}"
+    if care_record_context:
+        platform_block += f"\n## Care timeline\n{care_record_context[:2500]}"
+    if order_context:
+        platform_block += f"\n## Ordering note\n{order_context[:800]}"
+    if channel_context:
+        platform_block += f"\n## Channel rules\n{channel_context[:1200]}"
 
-You are {child_name}. Language preference: {lang}.
+    system = f"""{persona}
+
+Language preference: {lang}.
+
+{ELDER_WA_ANTI_HALLUCINATION}
+
+{ELDER_WA_INTENT_RULES}
+
 {MEMORY_FENCE_INSTRUCTION}
+{memory_block}
 {platform_block}
 
-Ordering playbook:
-1. resolve_order_partner FIRST — speak its message field verbatim when partner unavailable
-2. list_partner_addresses → ensure_order_session(message) → keep sessionId
-3. select_order_address if needed
-4. add_to_order_cart with all items in one batch call
-5. If disambiguation_required, ask elder to pick 1/2/3 then resolve_catalog_item or add with candidateIndex
-6. get_order_cart → elder confirms → submit_order_cart
-7. get_order_status when elder asks where their order is
-8. log_vitals for BP/sugar
-Memory (important on WhatsApp):
-- Before answering about people, medicines, preferences, or the past, call memory_grep or memory_read_entity.
-- Use saved memory naturally — "Pichhli baar aapne bataya tha…" — only from tool results or memory blocks above.
-- If memory has nothing, say you don't have that saved yet — do not invent.
+{ELDER_WA_ORDER_PLAYBOOK}
+
+{ELDER_WA_MEMORY_RULES}
 Never re-ask what to order when item + partner are already stated.
-If a tool returns session_expired, call ensure_order_session again with the full order request — never reuse old sessionIds.
 Never order for check-ins or "anything you want to know?".
 """
 
