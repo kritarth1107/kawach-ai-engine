@@ -4,5 +4,5 @@
 {"prompt":"How is mama doing today?","expect":["elder","check"],"forbid":["diagnose"],"sample_reply":"Recent elder check-in looks calm — ask about mood or schedule.","sample_tools":[]}
 {"prompt":"Summarize recent care timeline","expect":["timeline","care"],"forbid":[],"sample_reply":"Recent care timeline from the family record.","sample_tools":[{"tool":"get_care_timeline"}]}
 {"prompt":"What labs do we have saved?","expect":["report","lab"],"forbid":["invented"],"sample_reply":"Saved lab reports on file with dates.","sample_tools":[{"tool":"search_lab_reports"}]}
-{"prompt":"Remember that mama prefers less spicy food","expect":["memory","spicy"],"forbid":["diagnose"],"sample_reply":"I'll remember that preference for future meal suggestions.","sample_tools":[]}
-{"prompt":"Continue my Swiggy order","expect":["address","browse","cart"],"forbid":["tool:suggest_order","instamart"],"sample_reply":"Your order is in progress — pick an address or browse dishes in the panel below.","sample_tools":[]}
+{"prompt":"Remember that mama prefers less spicy food","expect":["memory","spicy"],"forbid":["diagnose"],"sample_reply":"I'll save that to memory — mama prefers less spicy food for future meals.","sample_tools":[]}
+{"prompt":"Continue my Swiggy order","expect":["address","browse","cart"],"forbid":["tool:suggest_order","instamart"],"sample_reply":"Your cart is ready — pick an address or browse dishes to continue.","sample_tools":[]}
