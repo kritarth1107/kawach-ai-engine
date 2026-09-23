@@ -1,8 +1,9 @@
 import json
+import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,7 @@ from app.rag.retrieve import get_recent_messages, sync_conversation_history
 from app.services.tenant import scope_caregiver_chat_request, scope_chat_request
 
 router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(verify_api_secret)])
+logger = logging.getLogger(__name__)
 
 
 class ScheduleItemIn(BaseModel):
@@ -215,21 +217,32 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
         from app.rag.retrieve import db_messages_to_langchain
 
         history = db_messages_to_langchain(recent)
-        result = await run_elder_whatsapp_agent(
-            db,
-            family_id=body.family_id,
-            elder_id=body.elder_id,
-            message=body.message.strip(),
-            care_record_context=care_context,
-            schedule_context=body.schedule_context,
-            channel_context=body.channel_context,
-            order_context=body.order_context,
-            companion_profile=body.companion_profile,
-            history_messages=history,
-            actor_user_id=body.actor_user_id,
-            kavach_family_id=body.kavach_family_id,
-            kavach_recipient_user_id=body.kavach_recipient_user_id,
-        )
+        try:
+            result = await run_elder_whatsapp_agent(
+                db,
+                family_id=body.family_id,
+                elder_id=body.elder_id,
+                message=body.message.strip(),
+                care_record_context=care_context,
+                schedule_context=body.schedule_context,
+                channel_context=body.channel_context,
+                order_context=body.order_context,
+                companion_profile=body.companion_profile,
+                history_messages=history,
+                actor_user_id=body.actor_user_id,
+                kavach_family_id=body.kavach_family_id,
+                kavach_recipient_user_id=body.kavach_recipient_user_id,
+            )
+        except Exception as exc:
+            logger.exception(
+                "elder whatsapp agent failed family=%s elder=%s",
+                body.family_id,
+                body.elder_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Saheli agent unavailable",
+            ) from exc
         reply = result.get("reply", "")
         elder_msg = Message(
             conversation_id=conv.id,
@@ -394,22 +407,33 @@ async def caregiver_chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(
         conversation_id=body.conversation_id,
     )
 
-    result = await run_saheli_caregiver_chat(
-        db,
-        family_id=body.family_id,
-        elder_id=body.elder_id,
-        conversation_id=conv.id,
-        message=body.message.strip(),
-        care_record_context=body.care_record_context,
-        elder_thread_context=body.elder_thread_context,
-        labs_context=body.labs_context,
-        session_context=body.session_context,
-        order_context=body.order_context,
-        use_agent=body.use_agent,
-        actor_user_id=body.actor_user_id,
-        kavach_family_id=body.kavach_family_id,
-        kavach_recipient_user_id=body.kavach_recipient_user_id,
-    )
+    try:
+        result = await run_saheli_caregiver_chat(
+            db,
+            family_id=body.family_id,
+            elder_id=body.elder_id,
+            conversation_id=conv.id,
+            message=body.message.strip(),
+            care_record_context=body.care_record_context,
+            elder_thread_context=body.elder_thread_context,
+            labs_context=body.labs_context,
+            session_context=body.session_context,
+            order_context=body.order_context,
+            use_agent=body.use_agent,
+            actor_user_id=body.actor_user_id,
+            kavach_family_id=body.kavach_family_id,
+            kavach_recipient_user_id=body.kavach_recipient_user_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "caregiver chat failed family=%s elder=%s",
+            body.family_id,
+            body.elder_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Saheli agent unavailable",
+        ) from exc
     return ChatResponse(
         reply=result.get("reply", ""),
         conversation_id=str(conv.id),

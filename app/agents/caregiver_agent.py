@@ -230,7 +230,12 @@ async def run_elder_whatsapp_agent(
     if channel_context:
         platform_block += f"\n- Channel rules:\n{channel_context[:1200]}"
 
-    memory_profile = await load_memory_profile_text(session, family_id=family_id, elder_id=elder_id)
+    try:
+        memory_profile = await load_memory_profile_text(
+            session, family_id=family_id, elder_id=elder_id
+        )
+    except Exception:
+        memory_profile = ""
     if memory_profile:
         nonce = new_memory_nonce()
         platform_block += (
@@ -281,7 +286,7 @@ Never order for check-ins or "anything you want to know?".
 
     tools = [
         *build_elder_whatsapp_tools(platform_family_id, platform_recipient_id, actor_user_id),
-        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+        *build_memory_read_tools(str(family_id), str(elder_id)),
     ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
@@ -415,7 +420,7 @@ Quote lab values with dates only — never say high/low/normal.
 
     tools = [
         *build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id),
-        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+        *build_memory_read_tools(str(family_id), str(elder_id)),
     ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 
@@ -536,7 +541,7 @@ Quote lab values with dates only — never say high/low/normal.
 
     tools = [
         *build_caregiver_tools(platform_family_id, platform_recipient_id, actor_user_id),
-        *build_memory_read_tools(platform_family_id, platform_recipient_id),
+        *build_memory_read_tools(str(family_id), str(elder_id)),
     ]
     llm = get_caregiver_chat_llm().bind_tools(tools)
 

@@ -1,3 +1,4 @@
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from app.models.entities import (
     MessageRole,
 )
 from app.rag.embeddings import embed_text, embeddings_available
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -307,25 +310,33 @@ async def load_instinct_context(
 ) -> str:
     from app.rag.profile_render import load_memory_profile_text
 
-    profile = await load_memory_profile_text(session, family_id=family_id, elder_id=elder_id)
-    entity_blocks: list[str] = []
-    q = (query or "").strip()
-    if q:
-        grep_hits = await memory_grep(
-            session,
-            family_id=family_id,
-            elder_id=elder_id,
-            query=q,
-            limit=entity_limit,
+    try:
+        profile = await load_memory_profile_text(session, family_id=family_id, elder_id=elder_id)
+        entity_blocks: list[str] = []
+        q = (query or "").strip()
+        if q:
+            grep_hits = await memory_grep(
+                session,
+                family_id=family_id,
+                elder_id=elder_id,
+                query=q,
+                limit=entity_limit,
+            )
+            for hit in grep_hits:
+                entity = await load_entity_body(session, elder_id=elder_id, slug=hit.slug)
+                if entity and entity.body_md:
+                    entity_blocks.append(entity.body_md[:2000])
+        text = profile
+        if entity_blocks:
+            text = (profile + "\n\n" + "\n\n".join(entity_blocks)).strip()
+        return text or empty_label
+    except Exception:
+        logger.exception(
+            "load_instinct_context failed family=%s elder=%s",
+            family_id,
+            elder_id,
         )
-        for hit in grep_hits:
-            entity = await load_entity_body(session, elder_id=elder_id, slug=hit.slug)
-            if entity and entity.body_md:
-                entity_blocks.append(entity.body_md[:2000])
-    text = profile
-    if entity_blocks:
-        text = (profile + "\n\n" + "\n\n".join(entity_blocks)).strip()
-    return text or empty_label
+        return empty_label
 
 
 async def get_recent_messages(
@@ -474,40 +485,48 @@ async def memory_grep(
         return scored[:limit]
 
     if embeddings_available() and query.strip():
-        query_vector = await embed_text(query)
-        qv = "[" + ",".join(str(x) for x in query_vector) + "]"
-        sql = text("""
-            SELECT slug, kind, title, body_md,
-                   1 - (body_embedding <=> CAST(:qv AS vector)) AS score
-            FROM memory_entities
-            WHERE family_id = CAST(:family_id AS uuid)
-              AND elder_id = CAST(:elder_id AS uuid)
-              AND body_embedding IS NOT NULL
-            ORDER BY body_embedding <=> CAST(:qv AS vector)
-            LIMIT :limit
-        """)
-        rows = (
-            await session.execute(
-                sql,
-                {
-                    "qv": qv,
-                    "family_id": str(family_id),
-                    "elder_id": str(elder_id),
-                    "limit": limit,
-                },
+        try:
+            query_vector = await embed_text(query)
+            qv = "[" + ",".join(str(x) for x in query_vector) + "]"
+            sql = text("""
+                SELECT slug, kind, title, body_md,
+                       1 - (body_embedding <=> CAST(:qv AS vector)) AS score
+                FROM memory_entities
+                WHERE family_id = CAST(:family_id AS uuid)
+                  AND elder_id = CAST(:elder_id AS uuid)
+                  AND body_embedding IS NOT NULL
+                ORDER BY body_embedding <=> CAST(:qv AS vector)
+                LIMIT :limit
+            """)
+            rows = (
+                await session.execute(
+                    sql,
+                    {
+                        "qv": qv,
+                        "family_id": str(family_id),
+                        "elder_id": str(elder_id),
+                        "limit": limit,
+                    },
+                )
+            ).mappings().all()
+            return [
+                MemoryGrepHit(
+                    slug=row["slug"],
+                    kind=row["kind"],
+                    title=row["title"],
+                    snippet=(row["body_md"] or "")[:400],
+                    score=float(row["score"] or 0),
+                    match_type="vector",
+                )
+                for row in rows
+            ]
+        except Exception:
+            logger.warning(
+                "memory_grep vector fallback failed family=%s elder=%s",
+                family_id,
+                elder_id,
+                exc_info=True,
             )
-        ).mappings().all()
-        return [
-            MemoryGrepHit(
-                slug=row["slug"],
-                kind=row["kind"],
-                title=row["title"],
-                snippet=(row["body_md"] or "")[:400],
-                score=float(row["score"] or 0),
-                match_type="vector",
-            )
-            for row in rows
-        ]
     return []
 
 
