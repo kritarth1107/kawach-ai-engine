@@ -108,6 +108,12 @@ class LogCheckInArgs(BaseModel):
     note: str | None = Field(default=None)
 
 
+class LogSymptomArgs(BaseModel):
+    symptom: str = Field(description="What the elder reported feeling (pain, fever, cough, etc.). Never diagnose.")
+    severity: str | None = Field(default=None, description="Optional severity words from the elder")
+    note: str | None = Field(default=None)
+
+
 class LogDoseArgs(BaseModel):
     medicineName: str = Field(description="Medicine name")
     quantity: str | None = Field(default=None)
@@ -257,6 +263,16 @@ def _backend_tools(
             {"mood": mood, "meals": meals, "sleep": sleep, "pain": pain, "note": note},
         )
 
+    async def log_symptom(
+        symptom: str,
+        severity: str | None = None,
+        note: str | None = None,
+    ) -> str:
+        return await _run(
+            "log_symptom",
+            {"symptom": symptom, "severity": severity, "note": note},
+        )
+
     async def log_dose(
         medicineName: str,
         quantity: str | None = None,
@@ -358,6 +374,15 @@ def build_elder_whatsapp_tools(
             name="log_check_in",
             description="Log a wellness check-in when the elder shares mood, meals, sleep, or how they feel.",
             args_schema=LogCheckInArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["log_symptom"],
+            name="log_symptom",
+            description=(
+                "Log a symptom or pain the elder reported. Notifies caregivers. "
+                "Never diagnose or suggest treatment — only record what they said."
+            ),
+            args_schema=LogSymptomArgs,
         ),
         StructuredTool.from_function(
             coroutine=tools["log_dose"],
