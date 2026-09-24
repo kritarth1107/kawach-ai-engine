@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_xai import ChatXAI
 
 from app.core.config import get_settings
+from app.llm.content_text import stringify_ai_content
 
 
 def _valid_api_key(key: str) -> bool:
@@ -71,7 +72,7 @@ async def chat_invoke(system: str, user: str) -> str:
             [SystemMessage(content=system), HumanMessage(content=user)]
         )
         content = response.content
-        return content if isinstance(content, str) else str(content)
+        return stringify_ai_content(content)
 
     return await grok_cli_invoke(system, user)
 

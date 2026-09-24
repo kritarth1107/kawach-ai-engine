@@ -211,7 +211,7 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
             db,
             family_id=body.family_id,
             elder_id=body.elder_id,
-            limit=10,
+            limit=50,
             conversation_id=conv.id,
         )
         from app.rag.retrieve import db_messages_to_langchain

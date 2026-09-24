@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_vertexai import ChatVertexAI
 
 from app.core.config import get_settings
+from app.llm.content_text import stringify_ai_content
 
 
 def _vertex_location() -> str:
@@ -48,8 +49,7 @@ def vertex_configured() -> bool:
 async def chat_invoke(system: str, user: str) -> str:
     llm = _vertex_chat_llm()
     response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
-    content = response.content
-    return content if isinstance(content, str) else str(content)
+    return stringify_ai_content(response.content)
 
 
 async def chat_invoke_messages(messages: list) -> object:

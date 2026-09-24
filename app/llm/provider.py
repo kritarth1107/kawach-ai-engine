@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from app.core.config import get_settings
 from app.llm import grok as grok_provider
 from app.llm import vertex as vertex_provider
+from app.llm.content_text import stringify_ai_content
 
 
 def _azure_chat_llm() -> ChatOpenAI:
@@ -74,8 +75,7 @@ async def chat_invoke(system: str, user: str) -> str:
         return await grok_provider.chat_invoke(system, user)
 
     response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
-    content = response.content
-    return content if isinstance(content, str) else str(content)
+    return stringify_ai_content(response.content)
 
 
 def llm_provider_label() -> str:

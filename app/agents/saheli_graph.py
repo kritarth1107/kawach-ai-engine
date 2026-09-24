@@ -28,6 +28,7 @@ from app.rag.retrieve import (
     retrieve_context,
 )
 from app.services.family import get_caregiver_conversation, get_primary_conversation
+from app.llm.content_text import stringify_ai_content
 
 
 class SaheliState(TypedDict):
@@ -101,7 +102,7 @@ async def node_generate(state: SaheliState, session: AsyncSession) -> dict:
     if state.get("order_context"):
         messages.insert(-1, HumanMessage(content=state["order_context"]))
     response = await chat_invoke_messages(messages)
-    reply = response.content if isinstance(response.content, str) else str(response.content)
+    reply = stringify_ai_content(response.content)
     return {"reply": reply, "messages": [AIMessage(content=reply)]}
 
 

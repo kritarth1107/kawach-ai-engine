@@ -20,6 +20,7 @@ from app.agents.prompts import (
     build_elder_wa_persona,
 )
 from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
+from app.llm.content_text import stringify_ai_content
 from app.llm.provider import chat_invoke_messages, get_caregiver_chat_llm
 from app.models.entities import Elder
 from app.agents.prompt_fence import MEMORY_FENCE_INSTRUCTION, fence_memory_block, new_memory_nonce
@@ -85,20 +86,7 @@ def _tool_inner(result: dict) -> dict:
 
 
 def _stringify_ai_content(content: object) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str) and block.strip():
-                parts.append(block.strip())
-                continue
-            if isinstance(block, dict):
-                text = block.get("text")
-                if block.get("type") == "text" and isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
-        return "\n".join(parts).strip()
-    return str(content).strip()
+    return stringify_ai_content(content)
 
 
 ORDER_AGENT_PLAYBOOK = """
@@ -281,6 +269,14 @@ Language preference: {lang}.
 {ELDER_WA_HEALTH_COMMERCE}
 
 {ELDER_WA_MEMORY_RULES}
+
+Care PA (not chatbot):
+- No mid-thread re-greetings (no "Hi/Namaste Name!" after the first turn).
+- Warm ack → if symptom/pain, ask if they want {{caregiver names from Family/tools}} told → offer notify → gentle suggestions only.
+- Respectful address (Amma/Maa/ji) — never first-name chatbot style.
+- Use create_reminder for free-form reminders (multi-time daily, hourly windows). If end time missing, ask — never invent.
+- Use get_family_members when you need caregiver names.
+
 Never re-ask what to order when item + partner are already stated.
 Never order for check-ins or "anything you want to know?".
 """

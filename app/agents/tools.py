@@ -135,6 +135,31 @@ class GetOrderStatusArgs(BaseModel):
     orderId: str | None = Field(default=None, description="Optional order id; latest order if omitted")
 
 
+class CreateReminderArgs(BaseModel):
+    text: str = Field(description="What to remind about, including times if stated")
+    times: list[str] | None = Field(
+        default=None,
+        description="Optional HH:MM or 6pm-style times for multi-time daily reminders",
+    )
+    kind: str | None = Field(
+        default=None,
+        description="multi_time or hourly_window",
+    )
+    windowStartMinutes: int | None = Field(default=None)
+    windowEndMinutes: int | None = Field(default=None)
+    stopConditionPhrase: str | None = Field(
+        default=None,
+        description="Semantic stop e.g. filled / done / I've called",
+    )
+
+
+class CancelReminderArgs(BaseModel):
+    reminderId: str | None = Field(default=None)
+    textHint: str | None = Field(default=None, description="Match reminder text to cancel")
+
+
+
+
 def _backend_tools(
     family_id: str,
     elder_id: str,
@@ -312,6 +337,38 @@ def _backend_tools(
     async def save_memory(content: str) -> str:
         return await _run("save_memory", {"content": content})
 
+    async def create_reminder(
+        text: str,
+        times: list[str] | None = None,
+        kind: str | None = None,
+        windowStartMinutes: int | None = None,
+        windowEndMinutes: int | None = None,
+        stopConditionPhrase: str | None = None,
+    ) -> str:
+        return await _run(
+            "create_reminder",
+            {
+                "text": text,
+                "times": times,
+                "kind": kind,
+                "windowStartMinutes": windowStartMinutes,
+                "windowEndMinutes": windowEndMinutes,
+                "stopConditionPhrase": stopConditionPhrase,
+            },
+        )
+
+    async def list_reminders() -> str:
+        return await _run("list_reminders", {})
+
+    async def cancel_reminder(
+        reminderId: str | None = None,
+        textHint: str | None = None,
+    ) -> str:
+        return await _run(
+            "cancel_reminder",
+            {"reminderId": reminderId, "textHint": textHint},
+        )
+
     async def quick_order(message: str) -> str:
         return await _run("quick_order", {"message": message})
 
@@ -487,5 +544,33 @@ def build_elder_whatsapp_tools(
             name="resolve_catalog_item",
             description="Pick a numbered catalog option after disambiguation (candidateIndex 0-based).",
             args_schema=ResolveCatalogArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["get_family_members"],
+            name="get_family_members",
+            description="List family / caregiver names and roles so you can offer to notify the right people.",
+            args_schema=LimitArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["create_reminder"],
+            name="create_reminder",
+            description=(
+                "Create an Instinct-style reminder for the elder: multi-time daily "
+                "(e.g. 6pm and 9pm until they say filled) or hourly window. "
+                "If hourly end time is missing, return askUser — never invent an end time."
+            ),
+            args_schema=CreateReminderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["list_reminders"],
+            name="list_reminders",
+            description="List active free-form reminders for the elder.",
+            args_schema=LimitArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["cancel_reminder"],
+            name="cancel_reminder",
+            description="Cancel an active reminder by id or text hint.",
+            args_schema=CancelReminderArgs,
         ),
     ]
