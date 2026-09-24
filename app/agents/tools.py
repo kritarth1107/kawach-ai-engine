@@ -22,6 +22,22 @@ class OrderArgs(BaseModel):
     message: str = Field(description="Full order request from the user")
 
 
+
+class BookRideArgs(BaseModel):
+    message: str = Field(
+        description="Ride request, e.g. 'book a cab' or 'from home to Ritz-Carlton Bangalore'"
+    )
+    pickup: str | None = Field(default=None, description="Pickup place or address")
+    drop: str | None = Field(default=None, description="Drop place or address")
+    otp: str | None = Field(default=None, description="Uber SMS OTP pasted by user")
+    userConfirmed: bool | None = Field(
+        default=None, description="True when user confirmed fare / book"
+    )
+
+
+class RidePhoneArgs(BaseModel):
+    phone: str | None = Field(default=None, description="Optional WhatsApp phone override")
+
 class BrowserOrderArgs(BaseModel):
     message: str = Field(
         description="Full any-site order request, e.g. 'order oats from bigbasket' or a product URL"
@@ -405,6 +421,37 @@ def _backend_tools(
     async def confirm_and_place_order(sessionId: str) -> str:
         return await _run("confirm_and_place_order", {"sessionId": sessionId})
 
+    async def book_ride(
+        message: str,
+        pickup: str | None = None,
+        drop: str | None = None,
+        otp: str | None = None,
+        userConfirmed: bool | None = None,
+    ) -> str:
+        args: dict = {"message": message}
+        if pickup:
+            args["pickup"] = pickup
+        if drop:
+            args["drop"] = drop
+        if otp:
+            args["otp"] = otp
+        if userConfirmed is not None:
+            args["userConfirmed"] = userConfirmed
+        return await _run("book_ride", args)
+
+    async def ride_status(phone: str | None = None) -> str:
+        args: dict = {}
+        if phone:
+            args["phone"] = phone
+        return await _run("ride_status", args)
+
+    async def cancel_ride(phone: str | None = None) -> str:
+        args: dict = {}
+        if phone:
+            args["phone"] = phone
+        return await _run("cancel_ride", args)
+
+
     return locals()
 
 
@@ -435,6 +482,28 @@ def build_caregiver_tools(
             name="browse_and_shop",
             description="Alias of browser_order for any-site shopping with soft health tips.",
             args_schema=BrowserOrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["book_ride"],
+            name="book_ride",
+            description=(
+                "Book a cab/Uber ride via private browser. Slot-fill pickup+drop (text or WA location pin). "
+                "Confirm route, OTP paste, fare confirm-before-book. Never silent book. "
+                "Call when elder wants a ride/cab/Uber/taxi."
+            ),
+            args_schema=BookRideArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["ride_status"],
+            name="ride_status",
+            description="Check active ride booking status (OTP / fare / driver).",
+            args_schema=RidePhoneArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["cancel_ride"],
+            name="cancel_ride",
+            description="Cancel pending ride — nothing booked/paid.",
+            args_schema=RidePhoneArgs,
         ),
         StructuredTool.from_function(coroutine=tools["preview_order"], name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
         StructuredTool.from_function(coroutine=tools["place_cod_order"], name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
@@ -504,6 +573,28 @@ def build_elder_whatsapp_tools(
                 "Never invent prices — only read tool output."
             ),
             args_schema=OrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["book_ride"],
+            name="book_ride",
+            description=(
+                "Book a cab/Uber ride via private browser. Slot-fill pickup+drop (text or WA location pin). "
+                "Confirm route, OTP paste, fare confirm-before-book. Never silent book. "
+                "Call when elder wants a ride/cab/Uber/taxi."
+            ),
+            args_schema=BookRideArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["ride_status"],
+            name="ride_status",
+            description="Check active ride booking status (OTP / fare / driver).",
+            args_schema=RidePhoneArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["cancel_ride"],
+            name="cancel_ride",
+            description="Cancel pending ride — nothing booked/paid.",
+            args_schema=RidePhoneArgs,
         ),
         StructuredTool.from_function(
             coroutine=tools["browser_order"],

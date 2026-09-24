@@ -17,6 +17,7 @@ from app.agents.prompts import (
     ELDER_WA_MEMORY_RULES,
     ELDER_WA_HEALTH_COMMERCE,
     ELDER_WA_ORDER_PLAYBOOK,
+    ELDER_WA_RIDE_PLAYBOOK,
     build_elder_wa_persona,
 )
 from app.agents.tools import build_caregiver_tools, build_elder_whatsapp_tools
@@ -32,6 +33,7 @@ _CASUAL_OFFER = re.compile(
     re.I,
 )
 _ORDER_HINT = re.compile(r"\b(order|swiggy|instamart|zepto|bigbasket|amazon|flipkart|myntra|jiomart|dmart|blinkit)\b", re.I)
+_RIDE_HINT = re.compile(r"\b(uber|ola|rapido|cab|taxi|ride)\b", re.I)
 _GENERIC_ORDER_REPLY = re.compile(
     r"tell me what to order|what would you like to order|what do you want to order|from swiggy, instamart",
     re.I,
@@ -46,6 +48,12 @@ _ORDER_TOOL_NAMES = {
     "select_order_address",
     "list_partner_addresses",
     "resolve_catalog_item",
+    "quick_order",
+    "browser_order",
+    "browse_and_shop",
+    "book_ride",
+    "ride_status",
+    "cancel_ride",
 }
 
 
@@ -265,6 +273,8 @@ Language preference: {lang}.
 {platform_block}
 
 {ELDER_WA_ORDER_PLAYBOOK}
+
+{ELDER_WA_RIDE_PLAYBOOK}
 
 {ELDER_WA_HEALTH_COMMERCE}
 
