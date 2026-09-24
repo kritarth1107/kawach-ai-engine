@@ -101,14 +101,11 @@ ORDER_AGENT_PLAYBOOK = """
 You handle food and grocery ordering conversationally for the caregiver.
 
 Ordering playbook:
-1. Call resolve_order_partner when the caregiver wants to order.
-2. Swiggy Food = restaurant meals. Instamart = groceries/products — never call Instamart a restaurant.
-3. Call list_partner_addresses for that partner. Pick address (ask if multiple).
-4. Call search_swiggy_food or search_instamart with addressId. Quote real prices from results only — never guess ₹50.
-5. When cart is ready, call preview_order — tell caregiver to confirm on the card.
-6. Only call place_cod_order after they explicitly confirm on the card (not from chat text alone).
-
-If partner not connected, explain they must connect Swiggy Food or Instamart separately in Integrations.
+1. Prefer browser_order (private browser) for Instamart / Swiggy / Zepto / Blinkit / Zomato — MCP place is unreliable.
+   Swiggy/Zomato = restaurant meals. Instamart/Zepto/Blinkit = groceries — never call Instamart a restaurant.
+2. MCP tools (resolve_order_partner / search_swiggy_food / search_instamart / preview_order) remain as fallback only.
+3. Confirm before pay; OTP paste in WhatsApp when asked. Never silent pay.
+4. If using MCP fallback and partner not connected, explain they can use browser_order without MCP connect, or connect in Integrations.
 """
 
 

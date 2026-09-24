@@ -474,7 +474,7 @@ def build_caregiver_tools(
         StructuredTool.from_function(
             coroutine=tools["browser_order"],
             name="browser_order",
-            description="Shop any website via private browser (BigBasket, Amazon, Flipkart, product URL). Prefer MCP Instamart/Swiggy/Zepto when connected. Confirm before pay.",
+            description="Shop via private browser — primary for Instamart/Swiggy/Zepto/Blinkit/Zomato plus BigBasket/Amazon/Flipkart/product URL. MCP is fallback only. Confirm before pay.",
             args_schema=BrowserOrderArgs,
         ),
         StructuredTool.from_function(
@@ -568,8 +568,8 @@ def build_elder_whatsapp_tools(
             coroutine=tools["quick_order"],
             name="quick_order",
             description=(
-                "Phase-2 one-shot order: pass the elder's full order message. "
-                "Returns confirm card data (items, price, partner, address, sessionId). "
+                "MCP fallback one-shot order (prefer browser_order for Instamart/Swiggy/Zepto/Blinkit/Zomato). "
+                "Pass the elder's full order message. Returns confirm card or browser path result. "
                 "Never invent prices — only read tool output."
             ),
             args_schema=OrderArgs,
@@ -599,7 +599,7 @@ def build_elder_whatsapp_tools(
         StructuredTool.from_function(
             coroutine=tools["browser_order"],
             name="browser_order",
-            description="Shop any website via private browser (BigBasket, Amazon, Flipkart, product URL, etc.). Prefer quick_order for connected Instamart/Swiggy/Zepto. Confirm before pay; soft health tips when relevant.",
+            description="Shop via private browser — primary for Instamart/Swiggy/Zepto/Blinkit/Zomato and any other site/URL. Prefer over quick_order/MCP. Confirm before pay; soft health tips when relevant.",
             args_schema=BrowserOrderArgs,
         ),
         StructuredTool.from_function(
