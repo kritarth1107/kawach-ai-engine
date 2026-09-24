@@ -51,11 +51,12 @@ jobs:
           docker push "$IMAGE:latest"
           cat > /tmp/ai-engine-env.yaml <<EOF
           LLM_PROVIDER: vertex
+          # Product target is gemini-3.5-pro (allowlist); Flash is live until Pro is enabled on kavach-care.
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
           GCP_REGION: ${{ env.GCP_REGION }}
-          VERTEX_LOCATION: global
-          VERTEX_CHAT_MODEL: gemini-3.5-pro
-          VERTEX_CAREGIVER_CHAT_MODEL: gemini-3.5-pro
+          VERTEX_LOCATION: asia-south1
+          VERTEX_CHAT_MODEL: gemini-3.5-flash
+          VERTEX_CAREGIVER_CHAT_MODEL: gemini-3.5-flash
           VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
           EMBED_DIM: "768"
           DEBUG: "false"
