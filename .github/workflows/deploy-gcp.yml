@@ -53,8 +53,9 @@ jobs:
           LLM_PROVIDER: vertex
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
           GCP_REGION: ${{ env.GCP_REGION }}
-          VERTEX_CHAT_MODEL: gemini-2.5-pro
-          VERTEX_CAREGIVER_CHAT_MODEL: gemini-2.5-pro
+          VERTEX_LOCATION: global
+          VERTEX_CHAT_MODEL: gemini-3.5-pro
+          VERTEX_CAREGIVER_CHAT_MODEL: gemini-3.5-pro
           VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
           EMBED_DIM: "768"
           DEBUG: "false"

@@ -8,6 +8,18 @@ from langchain_google_vertexai import ChatVertexAI
 from app.core.config import get_settings
 
 
+def _vertex_location() -> str:
+    settings = get_settings()
+    loc = (settings.vertex_location or "").strip()
+    if loc:
+        return loc
+    # Pro-class Gemini 3.x typically serves from global; Flash may be regional.
+    model = (settings.vertex_chat_model or "").lower()
+    if "3.5-pro" in model or "3.1-pro" in model or model.endswith("-pro"):
+        return "global"
+    return settings.gcp_region or "asia-south1"
+
+
 def _vertex_chat_llm(model_name: str | None = None) -> ChatVertexAI:
     settings = get_settings()
     project = settings.gcp_project_id
@@ -17,7 +29,7 @@ def _vertex_chat_llm(model_name: str | None = None) -> ChatVertexAI:
     return ChatVertexAI(
         model_name=model_name or settings.vertex_chat_model,
         project=project,
-        location=settings.gcp_region,
+        location=_vertex_location(),
         temperature=0.35 if is_agent_model else 0.5,
         max_retries=2,
     )
@@ -47,4 +59,4 @@ async def chat_invoke_messages(messages: list) -> object:
 
 def llm_provider_label() -> str:
     settings = get_settings()
-    return f"vertex:{settings.vertex_chat_model}"
+    return f"vertex:{settings.vertex_chat_model}@{_vertex_location()}"

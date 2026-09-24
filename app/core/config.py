@@ -28,8 +28,11 @@ class Settings(BaseSettings):
     # Google Cloud / Vertex AI (preferred on GCP)
     gcp_project_id: str = ""
     gcp_region: str = "asia-south1"
-    vertex_chat_model: str = "gemini-2.5-pro"
-    vertex_caregiver_chat_model: str = "gemini-2.5-pro"
+    # Vertex Gemini location (may differ from Cloud Run / Cloud SQL region).
+    # gemini-3.5-pro is allowlist/preview — use global when available; Flash works in asia-south1.
+    vertex_location: str = ""
+    vertex_chat_model: str = "gemini-3.5-pro"
+    vertex_caregiver_chat_model: str = "gemini-3.5-pro"
     kavach_backend_url: str = "http://localhost:5000"
     kavach_job_secret: str = ""
     memory_gcs_bucket: str = ""
