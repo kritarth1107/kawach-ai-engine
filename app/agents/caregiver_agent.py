@@ -31,7 +31,7 @@ _CASUAL_OFFER = re.compile(
     r"\banything you (want|need) to know\b|\bdo you need (any|some)? (info|information|help)\b",
     re.I,
 )
-_ORDER_HINT = re.compile(r"\b(order|swiggy|instamart|zepto)\b", re.I)
+_ORDER_HINT = re.compile(r"\b(order|swiggy|instamart|zepto|bigbasket|amazon|flipkart|myntra|jiomart|dmart|blinkit)\b", re.I)
 _GENERIC_ORDER_REPLY = re.compile(
     r"tell me what to order|what would you like to order|what do you want to order|from swiggy, instamart",
     re.I,

@@ -22,6 +22,16 @@ class OrderArgs(BaseModel):
     message: str = Field(description="Full order request from the user")
 
 
+class BrowserOrderArgs(BaseModel):
+    message: str = Field(
+        description="Full any-site order request, e.g. 'order oats from bigbasket' or a product URL"
+    )
+    otp: str | None = Field(default=None, description="SMS OTP pasted by user, if any")
+    userConfirmed: bool | None = Field(
+        default=None, description="True when user replied confirm to the basket card"
+    )
+
+
 class SessionQueryArgs(BaseModel):
     sessionId: str = Field(description="Active order session id from ensure_order_session")
     query: str = Field(description="Product or dish search query")
@@ -198,6 +208,26 @@ def _backend_tools(
 
     async def search_instamart(query: str, addressId: str | None = None) -> str:
         return await _run("search_instamart", {"query": query, "addressId": addressId})
+
+    async def browser_order(
+        message: str,
+        otp: str | None = None,
+        userConfirmed: bool | None = None,
+    ) -> str:
+        args: dict = {"message": message}
+        if otp:
+            args["otp"] = otp
+        if userConfirmed is not None:
+            args["userConfirmed"] = userConfirmed
+        return await _run("browser_order", args)
+
+    async def browse_and_shop(
+        message: str,
+        otp: str | None = None,
+        userConfirmed: bool | None = None,
+    ) -> str:
+        return await browser_order(message, otp=otp, userConfirmed=userConfirmed)
+
 
     async def preview_order(
         partner: str,
@@ -394,6 +424,18 @@ def build_caregiver_tools(
         StructuredTool.from_function(coroutine=tools["list_partner_addresses"], name="list_partner_addresses", description="List saved delivery addresses for swiggy or instamart.", args_schema=PartnerOnlyArgs),
         StructuredTool.from_function(coroutine=tools["search_swiggy_food"], name="search_swiggy_food", description="Search Swiggy Food dishes/restaurants. Requires addressId.", args_schema=SwiggySearchArgs),
         StructuredTool.from_function(coroutine=tools["search_instamart"], name="search_instamart", description="Search Instamart grocery products. Requires addressId.", args_schema=InstamartSearchArgs),
+        StructuredTool.from_function(
+            coroutine=tools["browser_order"],
+            name="browser_order",
+            description="Shop any website via private browser (BigBasket, Amazon, Flipkart, product URL). Prefer MCP Instamart/Swiggy/Zepto when connected. Confirm before pay.",
+            args_schema=BrowserOrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["browse_and_shop"],
+            name="browse_and_shop",
+            description="Alias of browser_order for any-site shopping with soft health tips.",
+            args_schema=BrowserOrderArgs,
+        ),
         StructuredTool.from_function(coroutine=tools["preview_order"], name="preview_order", description="Build COD order preview with live MCP prices.", args_schema=PreviewOrderArgs),
         StructuredTool.from_function(coroutine=tools["place_cod_order"], name="place_cod_order", description="Place COD order after caregiver confirms preview card.", args_schema=PlaceCodArgs),
         StructuredTool.from_function(coroutine=tools["recall_memories"], name="recall_memories", description="Recall elder family memories.", args_schema=LimitArgs),
@@ -462,6 +504,18 @@ def build_elder_whatsapp_tools(
                 "Never invent prices — only read tool output."
             ),
             args_schema=OrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["browser_order"],
+            name="browser_order",
+            description="Shop any website via private browser (BigBasket, Amazon, Flipkart, product URL, etc.). Prefer quick_order for connected Instamart/Swiggy/Zepto. Confirm before pay; soft health tips when relevant.",
+            args_schema=BrowserOrderArgs,
+        ),
+        StructuredTool.from_function(
+            coroutine=tools["browse_and_shop"],
+            name="browse_and_shop",
+            description="Alias of browser_order — any-site shop via private browser with health-aware tips.",
+            args_schema=BrowserOrderArgs,
         ),
         StructuredTool.from_function(
             coroutine=tools["confirm_and_place_order"],
