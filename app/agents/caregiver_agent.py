@@ -15,6 +15,7 @@ from app.agents.prompts import (
     ELDER_WA_ANTI_HALLUCINATION,
     ELDER_WA_INTENT_RULES,
     ELDER_WA_MEMORY_RULES,
+    ELDER_WA_HEALTH_COMMERCE,
     ELDER_WA_ORDER_PLAYBOOK,
     build_elder_wa_persona,
 )
@@ -276,6 +277,8 @@ Language preference: {lang}.
 {platform_block}
 
 {ELDER_WA_ORDER_PLAYBOOK}
+
+{ELDER_WA_HEALTH_COMMERCE}
 
 {ELDER_WA_MEMORY_RULES}
 Never re-ask what to order when item + partner are already stated.
