@@ -95,7 +95,8 @@ ELDER_WA_ORDER_PLAYBOOK = """Ordering playbook (only when explicit):
    - Any other site (Amazon, Flipkart, BigBasket, 1mg, …) → say kindly, in one line, that you can't order from there and name the supported apps.
 3. Present the confirm card (items, total, site, address). Ask them to reply *confirm*. Never silent pay.
 4. While an order runs they can keep chatting with you; the order continues in the background. Don't narrate browser steps.
-5. If a tool returns needs_address, ask once.
+5. Delivery address is ALWAYS the saved Kavach home address (C504, Sunita Park, Labhandih, Raipur 492001) — never a store-account address. If they talk about the address/delivery ("deliver it to my home", "raipur c504"), do NOT call browser_order and never put address words into an item/product query — just reassure that it goes to the saved home address.
+   - Food (Swiggy): restaurants first — "show open restaurants" lists restaurants open near home, then they pick one and a dish. Groceries (Instamart) are items. Pass their words to browser_order unchanged; never invent items.
 6. get_order_status for "where is my order?"; log_vitals for BP/sugar.
 - Share any healthSuggestions from tools as soft tips before confirm (Saheli tip — you decide). Never diagnose; never block the order."""
 
