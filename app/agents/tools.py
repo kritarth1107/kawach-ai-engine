@@ -27,8 +27,8 @@ class BookRideArgs(BaseModel):
     message: str = Field(
         description="Ride request, e.g. 'book a cab' or 'from home to Ritz-Carlton Bangalore'"
     )
-    pickup: str | None = Field(default=None, description="Pickup place or address")
-    drop: str | None = Field(default=None, description="Drop place or address")
+    pickup: str | None = Field(default=None, description="Pickup: a saved family place nickname (e.g. Home, Clinic) or a place / address")
+    drop: str | None = Field(default=None, description="Drop: a saved family place nickname (e.g. Home, Beta's flat) or a place / address")
     otp: str | None = Field(default=None, description="Uber SMS OTP pasted by user")
     userConfirmed: bool | None = Field(
         default=None, description="True when user confirmed fare / book"
@@ -474,7 +474,7 @@ def build_caregiver_tools(
         StructuredTool.from_function(coroutine=tools["get_lab_value"], name="get_lab_value", description="Get specific lab value with date.", args_schema=LabNameArgs),
         StructuredTool.from_function(coroutine=tools["get_elder_messages"], name="get_elder_messages", description="Recent elder Saheli messages.", args_schema=LimitArgs),
         StructuredTool.from_function(coroutine=tools["resolve_order_partner"], name="resolve_order_partner", description="Pick Swiggy Food vs Instamart from caregiver message.", args_schema=ResolvePartnerArgs),
-        StructuredTool.from_function(coroutine=tools["list_partner_addresses"], name="list_partner_addresses", description="List saved delivery addresses for swiggy or instamart.", args_schema=PartnerOnlyArgs),
+        StructuredTool.from_function(coroutine=tools["list_partner_addresses"], name="list_partner_addresses", description="List the family's saved places (address book: nickname + full address, default marked). Orders go only to one of these, confirmed with the elder — never ask them to retype a saved address.", args_schema=PartnerOnlyArgs),
         StructuredTool.from_function(coroutine=tools["search_swiggy_food"], name="search_swiggy_food", description="Search Swiggy Food dishes/restaurants. Requires addressId.", args_schema=SwiggySearchArgs),
         StructuredTool.from_function(coroutine=tools["search_instamart"], name="search_instamart", description="Search Instamart grocery products. Requires addressId.", args_schema=InstamartSearchArgs),
         StructuredTool.from_function(
