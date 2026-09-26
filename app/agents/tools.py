@@ -316,10 +316,16 @@ def _backend_tools(
             {"sessionId": sessionId, "addressId": addressId},
         )
 
-    async def get_today_schedule(dateKey: str | None = None) -> str:
+    # Schema is ScheduleTitleArgs (title/scheduleId/dateKey/note) — accept every field so a
+    # model-supplied "title" hint never crashes the tool.
+    async def get_today_schedule(
+        dateKey: str | None = None, title: str | None = None, scheduleId: str | None = None, note: str | None = None
+    ) -> str:
         return await _run("get_today_schedule", {"dateKey": dateKey} if dateKey else {})
 
-    async def get_missed_tasks(dateKey: str | None = None) -> str:
+    async def get_missed_tasks(
+        dateKey: str | None = None, title: str | None = None, scheduleId: str | None = None, note: str | None = None
+    ) -> str:
         return await _run("get_missed_tasks", {"dateKey": dateKey} if dateKey else {})
 
     async def log_check_in(

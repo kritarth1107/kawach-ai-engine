@@ -147,6 +147,9 @@ def _friendly_tool_error(raw: object) -> str | None:
         return "That delivery partner isn't connected yet — your caregiver can link it in Integrations."
     if "session expired" in lower or ("timed out" in lower and "basket" in lower):
         return "That order basket timed out — tell me again what you'd like to order and I'll start fresh."
+    # Internal errors (Python tracebacks, TypeErrors, HTTP bodies) are never shown to the family.
+    if re.search(r"(unexpected keyword|traceback|typeerror|valueerror|keyerror|attributeerror|<locals>|exception|http \d{3}|errno)", lower):
+        return "Sorry, I couldn't check that just now 🙏 Please try again in a minute."
     if raw.strip():
         return f"Sorry — {raw.strip()}"
     return None
