@@ -560,6 +560,7 @@ async def run_saheli_outreach(
     companion_profile: dict[str, Any] | None = None,
     schedule_items: list[dict] | None = None,
     memory_hint: str | None = None,
+    followup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Proactive outreach — Saheli initiates like a child calling to chat."""
     elder = await session.get(Elder, elder_id)
@@ -605,11 +606,17 @@ async def run_saheli_outreach(
         schedule_block=schedule_block,
         care_record_context=care_record_context,
         outreach_kind=effective_kind,
-        memory_recall=(outreach_kind == "memory" or bucket == "memory_recall"),
+        memory_recall=(outreach_kind == "memory" or bucket == "memory_recall") and not followup,
+        followup=followup,
     )
 
     user_prompt = f"Reach out to {display_name} now. Start a warm conversation about: {hint}"
-    if outreach_kind == "memory" and family_memories and family_memories != "(Nothing saved yet.)":
+    if followup:
+        user_prompt = (
+            f"{display_name} has not replied to your last message(s). Write the gentle follow-up now — "
+            "a short continuation of what you last asked, not a new topic."
+        )
+    elif outreach_kind == "memory" and family_memories and family_memories != "(Nothing saved yet.)":
         user_prompt += (
             "\nPick ONE specific detail from saved memory and ask a gentle follow-up question "
             "that makes them feel remembered and cared for."
@@ -623,8 +630,13 @@ async def run_saheli_outreach(
             family_id=family_id,
             elder_id=elder_id,
             role=MessageRole.system,
-            content=f"Saheli reached out · {bucket}: {hint}",
-            metadata_={"kind": "outreach", "outreach_kind": outreach_kind, "topic_bucket": bucket},
+            content=f"Saheli {'followed up (unanswered)' if followup else 'reached out'} · {bucket}: {hint}",
+            metadata_={
+                "kind": "outreach",
+                "outreach_kind": outreach_kind,
+                "topic_bucket": bucket,
+                "followup": bool(followup),
+            },
         )
     )
     session.add(

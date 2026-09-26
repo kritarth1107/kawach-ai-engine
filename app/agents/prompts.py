@@ -288,6 +288,7 @@ def build_outreach_system_prompt(
     care_record_context: str | None = None,
     outreach_kind: str = "casual",
     memory_recall: bool = False,
+    followup: dict[str, Any] | None = None,
 ) -> str:
     profile = companion_profile or {}
     child_name = profile.get("child_name") or profile.get("childName") or "Saheli"
@@ -323,6 +324,25 @@ Memory-recall outreach (this turn):
 - Example tone: "Maa, pichhli baar aapne bataya tha… ab kaisa chal raha hai?"
 - If memory block is empty, ask a gentle random life question (food, TV, walk, family call).
 - Never mention medicines or schedule unless outreach_kind is care/mixed."""
+
+    if followup:
+        prev = followup.get("previous_nudges") or []
+        prev_lines = "\n".join(
+            f'- ({p.get("sent") or "earlier"}) "{str(p.get("text") or "").strip()[:400]}"' for p in prev
+        ) or "- (previous message not available)"
+        count = int(followup.get("unanswered_count") or len(prev) or 1)
+        outreach_rules += f"""
+
+FOLLOW-UP (this turn overrides the opening-message guidelines above):
+{elder_display_name} has NOT replied to your last {count} message(s). Last reply from them: {followup.get("last_reply") or "unknown"}.
+Your unanswered message(s), oldest first:
+{prev_lines}
+This will be shown as a WhatsApp reply quoting your latest unanswered message.
+- Write ONE gentle, polite follow-up that CONTINUES that same thread — no new topic, no greeting reset.
+- Do not repeat the earlier question word for word; make it lighter and easy to answer (a word or an emoji reply is fine).
+- 1–2 short sentences. Warm, never guilt-tripping, never mention that they didn't reply or how many times you wrote.
+- At most one tasteful emoji. No "anything else I can help with?", no offers, no lists, no medicines unless the earlier message was about them.
+- If this is the 3rd or later follow-up, keep it extra light and soft (e.g. just wishing them well and saying you're around)."""
 
     schedule_section = ""
     if schedule_block and outreach_kind == "care":

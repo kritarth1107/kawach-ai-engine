@@ -86,6 +86,8 @@ class OutreachRequest(BaseModel):
     care_record_context: str | None = None
     companion_profile: dict | None = None
     schedule_items: list[ScheduleItemIn] = Field(default_factory=list)
+    # Previous Saheli nudge(s) went unanswered → gentle continuation (sent as a quoted reply).
+    followup: dict | None = None
 
 
 class FamilyShareRequest(BaseModel):
@@ -378,6 +380,7 @@ async def outreach(body: OutreachRequest, db: Annotated[AsyncSession, Depends(ge
         companion_profile=body.companion_profile,
         schedule_items=[item.model_dump() for item in body.schedule_items],
         memory_hint=body.memory_hint,
+        followup=body.followup,
     )
     return OutreachResponse(
         reply=result["reply"],
