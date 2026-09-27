@@ -21,7 +21,7 @@ def _vertex_location() -> str:
     return settings.gcp_region or "asia-south1"
 
 
-def _vertex_chat_llm(model_name: str | None = None) -> ChatVertexAI:
+def _vertex_chat_llm(model_name: str | None = None, location: str | None = None) -> ChatVertexAI:
     settings = get_settings()
     project = settings.gcp_project_id
     if not project:
@@ -30,7 +30,7 @@ def _vertex_chat_llm(model_name: str | None = None) -> ChatVertexAI:
     return ChatVertexAI(
         model_name=model_name or settings.vertex_chat_model,
         project=project,
-        location=_vertex_location(),
+        location=location or _vertex_location(),
         temperature=0.35 if is_agent_model else 0.5,
         max_retries=2,
     )
@@ -46,15 +46,30 @@ def vertex_configured() -> bool:
     return bool(settings.gcp_project_id.strip())
 
 
+def _other_location() -> str:
+    loc = _vertex_location()
+    return (get_settings().gcp_region or "asia-south1") if loc == "global" else "global"
+
+
+async def _invoke_with_capacity_fallback(messages: list) -> object:
+    """Quota / capacity errors (429 RESOURCE_EXHAUSTED, 503) on one Vertex endpoint → the other
+    endpoint (regional ↔ global), so a family never gets a generic error for a busy region."""
+    try:
+        return await _vertex_chat_llm().ainvoke(messages)
+    except Exception as exc:  # noqa: BLE001
+        text = str(exc)
+        if not any(k in text for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "Quota")):
+            raise
+        return await _vertex_chat_llm(location=_other_location()).ainvoke(messages)
+
+
 async def chat_invoke(system: str, user: str) -> str:
-    llm = _vertex_chat_llm()
-    response = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=user)])
+    response = await _invoke_with_capacity_fallback([SystemMessage(content=system), HumanMessage(content=user)])
     return stringify_ai_content(response.content)
 
 
 async def chat_invoke_messages(messages: list) -> object:
-    llm = _vertex_chat_llm()
-    return await llm.ainvoke(messages)
+    return await _invoke_with_capacity_fallback(messages)
 
 
 def llm_provider_label() -> str:
