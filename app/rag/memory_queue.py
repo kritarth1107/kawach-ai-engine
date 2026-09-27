@@ -69,7 +69,17 @@ async def run_memory_extract_task(
             )
             await session.commit()
             return memories
-    except Exception:
+    except Exception as exc:
+        # Source message not visible (FK) → keep the memory, just without the back-link.
+        if source_message_id is not None and "foreign key" in str(exc).lower():
+            logger.warning("Memory extract: source message not visible, retrying unlinked family=%s", family_id)
+            return await run_memory_extract_task(
+                family_id=family_id,
+                elder_id=elder_id,
+                message=message,
+                source_message_id=None,
+                source_role=source_role,
+            )
         logger.exception(
             "Memory extract failed family=%s elder=%s",
             family_id,

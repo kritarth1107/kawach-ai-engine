@@ -133,6 +133,12 @@ async def node_persist(state: SaheliState, session: AsyncSession) -> dict:
     session.add(saheli_msg)
     await session.flush()
 
+    conv = await session.get(Conversation, conversation_id)
+    if conv:
+        conv.updated_at = datetime.now(timezone.utc)
+
+    await session.commit()
+    # After commit: the extractor's own session must see the elder message (FK).
     if not is_legacy_checkin and incoming_role == MessageRole.elder:
         schedule_memory_extract(
             family_id=family_id,
@@ -141,12 +147,6 @@ async def node_persist(state: SaheliState, session: AsyncSession) -> dict:
             source_message_id=elder_msg.id,
             source_role="elder",
         )
-
-    conv = await session.get(Conversation, conversation_id)
-    if conv:
-        conv.updated_at = datetime.now(timezone.utc)
-
-    await session.commit()
     return {}
 
 

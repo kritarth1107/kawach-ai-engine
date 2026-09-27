@@ -263,7 +263,10 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
                 content=reply,
             )
         )
-        await db.flush()
+        # Commit BEFORE memory extraction: extraction runs in its own session and its
+        # family_memories.source_message_id FK must see the committed elder message
+        # (an uncommitted row → ForeignKeyViolation → the memory was silently lost).
+        await db.commit()
         from app.rag.memory_queue import (
             eager_memory_extract,
             is_high_value_message,
@@ -287,7 +290,6 @@ async def chat(body: ChatRequest, db: Annotated[AsyncSession, Depends(get_db)]):
                 source_message_id=elder_msg.id,
                 source_role="elder",
             )
-        await db.commit()
         return ChatResponse(
             reply=reply,
             conversation_id=str(conv.id),
