@@ -186,6 +186,13 @@ async def persist_family_memories(
     return saved
 
 
+_NOT_A_MEMORY = re.compile(
+    r"\?\s*$|^(kaun|kya|kab|kahan|kaha|kaise|kitna|kitne|kyun|kyon|what|who|when|where|why|how|did|is|are|can|could|will|do|does)\b"
+    r"|\b(mangwa|mangva|order|remind|yaad dila|cab|uber|taxi|book|cancel|confirm|haan|ok|okay|thanks|thank you)\b",
+    re.IGNORECASE,
+)
+
+
 async def process_elder_message_memories(
     session: AsyncSession,
     *,
@@ -197,7 +204,10 @@ async def process_elder_message_memories(
 ) -> list[FamilyMemory]:
     extracted = await extract_memories_from_message(message)
     if not extracted:
-        if 12 <= len(message.strip()) <= 400:
+        # Raw "inbox" notes only for statements about her life — never questions or requests
+        # ("Kaun aa raha tha kal?", "kal wala order aaya kya?", "doodh mangwa do") which the
+        # family would see listed as things Saheli "remembers".
+        if 12 <= len(message.strip()) <= 400 and not _NOT_A_MEMORY.search(message.strip()):
             row = await persist_inbox_memory(
                 session,
                 family_id=family_id,
