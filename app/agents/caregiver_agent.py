@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any
@@ -27,6 +28,10 @@ from app.models.entities import Elder
 from app.agents.prompt_fence import MEMORY_FENCE_INSTRUCTION, fence_memory_block, new_memory_nonce
 from app.rag.profile_render import load_memory_profile_text
 from app.rag.retrieve import load_instinct_context
+
+logger = logging.getLogger(__name__)
+_INTERNAL_ERR = re.compile(r"(unexpected keyword|traceback|typeerror|valueerror|keyerror|attributeerror|<locals>|exception|http \d{3}|errno|validation error|field required)", re.I)
+_TOOL_UNAVAILABLE = json.dumps({"error": "unavailable", "note": "This lookup isn't available right now. Answer warmly from what you already know; never mention errors, tools or technical problems."})
 
 _CASUAL_OFFER = re.compile(
     r"\banything you (want|need) to know\b|\bdo you need (any|some)? (info|information|help)\b",
@@ -147,9 +152,10 @@ def _friendly_tool_error(raw: object) -> str | None:
         return "That delivery partner isn't connected yet — your caregiver can link it in Integrations."
     if "session expired" in lower or ("timed out" in lower and "basket" in lower):
         return "That order basket timed out — tell me again what you'd like to order and I'll start fresh."
-    # Internal errors (Python tracebacks, TypeErrors, HTTP bodies) are never shown to the family.
-    if re.search(r"(unexpected keyword|traceback|typeerror|valueerror|keyerror|attributeerror|<locals>|exception|http \d{3}|errno)", lower):
-        return "Sorry, I couldn't check that just now 🙏 Please try again in a minute."
+    # Internal errors (Python tracebacks, TypeErrors, HTTP bodies) are never shown to the family —
+    # and never replace the model's own warm reply with a generic apology either.
+    if _INTERNAL_ERR.search(lower):
+        return None
     if raw.strip():
         return f"Sorry — {raw.strip()}"
     return None
@@ -165,6 +171,9 @@ def _prompt_message_from_tools(tool_results: list[dict]) -> str | None:
         inner = _tool_inner(result)
         err = inner.get("error") or result.get("error")
         if err:
+            if _INTERNAL_ERR.search(str(err)):
+                logger.warning("saheli_tool internal error tool=%s err=%s", row.get("tool"), str(err)[:300])
+                continue
             msg = inner.get("message") or result.get("message")
             if isinstance(msg, str) and msg.strip():
                 return msg.strip()
@@ -348,9 +357,8 @@ Never order for check-ins or "anything you want to know?".
                     )
                     tool_results_raw.append({"tool": tool_name, "result": parsed})
                 except Exception as exc:
-                    parsed = {"error": str(exc)}
-                    result_str = json.dumps(parsed)
-                    tool_results_raw.append({"tool": tool_name, "result": parsed})
+                    logger.warning("saheli_tool exception tool=%s args=%s err=%s", tool_name, list(tool_args)[:8], str(exc)[:300])
+                    result_str = _TOOL_UNAVAILABLE
             tool_trace.append({"tool": tool_name, "status": "done"})
             messages.append(
                 ToolMessage(content=result_str, tool_call_id=call["id"]),
@@ -475,7 +483,8 @@ Quote lab values with dates only — never say high/low/normal.
                     result_str = result if isinstance(result, str) else json.dumps(result)
                     tool_results_raw.append({"tool": tool_name, "result": json.loads(result_str) if result_str.startswith("{") else result_str})
                 except Exception as exc:
-                    result_str = json.dumps({"error": str(exc)})
+                    logger.warning("saheli_tool exception tool=%s err=%s", tool_name, str(exc)[:300])
+                    result_str = _TOOL_UNAVAILABLE
             tool_trace.append({"tool": tool_name, "status": "done"})
             messages.append(
                 ToolMessage(content=result_str, tool_call_id=call["id"]),
@@ -607,7 +616,8 @@ Quote lab values with dates only — never say high/low/normal.
                         }
                     )
                 except Exception as exc:
-                    result_str = json.dumps({"error": str(exc)})
+                    logger.warning("saheli_tool exception tool=%s err=%s", tool_name, str(exc)[:300])
+                    result_str = _TOOL_UNAVAILABLE
             yield {"type": "tool_result", "id": tool_name, "name": tool_name}
             messages.append(ToolMessage(content=result_str, tool_call_id=call["id"]))
 
