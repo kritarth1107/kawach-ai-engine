@@ -156,8 +156,8 @@ def _friendly_tool_error(raw: object) -> str | None:
     # and never replace the model's own warm reply with a generic apology either.
     if _INTERNAL_ERR.search(lower):
         return None
-    if raw.strip():
-        return f"Sorry — {raw.strip()}"
+    # Anything else (e.g. "No order found") is data for the model, not a reply: its own answer,
+    # in her language, stands — never a raw English "Sorry — …" line.
     return None
 
 
