@@ -2,23 +2,27 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_vertexai import ChatVertexAI
 
 from app.core.config import get_settings
 from app.llm.content_text import stringify_ai_content
 
+PRO_MODEL = "gemini-3.1-pro-preview"
+
+
+def _pro_model(name: str | None) -> str:
+    m = (name or "").strip()
+    if not m or "flash" in m.lower() or "2.5" in m:
+        return PRO_MODEL
+    return m
+
 
 def _vertex_location() -> str:
-    settings = get_settings()
-    loc = (settings.vertex_location or "").strip()
-    if loc:
-        return loc
-    # Pro-class Gemini 3.x typically serves from global; Flash may be regional.
-    model = (settings.vertex_chat_model or "").lower()
-    if "3.5-pro" in model or "3.1-pro" in model or model.endswith("-pro"):
-        return "global"
-    return settings.gcp_region or "asia-south1"
+    # 3.1 Pro is global-only. A regional location returns 404.
+    return "global"
 
 
 def _vertex_chat_llm(model_name: str | None = None, location: str | None = None) -> ChatVertexAI:
@@ -26,9 +30,10 @@ def _vertex_chat_llm(model_name: str | None = None, location: str | None = None)
     project = settings.gcp_project_id
     if not project:
         raise RuntimeError("GCP_PROJECT_ID is required for Vertex AI")
+    chosen = _pro_model(model_name or settings.vertex_chat_model)
     is_agent_model = model_name == settings.vertex_caregiver_chat_model
     return ChatVertexAI(
-        model_name=model_name or settings.vertex_chat_model,
+        model_name=chosen,
         project=project,
         location=location or _vertex_location(),
         temperature=0.35 if is_agent_model else 0.5,
@@ -46,21 +51,16 @@ def vertex_configured() -> bool:
     return bool(settings.gcp_project_id.strip())
 
 
-def _other_location() -> str:
-    loc = _vertex_location()
-    return (get_settings().gcp_region or "asia-south1") if loc == "global" else "global"
-
-
 async def _invoke_with_capacity_fallback(messages: list) -> object:
-    """Quota / capacity errors (429 RESOURCE_EXHAUSTED, 503) on one Vertex endpoint → the other
-    endpoint (regional ↔ global), so a family never gets a generic error for a busy region."""
+    """A 429 stays on 3.1 Pro at global. The regional endpoint 404s for this model."""
     try:
         return await _vertex_chat_llm().ainvoke(messages)
     except Exception as exc:  # noqa: BLE001
         text = str(exc)
         if not any(k in text for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "Quota")):
             raise
-        return await _vertex_chat_llm(location=_other_location()).ainvoke(messages)
+        await asyncio.sleep(2)
+        return await _vertex_chat_llm(location="global").ainvoke(messages)
 
 
 async def chat_invoke(system: str, user: str) -> str:
@@ -74,4 +74,4 @@ async def chat_invoke_messages(messages: list) -> object:
 
 def llm_provider_label() -> str:
     settings = get_settings()
-    return f"vertex:{settings.vertex_chat_model}@{_vertex_location()}"
+    return f"vertex:{_pro_model(settings.vertex_chat_model)}@{_vertex_location()}"
