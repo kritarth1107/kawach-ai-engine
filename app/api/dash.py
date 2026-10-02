@@ -361,6 +361,19 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
          "meta": f"Total {t.result.get('total')}" if t.result.get("total") else (t.input_needed or "")}
         for t in tasks if t.status in ("needs_input", "awaiting_confirm")
     ]
+    from app.care import features
+
+    for r in await features.stock(session, family_id, elder_id):
+        if r["low"]:
+            needs.append({"id": f"refill:{r['key']}", "kind": "refill", "key": r["key"], "title": f"{r['name']}: {r['daysLeft']} days left",
+                          "meta": f"{r['stock']} left. Reorder from Apollo, 1mg or PharmEasy, or set a new count."})
+    appts = [features.appointment_json(f) for f in await store.facts(session, family_id, elder_id, domains=["appointment"], statuses=("active",))]
+    upcoming = sorted((a for a in appts if a["upcoming"] and a["when"]), key=lambda a: a["when"])
+    next_appt = upcoming[0] if upcoming else None
+    if next_appt and next_appt["when"][:10] <= clock.ist_day(clock.now() + timedelta(days=2)):
+        needs.append({"id": f"appointment:{next_appt['key']}", "kind": "appointment", "key": next_appt["key"],
+                      "title": f"{next_appt['doctor']}, {next_appt['when'][8:10]}/{next_appt['when'][5:7]} at {next_appt['when'][11:16]}",
+                      "meta": " · ".join(x for x in (next_appt.get("place"), f"{len(next_appt['questions'])} questions to ask" if next_appt["questions"] else None) if x)})
     last_turn = (
         await session.execute(
             select(Turn).where(Turn.family_id == family_id, Turn.thread_id == elder_id, Turn.role == "user").order_by(Turn.id.desc()).limit(1)
@@ -374,10 +387,11 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
         "week": {"taken": week_taken, "scheduled": per_day * 7, "streakDays": streak, "adherence": adherence, "days": days},
         "vitals": {k: vital(k) for k in ("bp", "sugar", "weight", "temperature", "spo2")},
         "needsYou": needs,
-        "followUps": [loop_json(o) for o in loops if o.kind != "confirm_fact"],
+        "followUps": [loop_json(o) for o in loops if o.kind not in ("confirm_fact", "refill", "appointment")],
         "tasks": [task_json(t) for t in tasks],
         "timeline": timeline,
         "lastHeardAt": last_turn.at.isoformat() if last_turn else None,
+        "nextAppointment": next_appt,
     }
 
 
