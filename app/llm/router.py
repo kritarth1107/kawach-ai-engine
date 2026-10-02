@@ -106,7 +106,7 @@ class Provider(Protocol):
         self,
         route: Route,
         *,
-        system_stable: str,
+        system_stable: list[str],
         system_dynamic: str,
         messages: list[dict],
         tools: list[ToolSpec],
@@ -172,7 +172,7 @@ def _provider(name: str) -> Provider:
 async def complete(
     role: str,
     *,
-    system_stable: str,
+    system_stable: str | list[str],
     system_dynamic: str = "",
     messages: list[dict],
     tools: list[ToolSpec] | None = None,
@@ -181,6 +181,9 @@ async def complete(
     timeout_s: float = 90.0,
     routes: list[Route] | None = None,
 ) -> LLMReply:
+    """system_stable blocks are cached in order (persona first, then the family's care record);
+    system_dynamic is per-turn and never cached."""
+    stable = [system_stable] if isinstance(system_stable, str) else list(system_stable)
     candidates = routes or routes_for(role)
     live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway
     errors: list[str] = []
@@ -189,7 +192,7 @@ async def complete(
             reply = await asyncio.wait_for(
                 _provider(route.provider).complete(
                     route,
-                    system_stable=scrub(system_stable),
+                    system_stable=[scrub(b) for b in stable if b],
                     system_dynamic=scrub(system_dynamic),
                     messages=messages,
                     tools=tools or [],

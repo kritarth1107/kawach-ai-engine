@@ -6,7 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _env_file = Path(__file__).resolve().parents[2] / ".env"
 if _env_file.exists():
-    load_dotenv(_env_file, override=True)
+    # Real environment variables win over the local .env file.
+    load_dotenv(_env_file, override=False)
 
 
 class Settings(BaseSettings):

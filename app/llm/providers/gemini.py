@@ -11,6 +11,8 @@ from google.genai import errors, types
 from app.core.config import get_settings
 from app.llm.router import LLMReply, ModelUnavailable, Route, ToolCall, ToolSpec, new_call_id, scrub
 
+FOREIGN_SIGNATURE = b"skip_thought_signature_validator"
+
 _LEVEL = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH", "xhigh": "HIGH", "max": "HIGH"}
 
 
@@ -30,7 +32,7 @@ class GeminiProvider:
         self,
         route: Route,
         *,
-        system_stable: str,
+        system_stable: list[str],
         system_dynamic: str,
         messages: list[dict],
         tools: list[ToolSpec],
@@ -38,7 +40,7 @@ class GeminiProvider:
         effort: str,
     ) -> LLMReply:
         config = types.GenerateContentConfig(
-            system_instruction="\n\n".join(p for p in (system_stable, system_dynamic) if p),
+            system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
             max_output_tokens=max_tokens,
             thinking_config=types.ThinkingConfig(thinking_level=_LEVEL.get(effort, "MEDIUM")),
         )
@@ -51,15 +53,22 @@ class GeminiProvider:
                     ]
                 )
             ]
-        try:
-            resp = await self._client(route.location).aio.models.generate_content(
-                model=route.model, contents=to_gemini_contents(messages, route.model), config=config
-            )
-        except errors.APIError as exc:
-            code = getattr(exc, "code", None)
-            if code in (403, 404, 429) or (code or 500) >= 500:
-                raise ModelUnavailable(code, str(exc)) from exc
-            raise
+        contents = to_gemini_contents(messages, route.model)
+        for attempt in range(2):
+            try:
+                resp = await self._client(route.location).aio.models.generate_content(
+                    model=route.model, contents=contents, config=config
+                )
+            except errors.APIError as exc:
+                code = getattr(exc, "code", None)
+                if code in (403, 404, 429) or (code or 500) >= 500:
+                    raise ModelUnavailable(code, str(exc)) from exc
+                raise
+            cand = (resp.candidates or [None])[0]
+            # A malformed tool call is a one-off generation slip; one retry on the same model usually fixes it.
+            if attempt == 0 and "MALFORMED" in str(getattr(cand, "finish_reason", "")):
+                continue
+            break
 
         cand = (resp.candidates or [None])[0]
         parts = (cand.content.parts if cand and cand.content else None) or []
@@ -110,8 +119,11 @@ def to_gemini_contents(messages: list[dict], model: str) -> list[types.Content]:
                 push("model", list(raw["parts"]))
                 continue
             parts = [types.Part(text=scrub(m["text"]))] if m.get("text") else []
+            # Calls made by another model carry no thought signature; Gemini accepts this documented
+            # placeholder for history it did not produce.
             parts += [
-                types.Part(function_call=types.FunctionCall(id=c.id, name=c.name, args=c.args)) for c in m.get("tool_calls", [])
+                types.Part(function_call=types.FunctionCall(id=c.id, name=c.name, args=c.args), thought_signature=FOREIGN_SIGNATURE)
+                for c in m.get("tool_calls", [])
             ]
             push("model", parts or [types.Part(text="…")])
         elif m["role"] == "tool":

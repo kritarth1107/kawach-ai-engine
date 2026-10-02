@@ -30,14 +30,17 @@ class ClaudeProvider:
         self,
         route: Route,
         *,
-        system_stable: str,
+        system_stable: list[str],
         system_dynamic: str,
         messages: list[dict],
         tools: list[ToolSpec],
         max_tokens: int,
         effort: str,
     ) -> LLMReply:
-        system = [{"type": "text", "text": system_stable, "cache_control": {"type": "ephemeral"}}]
+        # Each stable block ends a cache breakpoint (max 4 per request, tools ride on the first).
+        system = [{"type": "text", "text": b, "cache_control": {"type": "ephemeral"}} for b in system_stable[:3]]
+        if system_stable[3:]:
+            system.append({"type": "text", "text": "\n\n".join(system_stable[3:])})
         if system_dynamic:
             system.append({"type": "text", "text": system_dynamic})
         kwargs: dict = {

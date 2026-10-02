@@ -4,10 +4,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import care_brief, chat, documents, doctor_brief, families, health, memory
+from app.api import brain, care_brief, chat, documents, doctor_brief, families, health, memory
 from app.core.config import get_settings
 from app.db.migrate import run_instinct_migrations
 from app.db.session import Base, engine
+from app.care import models as care_models  # noqa: F401
 from app.models import entities  # noqa: F401
 
 
@@ -60,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(memory.router, prefix="/v1")
     app.include_router(care_brief.router, prefix="/v1")
     app.include_router(doctor_brief.router, prefix="/v1")
+    app.include_router(brain.router)
     return app
 
 

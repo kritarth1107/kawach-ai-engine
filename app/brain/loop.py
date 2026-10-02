@@ -1,0 +1,241 @@
+"""One brain turn: build context from Care Memory, think with tools, check the reply, remember it."""
+
+from __future__ import annotations
+
+import json
+import logging
+import time
+from dataclasses import dataclass, field
+
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.brain import policy, tools
+from app.brain.host import ToolHost
+from app.brain.persona import PERSONA, REPLY_FORMAT
+from app.care import digest, importer, store
+from app.care.models import Turn
+from app.core import clock
+from app.llm import router
+
+logger = logging.getLogger(__name__)
+
+MAX_STEPS = 10
+HISTORY_TURNS = 40
+COMPACT_AFTER = 80
+
+
+@dataclass
+class TurnRequest:
+    family_id: str
+    elder: dict
+    speaker: dict
+    members: list[dict]
+    text: str
+    message_ref: str | None = None
+    images: list[dict] = field(default_factory=list)  # [{"mime", "data"}] base64
+    channel: str = "whatsapp"
+
+
+@dataclass
+class TurnResult:
+    reply: str
+    actions: list[dict]
+    alerts: list[dict]
+    model: str = ""
+    duplicate: bool = False
+    shadow_writes: list[dict] = field(default_factory=list)
+    ms: int = 0
+
+
+async def _lock_family(session: AsyncSession, family_id: str) -> None:
+    """One turn at a time per family, across instances; released at commit."""
+    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+
+
+async def family_block(session: AsyncSession, req: TurnRequest) -> tuple[str, str, list[str]]:
+    """The cached block: household, care record, notes. Also returns text for the reply guard and avoid-words."""
+    rows = await store.facts(session, req.family_id, req.elder["id"])
+    note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
+    record = digest.care_record(req.elder.get("name", "care recipient"), rows)
+    block = "\n\n".join(
+        p for p in (digest.household(req.elder, req.members, req.speaker["id"]), record, digest.notes_block(note_rows)) if p
+    )
+    avoid: list[str] = []
+    for f in rows:
+        if f.domain == "naming" and f.status == "active":
+            avoid += [w for w in (f.value.get("avoid") or []) if isinstance(w, str)]
+    known = record + "\n" + "\n".join(n.body_md for n in note_rows)
+    return block, known, avoid
+
+
+async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, str]:
+    now = clock.ist()
+    day_events = await store.events(session, req.family_id, req.elder["id"], day=clock.ist_day())
+    loops = await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]])
+    hits = await store.recall(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
+    parts = [
+        f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
+        f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
+        digest.ledger(day_events),
+        digest.loops(loops),
+    ]
+    if hits:
+        parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
+    if req.speaker["id"] != req.elder["id"]:
+        elder_turns = await store.recent_turns(session, req.family_id, req.elder["id"], limit=12)
+        if elder_turns:
+            parts.append(
+                f"RECENT WITH {req.elder.get('name', 'the elder').upper()}:\n"
+                + "\n".join(f"  {clock.ist(t.at).strftime('%d %b %H:%M')} {'them' if t.role == 'user' else 'Saheli'}: {t.text[:300]}" for t in elder_turns)
+            )
+    known = "\n".join(h.text for h in hits) + "\n" + "\n".join(e.summary for e in day_events)
+    return "\n\n".join(parts), known
+
+
+async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
+    summ = await store.summary(session, req.family_id, req.speaker["id"])
+    turns = await store.recent_turns(
+        session, req.family_id, req.speaker["id"], after_id=summ.covers_until_turn if summ else 0, limit=HISTORY_TURNS
+    )
+    msgs: list[dict] = []
+    if summ and summ.summary:
+        msgs.append({"role": "user", "content": [{"type": "text", "text": f"(Earlier in our conversation, summarized: {summ.summary})"}]})
+        msgs.append({"role": "assistant", "text": "Noted.", "tool_calls": []})
+    for t in turns:
+        if t.message_ref and t.message_ref == req.message_ref:
+            continue
+        stamp = clock.ist(t.at).strftime("%d %b %H:%M")
+        if t.role == "user":
+            msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {t.text}"}]})
+        else:
+            msgs.append({"role": "assistant", "text": t.text, "tool_calls": []})
+    while msgs and msgs[0]["role"] != "user":
+        msgs.pop(0)
+    return msgs
+
+
+async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
+    started = time.monotonic()
+    await _lock_family(session, req.family_id)
+
+    inserted = await store.add_turn(
+        session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
+        speaker_id=req.speaker["id"], message_ref=req.message_ref, meta={"channel": req.channel, "images": len(req.images)},
+    )
+    if req.message_ref and inserted is None:
+        prior = (
+            await session.execute(
+                select(Turn).where(Turn.family_id == req.family_id, Turn.meta["reply_to"].astext == req.message_ref)
+            )
+        ).scalar_one_or_none()
+        await session.commit()
+        return TurnResult(reply=prior.text if prior else "", actions=[], alerts=[], duplicate=True)
+
+    if not await importer.already_imported(session, req.family_id, req.elder["id"]):
+        try:
+            async with session.begin_nested():
+                await importer.import_family(
+                    session, host, family_id=req.family_id,
+                    backend_family_id=req.family_id.removeprefix("shadow:"), elder_id=req.elder["id"],
+                )
+        except Exception:  # noqa: BLE001 — a failed import must not cost the person their reply
+            logger.exception("care import failed family=%s", req.family_id)
+
+    fam_block, known_record, avoid = await family_block(session, req)
+    dynamic, known_turn = await turn_context(session, req)
+    msgs = await history(session, req)
+    content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {req.text}"}]
+    content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
+    msgs.append({"role": "user", "content": content})
+
+    ctx = tools.TurnCtx(
+        session=session, host=host, family_id=req.family_id, elder=req.elder, speaker=req.speaker,
+        members=req.members, message_ref=req.message_ref,
+    )
+    stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
+    tool_texts: list[str] = []
+    reply: router.LLMReply | None = None
+    for step in range(MAX_STEPS):
+        last = step == MAX_STEPS - 1
+        reply = await router.complete(
+            "brain",
+            system_stable=stable,
+            system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now." if last else ""),
+            messages=msgs,
+            tools=tools.specs(),
+            max_tokens=6000,
+            effort="medium",
+        )
+        msgs.append(reply.as_message())
+        if not reply.tool_calls:
+            break
+        results = []
+        for call in reply.tool_calls:
+            out, is_error = await tools.run(ctx, call.name, call.args)
+            tool_texts.append(out)
+            results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
+        msgs.append({"role": "tool", "results": results})
+
+    final = (reply.text if reply else "").strip()
+    problems = policy.reply_problems(
+        final, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text
+    )
+    if problems and final:
+        msgs.append({"role": "user", "content": [{"type": "text", "text": "(Check before sending: " + "; ".join(problems) + ". Rewrite your reply to the person, fixing this. Write only the message.)"}]})
+        fixed = await router.complete(
+            "brain", system_stable=stable, system_dynamic=dynamic, messages=msgs, tools=tools.specs(), max_tokens=2000, effort="low"
+        )
+        if fixed.text.strip() and not policy.reply_problems(
+            fixed.text, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text
+        ):
+            final = fixed.text.strip()
+        logger.warning("reply guard family=%s problems=%s fixed=%s", req.family_id, problems, final == fixed.text.strip())
+
+    await store.add_turn(
+        session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
+        meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
+    )
+    await maybe_compact(session, req.family_id, req.speaker["id"])
+    await session.commit()
+    return TurnResult(
+        reply=final,
+        actions=ctx.actions,
+        alerts=ctx.alerts,
+        model=reply.model if reply else "",
+        shadow_writes=getattr(host, "would_have", []),
+        ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+async def maybe_compact(session: AsyncSession, family_id: str, thread_id: str) -> None:
+    """Fold the oldest turns into the thread summary once the raw history gets long."""
+    summ = await store.summary(session, family_id, thread_id)
+    after = summ.covers_until_turn if summ else 0
+    count = (
+        await session.execute(
+            select(func.count()).select_from(Turn).where(Turn.family_id == family_id, Turn.thread_id == thread_id, Turn.id > after)
+        )
+    ).scalar_one()
+    if count <= COMPACT_AFTER:
+        return
+    old = await store.recent_turns(session, family_id, thread_id, after_id=after, limit=count)
+    fold = old[: count - HISTORY_TURNS]
+    transcript = "\n".join(f"{clock.ist(t.at).strftime('%d %b %H:%M')} {'them' if t.role == 'user' else 'Saheli'}: {t.text}" for t in fold)
+    try:
+        out = await router.complete(
+            "extract",
+            system_stable="You keep the running summary of a conversation between Saheli, a care companion, and one person. "
+            "Merge the previous summary and the new messages into one summary under 250 words: what matters for care, "
+            "promises made, questions still open, their mood and situation, people mentioned. Plain text.",
+            messages=[{"role": "user", "content": [{"type": "text", "text": f"Previous summary:\n{summ.summary if summ else '(none)'}\n\nNew messages:\n{transcript}"}]}],
+            max_tokens=1200,
+            effort="low",
+        )
+        await store.set_summary(session, family_id, thread_id, out.text.strip(), fold[-1].id)
+    except router.AllModelsFailed:
+        logger.warning("compaction skipped family=%s thread=%s", family_id, thread_id)
+
+
+def result_json(r: TurnResult) -> dict:
+    return json.loads(json.dumps(r.__dict__, default=str))
