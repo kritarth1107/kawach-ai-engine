@@ -282,6 +282,12 @@ async def s_grocery_confirm_and_place(run: Run) -> None:
     run.check(any("IM-55821" in t or "17" in t for t in told[-2:]), f"told the order id or ETA ({told[-2:]})")
 
 
+async def s_no_false_promise(run: Run) -> None:
+    reply = await say(run, ELDER, "Beta aaj thoda sir dard hai, aur meri dawai kab leni hai?", "2026-10-02 10:00")
+    run.check(not re.search(r"(laa(ne|ti|ungi|oongi)|le aa|bhej(ti|ungi) (kisi|koi)|paani la)", reply.lower()), "no physical promise")
+    run.check(any(w in reply.lower() for w in ("list", "pata nahi", "nahi hai", "abhi tak", "bata dijiye", "batayein", "batayenge")), "says the medicine list is missing")
+
+
 SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "setup": s_setup,
     "naming_correction": s_naming_correction,
@@ -298,6 +304,7 @@ SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "no_answer_after_fall": s_no_answer_after_fall,
     "cab_unrelated_then_cancel": s_cab_unrelated_then_cancel,
     "grocery_confirm_and_place": s_grocery_confirm_and_place,
+    "no_false_promise": s_no_false_promise,
 }
 
 
