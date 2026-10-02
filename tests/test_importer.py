@@ -11,7 +11,7 @@ RECORD = {
     "profileMedicines": [{"name": "Thyroxine", "dose": "50 mcg", "time": "06:30"}],
     "schedules": [
         {"scheduleId": "s1", "type": "MEDICINE", "title": "Metformin", "time": "08:30", "dosage": "500 mg", "instructions": "After food", "daysOfWeek": [], "sourceKey": None},
-        {"scheduleId": "s2", "type": "MEDICINE", "title": "Metformin", "time": "20:30", "dosage": "500 mg", "instructions": "After food", "daysOfWeek": [], "sourceKey": None},
+        {"scheduleId": "s2", "type": "MEDICINE", "title": "Metformin", "time": "8:30 PM", "dosage": "500 mg", "instructions": "After food", "daysOfWeek": [], "sourceKey": None},
         {"scheduleId": "s3", "type": "CHECK_IN", "title": "Evening walk", "time": "18:00", "dosage": None, "instructions": None, "daysOfWeek": [], "sourceKey": None},
     ],
     "learned": [{"category": "food", "text": "Loves besan chilla", "confirmed": True, "confidence": 0.9}],
@@ -42,3 +42,13 @@ async def test_shadow_import_does_not_claim_rows(db, at):
     host = SimHost(World(backend_record=RECORD))
     await importer.import_family(db, host, family_id="shadow:" + FAM, backend_family_id=FAM, elder_id=ELDER)
     assert not [c for c in host.world.calls if c["tool"] == "claim_schedule_rows"]
+
+
+def test_to_hhmm():
+    assert importer.to_hhmm("1:00 PM") == "13:00"
+    assert importer.to_hhmm("10:00 AM") == "10:00"
+    assert importer.to_hhmm("12:30 am") == "00:30"
+    assert importer.to_hhmm("8 pm") == "20:00"
+    assert importer.to_hhmm("08:30") == "08:30"
+    assert importer.to_hhmm("after lunch") is None
+    assert importer.to_hhmm("8") is None

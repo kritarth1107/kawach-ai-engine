@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 
 from sqlalchemy import select
@@ -24,6 +25,19 @@ DIET_WORDS = {
     "no_spice": ("spice", "spicy", "mirch", "teekha"),
     "vegetarian": ("vegetarian", "veg only", "no meat", "shakahari"),
 }
+
+
+def to_hhmm(raw: str | None) -> str | None:
+    """'1:00 PM', '8 am', '13:00', '08:30' → 'HH:MM' (24h). None when it is not a clock time."""
+    m = re.match(r"^\s*(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?\s*$", str(raw or ""), re.I)
+    if not m or (m.group(2) is None and not m.group(3)):
+        return None
+    h, mins, ampm = int(m.group(1)), int(m.group(2) or 0), (m.group(3) or "").lower().replace(".", "")
+    if ampm == "pm" and h < 12:
+        h += 12
+    if ampm == "am" and h == 12:
+        h = 0
+    return f"{h:02d}:{mins:02d}" if h < 24 and mins < 60 else None
 
 
 def diet_name(rule: str) -> str:
@@ -72,19 +86,20 @@ async def import_family(session: AsyncSession, host: ToolHost, *, family_id: str
     for s in data.get("schedules") or []:
         if s.get("type") != "MEDICINE":
             if s.get("time"):
-                await put("routine", s["title"], {"what": s["title"], "time": s["time"], "type": s.get("type")}, f"{s['title']} at {s['time']}")
+                t = to_hhmm(s["time"]) or s["time"]
+                await put("routine", s["title"], {"what": s["title"], "time": t, "type": s.get("type")}, f"{s['title']} at {t}")
             continue
         key = s.get("sourceKey") or fact_key("medicine", s["title"])
         m = meds.setdefault(key, {"name": s["title"], "dose": s.get("dosage"), "times": [], "instructions": s.get("instructions"), "days": s.get("daysOfWeek") or None})
-        if s.get("time") and ":" in s["time"]:
-            m["times"].append(s["time"][:5])
+        if to_hhmm(s.get("time")):
+            m["times"].append(to_hhmm(s["time"]))
         if not s.get("sourceKey"):
             claims[key].append(s["scheduleId"])
     for p in data.get("profileMedicines") or []:
         key = fact_key("medicine", p["name"])
         m = meds.setdefault(key, {"name": p["name"], "dose": p.get("dose"), "times": [], "instructions": None, "days": None})
-        if p.get("time") and ":" in str(p["time"]) and p["time"][:5] not in m["times"]:
-            m["times"].append(p["time"][:5])
+        if to_hhmm(p.get("time")) and to_hhmm(p["time"]) not in m["times"]:
+            m["times"].append(to_hhmm(p["time"]))
     for key, m in meds.items():
         m["times"] = sorted(set(m["times"]))
         when = ", ".join(m["times"]) or "no time set"
