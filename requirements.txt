@@ -17,3 +17,5 @@ langchain-text-splitters>=0.3.4
 langchain-google-vertexai>=2.0.12
 google-cloud-aiplatform>=1.70.0
 tiktoken>=0.8.0
+anthropic[vertex]>=1.11.0
+google-genai>=2.27.0
