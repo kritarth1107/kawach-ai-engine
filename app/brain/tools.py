@@ -113,7 +113,9 @@ ABOUT = {"type": "string", "description": "Person id this is about. Leave out fo
     "they cook, a routine, a naming preference or correction, family rules (who to call first, who pays, who must "
     "not be told), doctors, hospital, helpers. The same domain+name updates the existing fact. For medicine, give "
     "details {name, dose, times: ['HH:MM', ...], food_timing, days: [0-6, Monday=0] or omit for daily, "
-    "instructions}; their reminders follow these times.",
+    "instructions}; their reminders follow these times. For naming, use name 'address_as' with details "
+    "{name: what to call them, avoid: [every word they asked never to be called]}. For an allergy, details "
+    "{allergen, reaction}. For family rules, names like 'call_first', 'payer', 'do_not_tell', 'neighbour'.",
     {
         "domain": {"type": "string", "enum": sorted(DOMAINS)},
         "name": {"type": "string", "description": "What it is, e.g. 'Metformin', 'milk', 'low_salt', 'address_as', 'call_first'"},

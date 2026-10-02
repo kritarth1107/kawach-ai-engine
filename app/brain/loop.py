@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
@@ -21,6 +22,8 @@ from app.llm import router
 logger = logging.getLogger(__name__)
 
 MAX_STEPS = 10
+# Thinking depth for brain turns. Scenarios pass at low; raise per deployment if quality needs it.
+BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
 HISTORY_TURNS = 40
 COMPACT_AFTER = 80
 
@@ -167,7 +170,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             messages=msgs,
             tools=tools.specs(),
             max_tokens=6000,
-            effort="medium",
+            effort=BRAIN_EFFORT,
         )
         msgs.append(reply.as_message())
         if not reply.tool_calls:
