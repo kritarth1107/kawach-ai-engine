@@ -51,8 +51,29 @@ def vertex_configured() -> bool:
     return bool(settings.gcp_project_id.strip())
 
 
+def _scrub_surrogates(text: str) -> str:
+    # Upstream JS string slicing can split an emoji and leave a lone UTF-16 surrogate,
+    # which protobuf refuses to encode as UTF-8.
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
+def _scrub_messages(messages: list) -> list:
+    for m in messages:
+        if isinstance(getattr(m, "content", None), str):
+            m.content = _scrub_surrogates(m.content)
+        elif isinstance(getattr(m, "content", None), list):
+            m.content = [
+                _scrub_surrogates(p) if isinstance(p, str)
+                else {**p, "text": _scrub_surrogates(p["text"])} if isinstance(p, dict) and isinstance(p.get("text"), str)
+                else p
+                for p in m.content
+            ]
+    return messages
+
+
 async def _invoke_with_capacity_fallback(messages: list) -> object:
     """A 429 stays on 3.1 Pro at global. The regional endpoint 404s for this model."""
+    messages = _scrub_messages(messages)
     try:
         return await _vertex_chat_llm().ainvoke(messages)
     except Exception as exc:  # noqa: BLE001
