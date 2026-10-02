@@ -251,3 +251,131 @@ async def task_live(family_id: str, elder_id: str, task_id: uuid.UUID, session: 
         return {"url": await tools.task_agent().live_url(t.agent_session)}
     except Exception:  # noqa: BLE001 — the session may already be closed
         return {"url": None}
+
+
+# ── home summary ───────────────────────────────────────────────────────────────
+
+DOSE_KINDS = {"dose_taken": "taken", "dose_skipped": "skipped", "dose_refused": "skipped", "dose_missed": "missed", "dose_empty_strip": "taken"}
+
+
+def _mentions(text: str, name: str) -> bool:
+    from app.care.domains import slug as _slug
+
+    s = _slug(name).replace("_", " ").split(" ")[0]
+    return bool(s) and s in (text or "").lower()
+
+
+def _hm(t: str) -> int:
+    h, m = t.split(":")
+    return int(h) * 60 + int(m)
+
+
+@router.get("/{family_id}/{elder_id}/home")
+async def home(family_id: str, elder_id: str, session: DB) -> dict:
+    from datetime import timedelta
+
+    from app.care.models import Turn
+
+    now = clock.ist()
+    today = clock.ist_day()
+    meds = [f for f in await store.facts(session, family_id, elder_id, domains=["medicine"], statuses=("active",))]
+    schedule = sorted(
+        ({"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "dose": f.value.get("dose"), "time": t, "key": f.key}
+         for f in meds for t in (f.value.get("times") or [])),
+        key=lambda d: d["time"],
+    )
+    since = clock.now() - timedelta(days=14)
+    evs = await store.events(session, family_id, elder_id, since=since, limit=5000)
+    by_day: dict[str, list] = {}
+    for e in evs:
+        by_day.setdefault(e.day, []).append(e)
+
+    # today's doses
+    todays = by_day.get(today, [])
+    doses = []
+    used: set[int] = set()
+    mins_now = now.hour * 60 + now.minute
+    for i, d in enumerate(schedule):
+        status = "upcoming"
+        for e in todays:
+            if e.id in used or e.kind not in DOSE_KINDS:
+                continue
+            if _mentions(e.summary, d["name"]) or _mentions(str(e.payload.get("medicine", "")), d["name"]):
+                status = DOSE_KINDS[e.kind]
+                used.add(e.id)
+                break
+        if status == "upcoming":
+            reminded = any(e.kind == "reminder_sent" and _mentions(e.summary, d["name"]) and d["time"] in e.summary for e in todays)
+            delta = mins_now - _hm(d["time"])
+            if delta >= 0 and delta <= 90:
+                status = "due"
+            elif delta > 90:
+                status = "reminded" if reminded else "unmarked"
+        doses.append({"id": f"{d['key']}@{d['time']}", "time": d["time"], "name": d["name"], "dose": d.get("dose"), "status": status})
+
+    # 14-day adherence
+    days, adherence = [], []
+    per_day = len(schedule)
+    for back in range(13, -1, -1):
+        day = clock.ist_day(clock.now() - timedelta(days=back))
+        taken = sum(1 for e in by_day.get(day, []) if e.kind in ("dose_taken", "dose_empty_strip"))
+        days.append(day)
+        adherence.append(round(100 * min(taken, per_day) / per_day) if per_day else 0)
+    week_days = days[-7:]
+    week_taken = sum(min(per_day, sum(1 for e in by_day.get(d, []) if e.kind in ("dose_taken", "dose_empty_strip"))) for d in week_days)
+    streak = 0
+    for pct in reversed(adherence[:-1]):
+        if pct < 100 or not per_day:
+            break
+        streak += 1
+
+    # vitals
+    vitals: dict[str, list] = {}
+    for e in evs:
+        if e.kind == "vital" and e.payload.get("kind"):
+            vitals.setdefault(e.payload["kind"], []).append(e)
+
+    def vital(kind: str) -> dict | None:
+        rows = vitals.get(kind) or []
+        if not rows:
+            return None
+        last = rows[-1]
+        import re as _re
+
+        nums = [float(_re.findall(r"\d+(?:\.\d+)?", r.payload.get("value", "0"))[0]) for r in rows if _re.findall(r"\d+(?:\.\d+)?", r.payload.get("value", ""))]
+        change = None
+        if len(nums) >= 2 and nums[-2]:
+            pct = round(100 * (nums[-1] - nums[-2]) / nums[-2])
+            change = {"pct": abs(pct), "dir": "up" if pct > 0 else "down"} if pct else None
+        return {
+            "value": last.payload.get("value"), "unit": last.payload.get("unit"), "at": last.at.isoformat(),
+            "trend": nums[-7:], "change": change, "redFlag": last.payload.get("red_flag"),
+        }
+
+    loops = await store.live_loops(session, family_id, [elder_id, "family"])
+    tasks = list((await session.execute(select(Task).where(Task.family_id == family_id).order_by(Task.created_at.desc()).limit(8))).scalars())
+    pending = [f for f in await store.facts(session, family_id, elder_id, statuses=("pending",))]
+    needs = [{"id": f"fact:{f.key}", "kind": "fact", "key": f.key, "title": f.text, "meta": f.note or "Reported in chat; waits for your OK"} for f in pending]
+    needs += [
+        {"id": f"task:{t.id}", "kind": "task", "taskId": str(t.id), "input": t.input_needed, "title": f"{SKILLS[t.service]['label']}: {t.goal}",
+         "meta": f"Total {t.result.get('total')}" if t.result.get("total") else (t.input_needed or "")}
+        for t in tasks if t.status in ("needs_input", "awaiting_confirm")
+    ]
+    last_turn = (
+        await session.execute(
+            select(Turn).where(Turn.family_id == family_id, Turn.thread_id == elder_id, Turn.role == "user").order_by(Turn.id.desc()).limit(1)
+        )
+    ).scalar_one_or_none()
+    hidden = {"import_done", "memory_extract", "note_rewritten", "probe", "dashboard_edit"}
+    timeline = [{"id": e.id, "at": e.at.isoformat(), "kind": e.kind, "text": e.summary} for e in reversed(todays) if e.kind not in hidden][:20]
+    return {
+        "now": now.isoformat(),
+        "doses": doses,
+        "week": {"taken": week_taken, "scheduled": per_day * 7, "streakDays": streak, "adherence": adherence, "days": days},
+        "vitals": {k: vital(k) for k in ("bp", "sugar", "weight", "temperature", "spo2")},
+        "needsYou": needs,
+        "followUps": [loop_json(o) for o in loops if o.kind != "confirm_fact"],
+        "tasks": [task_json(t) for t in tasks],
+        "timeline": timeline,
+        "lastHeardAt": last_turn.at.isoformat() if last_turn else None,
+    }

@@ -62,3 +62,22 @@ async def test_note_scrubs_otp(client, at):
     assert r.json()["saved"]
     notes = (await client.get(f"/v2/dash/{FAM}/{ELDER}/overview")).json()["notes"]
     assert "556677" not in notes[0]["body"]
+
+
+async def test_home_summary(client, db, at):
+    from app.care import store
+
+    at("2026-10-02 07:00")
+    await client.get(f"/v2/dash/{FAM}/{ELDER}/overview")  # imports Metformin 08:30
+    at("2026-10-02 08:30")
+    await store.record_event(db, family_id=FAM, subject_id=ELDER, kind="reminder_sent", summary="dose due: Metformin 500 mg at 08:30", ref="r1")
+    at("2026-10-02 08:40")
+    await store.record_event(db, family_id=FAM, subject_id=ELDER, kind="dose_taken", summary="metformin: taken", payload={"medicine": "metformin"})
+    await store.record_event(db, family_id=FAM, subject_id=ELDER, kind="vital", summary="bp 140/90", payload={"kind": "bp", "value": "140/90"})
+    await store.record_event(db, family_id=FAM, subject_id=ELDER, kind="vital", summary="bp 132/84", payload={"kind": "bp", "value": "132/84"})
+    at("2026-10-02 12:00")
+    r = (await client.get(f"/v2/dash/{FAM}/{ELDER}/home")).json()
+    assert r["doses"] == [{"id": "medicine:metformin@08:30", "time": "08:30", "name": "Metformin", "dose": "500 mg", "status": "taken"}]
+    assert r["week"]["adherence"][-1] == 100 and r["week"]["scheduled"] == 7
+    assert r["vitals"]["bp"]["value"] == "132/84" and r["vitals"]["bp"]["change"] == {"pct": 6, "dir": "down"}
+    assert r["timeline"][0]["kind"] == "vital"
