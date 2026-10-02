@@ -77,6 +77,17 @@ DISHES = re.compile(
 TECH = re.compile(r"\b(browser|model|server|api|mcp|captcha|bots?|automated|automation|llm|gemini|claude|tool call)\b", re.I)
 
 
+HINGLISH = {
+    "hai", "hain", "nahi", "nahin", "kya", "kar", "karo", "kardo", "mujhe", "aap", "aapko", "main", "raha", "rahi",
+    "theek", "thik", "haan", "ji", "acha", "achha", "kab", "kaise", "mein", "bhi", "aur", "beta", "dawai", "goli",
+    "kyun", "kuch", "abhi", "batao", "bataiye", "lijiye", "dijiye", "mera", "meri", "tha", "thi", "gaya", "gayi",
+}
+
+
+def hinglish_words(text: str) -> int:
+    return sum(1 for w in re.findall(r"[a-z]+", (text or "").lower()) if w in HINGLISH)
+
+
 def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_text: str) -> list[str]:
     """Things the elder must never read. known_text is everything in memory the reply may draw on."""
     problems = []
@@ -89,6 +100,8 @@ def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_
     for w in avoid_words:
         if w and re.search(rf"\b{re.escape(w)}\b", reply, re.I):
             problems.append(f"uses '{w}', which they asked not to be called")
+    if hinglish_words(user_text) >= 2 and not re.search(r"[\u0900-\u097F]", reply) and len(reply.split()) >= 4 and hinglish_words(reply) == 0:
+        problems.append("they wrote in Hinglish (Roman letters) and the reply is in English; reply in Hinglish like they did")
     for price in re.findall(r"₹\s?\d[\d,]*(?:\.\d+)?", reply):
         if price.replace(" ", "") not in known.replace(" ", ""):
             problems.append(f"states the price {price}, which no tool returned")

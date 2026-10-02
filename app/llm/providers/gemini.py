@@ -43,6 +43,8 @@ class GeminiProvider:
             system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
             max_output_tokens=max_tokens,
             thinking_config=types.ThinkingConfig(thinking_level=_LEVEL.get(effort, "MEDIUM")),
+            # We run tools ourselves; never let the SDK try to call them.
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )
         if tools:
             config.tools = [

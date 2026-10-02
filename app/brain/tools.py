@@ -554,7 +554,24 @@ async def lab_trend(ctx: TurnCtx, a: dict) -> dict:
     )
 
 
-# ── orders and rides (until the task runtime replaces them) ────────────────────
+# ── tasks: orders and rides, carried through by the task runtime ────────────────
+
+_agent = None
+
+
+def task_agent():
+    """The browser agent used for stops and cancels during a turn (the sim swaps in a fake)."""
+    global _agent
+    if _agent is None:
+        from app.tasks.browser_use import BrowserUseCloud
+
+        _agent = BrowserUseCloud()
+    return _agent
+
+
+def set_task_agent(agent) -> None:
+    global _agent
+    _agent = agent
 
 
 async def _care_limits(ctx: TurnCtx) -> tuple[list[str], list[str]]:
@@ -564,42 +581,92 @@ async def _care_limits(ctx: TurnCtx) -> tuple[list[str], list[str]]:
     return allergies, never
 
 
-@tool(
-    "order",
-    "Order groceries, medicines or food for the care recipient (cash on delivery, the family's own accounts). "
-    "goal says exactly what to buy and from where if they said. Only call after the person confirmed the items. "
-    "Allergies and the never-order list are checked first.",
-    {
-        "goal": {"type": "string", "description": "e.g. '2 packets Aashirvaad atta 5kg from Instamart'"},
-        "confirmed": {"type": "boolean", "description": "The person confirmed items and quantity"},
-    },
-    ["goal", "confirmed"],
-)
-async def order(ctx: TurnCtx, a: dict) -> dict:
-    allergies, never = await _care_limits(ctx)
-    conflicts = policy.order_conflicts(a["goal"], allergies, never)
-    if conflicts:
-        raise ToolRefused(f"Blocked by the care record: {', '.join(conflicts)}. Tell them kindly and offer something safe.")
-    return await ctx.host.call(
-        "browser_order", {"goal": a["goal"], "message": a["goal"], "userConfirmed": bool(a["confirmed"])},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
-    )
+async def _task(ctx: TurnCtx, task_id: str):
+    from app.tasks.models import Task
+
+    try:
+        tid = uuid.UUID(task_id)
+    except ValueError as exc:
+        raise ToolRefused("Use the task id shown in ACTIVE TASKS.") from exc
+    task = await ctx.session.get(Task, tid, with_for_update=True)
+    if not task or task.family_id != ctx.family_id:
+        raise ToolRefused("No such task for this family.")
+    return task
 
 
 @tool(
-    "ride",
-    "Book, check or cancel a cab or auto for the care recipient.",
+    "start_task",
+    "Start an order or a ride on one of the family's own accounts. It runs in the background: it builds the "
+    "cart (or finds ride fares) and comes back to you to confirm before anything is placed, and it may ask for a "
+    "login code. Cash on delivery only. Allergies and the never-order list are checked first. Tell the person "
+    "you are on it; you will get a task update when it needs them.",
     {
-        "action": {"type": "string", "enum": ["book", "status", "cancel"]},
+        "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"]},
+        "kind": {"type": "string", "enum": ["order", "ride"]},
+        "goal": {"type": "string", "description": "One line, e.g. 'Atta and toor dal for Amma' or 'Cab to Dr Iyer's clinic'"},
+        "items": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "qty": {"type": "integer"}}, "required": ["name"]},
+                  "description": "For orders: exact item names with brand and pack size when known"},
         "pickup": {"type": "string"},
         "drop": {"type": "string"},
-        "confirmed": {"type": "boolean"},
+        "vehicle": {"type": "string", "description": "auto, mini, sedan, bike, or omit for cheapest car"},
+        "area": {"type": "string", "description": "Delivery area or pincode if known"},
     },
-    ["action"],
+    ["service", "kind", "goal"],
 )
-async def ride(ctx: TurnCtx, a: dict) -> dict:
-    tool_name = {"book": "book_ride", "status": "ride_status", "cancel": "cancel_ride"}[a["action"]]
-    args = {"pickup": a.get("pickup"), "drop": a.get("drop"), "userConfirmed": bool(a.get("confirmed"))} if a["action"] == "book" else {}
-    return await ctx.host.call(
-        tool_name, args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+async def start_task(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import runtime
+
+    if a["kind"] == "order":
+        allergies, never = await _care_limits(ctx)
+        text = a["goal"] + " " + " ".join(i.get("name", "") for i in a.get("items") or [])
+        conflicts = policy.order_conflicts(text, allergies, never)
+        if conflicts:
+            raise ToolRefused(f"Blocked by the care record: {', '.join(conflicts)}. Tell them kindly and offer something safe.")
+        if not a.get("items"):
+            raise ToolRefused("List the items (name, brand/size, qty) before starting an order.")
+    elif not (a.get("pickup") and a.get("drop")):
+        raise ToolRefused("A ride needs pickup and drop.")
+    for t in await runtime.live_tasks(ctx.session, ctx.family_id):
+        if t.service == a["service"] and t.kind == a["kind"]:
+            return {"already_running": runtime.describe(t)}
+    task = await runtime.create(
+        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
+        service=a["service"], kind=a["kind"], goal=a["goal"],
+        details={k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)},
     )
+    return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
+
+
+@tool(
+    "task_input",
+    "Give a running task what it is waiting for: the login code (otp), the person's confirm of the cart or "
+    "fare (confirm: yes/no), approval of a cancellation fee (fee: yes/no), or which ride option to book (choice).",
+    {
+        "task_id": {"type": "string"},
+        "kind": {"type": "string", "enum": ["otp", "confirm", "fee", "choice"]},
+        "value": {"type": "string"},
+    },
+    ["task_id", "kind", "value"],
+)
+async def task_input(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import runtime
+
+    task = await _task(ctx, a["task_id"])
+    outcome = await runtime.provide_input(
+        ctx.session, task, kind=a["kind"], value=a["value"], by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
+    )
+    return {"result": outcome, "task": runtime.describe(task)}
+
+
+@tool(
+    "cancel_task",
+    "Cancel a running or placed task: stops it before placing, or cancels the placed order or ride on the "
+    "service. If cancelling costs a fee you will be asked before it is accepted.",
+    {"task_id": {"type": "string"}, "reason": {"type": "string"}},
+    ["task_id", "reason"],
+)
+async def cancel_task(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import runtime
+
+    task = await _task(ctx, a["task_id"])
+    return {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}

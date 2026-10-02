@@ -80,8 +80,9 @@ jobs:
           VERTEX_LOCATION: global
           VERTEX_CHAT_MODEL: gemini-3.1-pro-preview
           VERTEX_CAREGIVER_CHAT_MODEL: gemini-3.1-pro-preview
-          # Brain v2 model order per role. Claude leads once Model Garden quota is granted.
-          MODEL_ROUTES: '{"brain": ["gemini:gemini-3.8-flash", "gemini:gemini-3.1-pro-preview"], "extract": ["gemini:gemini-3.8-flash"], "worker": ["gemini:gemini-3.8-flash"], "classify": ["gemini:gemini-3.8-flash"]}'
+          # Brain v2 model order per role: India region first (2-3 s turns, data stays in India).
+          # Claude leads once Model Garden quota is granted.
+          MODEL_ROUTES: '{"brain": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash", "gemini:gemini-3.1-pro-preview"], "extract": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash"], "worker": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash"], "classify": ["gemini:gemini-3.5-flash@asia-south1"]}'
           VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
           EMBED_DIM: "768"
           DEBUG: "false"
@@ -104,6 +105,7 @@ jobs:
             --max-instances=3 \
             --add-cloudsql-instances=${{ env.CLOUDSQL }} \
             --env-vars-file=/tmp/ai-engine-env.yaml \
+            --update-secrets=BROWSER_USE_API_KEY=backend-browser-use-api-key:latest \
             --quiet
 
       - name: Grant backend service account invoker access

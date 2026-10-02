@@ -148,3 +148,32 @@ async def consolidate_job() -> dict:
         except Exception:  # noqa: BLE001
             logger.exception("consolidate failed family=%s", fid)
     return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired}
+
+
+@router.post("/jobs/tasks")
+async def tasks_job() -> dict:
+    """Cloud Scheduler, every minute: advance running orders and rides."""
+    import uuid as _uuid
+
+    from app.brain.tools import task_agent
+    from app.brain.wake import system_turn
+    from app.db.session import SessionLocal
+    from app.tasks.runtime import tick
+
+    def host_for(fid: str):
+        return ShadowHost() if fid.startswith("shadow:") else LiveHost()
+
+    async def profile_for(task) -> str | None:
+        res = await host_for(task.family_id).call(
+            "browser_profile", {"partner": task.service},
+            family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by,
+        )
+        return res.get("profileId")
+
+    async def notify(family_id: str, requested_by: str, prompt: str) -> None:
+        try:
+            await system_turn(SessionLocal, host_for(family_id), family_id, f"{prompt} (Requested by {requested_by}.)", f"task:{_uuid.uuid4().hex[:12]}")
+        except Exception:  # noqa: BLE001
+            logger.exception("task notify failed family=%s", family_id)
+
+    return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify)

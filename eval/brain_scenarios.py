@@ -25,6 +25,7 @@ from app.brain.loop import TurnRequest, run_turn
 from app.care import store
 from app.core import clock
 from app.db.session import Base, SessionLocal, engine
+from app.sim.agent import FakeAgent
 from app.sim.world import SimHost
 
 ELDER = {"id": "elder-leela", "name": "Leela", "role": "elder"}
@@ -43,6 +44,7 @@ SETUP = (
 class Run:
     family_id: str
     host: SimHost
+    agent: "FakeAgent" = field(default_factory=lambda: FakeAgent())
     replies: list[str] = field(default_factory=list)
     results: list = field(default_factory=list)
     failures: list[str] = field(default_factory=list)
@@ -214,6 +216,72 @@ async def s_no_answer_after_fall(run: Run) -> None:
     run.check(bool(run.host.world.alerts), f"caregiver told after no answer (sent: {run.host.world.sent})")
 
 
+async def tasks_tick(run: Run, when: str) -> None:
+    """The task runtime's minute tick, with the fake browser agent and brain notifications."""
+    from app.brain.wake import system_turn
+    from app.tasks.runtime import tick
+
+    clock.set_now(ist(when))
+
+    async def profile_for(task):
+        return "prof-sim"
+
+    async def notify(family_id, requested_by, prompt):
+        await system_turn(SessionLocal, run.host, family_id, f"{prompt} (Requested by {requested_by}.)", f"task:{uuid.uuid4().hex[:8]}")
+
+    await tick(SessionLocal, run.agent, profile_for=profile_for, notify=notify)
+
+
+async def tasks_of(run: Run):
+    from sqlalchemy import select as sel
+
+    from app.tasks.models import Task
+
+    async with SessionLocal() as session:
+        return list((await session.execute(sel(Task).where(Task.family_id == run.family_id))).scalars())
+
+
+async def s_cab_unrelated_then_cancel(run: Run) -> None:
+    from app.sim.agent import FARES
+
+    run.agent.script = {"prepare": [FARES]}
+    run.agent.finish_after_polls = 1
+    await setup(run)
+    await say(run, ELDER, "Mujhe ghar se Dr Iyer ke clinic jaana hai, Uber se ek auto book kar do", "2026-10-02 10:00")
+    tasks = await tasks_of(run)
+    run.check(len(tasks) == 1 and tasks[0].kind == "ride", f"one ride task started ({[(t.service, t.kind) for t in tasks]})")
+    await tasks_tick(run, "2026-10-02 10:01")
+    await tasks_tick(run, "2026-10-02 10:02")
+    told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
+    run.check(any("142" in t for t in told), f"fares sent to her ({told})")
+    reply = await say(run, ELDER, "Achha ek baat batao, BP wali goli kis time leni hai?", "2026-10-02 10:03")
+    run.check("9" in reply or "21" in reply, "answers the unrelated question (9 pm)")
+    await say(run, ELDER, "Cab cancel kar do, beta aa raha hai lene", "2026-10-02 10:04")
+    tasks = await tasks_of(run)
+    run.check(tasks and tasks[0].status == "cancelled", f"ride cancelled ({[t.status for t in tasks]})")
+    run.check(not [r for r in run.agent.runs if r["phase"] == "place"], "nothing booked")
+
+
+async def s_grocery_confirm_and_place(run: Run) -> None:
+    from app.sim.agent import CART, PLACED
+
+    run.agent.script = {"prepare": [CART], "place": [PLACED]}
+    await setup(run)
+    await say(run, ELDER, "Instamart se Aashirvaad atta 5 kilo mangwa do", "2026-10-02 11:00")
+    await tasks_tick(run, "2026-10-02 11:01")
+    await tasks_tick(run, "2026-10-02 11:02")
+    told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
+    run.check(any("318" in t for t in told), f"total read out before placing ({told})")
+    run.check(not [r for r in run.agent.runs if r["phase"] == "place"], "not placed before her yes")
+    await say(run, ELDER, "Haan theek hai, order kar do", "2026-10-02 11:03")
+    await tasks_tick(run, "2026-10-02 11:04")
+    await tasks_tick(run, "2026-10-02 11:05")
+    tasks = await tasks_of(run)
+    run.check(tasks and tasks[0].status == "done", f"order placed ({[t.status for t in tasks]})")
+    told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
+    run.check(any("IM-55821" in t or "17" in t for t in told[-2:]), f"told the order id or ETA ({told[-2:]})")
+
+
 SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "setup": s_setup,
     "naming_correction": s_naming_correction,
@@ -228,11 +296,14 @@ SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "low_mood_no_whatsapp": s_low_mood_no_whatsapp,
     "caregiver_asks_day": s_caregiver_asks_day,
     "no_answer_after_fall": s_no_answer_after_fall,
+    "cab_unrelated_then_cancel": s_cab_unrelated_then_cancel,
+    "grocery_confirm_and_place": s_grocery_confirm_and_place,
 }
 
 
 async def main(names: list[str]) -> int:
     from app.care import models  # noqa: F401
+    from app.tasks import models as task_models  # noqa: F401
     from app.models import entities  # noqa: F401
 
     async with engine.begin() as conn:
@@ -242,6 +313,9 @@ async def main(names: list[str]) -> int:
     chosen = names or list(SCENARIOS)
     for name in chosen:
         run = Run(family_id=f"sim-{name}-{uuid.uuid4().hex[:6]}", host=SimHost())
+        from app.brain.tools import set_task_agent
+
+        set_task_agent(run.agent)
         print(f"── {name}")
         try:
             await SCENARIOS[name](run)

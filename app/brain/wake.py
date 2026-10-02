@@ -58,6 +58,20 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     )
 
 
+async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str) -> None:
+    """Let the brain act on something that happened without a person writing (a due loop, a task update)."""
+    async with sessions() as session:
+        roster = await store.roster(session, family_id)
+    if not roster:
+        logger.warning("system turn skipped, no roster family=%s", family_id)
+        return
+    async with sessions() as session:
+        await run_turn(
+            session, host,
+            TurnRequest(family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt, message_ref=ref, channel="scheduler"),
+        )
+
+
 async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolHost], *, limit: int = 50) -> dict:
     stats = {"due": 0, "ran": 0, "deferred": 0, "expired": 0, "failed": 0}
     async with sessions() as session:

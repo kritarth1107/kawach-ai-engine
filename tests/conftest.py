@@ -14,6 +14,7 @@ TEST_DB = os.getenv("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres
 async def db():
     """A session inside a transaction that is rolled back after the test."""
     from app.care import models  # noqa: F401
+    from app.tasks import models as task_models  # noqa: F401
     from app.db.session import Base
     from app.models import entities  # noqa: F401
 

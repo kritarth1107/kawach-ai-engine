@@ -77,11 +77,16 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
     day_events = await store.events(session, req.family_id, req.elder["id"], day=clock.ist_day())
     loops = await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]])
     hits = await store.recall(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
+    from app.tasks import runtime as task_runtime
+
+    tasks = await task_runtime.live_tasks(session, req.family_id)
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
         f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
         digest.ledger(day_events),
         digest.loops(loops),
+        ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
+        if tasks else "ACTIVE TASKS: none.",
     ]
     if hits:
         parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
