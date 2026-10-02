@@ -104,3 +104,47 @@ async def wake_job() -> dict:
     from app.db.session import SessionLocal
 
     return await wake_due(SessionLocal, lambda fid: ShadowHost() if fid.startswith("shadow:") else LiveHost())
+
+
+@router.post("/jobs/extract")
+async def extract_job() -> dict:
+    """Cloud Scheduler, every 30 minutes: re-read new conversation turns for facts the brain missed."""
+    from app.care.extract import extract_family, families_with_new_turns
+    from app.db.session import SessionLocal
+
+    done = {}
+    async with SessionLocal() as session:
+        families = await families_with_new_turns(session)
+    for fid in families:
+        try:
+            async with SessionLocal() as session:
+                done[fid] = await extract_family(session, fid)
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("extract failed family=%s", fid)
+            done[fid] = {"error": str(exc)[:200]}
+    return {"families": len(families), "results": done}
+
+
+@router.post("/jobs/consolidate")
+async def consolidate_job() -> dict:
+    """Nightly: rewrite long memory notes into clean files and expire unanswered confirmations."""
+    from sqlalchemy import select as sql_select
+
+    from app.care.extract import consolidate_family, expire_stale_confirmations
+    from app.care.models import MemoryNote
+    from app.db.session import SessionLocal
+
+    async with SessionLocal() as session:
+        fids = [r[0] for r in await session.execute(sql_select(MemoryNote.family_id).distinct())]
+        expired = await expire_stale_confirmations(session)
+        await session.commit()
+    rewritten = 0
+    for fid in fids:
+        try:
+            async with SessionLocal() as session:
+                rewritten += await consolidate_family(session, fid)
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("consolidate failed family=%s", fid)
+    return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired}

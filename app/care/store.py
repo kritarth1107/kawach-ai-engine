@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care.domains import needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
+from app.care.redact import scrub_secrets
 from app.core import clock
 
 
@@ -415,7 +416,7 @@ async def add_turn(
             thread_id=thread_id,
             speaker_id=speaker_id,
             role=role,
-            text=text,
+            text=scrub_secrets(text) if role == "user" else text,
             at=clock.now(),
             meta=meta or {},
             message_ref=message_ref,
