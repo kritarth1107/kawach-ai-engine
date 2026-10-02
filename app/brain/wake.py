@@ -39,7 +39,28 @@ def next_morning(at=None):
     return morning
 
 
+KIND_PROMPTS = {
+    "family_task": (
+        "[Scheduled wake-up] Family task {id} is due: \"{title}\". It is assigned to person {owner}. Send {owner} one short "
+        "reminder with send_message (who it is for and what to do). Do not message anyone else. If the conversation shows it "
+        "is already done, close_loop it instead. Then reply none."
+    ),
+    "appointment": (
+        "[Scheduled wake-up] {title}. Remind the person the appointment is for (send_message, in their language), and tell "
+        "the caregiver who saved it in one line if it is someone else. Mention the questions to ask from care_team if any, and "
+        "offer to book a cab (start_task ride) only if they want one. Then close_loop {id} and reply none."
+    ),
+    "refill": (
+        "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
+        "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "
+        "If they already answered, act on it: start_task (order) after a yes, close_loop {id} after a no. Then reply none."
+    ),
+}
+
+
 async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str:
+    if loop.kind in KIND_PROMPTS:
+        return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver")
     last = (
         await session.execute(
             select(Turn)
@@ -106,7 +127,9 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
             prompt = await wake_prompt(session, loop, roster.elder["id"])
             # Count the wake before the brain runs, so a crash cannot make it fire forever.
             loop.detail = {**(loop.detail or {}), "wakes": wakes + 1}
-            loop.wake_at = clock.now() + timedelta(hours=1)
+            # One-shot reminders (family tasks, appointments, refills) stay open on the dashboard but wake only once.
+            once = wakes + 1 >= int((loop.detail or {}).get("max_wakes", MAX_WAKES))
+            loop.wake_at = None if once else clock.now() + timedelta(hours=1)
             await session.commit()
         try:
             async with sessions() as session:

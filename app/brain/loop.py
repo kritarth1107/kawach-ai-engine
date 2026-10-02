@@ -90,6 +90,15 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
     ]
     if hits:
         parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
+    if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":
+        own = await store.facts(session, req.family_id, req.speaker["id"], statuses=("active", "pending"))
+        if own:
+            own_today = await store.events(session, req.family_id, req.speaker["id"], day=clock.ist_day())
+            parts.append(
+                f"YOUR OWN CARE (the speaker's self care; use about={req.speaker['id']} for anything about them):\n"
+                + digest.care_record(req.speaker.get("name") or "the speaker", own)
+                + ("\n" + digest.ledger(own_today) if own_today else "")
+            )
     if req.speaker["id"] != req.elder["id"]:
         elder_turns = await store.recent_turns(session, req.family_id, req.elder["id"], limit=12)
         if elder_turns:

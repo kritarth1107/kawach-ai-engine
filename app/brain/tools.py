@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -160,7 +161,11 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     out: dict = {"result": w.result, "key": w.fact.key}
     if w.result == "pending":
         out["note"] = "This changes a fact a caregiver or prescription set; it waits for a caregiver to confirm."
-    if domain == "medicine" and w.result in ("created", "superseded") and subject == ctx.elder_id:
+    if domain == "appointment" and w.result in ("created", "superseded"):
+        from app.care import features
+
+        out["reminders"] = await features.appointment_loops(ctx.session, family_id=ctx.family_id, subject_id=subject, f=w.fact, owner_id=ctx.speaker.get("id"))
+    if domain == "medicine" and w.result in ("created", "superseded"):
         out["reminders"] = await ctx.host.call(
             "sync_medicine_schedule",
             {
@@ -206,7 +211,7 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind="fact_" + w.result,
         summary=f"{a['name']}: {a['reason']}", payload={"key": key}, actor_id=ctx.speaker.get("id"),
     )
-    if w.result == "stopped" and a["domain"] == "medicine" and subject == ctx.elder_id:
+    if w.result == "stopped" and a["domain"] == "medicine":
         await ctx.host.call(
             "sync_medicine_schedule",
             {"key": key, "name": a["name"], "times": [], "active": False},
@@ -290,24 +295,26 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
         "medicine": {"type": "string", "description": "Medicine name or key"},
         "outcome": {"type": "string", "enum": ["taken", "skipped", "refused", "missed", "empty_strip"]},
         "note": {"type": "string"},
+        "about": ABOUT,
     },
     ["medicine", "outcome"],
 )
 async def log_dose(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
     name = a["medicine"].split(":", 1)[-1]
     summary = f"{name}: {a['outcome']}" + (f" ({a['note']})" if a.get("note") else "")
     await store.record_event(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=f"dose_{a['outcome']}",
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind=f"dose_{a['outcome']}",
         summary=summary, payload={"medicine": name}, actor_id=ctx.speaker.get("id"), ref=ctx.message_ref and f"{ctx.message_ref}:{slug(name)}",
     )
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
         tool_name, {"title": name, "note": a.get("note") or a["outcome"]},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+        family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     out = {"logged": summary, "schedule": res}
     if a["outcome"] == "empty_strip":
-        out["next"] = "Ask whether to reorder; ordering needs the medicine name and a confirmed quantity."
+        out["next"] = "Ask how many tablets are left or whether to reorder (set_stock, then start_task with a pharmacy)."
     return out
 
 
@@ -320,19 +327,22 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         "value": {"type": "string"},
         "unit": {"type": "string"},
         "note": {"type": "string"},
+        "about": ABOUT,
     },
     ["kind", "value"],
 )
 async def log_vital(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
+    a = {k: v for k, v in a.items() if k != "about"}
     flag = policy.vital_red_flag(a["kind"], a["value"])
     summary = f"{a['kind']} {a['value']}{(' ' + a['unit']) if a.get('unit') else ''}" + (f" ({a['note']})" if a.get("note") else "")
     await store.record_event(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="vital", summary=summary,
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind="vital", summary=summary,
         payload={**a, "red_flag": flag}, actor_id=ctx.speaker.get("id"),
     )
     await ctx.host.call(
         "log_vitals", {"kind": a["kind"], "value": a["value"], "unit": a.get("unit"), "note": a.get("note")},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+        family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     return {"logged": summary, "red_flag": flag}
 
@@ -347,18 +357,20 @@ async def log_vital(ctx: TurnCtx, a: dict) -> dict:
         "kind": {"type": "string", "enum": ["meal", "water", "mood", "symptom", "routine", "home", "sleep", "social", "other"]},
         "summary": {"type": "string"},
         "severity": {"type": "string", "enum": ["info", "watch", "concern"]},
+        "about": ABOUT,
     },
     ["kind", "summary"],
 )
 async def log_event(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
     await store.record_event(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], summary=a["summary"],
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind=a["kind"], summary=a["summary"],
         payload={"severity": a.get("severity", "info")}, actor_id=ctx.speaker.get("id"),
     )
     if a["kind"] == "symptom":
         await ctx.host.call(
             "log_symptom", {"symptom": a["summary"], "severity": a.get("severity", "info")},
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+            family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
         )
     return {"logged": a["summary"]}
 
@@ -367,16 +379,17 @@ async def log_event(ctx: TurnCtx, a: dict) -> dict:
     "reminder_log",
     "What the reminder system actually did on a day: which reminders were sent, failed or never attempted, "
     "and the doses marked. Use it before answering any question about a reminder.",
-    {"day": {"type": "string", "description": "YYYY-MM-DD, default today"}},
+    {"day": {"type": "string", "description": "YYYY-MM-DD, default today"}, "about": ABOUT},
     [],
 )
 async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
     day = a.get("day") or clock.ist_day()
     sent = await ctx.host.call(
-        "get_reminder_log", {"dateKey": day}, family_id=ctx.family_id, subject_id=ctx.elder_id,
+        "get_reminder_log", {"dateKey": day}, family_id=ctx.family_id, subject_id=subject,
         actor_id=ctx.actor_id,
     )
-    doses = await store.events(ctx.session, ctx.family_id, ctx.elder_id, day=day)
+    doses = await store.events(ctx.session, ctx.family_id, subject, day=day)
     return {
         "day": day,
         "reminder_attempts": sent.get("attempts", []),
@@ -390,25 +403,25 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
     "set_reminder",
     "A one-off or repeating reminder that is not a medicine (medicines get reminders through remember). "
     "times are 'HH:MM' in IST.",
-    {"text": {"type": "string"}, "times": {"type": "array", "items": {"type": "string"}}},
+    {"text": {"type": "string"}, "times": {"type": "array", "items": {"type": "string"}}, "about": ABOUT},
     ["text", "times"],
 )
 async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
         "create_reminder", {"text": a["text"], "times": a["times"], "kind": "multi_time"},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+        family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), actor_id=ctx.actor_id,
     )
 
 
 @tool(
     "today_schedule",
     "Today's care schedule with each item's status (done, missed, due, upcoming).",
-    {},
+    {"about": ABOUT},
     [],
 )
 async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
-        "get_today_schedule", {}, family_id=ctx.family_id, subject_id=ctx.elder_id,
+        "get_today_schedule", {}, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")),
         actor_id=ctx.actor_id,
     )
 
@@ -670,3 +683,178 @@ async def cancel_task(ctx: TurnCtx, a: dict) -> dict:
 
     task = await _task(ctx, a["task_id"])
     return {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}
+
+
+# ── care views: refills, emergency card, care team, reports, wellbeing, family tasks, spending ──
+# Each reads the same data the dashboard shows (app.care.features), so WhatsApp and the dashboard agree.
+
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "https://app.kavach.care").rstrip("/")
+
+
+def _name_of(ctx: TurnCtx, subject: str) -> str:
+    if subject == ctx.elder_id:
+        return ctx.elder.get("name") or "them"
+    for m in ctx.members:
+        if m.get("id") == subject:
+            return m.get("name") or "them"
+    return "them"
+
+
+@tool(
+    "set_stock",
+    "Record how many tablets (or doses) of a medicine are on hand now, e.g. after a new strip arrives or when "
+    "someone counts them. Saheli then works out days left and asks about a refill before it runs out.",
+    {"medicine": {"type": "string"}, "count": {"type": "integer", "minimum": 0, "maximum": 2000}, "about": ABOUT},
+    ["medicine", "count"],
+)
+async def set_stock_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    subject = ctx.subject(a.get("about"))
+    f = await features.find_medicine(ctx.session, ctx.family_id, subject, a["medicine"])
+    if not f:
+        raise ToolRefused("That medicine is not in the care record. Save it with remember first.")
+    return await features.set_stock(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, key=f.key, name=features.med_name(f), count=int(a["count"]),
+        actor_id=ctx.speaker.get("id"),
+    )
+
+
+@tool(
+    "medicine_stock",
+    "Tablets left and days left for each medicine, and which ones need a refill soon.",
+    {"about": ABOUT},
+    [],
+)
+async def medicine_stock(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    rows = await features.stock(ctx.session, ctx.family_id, ctx.subject(a.get("about")))
+    return {"medicines": rows, "refill_within_days": features.REFILL_DAYS, "unknown": [r["name"] for r in rows if r["stock"] is None]}
+
+
+@tool(
+    "emergency_card",
+    "The person's emergency card (blood group, allergies, conditions, medicines, doctors, hospital, who to call) "
+    "and a link anyone can open in an emergency. Send it when someone asks for it or there is an emergency.",
+    {"about": ABOUT},
+    [],
+)
+async def emergency_card(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    subject = ctx.subject(a.get("about"))
+    card = await features.emergency(ctx.session, ctx.family_id, subject)
+    link = await ctx.host.call("emergency_link", {}, family_id=ctx.family_id.removeprefix("shadow:"), subject_id=subject, actor_id=ctx.actor_id)
+    missing = [k for k in ("blood_group",) if k not in card["profile"]]
+    return {"text": features.emergency_text(_name_of(ctx, subject), card), "link": link.get("url"), "missing": missing}
+
+
+@tool(
+    "care_team",
+    "Doctors, hospital, contacts, helpers and appointments (upcoming and past, with the questions to ask the doctor).",
+    {"about": ABOUT},
+    [],
+)
+async def care_team_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    return await features.care_team(ctx.session, ctx.family_id, ctx.subject(a.get("about")))
+
+
+@tool(
+    "add_doctor_question",
+    "Add a question to ask the doctor at an appointment (saved with the appointment and shown on the report).",
+    {"appointment": {"type": "string", "description": "Appointment name or key, e.g. the doctor's name"}, "question": {"type": "string"}, "about": ABOUT},
+    ["appointment", "question"],
+)
+async def add_doctor_question(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
+    appts = await store.facts(ctx.session, ctx.family_id, subject, domains=["appointment"], statuses=("active",))
+    want = slug(a["appointment"].split(":", 1)[-1])
+    hit = next((f for f in appts if f.key.split(":", 1)[1] == want or want in f.key or want in slug(str(f.value.get("doctor", "")))), None)
+    if not hit:
+        raise ToolRefused("No such appointment. Save the appointment with remember (domain appointment) first.")
+    qs = [*(hit.value.get("questions") or []), a["question"].strip()]
+    w = await store.write_fact(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, domain="appointment", key=hit.key, value={**hit.value, "questions": qs},
+        text=hit.text, source_kind=ctx.source_kind, source_ref=ctx.message_ref, stated_by=ctx.speaker.get("id"),
+    )
+    return {"result": w.result, "questions": qs}
+
+
+@tool(
+    "weekly_report",
+    "A care report for the last N days (default 7) to share with the doctor or family: adherence, readings, "
+    "symptoms, mood, alerts and orders, with a link to the printable report.",
+    {"days": {"type": "integer", "minimum": 1, "maximum": 31}, "about": ABOUT},
+    [],
+)
+async def weekly_report(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    subject = ctx.subject(a.get("about"))
+    r = await features.report(ctx.session, ctx.family_id, subject, int(a.get("days") or 7))
+    return {
+        "summary": features.report_facts_text(_name_of(ctx, subject), r),
+        "link": f"{DASHBOARD_URL}/dashboard/report?recipient={subject}&days={r['days']}",
+    }
+
+
+@tool(
+    "wellbeing",
+    "How the person has been lately: when they were last heard from, how many days they talked, mood and concerns.",
+    {"days": {"type": "integer", "minimum": 3, "maximum": 60}, "about": ABOUT},
+    [],
+)
+async def wellbeing_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    subject = ctx.subject(a.get("about"))
+    w = await features.wellbeing(ctx.session, ctx.family_id, subject, int(a.get("days") or 14))
+    return {"summary": features.wellbeing_text(_name_of(ctx, subject), w), "streak": w["streak"], "lastHeard": w["lastHeard"]}
+
+
+@tool(
+    "assign_family_task",
+    "Give a family member a care task (call Maa tonight, pick up medicines, take Papa to the clinic). Saheli "
+    "reminds them on WhatsApp when it is due. 'to' is a person id from HOUSEHOLD; due is 'YYYY-MM-DDTHH:MM' IST.",
+    {"title": {"type": "string"}, "to": {"type": "string"}, "due": {"type": "string"}, "about": ABOUT},
+    ["title", "to"],
+)
+async def assign_family_task(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    ids = {m.get("id") for m in ctx.members}
+    if a["to"] not in ids:
+        raise ToolRefused("Assign only to people in HOUSEHOLD, by id.")
+    due = features.parse_when(a.get("due"))
+    loop = await features.add_family_task(
+        ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), title=a["title"], assignee=a["to"],
+        due=due, by=ctx.speaker.get("id"),
+    )
+    return {"task_id": str(loop.id), "due": clock.ist(due).strftime("%d %b %H:%M") if due else None, "done_with": "close_loop"}
+
+
+@tool(
+    "family_tasks",
+    "The family's care tasks: who has what, when it is due, and what was done recently. Close one with close_loop.",
+    {},
+    [],
+)
+async def family_tasks_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    return {"tasks": await features.family_tasks(ctx.session, ctx.family_id)}
+
+
+@tool(
+    "spending",
+    "What was spent on orders and rides Saheli placed in a month (cash on delivery), by service and by person.",
+    {"month": {"type": "string", "description": "YYYY-MM, default this month"}},
+    [],
+)
+async def spending_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import features
+
+    return await features.spending(ctx.session, ctx.family_id, a.get("month"))

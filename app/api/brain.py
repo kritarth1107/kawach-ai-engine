@@ -177,3 +177,68 @@ async def tasks_job() -> dict:
             logger.exception("task notify failed family=%s", family_id)
 
     return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify)
+
+
+@router.post("/jobs/daily")
+async def daily_job() -> dict:
+    """Cloud Scheduler, 10:00 IST: medicines running low become a refill loop that wakes Saheli to ask about a reorder."""
+    from app.care import features
+    from app.core import clock
+    from app.db.session import SessionLocal
+
+    opened = 0
+    async with SessionLocal() as session:
+        from sqlalchemy import select as sql_select
+
+        from app.care.models import OpenLoop
+
+        for fid, sid, row in await features.refill_candidates(session):
+            dedupe = f"refill:{sid}:{row['key']}"
+            already = (
+                await session.execute(
+                    sql_select(OpenLoop.id).where(OpenLoop.family_id == fid, OpenLoop.dedupe_key == dedupe, OpenLoop.status == "open")
+                )
+            ).first()
+            if already:
+                continue  # asked once already; it stays on the dashboard until someone acts
+            await store.open_loop(
+                session, family_id=fid, subject_id=sid, kind="refill",
+                title=f"Refill {row['name']}: about {row['daysLeft']} days left ({row['stock']} left) for person {sid}",
+                detail={"key": row["key"], "days_left": row["daysLeft"], "stock": row["stock"], "max_wakes": 1},
+                wake_at=clock.now(), alert_rule="dashboard", dedupe_key=dedupe,
+            )
+            opened += 1
+        await session.commit()
+    return {"refills": opened}
+
+
+CHECKIN_PROMPT = (
+    "[Caregiver check-in] It is the weekly check-in on the caregivers themselves. For each caregiver in HOUSEHOLD "
+    "(not the care recipient), send one short, warm message with send_message asking how they are doing this week "
+    "(sleep, stress, their own health). One question only, no lists. When they answer later, log it with log_event "
+    "kind mood about their own id. After sending, reply none."
+)
+
+
+@router.post("/jobs/weekly")
+async def weekly_job() -> dict:
+    """Cloud Scheduler, Sunday 18:00 IST: a short check-in with each caregiver about themselves."""
+    import uuid as _uuid
+
+    from sqlalchemy import select as sql_select
+
+    from app.brain.wake import system_turn
+    from app.care.models import FamilyRoster
+    from app.core import clock
+    from app.db.session import SessionLocal
+
+    async with SessionLocal() as session:
+        fids = [r[0] for r in await session.execute(sql_select(FamilyRoster.family_id).where(~FamilyRoster.family_id.startswith("shadow:")))]
+    ran = 0
+    for fid in fids:
+        try:
+            await system_turn(SessionLocal, LiveHost(), fid, CHECKIN_PROMPT, f"checkin:{clock.ist_day()}:{_uuid.uuid4().hex[:6]}")
+            ran += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("caregiver check-in failed family=%s", fid)
+    return {"families": len(fids), "ran": ran}

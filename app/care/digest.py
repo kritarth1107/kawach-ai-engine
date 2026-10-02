@@ -39,6 +39,8 @@ ORDER = [
     "home",
     "contact",
     "preference",
+    "profile",
+    "appointment",
 ]
 
 TITLES = {
@@ -59,6 +61,8 @@ TITLES = {
     "home": "Home",
     "contact": "Contacts",
     "preference": "Preferences",
+    "profile": "Emergency profile",
+    "appointment": "Appointments",
 }
 
 

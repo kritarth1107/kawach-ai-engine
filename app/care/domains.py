@@ -27,6 +27,8 @@ DOMAINS = {
     "home": "Helpers, cook, maid, home setup",
     "contact": "Other people and numbers",
     "preference": "Likes and dislikes that matter for care",
+    "profile": "Emergency profile: blood_group, height, weight, insurance, mobility, id_note (one fact each)",
+    "appointment": "Doctor appointments: doctor, when (YYYY-MM-DDTHH:MM IST), place, purpose, questions to ask",
 }
 
 # A change from a weaker source to these waits for a caregiver to confirm.

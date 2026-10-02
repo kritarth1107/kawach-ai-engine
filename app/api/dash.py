@@ -379,3 +379,157 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
         "timeline": timeline,
         "lastHeardAt": last_turn.at.isoformat() if last_turn else None,
     }
+
+
+# ── care views (the same data Saheli's tools read on WhatsApp) ─────────────────
+
+
+@router.get("/{family_id}/{elder_id}/stock")
+async def stock_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import features
+
+    return {"medicines": await features.stock(session, family_id, elder_id), "refillWithinDays": features.REFILL_DAYS}
+
+
+class StockIn(BaseModel):
+    actor: Actor
+    key: str = Field(min_length=3, max_length=160)
+    count: int = Field(ge=0, le=2000)
+
+
+@router.post("/{family_id}/{elder_id}/stock")
+async def stock_set(family_id: str, elder_id: str, body: StockIn, session: DB) -> dict:
+    from app.care import features
+
+    f = await features.find_medicine(session, family_id, elder_id, body.key)
+    if not f:
+        raise HTTPException(status_code=404, detail="no such medicine")
+    row = await features.set_stock(session, family_id=family_id, subject_id=elder_id, key=f.key, name=features.med_name(f), count=body.count, actor_id=body.actor.id)
+    await session.commit()
+    return row
+
+
+class RefillOrderIn(BaseModel):
+    actor: Actor
+    service: str = Field(pattern="^(apollo|1mg|pharmeasy)$")
+    qty: int = Field(default=1, ge=1, le=20)
+
+
+@router.post("/{family_id}/{elder_id}/stock/{key}/order")
+async def refill_order(family_id: str, elder_id: str, key: str, body: RefillOrderIn, session: DB) -> dict:
+    from app.care import features
+
+    f = await features.find_medicine(session, family_id, elder_id, key)
+    if not f:
+        raise HTTPException(status_code=404, detail="no such medicine")
+    name = features.med_name(f)
+    for t in await runtime.live_tasks(session, family_id):
+        if t.service == body.service and t.kind == "order":
+            return {"alreadyRunning": True, "task": task_json(t)}
+    item = f"{name} {f.value.get('dose') or ''}".strip()
+    task = await runtime.create(
+        session, family_id=family_id, subject_id=elder_id, requested_by=body.actor.id, service=body.service, kind="order",
+        goal=f"Refill {item}", details={"items": [{"name": item, "qty": body.qty}], "refill_key": f.key},
+    )
+    live = (await session.execute(select(OpenLoop).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == f"refill:{elder_id}:{f.key}", OpenLoop.status == "open"))).scalars()
+    for loop in live:
+        await store.close_loop(session, loop.id, note=f"reorder started on {body.service}")
+    await session.commit()
+    return {"task": task_json(task)}
+
+
+@router.get("/{family_id}/{elder_id}/emergency")
+async def emergency_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import features
+
+    return await features.emergency(session, family_id, elder_id)
+
+
+@router.get("/{family_id}/{elder_id}/care-team")
+async def care_team_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import features
+
+    return await features.care_team(session, family_id, elder_id)
+
+
+class QuestionIn(BaseModel):
+    actor: Actor
+    key: str = Field(min_length=3, max_length=160)
+    question: str = Field(min_length=1, max_length=400)
+
+
+@router.post("/{family_id}/{elder_id}/appointments/question")
+async def appointment_question(family_id: str, elder_id: str, body: QuestionIn, session: DB) -> dict:
+    out = await _run(session, _ctx(session, family_id, elder_id, body.actor), "add_doctor_question", {"appointment": body.key, "question": body.question})
+    await session.commit()
+    return out
+
+
+@router.get("/{family_id}/{elder_id}/report")
+async def report_view(family_id: str, elder_id: str, session: DB, days: int = 7, name: str = "") -> dict:
+    from app.care import features
+
+    r = await features.report(session, family_id, elder_id, days)
+    r["narrative"] = await features.narrative(session, family_id, elder_id, name or "the care recipient", r)
+    await session.commit()
+    return r
+
+
+@router.get("/{family_id}/{elder_id}/wellbeing")
+async def wellbeing_view(family_id: str, elder_id: str, session: DB, days: int = 14) -> dict:
+    from app.care import features
+
+    return await features.wellbeing(session, family_id, elder_id, max(3, min(days, 60)))
+
+
+@router.get("/{family_id}/{elder_id}/family-tasks")
+async def family_tasks_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import features
+
+    return {"tasks": await features.family_tasks(session, family_id)}
+
+
+class FamilyTaskIn(BaseModel):
+    actor: Actor
+    title: str = Field(min_length=2, max_length=300)
+    assignee: str = Field(min_length=3, max_length=64)
+    due: str | None = None
+
+
+@router.post("/{family_id}/{elder_id}/family-tasks")
+async def family_task_add(family_id: str, elder_id: str, body: FamilyTaskIn, session: DB) -> dict:
+    from app.care import features
+
+    due = features.parse_when(body.due)
+    loop = await features.add_family_task(session, family_id=family_id, subject_id=elder_id, title=body.title, assignee=body.assignee, due=due, by=body.actor.id)
+    await store.record_event(session, family_id=family_id, subject_id=elder_id, kind="dashboard_edit", summary=f"task for {body.assignee}: {body.title}", actor_id=body.actor.id)
+    await session.commit()
+    return features.family_task_json(loop)
+
+
+class TaskDoneIn(BaseModel):
+    actor: Actor
+    note: str = "done"
+
+
+@router.post("/{family_id}/{elder_id}/family-tasks/{task_id}/done")
+async def family_task_done(family_id: str, elder_id: str, task_id: uuid.UUID, body: TaskDoneIn, session: DB) -> dict:
+    from app.care import features
+
+    loop = await session.get(OpenLoop, task_id)
+    if not loop or loop.family_id != family_id or loop.kind != "family_task":
+        raise HTTPException(status_code=404, detail="no such task")
+    await store.close_loop(session, task_id, note=body.note[:200])
+    await session.commit()
+    return features.family_task_json(loop)
+
+
+@router.get("/{family_id}/{elder_id}/spending")
+async def spending_view(family_id: str, elder_id: str, session: DB, month: str | None = None) -> dict:
+    import re
+
+    from app.care import features
+
+    if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    return await features.spending(session, family_id, month)

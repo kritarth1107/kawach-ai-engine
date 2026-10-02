@@ -115,6 +115,8 @@ class SimHost:
             if w.rides:
                 w.rides[-1]["cancelled"] = True
             return {"cancelled": bool(w.rides)}
+        if tool == "emergency_link":
+            return {"url": f"https://kavach.test/e/{subject_id}"}
         if tool == "export_care_record":
             return dict(w.backend_record)
         if tool == "send_whatsapp":
