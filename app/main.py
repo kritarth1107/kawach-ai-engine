@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
-from app.api import brain, care_brief, chat, documents, doctor_brief, families, health, memory
+from app.api import brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory
 from app.core.config import get_settings
 from app.db.migrate import run_instinct_migrations
 from app.db.session import Base, engine
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(care_brief.router, prefix="/v1")
     app.include_router(doctor_brief.router, prefix="/v1")
     app.include_router(brain.router)
+    app.include_router(dash.router)
     return app
 
 
