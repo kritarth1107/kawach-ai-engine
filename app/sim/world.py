@@ -20,6 +20,7 @@ class World:
     symptoms: list[dict] = field(default_factory=list)
     reminders: list[dict] = field(default_factory=list)
     alerts: list[dict] = field(default_factory=list)
+    sent: list[dict] = field(default_factory=list)  # proactive WhatsApp messages Saheli started
     emergencies: list[dict] = field(default_factory=list)
     orders: list[dict] = field(default_factory=list)
     rides: list[dict] = field(default_factory=list)
@@ -116,6 +117,9 @@ class SimHost:
             return {"cancelled": bool(w.rides)}
         if tool == "export_care_record":
             return dict(w.backend_record)
+        if tool == "send_whatsapp":
+            w.sent.append({**args, "at": clock.now().isoformat()})
+            return {"delivered": True}
         if tool == "claim_schedule_rows":
             return {"claimed": len(args.get("scheduleIds") or [])}
         return {"ok": True, "note": f"sim: {tool} not modelled"}

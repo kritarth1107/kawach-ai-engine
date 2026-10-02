@@ -132,6 +132,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         await session.commit()
         return TurnResult(reply=prior.text if prior else "", actions=[], alerts=[], duplicate=True)
 
+    if req.speaker.get("role") != "system":
+        await store.save_roster(session, req.family_id, req.elder, req.members)
     if not await importer.already_imported(session, req.family_id, req.elder["id"]):
         try:
             async with session.begin_nested():

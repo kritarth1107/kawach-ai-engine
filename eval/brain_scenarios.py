@@ -200,6 +200,20 @@ async def s_caregiver_asks_day(run: Run) -> None:
     run.check("metformin" in reply.lower() or "medicine" in reply.lower() or "dawai" in reply.lower(), "caregiver hears about the dose")
 
 
+async def s_no_answer_after_fall(run: Run) -> None:
+    await setup(run)
+    await say(run, ELDER, "Abhi bathroom mein thoda phisal gayi thi, theek hoon shayad", "2026-10-02 10:00")
+    # She goes quiet. The scheduler wakes every due loop over the next two hours.
+    from app.brain.wake import wake_due
+
+    for minute in range(10, 130, 10):
+        clock.set_now(ist(f"2026-10-02 {10 + minute // 60:02d}:{minute % 60:02d}"))
+        await wake_due(SessionLocal, lambda fid: run.host)
+    followups = [m for m in run.host.world.sent if m["to"] == ELDER["id"]]
+    run.check(bool(followups) or bool(run.host.world.alerts), "followed up with her or told the caregiver")
+    run.check(bool(run.host.world.alerts), f"caregiver told after no answer (sent: {run.host.world.sent})")
+
+
 SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "setup": s_setup,
     "naming_correction": s_naming_correction,
@@ -213,6 +227,7 @@ SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "dose_taken": s_dose_taken,
     "low_mood_no_whatsapp": s_low_mood_no_whatsapp,
     "caregiver_asks_day": s_caregiver_asks_day,
+    "no_answer_after_fall": s_no_answer_after_fall,
 }
 
 

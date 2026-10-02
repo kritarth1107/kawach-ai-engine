@@ -34,6 +34,7 @@ WRITE_TOOLS = {
     "place_cod_order",
     "confirm_and_place_order",
     "claim_schedule_rows",
+    "send_whatsapp",
 }
 
 

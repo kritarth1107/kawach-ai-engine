@@ -95,3 +95,12 @@ async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get
         )
     await session.commit()
     return {"recorded": ids[0] is not None}
+
+
+@router.post("/jobs/wake")
+async def wake_job() -> dict:
+    """Cloud Scheduler, every 5 minutes: run the open loops that are due."""
+    from app.brain.wake import wake_due
+    from app.db.session import SessionLocal
+
+    return await wake_due(SessionLocal, lambda fid: ShadowHost() if fid.startswith("shadow:") else LiveHost())

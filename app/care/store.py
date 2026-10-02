@@ -525,3 +525,23 @@ async def stale_unanswered(session: AsyncSession, family_id: str, subject_id: st
         )
     )
     return list((await session.execute(q)).scalars())
+
+
+# ── roster ─────────────────────────────────────────────────────────────────────
+
+
+async def save_roster(session: AsyncSession, family_id: str, elder: dict, members: list[dict]) -> None:
+    from app.care.models import FamilyRoster
+
+    stmt = (
+        insert(FamilyRoster)
+        .values(family_id=family_id, elder=elder, members=members, updated_at=clock.now())
+        .on_conflict_do_update(index_elements=["family_id"], set_={"elder": elder, "members": members, "updated_at": clock.now()})
+    )
+    await session.execute(stmt)
+
+
+async def roster(session: AsyncSession, family_id: str):
+    from app.care.models import FamilyRoster
+
+    return await session.get(FamilyRoster, family_id)

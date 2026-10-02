@@ -168,3 +168,14 @@ class ThreadSummary(Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     covers_until_turn: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class FamilyRoster(Base):
+    """Last known household for a family, so scheduled wake-ups can run a turn without the backend."""
+
+    __tablename__ = "family_rosters"
+
+    family_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    elder: Mapped[dict] = mapped_column(JSONB, default=dict)
+    members: Mapped[list] = mapped_column(JSONB, default=list)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

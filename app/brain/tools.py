@@ -42,8 +42,18 @@ class TurnCtx:
         return self.speaker.get("id") == self.elder_id
 
     @property
+    def is_system(self) -> bool:
+        return self.speaker.get("role") == "system"
+
+    @property
     def source_kind(self) -> str:
+        if self.is_system:
+            return "inferred"
         return "elder_said" if self.speaker_is_elder else "caregiver_said"
+
+    @property
+    def actor_id(self) -> str:
+        return self.elder_id if self.is_system else (self.speaker.get("id") or self.elder_id)
 
     def subject(self, about: str | None) -> str:
         ids = {m.get("id") for m in self.members} | {self.elder_id}
@@ -163,7 +173,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
             },
             family_id=ctx.family_id,
             subject_id=subject,
-            actor_id=ctx.speaker.get("id") or subject,
+            actor_id=ctx.actor_id,
         )
     return out
 
@@ -198,7 +208,7 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
         await ctx.host.call(
             "sync_medicine_schedule",
             {"key": key, "name": a["name"], "times": [], "active": False},
-            family_id=ctx.family_id, subject_id=subject, actor_id=ctx.speaker.get("id") or subject,
+            family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
         )
     return {"result": w.result, "key": key}
 
@@ -263,7 +273,7 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
                 "food_timing": v.get("food_timing"), "days": v.get("days"), "instructions": v.get("instructions"),
                 "active": row.status == "active",
             },
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker["id"],
+            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
         )
     return {"result": row.status if row else "not_found", "key": a["key"]}
 
@@ -291,7 +301,7 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
         tool_name, {"title": name, "note": a.get("note") or a["outcome"]},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
     out = {"logged": summary, "schedule": res}
     if a["outcome"] == "empty_strip":
@@ -320,7 +330,7 @@ async def log_vital(ctx: TurnCtx, a: dict) -> dict:
     )
     await ctx.host.call(
         "log_vitals", {"kind": a["kind"], "value": a["value"], "unit": a.get("unit"), "note": a.get("note")},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
     return {"logged": summary, "red_flag": flag}
 
@@ -346,7 +356,7 @@ async def log_event(ctx: TurnCtx, a: dict) -> dict:
     if a["kind"] == "symptom":
         await ctx.host.call(
             "log_symptom", {"symptom": a["summary"], "severity": a.get("severity", "info")},
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
         )
     return {"logged": a["summary"]}
 
@@ -362,7 +372,7 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
     day = a.get("day") or clock.ist_day()
     sent = await ctx.host.call(
         "get_reminder_log", {"dateKey": day}, family_id=ctx.family_id, subject_id=ctx.elder_id,
-        actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        actor_id=ctx.actor_id,
     )
     doses = await store.events(ctx.session, ctx.family_id, ctx.elder_id, day=day)
     return {
@@ -384,7 +394,7 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
 async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
         "create_reminder", {"text": a["text"], "times": a["times"], "kind": "multi_time"},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
 
 
@@ -397,7 +407,7 @@ async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
 async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
         "get_today_schedule", {}, family_id=ctx.family_id, subject_id=ctx.elder_id,
-        actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        actor_id=ctx.actor_id,
     )
 
 
@@ -444,6 +454,31 @@ async def close_loop_tool(ctx: TurnCtx, a: dict) -> dict:
     return {"closed": bool(loop)}
 
 
+@tool(
+    "send_message",
+    "Send a WhatsApp message to someone in the family other than the person you are replying to: pass a message "
+    "on to the elder from a caregiver, or, on a scheduled wake-up, start the follow-up you promised. Your normal "
+    "reply already goes to the speaker; do not use this for that.",
+    {"to": {"type": "string", "description": "Person id from HOUSEHOLD"}, "text": {"type": "string"}},
+    ["to", "text"],
+)
+async def send_message(ctx: TurnCtx, a: dict) -> dict:
+    ids = {m.get("id") for m in ctx.members} | {ctx.elder_id}
+    if a["to"] not in ids:
+        raise ToolRefused("Send only to people in HOUSEHOLD, by id.")
+    if a["to"] == ctx.speaker.get("id"):
+        raise ToolRefused("Your reply already goes to the speaker.")
+    res = await ctx.host.call(
+        "send_whatsapp", {"to": a["to"], "text": a["text"]},
+        family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+    )
+    await store.add_turn(
+        ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
+        meta={"proactive": True, "delivered": res.get("delivered")},
+    )
+    return res
+
+
 # ── alerts ─────────────────────────────────────────────────────────────────────
 
 
@@ -478,12 +513,12 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
     if a["reason"] == "red_flag":
         await ctx.host.call(
             "trigger_emergency_escalation", {"message": a["message"]},
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
         )
     res = await ctx.host.call(
         "notify_caregivers",
         {"message": a["message"], "urgency": "high" if a["reason"] == "red_flag" else "medium", "kind": kind if decision.whatsapp else "care_note"},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
     return {"sent": True, "whatsapp": decision.whatsapp, "why": decision.why, "result": res}
 
@@ -500,7 +535,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
 async def search_records(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
         "search_lab_reports", {"query": a["query"]}, family_id=ctx.family_id, subject_id=ctx.elder_id,
-        actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        actor_id=ctx.actor_id,
     )
 
 
@@ -513,7 +548,7 @@ async def search_records(ctx: TurnCtx, a: dict) -> dict:
 async def lab_trend(ctx: TurnCtx, a: dict) -> dict:
     return await ctx.host.call(
         "get_lab_trends", {"marker": a["marker"]}, family_id=ctx.family_id, subject_id=ctx.elder_id,
-        actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        actor_id=ctx.actor_id,
     )
 
 
@@ -545,7 +580,7 @@ async def order(ctx: TurnCtx, a: dict) -> dict:
         raise ToolRefused(f"Blocked by the care record: {', '.join(conflicts)}. Tell them kindly and offer something safe.")
     return await ctx.host.call(
         "browser_order", {"goal": a["goal"], "message": a["goal"], "userConfirmed": bool(a["confirmed"])},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
 
 
@@ -564,5 +599,5 @@ async def ride(ctx: TurnCtx, a: dict) -> dict:
     tool_name = {"book": "book_ride", "status": "ride_status", "cancel": "cancel_ride"}[a["action"]]
     args = {"pickup": a.get("pickup"), "drop": a.get("drop"), "userConfirmed": bool(a.get("confirmed"))} if a["action"] == "book" else {}
     return await ctx.host.call(
-        tool_name, args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id,
+        tool_name, args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
