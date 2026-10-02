@@ -212,23 +212,24 @@ async def dream_all_elders() -> dict:
     await _ensure_schema()
     results: list[dict] = []
     async with SessionLocal() as session:
-        elders = (await session.execute(select(Elder))).scalars().all()
-        for elder in elders:
+        # Plain ids: after a rollback the ORM rows expire, and touching them needs async IO.
+        elder_ids = (await session.execute(select(Elder.id, Elder.family_id))).all()
+        for elder_id, family_id in elder_ids:
             try:
                 life_context, care_context = await fetch_dream_context(
-                    family_id=elder.family_id,
-                    elder_id=elder.id,
+                    family_id=family_id,
+                    elder_id=elder_id,
                 )
                 stats = await dream_elder(
                     session,
-                    family_id=elder.family_id,
-                    elder_id=elder.id,
+                    family_id=family_id,
+                    elder_id=elder_id,
                     life_context=life_context,
                     care_context=care_context,
                 )
-                results.append({"elder_id": str(elder.id), **stats})
+                results.append({"elder_id": str(elder_id), **stats})
             except Exception:
-                logger.exception("Dream failed for elder %s", elder.id)
+                logger.exception("Dream failed for elder %s", elder_id)
                 await session.rollback()
     return {"elders": len(results), "results": results}
 
