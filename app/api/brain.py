@@ -255,7 +255,8 @@ async def weekly_job() -> dict:
     ran = 0
     for fid in fids:
         try:
-            await system_turn(SessionLocal, LiveHost(), fid, CHECKIN_PROMPT, f"checkin:{clock.ist_day()}:{_uuid.uuid4().hex[:6]}")
+            # One check-in per family per day: a scheduler retry is a duplicate turn, not a second message.
+            await system_turn(SessionLocal, LiveHost(), fid, CHECKIN_PROMPT, f"checkin:{clock.ist_day()}")
             ran += 1
         except Exception:  # noqa: BLE001
             logger.exception("caregiver check-in failed family=%s", fid)

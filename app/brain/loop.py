@@ -245,6 +245,24 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     return out
 
 
+# Tools that change something; once one has run, a failed turn is kept rather than retried elsewhere.
+WRITE_TOOLS = {
+    "remember", "stop", "note", "confirm_change", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
+    "close_loop", "send_message", "alert_caregiver", "start_task", "task_input", "cancel_task", "set_stock",
+    "add_doctor_question", "assign_family_task",
+}
+PARTIAL = {
+    "devanagari": "मैंने आपकी बात नोट कर ली है 🙏 अभी पूरा जवाब देने में दिक्कत आ रही है, कुछ मिनट बाद फिर लिखिए।",
+    "indic": "Maine aapki baat note kar li hai 🙏 Abhi poora jawab dene mein dikkat aa rahi hai, kuch minute baad phir likhiye.",
+    "english": "I've noted what you told me 🙏 I'm having trouble answering fully right now; please write again in a few minutes.",
+}
+
+
+def partial_reply(p: dict | None) -> str:
+    p = p or {}
+    return PARTIAL["devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")]
+
+
 async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
     started = time.monotonic()
     await _lock_family(session, req.family_id)
@@ -307,19 +325,29 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
     guarded = False
+    degraded = ""
     reply: router.LLMReply | None = None
     for step in range(MAX_STEPS):
         last = step == MAX_STEPS - 1
-        reply = await router.complete(
-            "brain",
-            system_stable=stable,
-            system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
-            messages=msgs,
-            # On the last step there are no tools, so the person always gets a reply.
-            tools=None if last else tools.specs(),
-            max_tokens=6000,
-            effort=BRAIN_EFFORT,
-        )
+        try:
+            reply = await router.complete(
+                "brain",
+                system_stable=stable,
+                system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
+                messages=msgs,
+                # On the last step there are no tools, so the person always gets a reply.
+                tools=None if last else tools.specs(),
+                max_tokens=6000,
+                effort=BRAIN_EFFORT,
+            )
+        except router.AllModelsFailed:
+            if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
+                raise  # nothing happened yet: the caller may safely try another path
+            # Something was already saved or sent: keep it (a retry elsewhere would do it twice) and say so plainly.
+            logger.error("brain failed mid-turn family=%s after %s", req.family_id, [a["tool"] for a in ctx.actions])
+            degraded = "none" if is_system else partial_reply(ctx.profiles.get(req.speaker["id"]))
+            reply = None
+            break
         msgs.append(reply.as_message())
         if not reply.tool_calls:
             text_now = (reply.text or "").strip()
@@ -349,7 +377,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
 
-    final = (reply.text if reply else "").strip()
+    final = (reply.text if reply else degraded).strip()
     if guarded and not final:
         # The fix came back empty: fall back to the last non-empty text the model wrote.
         final = next((m.get("text", "").strip() for m in reversed(msgs) if m.get("role") == "assistant" and (m.get("text") or "").strip()), "")
