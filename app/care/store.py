@@ -461,6 +461,23 @@ async def recent_turns(session: AsyncSession, family_id: str, thread_id: str, *,
     return list(reversed(list((await session.execute(q)).scalars())))
 
 
+async def recent_turns_many(session: AsyncSession, family_id: str, thread_ids: list[str], *, limit: int = 40) -> dict[str, list[Turn]]:
+    """The last `limit` turns of several threads in one query (oldest first per thread)."""
+    from sqlalchemy.orm import aliased
+
+    ids = sorted({t for t in thread_ids if t})
+    if not ids:
+        return {}
+    rn = func.row_number().over(partition_by=Turn.thread_id, order_by=Turn.id.desc()).label("rn")
+    sub = select(Turn, rn).where(Turn.family_id == family_id, Turn.thread_id.in_(ids)).subquery()
+    t = aliased(Turn, sub)
+    rows = list((await session.execute(select(t).where(sub.c.rn <= limit).order_by(t.thread_id, t.id))).scalars())
+    out: dict[str, list[Turn]] = {i: [] for i in ids}
+    for r in rows:
+        out[r.thread_id].append(r)
+    return out
+
+
 async def summary(session: AsyncSession, family_id: str, thread_id: str) -> ThreadSummary | None:
     return await session.get(ThreadSummary, (family_id, thread_id))
 

@@ -118,11 +118,15 @@ def configure(sessions) -> None:
 
 
 def reset() -> None:
-    global _sessions, _process_total
+    global _sessions, _process_total, _flusher
     _sessions = None
     _process_total = 0.0
     _mem.clear()
     _cache.clear()
+    _unsaved.clear()
+    if _flusher is not None and not _flusher.done():
+        _flusher.cancel()
+    _flusher = None
 
 
 _process_total = 0.0
@@ -139,52 +143,82 @@ def process_spent() -> float:
 
 
 async def record(role: str, model: str, usage: dict) -> float:
-    global _process_total
+    global _process_total, _flusher
     inr = cost_inr(model, usage)
     _process_total += inr
     day = today()
+    _prune(day)
     row = _mem[(day, role, model)]
+    tokens_out = int(usage.get("out") or 0) + int(usage.get("think") or 0)
     row[0] += 1
     row[1] += int(usage.get("in") or 0)
-    row[2] += int(usage.get("out") or 0) + int(usage.get("think") or 0)
+    row[2] += tokens_out
     row[3] += inr
     if day in _cache:
         total, at = _cache[day]
         _cache[day] = (total + inr, at)
     if _sessions is not None:
-        task = asyncio.create_task(_write(day, role, model, usage, inr))
-        _pending.add(task)
-        task.add_done_callback(_pending.discard)
+        # Batched: model calls add to a pending row; one write every few seconds carries them all.
+        p = _unsaved[(day, role, model)]
+        p[0] += 1
+        p[1] += int(usage.get("in") or 0)
+        p[2] += tokens_out
+        p[3] += inr
+        if _flusher is None or _flusher.done():
+            _flusher = asyncio.create_task(_flush_later())
     return inr
 
 
-_pending: set = set()
+_unsaved: dict[tuple[str, str, str], list[float]] = defaultdict(lambda: [0, 0, 0, 0.0])
+_flusher: asyncio.Task | None = None
+FLUSH_EVERY = 3.0  # seconds
 
 
-async def _write(day: str, role: str, model: str, usage: dict, inr: float) -> None:
-    """Ledger write in the background, with a short timeout, so a busy connection pool never delays a reply."""
+def _prune(day: str) -> None:
+    """Keep only today's in-process counters (the ledger table keeps history)."""
+    for k in [k for k in _mem if k[0] != day]:
+        del _mem[k]
+    for k in [k for k in _cache if k != day]:
+        del _cache[k]
+
+
+async def _flush_later() -> None:
+    await asyncio.sleep(FLUSH_EVERY)
+    await _write_unsaved()
+
+
+async def _write_unsaved() -> None:
+    if not _unsaved or _sessions is None:
+        return
+    batch = {k: list(v) for k, v in _unsaved.items()}
+    _unsaved.clear()
     try:
-        async with asyncio.timeout(LEDGER_TIMEOUT):
-            async with _sessions() as s:
-                stmt = insert(LlmSpend).values(
-                    day=date.fromisoformat(day), role=role, model=model, calls=1,
-                    tokens_in=int(usage.get("in") or 0), tokens_out=int(usage.get("out") or 0) + int(usage.get("think") or 0), cost_inr=inr,
-                )
+        async with asyncio.timeout(LEDGER_TIMEOUT * 3), _sessions() as s:
+            for (day, role, model), (calls, tin, tout, inr) in batch.items():
+                stmt = insert(LlmSpend).values(day=date.fromisoformat(day), role=role, model=model, calls=int(calls), tokens_in=int(tin),
+                                               tokens_out=int(tout), cost_inr=inr)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=[LlmSpend.day, LlmSpend.role, LlmSpend.model],
-                    set_={"calls": LlmSpend.calls + 1, "tokens_in": LlmSpend.tokens_in + stmt.excluded.tokens_in,
+                    set_={"calls": LlmSpend.calls + stmt.excluded.calls, "tokens_in": LlmSpend.tokens_in + stmt.excluded.tokens_in,
                           "tokens_out": LlmSpend.tokens_out + stmt.excluded.tokens_out, "cost_inr": LlmSpend.cost_inr + stmt.excluded.cost_inr},
                 )
                 await s.execute(stmt)
-                await s.commit()
-    except Exception:  # noqa: BLE001 — accounting must never cost a person their reply
+            await s.commit()
+    except Exception:  # noqa: BLE001 — accounting must never cost a person their reply; keep it for the next flush
         logger.exception("llm spend ledger write failed")
+        for k, v in batch.items():
+            p = _unsaved[k]
+            for i in range(4):
+                p[i] += v[i]
 
 
 async def flush() -> None:
-    """Wait for background ledger writes (tests, shutdown)."""
-    if _pending:
-        await asyncio.gather(*list(_pending), return_exceptions=True)
+    """Write pending ledger rows now (tests, shutdown)."""
+    global _flusher
+    if _flusher is not None and not _flusher.done():
+        _flusher.cancel()
+    _flusher = None
+    await _write_unsaved()
 
 
 async def spent_today() -> float:

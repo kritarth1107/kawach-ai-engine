@@ -60,27 +60,62 @@ async def _lock_family(session: AsyncSession, family_id: str) -> None:
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
 
 
-async def medicine_times(session: AsyncSession, req: TurnRequest) -> dict[str, set[int]]:
-    rows = await store.facts(session, req.family_id, req.elder["id"], domains=["medicine"], statuses=("active",))
-    if req.speaker["id"] != req.elder["id"]:
-        rows += await store.facts(session, req.family_id, req.speaker["id"], domains=["medicine"], statuses=("active",))
+class TurnData:
+    """What one turn reads from memory, fetched once and shared by the context, the guards and the tools' checks
+    (the turn used to read the same facts, threads and tasks several times)."""
+
+    def __init__(self, session: AsyncSession, req: TurnRequest) -> None:
+        self.session, self.req = session, req
+        self._facts: dict[str, list] = {}
+        self._turns: dict[str, list] | None = None
+        self._tasks: list | None = None
+        self.history_full = True  # set by history(): did the thread fill a whole history window?
+
+    async def facts(self, subject: str) -> list:
+        if subject not in self._facts:
+            self._facts[subject] = await store.facts(self.session, self.req.family_id, subject)
+        return self._facts[subject]
+
+    async def turns(self, thread: str) -> list:
+        """The last HISTORY_TURNS turns of a thread; every household thread is read in one query."""
+        if self._turns is None:
+            people = {self.req.speaker["id"], self.req.elder["id"], *(m.get("id") for m in self.req.members if m.get("id"))}
+            self._turns = await store.recent_turns_many(self.session, self.req.family_id, list(people), limit=HISTORY_TURNS)
+        if thread not in self._turns:
+            self._turns[thread] = await store.recent_turns(self.session, self.req.family_id, thread, limit=HISTORY_TURNS)
+        return self._turns[thread]
+
+    async def tasks(self) -> list:
+        if self._tasks is None:
+            from app.tasks import runtime as task_runtime
+
+            self._tasks = await task_runtime.live_tasks(self.session, self.req.family_id)
+        return self._tasks
+
+
+async def medicine_times(data: TurnData) -> dict[str, set[int]]:
+    req = data.req
+    rows = [f for f in await data.facts(req.elder["id"]) if f.domain == "medicine" and f.status == "active"]
+    if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":
+        rows += [f for f in await data.facts(req.speaker["id"]) if f.domain == "medicine" and f.status == "active"]
     return guards.med_times([(str(f.value.get("name") or f.key.split(":", 1)[1]), f.text + " " + " ".join(map(str, f.value.get("times") or []))) for f in rows])
 
 
-async def writing_profiles(session: AsyncSession, family_id: str, people: list[dict]) -> dict[str, dict]:
+async def writing_profiles(session: AsyncSession, family_id: str, people: list[dict], data: TurnData | None = None) -> dict[str, dict]:
     """How each person writes, from their last messages to Saheli."""
     out = {}
     for p in people:
-        turns = [t for t in await store.recent_turns(session, family_id, p["id"], limit=16) if t.role == "user"][-8:]
+        recent = (await data.turns(p["id"]))[-16:] if data else await store.recent_turns(session, family_id, p["id"], limit=16)
+        turns = [t for t in recent if t.role == "user"][-8:]
         prof = guards.profile([t.text for t in turns])
         if prof:
             out[p["id"]] = prof
     return out
 
 
-async def family_block(session: AsyncSession, req: TurnRequest) -> tuple[str, str, list[str]]:
+async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData | None = None) -> tuple[str, str, list[str]]:
     """The cached block: household, care record, notes. Also returns text for the reply guard and avoid-words."""
-    rows = await store.facts(session, req.family_id, req.elder["id"])
+    rows = await data.facts(req.elder["id"]) if data else await store.facts(session, req.family_id, req.elder["id"])
     note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
     record = digest.care_record(req.elder.get("name", "care recipient"), rows)
     block = "\n\n".join(
@@ -99,14 +134,15 @@ async def family_block(session: AsyncSession, req: TurnRequest) -> tuple[str, st
     return block, known, avoid + [f"__unreachable__{u}" for u in unreachable]
 
 
-async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, str]:
+async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData | None = None) -> tuple[str, str]:
+    data = data or TurnData(session, req)
     now = clock.ist()
     day_events = await store.events(session, req.family_id, req.elder["id"], day=clock.ist_day())
     loops = await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]])
     hits = await store.recall(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
     from app.tasks import runtime as task_runtime
 
-    tasks = await task_runtime.live_tasks(session, req.family_id)
+    tasks = await data.tasks()
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
         f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
@@ -130,7 +166,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
     if hits:
         parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
     if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":
-        own = await store.facts(session, req.family_id, req.speaker["id"], statuses=("active", "pending"))
+        own = await data.facts(req.speaker["id"])
         if own:
             own_today = await store.events(session, req.family_id, req.speaker["id"], day=clock.ist_day())
             parts.append(
@@ -139,7 +175,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
                 + ("\n" + digest.ledger(own_today) if own_today else "")
             )
     if req.speaker["id"] != req.elder["id"]:
-        elder_turns = await store.recent_turns(session, req.family_id, req.elder["id"], limit=12)
+        elder_turns = (await data.turns(req.elder["id"]))[-12:]
         if elder_turns:
             parts.append(
                 f"RECENT WITH {req.elder.get('name', 'the elder').upper()}:\n"
@@ -155,11 +191,14 @@ def writing_block(req: TurnRequest, profiles: dict[str, dict]) -> str:
     return "HOW EACH PERSON WRITES (write to each person this way, in replies and in send_message):\n" + "\n".join(lines)
 
 
-async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
+async def history(session: AsyncSession, req: TurnRequest, data: TurnData | None = None) -> list[dict]:
     summ = await store.summary(session, req.family_id, req.speaker["id"])
-    turns = await store.recent_turns(
-        session, req.family_id, req.speaker["id"], after_id=summ.covers_until_turn if summ else 0, limit=HISTORY_TURNS
-    )
+    after = summ.covers_until_turn if summ else 0
+    if data:
+        turns = [t for t in await data.turns(req.speaker["id"]) if t.id > after]
+        data.history_full = len(turns) >= HISTORY_TURNS
+    else:
+        turns = await store.recent_turns(session, req.family_id, req.speaker["id"], after_id=after, limit=HISTORY_TURNS)
     msgs: list[dict] = []
     if summ and summ.summary:
         msgs.append({"role": "user", "content": [{"type": "text", "text": f"(Earlier in our conversation, summarized: {summ.summary})"}]})
@@ -175,6 +214,17 @@ async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
     while msgs and msgs[0]["role"] != "user":
         msgs.pop(0)
     return msgs
+
+
+# Families whose backend care record was already imported (checked in the database once per process).
+_IMPORTED: dict[tuple[str, str], bool] = {}
+_IMPORTED_MAX = 20000
+
+
+def _remember_imported(family_id: str, elder_id: str) -> None:
+    if len(_IMPORTED) >= _IMPORTED_MAX:
+        _IMPORTED.pop(next(iter(_IMPORTED)))
+    _IMPORTED[(family_id, elder_id)] = True
 
 
 CLAIM_WINDOW = timedelta(hours=3)
@@ -222,7 +272,8 @@ async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]
     return set(rows.scalars())
 
 
-async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, *, avoid: list[str], unreachable: list[str]) -> list[str]:
+async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, *, avoid: list[str], unreachable: list[str],
+                         data: TurnData | None = None) -> list[str]:
     """Everything wrong with a reply before the person reads it (policy + guards)."""
     known = "\n".join(ctx.known)
     problems = policy.reply_problems(final, known_text=known, avoid_words=avoid, user_text=req.text, unreachable=unreachable)
@@ -235,7 +286,8 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
     )
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
-    earlier = [t.text for t in await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
+    recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
+    earlier = [t.text for t in recent
                if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
     problems += guards.repeats(final, earlier)
     me = req.speaker["id"]
@@ -250,7 +302,8 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     messaged |= await recently_messaged(session, req)
     from app.tasks import runtime as task_runtime
 
-    ordering_ok = any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions) or bool(await task_runtime.live_tasks(session, req.family_id))
+    ordering_ok = any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions) or bool(
+        await data.tasks() if data else await task_runtime.live_tasks(session, req.family_id))
     problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok)
     seen, out = set(), []
     for p in problems:
@@ -326,27 +379,33 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
     if req.speaker.get("role") != "system":
         await store.save_roster(session, req.family_id, req.elder, req.members)
-    if not await importer.already_imported(session, req.family_id, req.elder["id"]):
-        try:
-            async with session.begin_nested():
-                await importer.import_family(
-                    session, host, family_id=req.family_id,
-                    backend_family_id=req.family_id.removeprefix("shadow:"), elder_id=req.elder["id"],
-                )
-        except Exception:  # noqa: BLE001 — a failed import must not cost the person their reply
-            logger.exception("care import failed family=%s", req.family_id)
+    if (req.family_id, req.elder["id"]) not in _IMPORTED:
+        if await importer.already_imported(session, req.family_id, req.elder["id"]):
+            _remember_imported(req.family_id, req.elder["id"])
+        else:
+            try:
+                async with session.begin_nested():
+                    await importer.import_family(
+                        session, host, family_id=req.family_id,
+                        backend_family_id=req.family_id.removeprefix("shadow:"), elder_id=req.elder["id"],
+                    )
+                _remember_imported(req.family_id, req.elder["id"])
+            except Exception:  # noqa: BLE001 — a failed import must not cost the person their reply; it is tried again next turn
+                logger.exception("care import failed family=%s", req.family_id)
 
-    fam_block, known_record, avoid = await family_block(session, req)
+    data = TurnData(session, req)
+    fam_block, known_record, avoid = await family_block(session, req, data)
     unreachable = [w.removeprefix("__unreachable__") for w in avoid if w.startswith("__unreachable__")]
     avoid = [w for w in avoid if not w.startswith("__unreachable__")]
-    dynamic, known_turn = await turn_context(session, req)
-    msgs = await history(session, req)
+    dynamic, known_turn = await turn_context(session, req, data)
+    data.history_full = True
+    msgs = await history(session, req, data)
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {req.text}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
     msgs.append({"role": "user", "content": content})
 
     is_system = req.speaker.get("role") == "system"
-    profiles = await writing_profiles(session, req.family_id, [req.elder, *[m for m in req.members if m.get("id") != req.elder["id"]]])
+    profiles = await writing_profiles(session, req.family_id, [req.elder, *[m for m in req.members if m.get("id") != req.elder["id"]]], data)
     if not is_system:
         cur = guards.profile([req.text])
         if cur and req.speaker["id"] not in profiles:
@@ -357,7 +416,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         session=session, host=host, family_id=req.family_id, elder=req.elder, speaker=req.speaker,
         members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text,
         known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
-        meds=await medicine_times(session, req), profiles=profiles,
+        meds=await medicine_times(data), profiles=profiles,
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
@@ -391,7 +450,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             text_now = (reply.text or "").strip()
             if guarded or is_system or not text_now or last:
                 break
-            problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable)
+            problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data)
             if not problems:
                 break
             guarded = True
@@ -424,7 +483,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
-    await maybe_compact(session, req.family_id, req.speaker["id"])
+    if data.history_full:  # fewer turns than a full history cannot need folding yet
+        await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
     return TurnResult(
         reply=final,

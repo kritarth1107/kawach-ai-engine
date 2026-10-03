@@ -14,7 +14,14 @@ else; a problem goes back to the model once, with tools, so it can fix the text 
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from collections import Counter
+
+@lru_cache(maxsize=4096)
+def _rx(pattern: str, flags: int = 0) -> re.Pattern:
+    """Patterns built per name (people, medicines, words) are compiled once; re's own cache holds only 512."""
+    return re.compile(pattern, flags)
+
 
 # ── text helpers ───────────────────────────────────────────────────────────────
 
@@ -264,7 +271,7 @@ def ungrounded(text: str, *, known: str, fresh: str = "", meds: dict[str, set[in
         for med, ts in (meds or {}).items():
             if not ts:
                 continue
-            for mm in re.finditer(rf"\b{re.escape(med)}", low):
+            for mm in _rx(rf"\b{re.escape(med)}").finditer(low):
                 # Only the time right next to this medicine is its time ("Telma at 9 am and Metformin at 9 pm"):
                 # the first one just after it, else one just before it, never across a comma or semicolon.
                 def gap(a: int, b: int) -> str:
@@ -278,7 +285,7 @@ def ungrounded(text: str, *, known: str, fresh: str = "", meds: dict[str, set[in
                         problems.append(f"gives {med} at {t0 // 60:02d}:{t0 % 60:02d}, but the care record says {on_file}")
         if not question and not HEDGE.search(s):
             for c in CONDITIONS:
-                if re.search(rf"\b{re.escape(c)}\b", low) and c not in k and not any(a in k for a in CONDITION_ALIASES.get(c, [])):
+                if _rx(rf"\b{re.escape(c)}\b").search(low) and c not in k and not any(a in k for a in CONDITION_ALIASES.get(c, [])):
                     problems.append(f"mentions '{c}', which is not in their record or the conversation")
     return sorted(set(problems))
 
@@ -352,9 +359,9 @@ def false_claims(text: str, *, others: dict[str, str], messaged: set[str], order
             continue
         if MSG_VERB.search(s):
             for name, pid in others.items():
-                if not re.search(rf"\b{re.escape(name)}\b", low) or pid in messaged:
+                if not _rx(rf"\b{re.escape(name)}\b").search(low) or pid in messaged:
                     continue
-                if re.search(rf"\b{re.escape(name)}{SUBJECT_TITLES}{OTHER_DOES}", low):
+                if _rx(rf"\b{re.escape(name)}{SUBJECT_TITLES}{OTHER_DOES}").search(low):
                     continue  # they did the telling, not Saheli
                 problems.append(f"says you messaged or will message {name.title()}, but you did not: call send_message now, or do not say it")
         if ORDER_CLAIM.search(s) and not ordering_ok:
@@ -399,7 +406,7 @@ def critical_reading(text: str) -> bool:
             return True
     low = t.lower()
     for kind, words_ in (("sugar", r"sugar|glucose|शुगर"), ("spo2", r"spo2|oxygen|saturation|ऑक्सीजन"), ("temp", r"temp|fever|bukhar|बुखार")):
-        for m in re.finditer(rf"(?:{words_})\D{{0,12}}(\d{{2,3}}(?:\.\d)?)|(\d{{2,3}}(?:\.\d)?)\D{{0,8}}(?:{words_})", low):
+        for m in _rx(rf"(?:{words_})\D{{0,12}}(\d{{2,3}}(?:\.\d)?)|(\d{{2,3}}(?:\.\d)?)\D{{0,8}}(?:{words_})").finditer(low):
             n = float(m.group(1) or m.group(2))
             if kind == "sugar" and (n < 70 or n >= 300):
                 return True

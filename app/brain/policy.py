@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from dataclasses import dataclass
+
+@lru_cache(maxsize=4096)
+def _rx(pattern: str, flags: int = 0) -> re.Pattern:
+    """Patterns built per name (people, medicines, words) are compiled once; re's own cache holds only 512."""
+    return re.compile(pattern, flags)
+
 
 ALERT_REASONS = {
     "red_flag": "Medical red flag or emergency",
@@ -88,7 +95,7 @@ def unreachable_promises(reply: str, unreachable: list[str]) -> list[str]:
     hits = []
     for sentence in re.split(r"[.!?\n\u0964]+", reply):
         for name in unreachable:
-            if name and re.search(rf"\b{re.escape(name)}\b", sentence, re.I) and PROMISE.search(sentence):
+            if name and _rx(rf"\b{re.escape(name)}\b", re.I).search(sentence) and PROMISE.search(sentence):
                 hits.append(name)
     return sorted(set(hits))
 
@@ -116,7 +123,7 @@ def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_
     if TECH.search(reply):
         problems.append("mentions technology words; speak like a person")
     for w in avoid_words:
-        if w and re.search(rf"\b{re.escape(w)}\b", reply, re.I):
+        if w and _rx(rf"\b{re.escape(w)}\b", re.I).search(reply):
             problems.append(f"uses '{w}', which they asked not to be called")
     if hinglish_words(user_text) >= 2 and not re.search(r"[\u0900-\u097F]", reply) and len(reply.split()) >= 4 and hinglish_words(reply) == 0:
         problems.append("they wrote in Hinglish (Roman letters) and the reply is in English; reply in Hinglish like they did")
@@ -148,7 +155,7 @@ def order_conflicts(goal: str, allergies: list[str], never_order: list[str]) -> 
     text = (goal or "").lower()
     hits = []
     for a in allergies:
-        word = next((w for w in allergen_words(a) if re.search(rf"\b{re.escape(w)}", text)), None)
+        word = next((w for w in allergen_words(a) if _rx(rf"\b{re.escape(w)}").search(text)), None)
         if word:
             hits.append(f"allergy to {a} ({word})")
     hits += [f"never order: {n}" for n in never_order if n and n.lower() in text]

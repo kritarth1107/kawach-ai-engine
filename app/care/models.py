@@ -156,6 +156,7 @@ class Turn(Base):
 
     __table_args__ = (
         Index("ix_turns_thread_at", "family_id", "thread_id", "at"),
+        Index("ix_turns_thread_id", "family_id", "thread_id", "id"),  # recent_turns orders by id
         Index("uq_turns_ref", "family_id", "message_ref", unique=True, postgresql_where=sql("message_ref IS NOT NULL")),
     )
 
