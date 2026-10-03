@@ -25,6 +25,7 @@ import re
 import sys
 import time
 import uuid
+import zlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -110,6 +111,9 @@ def parse_json(t: str) -> dict:
         return {}
 
 
+EXPIRED: Counter = Counter()  # lab requests no bot answered in time, by role (shown in the report)
+
+
 async def llm(role: str, system: str, user: str, *, tokens: int = 1500, meta: dict | None = None) -> str:
     from eval.lab import queue as lab_queue
 
@@ -120,6 +124,8 @@ async def llm(role: str, system: str, user: str, *, tokens: int = 1500, meta: di
         got = await lab_queue.ask(role, system, user, group=group, family=m.get("family", ""), person=m.get("person", ""))
         if got is not None:
             return got.strip()
+        # Expired: a person's turn becomes silence and an unanswered judge leaves messages ungraded (never "passed").
+        EXPIRED[f"{role}:{m.get('person') or group}" if role == "sim" else role] += 1
         if os.getenv("SIM_EXTERNAL_FALLBACK", "none") != "model":
             return ""
     for attempt in range(3):
@@ -593,7 +599,7 @@ async def judge_day(f: Fam, day: int) -> None:
             if v.get("n") in keep:
                 got[v["n"]] = {**v, "rechecked": True}
     for m in outs:
-        v = got.get(m.n) or {"pass": True, "score": 0, "issues": [], "note": "not graded"}
+        v = got.get(m.n) or {"pass": True, "score": 0, "issues": [], "note": "not graded", "ungraded": True}  # score 0: left out of pass rates
         f.verdicts.append({"day": day, "n": m.n, "to": m.to, "kind": m.kind, "trigger": m.trigger, "text": m.text, **v})
 
 
@@ -622,7 +628,7 @@ def apply_med_change(f: Fam, change: list) -> None:
 
 
 async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
-    f = Fam(spec=spec, family_id=f"month-{spec['key']}-{uuid.uuid4().hex[:6]}", rng=random.Random(hash(spec["key"]) & 0xFFFF))
+    f = Fam(spec=spec, family_id=f"month-{spec['key']}-{uuid.uuid4().hex[:6]}", rng=random.Random(zlib.crc32(spec["key"].encode()) & 0xFFFF))  # same events every run (not PYTHONHASHSEED)
     from app.brain.tools import set_task_agent
 
     set_task_agent(FakeAgent())
@@ -789,6 +795,9 @@ def report(fams: list[Fam], secs: int) -> str:
         for c in ev:
             if not c["pass"]:
                 worst.append((0, f"**{f.spec['key']}** day {c['day']} EVENT “{c['event'][:120]}”: {'; '.join(c['fails'])} — Saheli: “{c.get('reply','')[:200]}”"))
+    ungraded = sum(1 for f in fams for x in f.verdicts if x.get("ungraded"))
+    if EXPIRED or ungraded:
+        L.append(f"Lab queue: {sum(EXPIRED.values())} requests expired ({dict(EXPIRED.most_common(8))}); {ungraded} Saheli messages left ungraded.\n")
     L.append(f"**{all_ok}/{all_v} Saheli messages passed ({(100 * all_ok // all_v) if all_v else 0}%)** · {sum(len(f.msgs) for f in fams)} messages in total · {secs // 60} min · nothing sent, fake numbers only\n")
     L += rows + ["", "## Problems by type", ""] + [f"- {k}: {n}" for k, n in issue_tot.most_common()]
     L += ["", "## Daily audit (care record and reminders vs the truth)", ""]
@@ -835,7 +844,14 @@ async def main(argv: list[str]) -> int:
 
         lab, bad = lab_families.load(argv or None)
         if bad:
-            print(f"Skipping {len(bad)} invalid lab families: {list(bad)[:5]}")
+            for name, errs in bad.items():
+                print(f"  invalid lab family {name}: {'; '.join(errs[:3])}")
+            if os.getenv("SIM_LAB_SKIP_INVALID") != "1":
+                print("Refusing to start with invalid families (fix them, or set SIM_LAB_SKIP_INVALID=1 to skip them).")
+                return 2
+        if argv and {s['key'] for s in lab} != set(argv):
+            print(f"Unknown lab family keys: {sorted(set(argv) - {s['key'] for s in lab})}")
+            return 2
         chosen = lab
     else:
         chosen = [f for f in FAMILIES if not argv or f["key"] in argv]

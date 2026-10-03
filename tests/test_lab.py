@@ -61,3 +61,20 @@ async def test_queue_round_trip(db, monkeypatch):
             await s.execute(delete(queue.LabRequest).where(queue.LabRequest.run_id == "test-lab-queue"))
             await s.commit()
         await eng.dispose()
+
+
+def test_loader_skips_examples_flags_name_mismatch_and_filters_keys(tmp_path):
+    (tmp_path / "example-verma.json").write_text(json.dumps(EXAMPLE))
+    other = copy.deepcopy(EXAMPLE)
+    other["key"] = "verma2"
+    (tmp_path / "verma-02.json").write_text(json.dumps(other))  # file name differs from its key
+    good = copy.deepcopy(EXAMPLE)
+    good["key"] = "mehta-03"
+    (tmp_path / "mehta-03.json").write_text(json.dumps(good))
+    specs, bad = lab.load(directory=tmp_path)
+    assert [s["key"] for s in specs] == ["mehta-03"] and "verma-02.json" in bad  # the example only when named
+    specs, bad = lab.load(["example-verma"], directory=tmp_path)
+    assert [s["key"] for s in specs] == ["example-verma"]
+    specs, bad = lab.load(["mehta-03"], directory=tmp_path)
+    assert [s["key"] for s in specs] == ["mehta-03"] and bad == {}  # other files' problems don't block a named run
+

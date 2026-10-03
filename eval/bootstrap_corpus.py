@@ -72,7 +72,7 @@ async def main(argv: list[str]) -> int:
                             writes.setdefault(m["who"], []).append(m["text"])
                             continue
                         v = verdicts.get(m["n"])
-                        if not v or not m["text"].strip():
+                        if not v or v.get("ungraded") or not v.get("score") or not m["text"].strip():
                             continue
                         to = m["to"]
                         prev = next((x for x in reversed(msgs[:i]) if x["who"] == to and x["kind"] == "human"), None) if m["kind"] == "reply" else None

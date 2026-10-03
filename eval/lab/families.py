@@ -126,12 +126,18 @@ def load(keys: list[str] | None = None, *, directory: Path | None = None) -> tup
     d = directory or (LAB_DIR / "families")
     specs, bad = [], {}
     for path in sorted(d.glob("*.json")):
+        if not keys and (path.stem.startswith("example-") or path.stem.startswith("_")):
+            continue  # examples and drafts only when named
         try:
             f = json.loads(path.read_text())
         except json.JSONDecodeError as exc:
             bad[path.name] = [f"not JSON: {exc}"]
             continue
+        if keys and f.get("key") not in keys:
+            continue
         errs = validate(f)
+        if not errs and f.get("key") != path.stem:
+            errs = [f"file name {path.stem!r} differs from key {f.get('key')!r}"]
         if errs:
             bad[path.name] = errs
         elif not keys or f["key"] in keys:

@@ -17,6 +17,7 @@
 #   tune       export the anonymised fine-tuning data (free), then upload, start   tuning job: see TUNING_PLAN.md
 #              a Vertex tuning job and compare tuned vs base, each with its own "yes"
 #   failures   re-send past grader failures (eval/export_failures.py) to today's Saheli     ~₹150
+#   compare-lab V N D [keys]  the same lab families twice, without and with playbook V          Saheli only, x2
 #   compare V  regress twice on the same families: without a playbook and with  ~₹1,700
 #              playbook V; the report says which replies scored better
 #
@@ -36,12 +37,17 @@ case "$stage" in
   learning) days=21; fams=(); budget=${SIM_MAX_INR:-3000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=cheap JUDGE_SAMPLE=0.3 SIM_EXTRACT_PER_DAY=2 ;;
   full)    days=30; fams=(); budget=${SIM_MAX_INR:-10000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=full JUDGE_SAMPLE=1.0 SIM_EXTRACT_PER_DAY=5 ;;
   lab)
+    # lab N D [keys…]: N bot-designed families (or exactly the keys given) for D days. Saheli (brain, extract) is the
+    # only model spend here (~₹12–17 per family-day; players and judge are bots).
     n="${1:-20}"; d="${2:-14}"; shift 2 || true
-    days=$d; fams=(); budget=${SIM_MAX_INR:-$(( n * d * 6 ))}
+    days=$d; fams=(); budget=${SIM_MAX_INR:-$(( n * d * 18 ))}
     export SIM_LAB=1 SIM_EXTERNAL_ROLES="${SIM_EXTERNAL_ROLES:-sim,judge}" SIM_EXTERNAL_TIMEOUT="${SIM_EXTERNAL_TIMEOUT:-3600}" \
            SIM_RUN_ID="${SIM_RUN_ID:-lab-$(date +%Y%m%d-%H%M)}" SIM_AGGRESSIVE=0 SIM_LEARNING=1 JUDGE_MODE=full JUDGE_SAMPLE=1.0 SIM_EXTRACT_PER_DAY=2
-    keys=$(ls /home/m4dm4x/OpenBot/Shared/saheli-lab/families/*.json 2>/dev/null | head -n "$n" | xargs -n1 basename | sed 's/\.json$//' | tr '\n' ' ')
-    read -r -a fams <<< "$keys"
+    if [ $# -gt 0 ]; then fams=("$@"); set --
+    else
+      keys=$(ls /home/m4dm4x/OpenBot/Shared/saheli-lab/families/*.json 2>/dev/null | xargs -n1 basename | sed 's/\.json$//' | grep -v -E '^(example-|_)' | head -n "$n" | tr '\n' ' ')
+      read -r -a fams <<< "$keys"
+    fi
     [ -f /home/m4dm4x/OpenBot/Shared/saheli-lab/lab.env ] || { echo "Start the bridge first: eval/lab/start_bridge.sh"; exit 2; } ;;
   lessons)
     : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
@@ -73,12 +79,17 @@ case "$stage" in
     export MODEL_ROUTES='{"brain": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash"], "extract": ["gemini:gemini-3.8-flash"], "judge_fast": ["gemini:gemini-3.8-flash"], "judge": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"]}'
     read -r -p "Replay past failures (up to ₹$SIM_MAX_INR in $SIM_PROJECT)? Type yes: " ok; [ "$ok" = "yes" ] || exit 1
     exec .venv/bin/python eval/replay_failures.py "${1:-eval/fixtures/failures.jsonl}" --yes ;;
+  compare-lab)
+    # The same lab families twice: without a playbook, then with playbook V (players and judge are bots both times).
+    v="${1:?usage: eval/train.sh compare-lab <playbook version> N D [keys…]}"; shift
+    LEARN_FORCE_VERSION=0 SIM_RUN_ID="lab-compare-${v}-base-$(date +%m%d%H%M)" "$0" lab "$@"
+    LEARN_FORCE_VERSION="$v" SIM_RUN_ID="lab-compare-${v}-v${v}-$(date +%m%d%H%M)" exec "$0" lab "$@" ;;
   compare)
     v="${1:?usage: eval/train.sh compare <playbook version>}"; shift
     echo "Two regress runs: LEARN_FORCE_VERSION=0 then $v (same families, same events)."
     LEARN_FORCE_VERSION=0 SIM_MAX_INR="${SIM_MAX_INR:-900}" "$0" regress "$@"
     LEARN_FORCE_VERSION="$v" SIM_MAX_INR="${SIM_MAX_INR:-900}" exec "$0" regress "$@" ;;
-  *) echo "usage: eval/train.sh free|smoke|regress|learning|full|lessons|lab N D|tune|failures|compare V [families…]"; exit 2 ;;
+  *) echo "usage: eval/train.sh free|smoke|regress|learning|full|lessons|lab N D [keys]|tune|failures|compare V|compare-lab V N D [keys] [families…]"; exit 2 ;;
 esac
 [ $# -gt 0 ] && fams=("$@")
 : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
