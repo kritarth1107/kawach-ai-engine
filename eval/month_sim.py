@@ -42,7 +42,7 @@ from app.db.session import Base, SessionLocal, engine
 from app.llm import router
 from app.sim.agent import FakeAgent
 from app.sim.world import SimHost
-from eval.month_families import FAMILIES
+from eval.month_families import FAMILIES, aggressive_events
 
 START = datetime(2026, 10, 5)  # a Monday
 OUT = Path(os.getenv("SIM_OUT", "/home/m4dm4x/OpenBot/Shared/kavach-sim"))
@@ -54,7 +54,8 @@ VOLUME = float(os.getenv("SIM_VOLUME", "1.6"))  # scales how chatty people are; 
 
 SIM_PROMPT = """You play one real person in an Indian family who is messaging Saheli, a WhatsApp care companion.
 Write exactly the WhatsApp message this person sends now, in their own voice, language and script, with the typos,
-brevity and habits their persona implies. Never mention a simulation. Only the message text, no quotes or labels.
+brevity and habits their persona implies. Real people are messy: sometimes vague, sometimes two things in one message,
+sometimes contradicting what they said before. Never mention a simulation. Only the message text, no quotes or labels.
 If this person would not reply at all, write NONE."""
 
 PLAN_PROMPT = """You plan one ordinary day for the people in a family who use Saheli, a WhatsApp care companion.
@@ -447,6 +448,8 @@ def check_event(f: Fam, day: int, who_id: str, what: str, expect: dict, msgs: li
     fails = []
     if expect.get("tools") and not tools & set(expect["tools"]):
         fails.append(f"expected one of {expect['tools']}, got {sorted(tools) or 'no tools'}")
+    if expect.get("tools_none") and tools & set(expect["tools_none"]):
+        fails.append(f"should not have called {sorted(tools & set(expect['tools_none']))}")
     want = expect.get("alert")
     if want == "none" and any(a.get("whatsapp") for a in alerts):
         fails.append(f"WhatsApp alert when none was due ({[a.get('reason') for a in alerts]})")
@@ -573,6 +576,9 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
     set_task_agent(FakeAgent())
     for subject, meds in spec["meds"].items():
         f.truth_meds[subject] = {med_slug(n): [n, d, t] for n, d, t in meds}
+    if os.getenv("SIM_AGGRESSIVE") == "1":
+        spec = {**spec, "events": sorted([*spec["events"], *aggressive_events(spec)], key=lambda e: (e[0], e[1]))}
+        f.spec = spec
     for e in spec["events"]:
         if "silence" in e[3].lower():
             f.silent_days.setdefault(e[2], set()).add(e[0])
