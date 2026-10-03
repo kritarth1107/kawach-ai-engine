@@ -290,6 +290,44 @@ def talk_patterns(turn_times: list, *, now, subject: str) -> list[Pattern]:
     return out
 
 
+# ── against their own normal ───────────────────────────────────────────────────
+
+
+def baseline_patterns(base: dict, vitals: list, *, now, subject: str) -> list[Pattern]:
+    """Readings above this person's own usual range, and reminder times that do not fit how they live."""
+    out: list[Pattern] = []
+    bp = (base.get("vitals") or {}).get("bp")
+    if bp:
+        week = []
+        for e in vitals:
+            if e.at < now - timedelta(days=7):
+                continue
+            p = e.payload or {}
+            if str(p.get("kind") or "").lower() == "bp":
+                nums = _num(str(p.get("value") or e.summary))
+                if len(nums) >= 2:
+                    week.append(nums)
+        usual, hi = bp["systolic"]["median"], bp["systolic"]["high"]
+        if len(week) >= 3:
+            m = median(v[0] for v in week)
+            if m >= max(usual + 10, hi):
+                out.append(Pattern(
+                    "above_usual", "usual:bp:high", f"Blood pressure this week is above their own usual: about {m:.0f} on top vs a usual ~{usual:.0f}",
+                    f"{len(week)} readings this week; their usual range is {bp['systolic']['low']:.0f}–{hi:.0f}.",
+                    "Normal numbers differ per person; a change from their own usual is worth telling the doctor.", "watch", [], subject))
+    for sug in base.get("suggestions") or []:
+        if sug.get("suggest"):
+            out.append(Pattern(
+                "reminder_time", f"reminder:{sug['key']}", f"{sug['why']}: a reminder at {sug['suggest']} may fit better",
+                f"The reminder is now at {sug['now']}.", "Ask the caregiver whether to move it; if yes, update the medicine times with remember.",
+                "info", [], subject))
+        else:
+            out.append(Pattern(
+                "reminder_ignored", f"reminder:{sug['key']}:ignored", f"The reminder does not seem to help: {sug['why']}",
+                "", "Ask what would help instead: a different time, someone checking in, or keeping the strip in sight.", "info", [], subject))
+    return out
+
+
 # ── all together ───────────────────────────────────────────────────────────────
 
 
@@ -308,6 +346,9 @@ async def find(session: AsyncSession, family_id: str, subject_id: str, *, days: 
     turn_times = list((await session.execute(
         select(Turn.at).where(Turn.family_id == family_id, Turn.thread_id == subject_id, Turn.role == "user", Turn.at >= since)
     )).scalars())
+    from app.care import baselines
+
+    base = await baselines.get(session, family_id, subject_id)
     found: list[Pattern] = []
     detectors = [
         lambda: dose_patterns(meds, doses, now=now, subject=subject_id, days=days),
@@ -316,6 +357,7 @@ async def find(session: AsyncSession, family_id: str, subject_id: str, *, days: 
         lambda: mood_patterns([e for e in life if e.kind == "mood"], now=now, subject=subject_id),
         lambda: meal_patterns([e for e in life if e.kind == "meal"], now=now, subject=subject_id),
         lambda: talk_patterns(turn_times, now=now, subject=subject_id),
+        lambda: baseline_patterns(base, vitals, now=now, subject=subject_id),
     ]
     for run in detectors:
         try:

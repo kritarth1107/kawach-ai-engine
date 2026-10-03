@@ -115,7 +115,13 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
     ]
+    from app.care import baselines as care_baselines
     from app.care import patterns as care_patterns
+
+    for pid, pname in {req.elder["id"]: req.elder.get("name"), req.speaker["id"]: req.speaker.get("name")}.items():
+        line = care_baselines.usual_line(pname or "them", await care_baselines.get(session, req.family_id, pid))
+        if line:
+            parts.append(line)
 
     noticed = await care_patterns.recent(session, req.family_id, list({req.elder["id"], req.speaker["id"]}))
     if noticed:
