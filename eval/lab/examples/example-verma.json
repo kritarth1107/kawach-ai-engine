@@ -1,0 +1,33 @@
+{
+  "key": "example-verma",
+  "city": "Lucknow",
+  "setup": "sparse",
+  "meta": {"group": "north", "region": "Uttar Pradesh", "languages": ["hinglish"], "conditions": ["diabetes", "knee arthritis"],
+           "household": "elder with spouse, son abroad", "personality": ["proud", "short-tempered"], "tags": ["nri caregiver", "low reply"]},
+  "people": [
+    {"id": "ve-rajesh", "name": "Rajesh Verma", "role": "elder", "relation": "father",
+     "persona": "78, retired railway clerk, proud, says he needs no help, types slowly in Hinglish, short and sometimes rude, softens when asked about cricket.",
+     "phone": "+91 90000 51001", "recipient": true, "adherence": 0.75, "reports": 0.3, "answers": 0.45, "chat": [0, 2],
+     "style": {"script": "latin", "typos": 0.35, "emoji": 0.0, "reply_delay_min": [10, 180], "patience": 0.3,
+               "sample_messages": ["haan le li goli", "baar baar mat pucho", "aaj india jeeta kya"]}},
+    {"id": "ve-usha", "name": "Usha Verma", "role": "co-caregiver", "relation": "wife",
+     "persona": "72, warm, chatty, Hindi in Devanagari, reports for both of them, worries about his sugar and her own knees.",
+     "phone": "+91 90000 51002", "recipient": false, "answers": 0.85, "chat": [1, 4],
+     "style": {"script": "devanagari", "typos": 0.1, "emoji": 0.4, "reply_delay_min": [2, 30], "patience": 0.8,
+               "sample_messages": ["जी, इन्होंने दवा ले ली है 🙏", "आज घुटनों में बहुत दर्द है"]}},
+    {"id": "ve-amit", "name": "Amit Verma", "role": "primary caregiver", "relation": "son",
+     "persona": "45, lives in Dubai, English, replies late at night India time, anxious, wants numbers and short updates.",
+     "phone": "+91 90000 51003", "recipient": false, "answers": 0.7, "chat": [0, 1],
+     "style": {"script": "latin", "typos": 0.05, "emoji": 0.1, "reply_delay_min": [30, 600], "patience": 0.5,
+               "sample_messages": ["How was Papa's sugar today?", "Ok thanks. Please remind him about the walk."]}}
+  ],
+  "truth": "Rajesh 78: type 2 diabetes, knee arthritis. Vegetarian, loves sweets. Doctor Dr S. Rizvi. Wife Usha 72 helps with medicines.",
+  "meds": {"ve-rajesh": [["Glycomet", "500 mg", ["08:00", "20:00"]], ["Shelcal", "500 mg", ["14:00"]]]},
+  "setup_text": "Amit sets up from Dubai in two short English messages, mentioning only the Glycomet; Usha adds Shelcal on day 2.",
+  "events": [
+    {"day": 2, "time": "11:00", "who": "ve-usha", "what": "Adds that he also takes Shelcal 500 after lunch.", "expect": {"tools": ["remember"]}},
+    {"day": 5, "time": "21:30", "who": "ve-rajesh", "what": "Ate two rasgullas at a wedding and says don't tell Amit.", "expect": {"tools": ["log_event"]}},
+    {"day": 9, "time": "07:15", "who": "ve-usha", "what": "His fasting sugar is 210 and he feels dizzy.", "expect": {"tools": ["log_vital"]}},
+    {"day": 14, "time": "23:30", "who": "ve-amit", "what": "Asks how Papa has been these two weeks and whether anything worries Saheli.", "expect": {"tools": ["patterns"]}}
+  ]
+}

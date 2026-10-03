@@ -110,7 +110,18 @@ def parse_json(t: str) -> dict:
         return {}
 
 
-async def llm(role: str, system: str, user: str, *, tokens: int = 1500) -> str:
+async def llm(role: str, system: str, user: str, *, tokens: int = 1500, meta: dict | None = None) -> str:
+    from eval.lab import queue as lab_queue
+
+    if role in lab_queue.external_roles():
+        # A Saheli Lab bot plays this role (family member or judge). Saheli's own replies never come from here.
+        m = meta or {}
+        group = "judge" if role == "judge" else m.get("group", "english")
+        got = await lab_queue.ask(role, system, user, group=group, family=m.get("family", ""), person=m.get("person", ""))
+        if got is not None:
+            return got.strip()
+        if os.getenv("SIM_EXTERNAL_FALLBACK", "none") != "model":
+            return ""
     for attempt in range(3):
         try:
             r = await router.complete(role, system_stable=system, messages=[{"role": "user", "content": [{"type": "text", "text": user}]}],
@@ -409,13 +420,23 @@ def recent_summary(f: Fam, who_id: str | None = None, n: int = 10) -> str:
     return "\n".join(out)
 
 
+def _ext() -> set[str]:
+    from eval.lab import queue as lab_queue
+
+    return lab_queue.external_roles()
+
+
+def group_of(f: Fam) -> str:
+    return (f.spec.get("meta") or {}).get("group") or "english"
+
+
 async def write_as(f: Fam, who_id: str, ask: str) -> str:
     p = f.people[who_id]
     txt = await llm("sim", SIM_PROMPT, (
         f"YOU: {p['name']}, {p['relation']} in the {f.spec['key']} family, {f.spec['city']}. {p['persona']}\n"
         f"WHAT YOU KNOW ABOUT YOUR FAMILY'S CARE: {f.spec['truth']}\nCURRENT MEDICINES: {json.dumps(f.truth_meds, ensure_ascii=False)}\n\n"
         f"YOUR RECENT CHAT WITH SAHELI:\n{recent_summary(f, who_id) or '(none yet)'}\n\nNOW: {ask}"
-    ), tokens=3000)
+    ), tokens=3000, meta={"group": group_of(f), "family": f.spec["key"], "person": who_id})
     return "" if not txt or txt.upper().startswith("NONE") else txt.strip().strip('"')
 
 
@@ -430,7 +451,7 @@ async def plan_day(f: Fam, day: int) -> None:
         f"FAMILY: {f.spec['key']}, {f.spec['city']}. Day {day} of 30, {weekday}.\nCARE FACTS: {f.spec['truth']}\n"
         f"PEOPLE:\n{people}\nALSO HAPPENING TODAY (planned separately, do not duplicate): {[e[3] for e in scripted] or 'nothing special'}\n"
         f"RECENTLY:\n{recent_summary(f, None, 14) or '(first day)'}"
-    ), tokens=1500)
+    ), tokens=1500, meta={"group": group_of(f), "family": f.spec["key"], "person": "plan"})
     for m in (parse_json(raw).get("messages") or [])[:20]:
         who = m.get("who")
         if who in f.people and re.fullmatch(r"\d{2}:\d{2}", str(m.get("time", ""))) and m.get("intent"):
@@ -549,7 +570,7 @@ async def judge_day(f: Fam, day: int) -> None:
         memory.append(digest.notes_block(notes, max_chars=5000))
     earlier = [m for m in f.msgs if m.kind in ("human", "reply") and date - timedelta(days=3) <= clock.ist(m.at).date() < date][-40:]
     history = "\n".join(f"[{clock.ist(m.at).strftime('%d %b %H:%M')}] {'Saheli' if m.who == 'saheli' else f.people.get(m.who, {}).get('name', m.who)}: {m.text[:200]}" for m in earlier)
-    raw = await llm("judge_fast" if JUDGE_MODE == "cheap" else "judge", JUDGE_PROMPT, (
+    raw = await llm("judge_fast" if JUDGE_MODE == "cheap" and "judge" not in _ext() else "judge", JUDGE_PROMPT, (
         f"SAHELI'S MEMORY AT THE END OF THE DAY (everything here was told to her earlier and is NOT made up; it also shows changes such as a new name to use):\n{chr(10).join(x for x in memory if x)}\n\n"
         f"CONVERSATION FROM THE PREVIOUS DAYS (also not made up):\n{history or '(none)'}\n\n" +
         f"FAMILY TRUTH: {f.spec['truth']}\nCURRENT MEDICINES (truth): {json.dumps(f.truth_meds, ensure_ascii=False)}\nPEOPLE: "
@@ -798,6 +819,7 @@ async def main(argv: list[str]) -> int:
     from app.tasks import models as task_models  # noqa: F401
     from app.care import baselines  # noqa: F401  (every table the brain reads must exist)
     from app.learn import models as learn_models  # noqa: F401
+    from eval.lab import queue as lab_queue  # noqa: F401
     from app.llm import spend as _spend  # noqa: F401
     from app.specialists import channels  # noqa: F401
 
@@ -808,7 +830,15 @@ async def main(argv: list[str]) -> int:
             val = int(argv[i + 1])
             argv = argv[:i] + argv[i + 2:]
             days, par = (val, par) if flag == "--days" else (days, val)
-    chosen = [f for f in FAMILIES if not argv or f["key"] in argv]
+    if os.getenv("SIM_LAB") == "1":
+        from eval.lab import families as lab_families
+
+        lab, bad = lab_families.load(argv or None)
+        if bad:
+            print(f"Skipping {len(bad)} invalid lab families: {list(bad)[:5]}")
+        chosen = lab
+    else:
+        chosen = [f for f in FAMILIES if not argv or f["key"] in argv]
     if sim_budget() <= 0:
         print("Refusing to start: set SIM_MAX_INR (₹ this run may spend). Estimate ~₹31 per family-day at medium effort.")
         return 2

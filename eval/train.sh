@@ -12,6 +12,8 @@
 #   full       10 families × 30 days, aggressive, full Pro judge             ~₹9,500 (only before launch)
 #   lessons    learn a playbook from the simulated runs so far (score, corpus,  ~₹50
 #              draft, safety gate) — the "teach her how to talk" step
+#   lab N D    the Saheli Lab bots play N bot-designed families for D days (families from   Saheli's replies only
+#              /home/m4dm4x/OpenBot/Shared/saheli-lab/families); start eval/lab/start_bridge.sh first
 #   compare V  regress twice on the same families: without a playbook and with  ~₹1,700
 #              playbook V; the report says which replies scored better
 #
@@ -30,6 +32,14 @@ case "$stage" in
   regress) days=7;  fams=(); budget=${SIM_MAX_INR:-1200}; export SIM_AGGRESSIVE=1 JUDGE_MODE=cheap JUDGE_SAMPLE=0.4 SIM_EXTRACT_PER_DAY=2 ;;
   learning) days=21; fams=(); budget=${SIM_MAX_INR:-3000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=cheap JUDGE_SAMPLE=0.3 SIM_EXTRACT_PER_DAY=2 ;;
   full)    days=30; fams=(); budget=${SIM_MAX_INR:-10000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=full JUDGE_SAMPLE=1.0 SIM_EXTRACT_PER_DAY=5 ;;
+  lab)
+    n="${1:-20}"; d="${2:-14}"; shift 2 || true
+    days=$d; fams=(); budget=${SIM_MAX_INR:-$(( n * d * 6 ))}
+    export SIM_LAB=1 SIM_EXTERNAL_ROLES="${SIM_EXTERNAL_ROLES:-sim,judge}" SIM_EXTERNAL_TIMEOUT="${SIM_EXTERNAL_TIMEOUT:-3600}" \
+           SIM_RUN_ID="${SIM_RUN_ID:-lab-$(date +%Y%m%d-%H%M)}" SIM_AGGRESSIVE=0 SIM_LEARNING=1 JUDGE_MODE=full JUDGE_SAMPLE=1.0 SIM_EXTRACT_PER_DAY=2
+    keys=$(ls /home/m4dm4x/OpenBot/Shared/saheli-lab/families/*.json 2>/dev/null | head -n "$n" | xargs -n1 basename | sed 's/\.json$//' | tr '\n' ' ')
+    read -r -a fams <<< "$keys"
+    [ -f /home/m4dm4x/OpenBot/Shared/saheli-lab/lab.env ] || { echo "Start the bridge first: eval/lab/start_bridge.sh"; exit 2; } ;;
   lessons)
     : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
     [ "$SIM_PROJECT" = "kavach-care" ] && { echo "Refusing: training must not run in the production project."; exit 2; }
