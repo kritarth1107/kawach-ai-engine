@@ -69,7 +69,12 @@ async def family_block(session: AsyncSession, req: TurnRequest) -> tuple[str, st
         if f.domain == "naming" and f.status == "active":
             avoid += [w for w in (f.value.get("avoid") or []) if isinstance(w, str)]
     known = record + "\n" + "\n".join(n.body_md for n in note_rows)
-    return block, known, avoid
+    member_names = {w.lower() for m in req.members for w in (m.get("name") or "").split()} | {w.lower() for w in (req.elder.get("name") or "").split()}
+    unreachable = sorted({
+        n.split()[0] for f in rows if f.domain in ("home", "contact", "doctor") and f.status == "active"
+        for n in [str(f.value.get("name") or "")] if n and n.split()[0].lower() not in member_names and len(n.split()[0]) > 2
+    })
+    return block, known, avoid + [f"__unreachable__{u}" for u in unreachable]
 
 
 async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, str]:
@@ -162,6 +167,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             logger.exception("care import failed family=%s", req.family_id)
 
     fam_block, known_record, avoid = await family_block(session, req)
+    unreachable = [w.removeprefix("__unreachable__") for w in avoid if w.startswith("__unreachable__")]
+    avoid = [w for w in avoid if not w.startswith("__unreachable__")]
     dynamic, known_turn = await turn_context(session, req)
     msgs = await history(session, req)
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {req.text}"}]
@@ -205,7 +212,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
     final = (reply.text if reply else "").strip()
     problems = policy.reply_problems(
-        final, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text
+        final, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text,
+        unreachable=unreachable,
     )
     if problems and final:
         msgs.append({"role": "user", "content": [{"type": "text", "text": "(Check before sending: " + "; ".join(problems) + ". Rewrite your reply to the person, fixing this. Write only the message.)"}]})
@@ -213,7 +221,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             "brain", system_stable=stable, system_dynamic=dynamic, messages=msgs, tools=tools.specs(), max_tokens=2000, effort="low"
         )
         if fixed.text.strip() and not policy.reply_problems(
-            fixed.text, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text
+            fixed.text, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text,
+            unreachable=unreachable,
         ):
             final = fixed.text.strip()
         logger.warning("reply guard family=%s problems=%s fixed=%s", req.family_id, problems, final == fixed.text.strip())

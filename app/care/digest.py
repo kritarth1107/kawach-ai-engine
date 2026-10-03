@@ -100,6 +100,7 @@ def household(elder: dict, members: list[dict], speaker_id: str) -> str:
         lines.append(f"  {m.get('role', 'member')}: {m.get('name')} (id {m.get('id')}){you}")
     if speaker_id == elder.get("id"):
         lines.append(f"  {elder.get('name')} is speaking now.")
+    lines.append("  You can message only the people listed here. Helpers, neighbours, doctors and anyone else are not reachable by you.")
     return "\n".join(lines)
 
 

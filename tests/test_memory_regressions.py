@@ -58,3 +58,10 @@ async def test_logging_the_same_dose_twice_is_flagged(db, at):
     at("2026-10-05 08:14")
     out = await call(e, "log_dose", {"medicine": "Ultracet", "outcome": "taken"})
     assert "possible_double_dose" in out
+
+
+def test_promise_to_unreachable_helper_is_caught():
+    from app.brain.policy import reply_problems
+
+    assert reply_problems("Main abhi Gopal ko bolti hoon chai banane.", known_text="", avoid_words=[], user_text="chai", unreachable=["Gopal"])
+    assert not reply_problems("Gopal ji ghar par hain na?", known_text="", avoid_words=[], user_text="haan", unreachable=["Gopal"])

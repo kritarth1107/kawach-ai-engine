@@ -74,7 +74,23 @@ DISHES = re.compile(
     r"bhindi|baingan bharta|thepla|uttapam|vada|pongal|rasam)\b",
     re.I,
 )
-TECH = re.compile(r"\b(browser|model|server|api|mcp|captcha|bots?|automated|automation|llm|gemini|claude|tool call)\b", re.I)
+TECH = re.compile(r"\b(browser|model|server|api|mcp|captcha|bots?|automated|automation|automatic reminders?|llm|gemini|claude|tool call|(?:my|the|our) system|database|logged in the system)\b", re.I)
+
+PROMISE = re.compile(
+    r"\b(tell|ask|inform|message|text|remind|let\b.{0,20}\bknow|bol(?:ungi|ti|bo|e|o|na)?|bata(?:ungi|ti|ti hoon|o)?|kah(?:ungi|engi|ti)?|"
+    r"keh(?:ti|ungi)?|janab[oa]|sang(?:en|te|ate|u|ungi)|bolchi|boli)\b",
+    re.I,
+)
+
+
+def unreachable_promises(reply: str, unreachable: list[str]) -> list[str]:
+    """A promise to pass something on to someone Saheli cannot message (a helper, neighbour, doctor)."""
+    hits = []
+    for sentence in re.split(r"[.!?\n\u0964]+", reply):
+        for name in unreachable:
+            if name and re.search(rf"\b{re.escape(name)}\b", sentence, re.I) and PROMISE.search(sentence):
+                hits.append(name)
+    return sorted(set(hits))
 
 
 HINGLISH = {
@@ -88,9 +104,11 @@ def hinglish_words(text: str) -> int:
     return sum(1 for w in re.findall(r"[a-z]+", (text or "").lower()) if w in HINGLISH)
 
 
-def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_text: str) -> list[str]:
+def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_text: str, unreachable: list[str] | None = None) -> list[str]:
     """Things the elder must never read. known_text is everything in memory the reply may draw on."""
     problems = []
+    for name in unreachable_promises(reply, unreachable or []):
+        problems.append(f"promises to pass something to {name}, whom you cannot message; say what you can do instead (remind them, tell the family)")
     known = known_text.lower() + "\n" + user_text.lower()
     for m in DISHES.finditer(reply):
         if m.group(0).lower() not in known:
