@@ -176,7 +176,15 @@ async def tasks_job() -> dict:
         except Exception:  # noqa: BLE001
             logger.exception("task notify failed family=%s", family_id)
 
-    return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify)
+    return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify, host_for=host_for)
+
+
+@router.get("/agents/metrics")
+async def agent_metrics(session: Annotated[AsyncSession, Depends(get_db)], days: int = 7) -> dict:
+    """Shopping / pharmacy / rides agents: success rate, time to cart and to placed, cost, channels, failures, alerts."""
+    from app.specialists import channels, metrics
+
+    return {**await metrics.rollup(session, days=max(1, min(days, 90))), "channels": await channels.health_table(session)}
 
 
 @router.post("/jobs/daily")

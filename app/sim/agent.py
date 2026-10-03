@@ -25,19 +25,20 @@ class FakeAgent:
 
     script: dict[str, list[dict]] = field(default_factory=dict)
     finish_after_polls: int = 1
+    steps_per_run: int = 12
     runs: list[dict] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _polls: dict[str, int] = field(default_factory=dict)
     _out: dict[str, dict] = field(default_factory=dict)
 
-    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata) -> AgentRun:
+    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None) -> AgentRun:
         tid = f"t{next(self._ids)}"
         phase = metadata.get("phase", "prepare")
         queue = self.script.get(phase) or [CART]
         out = queue.pop(0) if len(queue) > 1 else queue[0]
         self._out[tid] = out
-        self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints})
+        self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm, "agent": metadata.get("agent")})
         return AgentRun(task_id=tid, session_id=session_id or f"s-{tid}", status="created")
 
     async def poll(self, task_id: str) -> AgentRun:
@@ -46,7 +47,7 @@ class FakeAgent:
         self._polls[task_id] = self._polls.get(task_id, 0) + 1
         if self._polls[task_id] < self.finish_after_polls:
             return AgentRun(task_id=task_id, session_id="", status="started")
-        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(self._out[task_id]))
+        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(self._out[task_id]), steps=self.steps_per_run)
 
     async def stop(self, task_id: str, *, end_session: bool = False) -> None:
         self.stopped.append(task_id)

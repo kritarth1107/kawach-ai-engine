@@ -440,11 +440,17 @@ async def refill_order(family_id: str, elder_id: str, key: str, body: RefillOrde
     for t in await runtime.live_tasks(session, family_id):
         if t.service == body.service and t.kind == "order":
             return {"alreadyRunning": True, "task": task_json(t)}
+    from app.specialists.contract import build_limits
+
     item = f"{name} {f.value.get('dose') or ''}".strip()
-    task = await runtime.create(
-        session, family_id=family_id, subject_id=elder_id, requested_by=body.actor.id, service=body.service, kind="order",
-        goal=f"Refill {item}", details={"items": [{"name": item, "qty": body.qty}], "refill_key": f.key},
-    )
+    limits = await build_limits(session, family_id=family_id, subject_id=elder_id, kind="order", agent="pharmacy", requester_is_elder=False)
+    try:
+        task = await runtime.create(
+            session, family_id=family_id, subject_id=elder_id, requested_by=body.actor.id, service=body.service, kind="order",
+            goal=f"Refill {item}", details={"items": [{"name": item, "qty": body.qty}], "refill_key": f.key}, limits=limits,
+        )
+    except runtime.TaskRefused as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     live = (await session.execute(select(OpenLoop).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == f"refill:{elder_id}:{f.key}", OpenLoop.status == "open"))).scalars()
     for loop in live:
         await store.close_loop(session, loop.id, note=f"reorder started on {body.service}")

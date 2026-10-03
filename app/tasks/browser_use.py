@@ -30,7 +30,7 @@ class AgentRun:
 
 class BrowserAgent(Protocol):
     async def run(self, *, goal: str, hints: str, schema: dict, session_id: str | None, profile_id: str | None,
-                  start_url: str | None, max_steps: int, metadata: dict) -> AgentRun: ...
+                  start_url: str | None, max_steps: int, metadata: dict, llm: str | None = None) -> AgentRun: ...
 
     async def poll(self, task_id: str) -> AgentRun: ...
 
@@ -53,10 +53,10 @@ class BrowserUseCloud:
             raise RuntimeError(f"browser-use {method} {path.split('/')[1]} {r.status_code}: {r.text[:200]}")
         return r.json() if r.content else {}
 
-    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata) -> AgentRun:
+    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None) -> AgentRun:
         body: dict = {
             "task": goal,
-            "llm": self.llm,
+            "llm": llm or self.llm,
             "maxSteps": max_steps,
             "structuredOutput": json.dumps(schema),
             "systemPromptExtension": hints[:9500],

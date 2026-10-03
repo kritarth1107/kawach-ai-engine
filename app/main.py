@@ -10,6 +10,7 @@ from app.db.migrate import run_instinct_migrations
 from app.db.session import Base, engine
 from app.care import models as care_models  # noqa: F401
 from app.tasks import models as task_models  # noqa: F401
+from app.specialists import channels as specialist_channels  # noqa: F401
 from app.models import entities  # noqa: F401
 
 

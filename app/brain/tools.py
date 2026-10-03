@@ -638,26 +638,32 @@ async def _task(ctx: TurnCtx, task_id: str):
     ["service", "kind", "goal"],
 )
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
+    from app.specialists.agents import specialist_for
+    from app.specialists.contract import build_limits
     from app.tasks import runtime
 
-    if a["kind"] == "order":
-        allergies, never = await _care_limits(ctx)
-        text = a["goal"] + " " + " ".join(i.get("name", "") for i in a.get("items") or [])
-        conflicts = policy.order_conflicts(text, allergies, never)
-        if conflicts:
-            raise ToolRefused(f"Blocked by the care record: {', '.join(conflicts)}. Tell them kindly and offer something safe.")
-        if not a.get("items"):
-            raise ToolRefused("List the items (name, brand/size, qty) before starting an order.")
-    elif not (a.get("pickup") and a.get("drop")):
-        raise ToolRefused("A ride needs pickup and drop.")
     for t in await runtime.live_tasks(ctx.session, ctx.family_id):
         if t.service == a["service"] and t.kind == a["kind"]:
             return {"already_running": runtime.describe(t)}
-    task = await runtime.create(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
-        service=a["service"], kind=a["kind"], goal=a["goal"],
-        details={k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)},
+    place: dict = {}
+    if a["kind"] == "order":
+        try:
+            got = await ctx.host.call("delivery_place", {"words": a.get("area") or ""}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id)
+            place = got if got.get("addressId") else {}
+        except Exception:  # noqa: BLE001 — no saved place: the agent uses the account's home address
+            place = {}
+    limits = await build_limits(
+        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], agent=specialist_for(a["service"]).name,
+        requester_is_elder=ctx.speaker_is_elder, place=place,
     )
+    try:
+        task = await runtime.create(
+            ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
+            service=a["service"], kind=a["kind"], goal=a["goal"],
+            details={k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)}, limits=limits,
+        )
+    except runtime.TaskRefused as exc:
+        raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
     return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
 
 
