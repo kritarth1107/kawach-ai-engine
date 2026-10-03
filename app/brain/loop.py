@@ -114,6 +114,12 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
     ]
+    from app.care import patterns as care_patterns
+
+    noticed = await care_patterns.recent(session, req.family_id, list({req.elder["id"], req.speaker["id"]}))
+    if noticed:
+        names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
+        parts.append(care_patterns.context_block(noticed, names))
     if hits:
         parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
     if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":

@@ -957,3 +957,20 @@ async def past_orders(ctx: TurnCtx, a: dict) -> dict:
         if len(out) >= int(a.get("limit") or 10):
             break
     return {"orders": out} if out else {"orders": [], "note": "Nothing placed before; ask what they want, with brand and size."}
+
+
+@tool(
+    "patterns",
+    "Patterns noticed in the last two weeks without anyone asking: dose times that keep slipping, readings drifting, "
+    "a complaint that keeps coming back, low moods, skipped meals, going quiet, late nights. Use it when someone asks "
+    "'how has she been?', 'anything I should know?', or before the weekly check-in. Facts from the logs, not diagnoses.",
+    {"about": ABOUT},
+    [],
+)
+async def patterns_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import patterns
+
+    found = await patterns.find(ctx.session, ctx.family_id, ctx.subject(a.get("about")))
+    if not found:
+        return {"patterns": [], "note": "Nothing stands out in the last two weeks."}
+    return {"patterns": [{"title": p.title, "detail": p.detail, "suggestion": p.suggestion, "level": p.severity} for p in found]}

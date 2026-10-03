@@ -97,8 +97,8 @@ async def test_daily_job_opens_refill_once(api, at, db):
     await tools.run(c, "set_stock", {"medicine": "Amlodipine", "count": 6})
     await db.commit()
     at("2026-10-02 10:00")
-    assert (await api.post("/v2/jobs/daily")).json() == {"refills": 1}
-    assert (await api.post("/v2/jobs/daily")).json() == {"refills": 0}  # asked once; stays on the dashboard
+    assert (await api.post("/v2/jobs/daily")).json()["refills"] == 1
+    assert (await api.post("/v2/jobs/daily")).json()["refills"] == 0  # asked once; stays on the dashboard
 
 
 async def test_weekly_checkin_is_once_per_day_even_if_retried(api, at, db):

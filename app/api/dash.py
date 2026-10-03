@@ -495,6 +495,14 @@ async def report_view(family_id: str, elder_id: str, session: DB, days: int = 7,
     return r
 
 
+@router.get("/{family_id}/{elder_id}/patterns")
+async def patterns_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """What Saheli noticed in the last two weeks without being asked (same as the WhatsApp 'patterns' tool)."""
+    from app.care import patterns
+
+    return {"patterns": [p.to_dict() for p in await patterns.find(session, family_id, elder_id)], "windowDays": patterns.WINDOW_DAYS}
+
+
 @router.get("/{family_id}/{elder_id}/wellbeing")
 async def wellbeing_view(family_id: str, elder_id: str, session: DB, days: int = 14) -> dict:
     from app.care import features

@@ -227,14 +227,38 @@ async def daily_job() -> dict:
             )
             opened += 1
         await session.commit()
-    return {"refills": opened}
+    found = await _patterns_for_all(SessionLocal)
+    return {"refills": opened, "patterns": found}
+
+
+async def _patterns_for_all(SessionLocal) -> int:
+    """Daily: look for patterns in every family's last two weeks (elder and anyone with self care)."""
+    from sqlalchemy import select as sql_select
+
+    from app.care import patterns
+    from app.care.models import FamilyRoster
+
+    async with SessionLocal() as session:
+        rosters = list((await session.execute(sql_select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
+    new = 0
+    for r in rosters:
+        people = {(r.elder or {}).get("id")} | {m.get("id") for m in r.members or []}
+        for pid in [p for p in people if p]:
+            try:
+                async with SessionLocal() as session:
+                    new += len(await patterns.record_new(session, r.family_id, pid))
+                    await session.commit()
+            except Exception:  # noqa: BLE001 — one family's data must not stop the others
+                logger.exception("patterns failed family=%s subject=%s", r.family_id, pid)
+    return new
 
 
 CHECKIN_PROMPT = (
     "[Caregiver check-in] It is the weekly check-in on the caregivers themselves. For each caregiver in HOUSEHOLD "
     "(not the care recipient), send one short, warm message with send_message asking how they are doing this week "
     "(sleep, stress, their own health). One question only, no lists. When they answer later, log it with log_event "
-    "kind mood about their own id. After sending, reply none."
+    "kind mood about their own id. If PATTERNS NOTICED lists something about the person they care for, add the most "
+    "important one to that same message in one line, with its suggestion. After sending, reply none."
 )
 
 
