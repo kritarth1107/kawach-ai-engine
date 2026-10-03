@@ -16,6 +16,7 @@ holds across Cloud Run instances; tests and scripts without a database use the i
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -107,6 +108,7 @@ _sessions = None  # async_sessionmaker, set by configure()
 _mem: dict[tuple[str, str, str], list[float]] = defaultdict(lambda: [0, 0, 0, 0.0])  # (day, role, model) -> calls, in, out, inr
 _cache: dict[str, tuple[float, float]] = {}  # day -> (total, read at monotonic)
 CACHE_SECONDS = 20.0
+LEDGER_TIMEOUT = 2.0  # seconds; past this the in-process counter is used
 
 
 def configure(sessions) -> None:
@@ -150,7 +152,19 @@ async def record(role: str, model: str, usage: dict) -> float:
         total, at = _cache[day]
         _cache[day] = (total + inr, at)
     if _sessions is not None:
-        try:
+        task = asyncio.create_task(_write(day, role, model, usage, inr))
+        _pending.add(task)
+        task.add_done_callback(_pending.discard)
+    return inr
+
+
+_pending: set = set()
+
+
+async def _write(day: str, role: str, model: str, usage: dict, inr: float) -> None:
+    """Ledger write in the background, with a short timeout, so a busy connection pool never delays a reply."""
+    try:
+        async with asyncio.timeout(LEDGER_TIMEOUT):
             async with _sessions() as s:
                 stmt = insert(LlmSpend).values(
                     day=date.fromisoformat(day), role=role, model=model, calls=1,
@@ -163,9 +177,14 @@ async def record(role: str, model: str, usage: dict) -> float:
                 )
                 await s.execute(stmt)
                 await s.commit()
-        except Exception:  # noqa: BLE001 — accounting must never cost a person their reply
-            logger.exception("llm spend ledger write failed")
-    return inr
+    except Exception:  # noqa: BLE001 — accounting must never cost a person their reply
+        logger.exception("llm spend ledger write failed")
+
+
+async def flush() -> None:
+    """Wait for background ledger writes (tests, shutdown)."""
+    if _pending:
+        await asyncio.gather(*list(_pending), return_exceptions=True)
 
 
 async def spent_today() -> float:
@@ -176,7 +195,7 @@ async def spent_today() -> float:
     total = sum(v[3] for k, v in _mem.items() if k[0] == day)
     if _sessions is not None:
         try:
-            async with _sessions() as s:
+            async with asyncio.timeout(LEDGER_TIMEOUT), _sessions() as s:
                 db_total = (await s.execute(select(func.coalesce(func.sum(LlmSpend.cost_inr), 0.0)).where(LlmSpend.day == date.fromisoformat(day)))).scalar_one()
                 total = max(total, float(db_total))
         except Exception:  # noqa: BLE001
@@ -186,8 +205,13 @@ async def spent_today() -> float:
 
 
 async def gate(role: str, essential: bool | None = None) -> str:
-    """'ok', 'cheap' (use only the cheapest model) or raise SpendCapReached."""
-    essential = role in ESSENTIAL_ROLES if essential is None else essential
+    """'ok', 'cheap' (cheapest models first, low effort) or raise SpendCapReached.
+
+    essential: a real person is waiting for this answer. Defaults to the role (brain, vision). A brain call on a
+    scheduler turn (wake-up, task update, weekly check-in) passes essential=False: it still runs cheap above the
+    soft cap, and stops above the hard cap."""
+    in_role = role in ESSENTIAL_ROLES
+    essential = in_role if essential is None else essential
     spent = await spent_today()
     if spent >= hard_cap():
         if not essential:
@@ -195,7 +219,7 @@ async def gate(role: str, essential: bool | None = None) -> str:
         logger.error("LLM HARD CAP: ₹%.0f spent today; answering an essential %s call on the cheapest model", spent, role)
         return "cheap"
     if spent >= soft_cap():
-        if not essential:
+        if not (essential or in_role):
             raise SpendCapReached(f"₹{spent:.0f} spent today, soft cap ₹{soft_cap():.0f}: non-essential calls are paused")
         logger.warning("LLM SOFT CAP: ₹%.0f spent today; %s on the cheapest model", spent, role)
         return "cheap"
@@ -203,8 +227,8 @@ async def gate(role: str, essential: bool | None = None) -> str:
 
 
 def cheapest(routes: list) -> list:
-    """The cheapest route of a role, by output price."""
-    return sorted(routes, key=lambda r: price_inr(r.model)[1])[:1]
+    """The role's routes, cheapest first. All are kept as fallbacks: a capped day must not also lose failover."""
+    return sorted(routes, key=lambda r: price_inr(r.model)[1])
 
 
 async def summary(sessions, days: int = 7) -> list[dict]:

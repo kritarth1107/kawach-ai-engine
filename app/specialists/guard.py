@@ -103,20 +103,21 @@ def missing_items(requested: list[dict], items: list[dict]) -> list[str]:
     return [str(r.get("name")) for r in requested if _keywords(str(r.get("name"))) and not any(k in names for k in _keywords(str(r.get("name"))))]
 
 
-def rx_covers(requested: list[dict], rx_on_file: list[str]) -> bool:
-    """Every requested medicine has a prescription on file for the same medicine (first word) and strength."""
+def rx_covers(requested: list[dict], rx_on_file: list[str], cart: list[dict] | None = None) -> bool:
+    """Every requested medicine has a prescription on file for the same medicine (first word) and strength.
+    The strength is taken from the request, else from the matching cart line ('Telma' asked, 'Telma 80mg' in cart)."""
     if not requested:
         return False
     for q in requested:
         name = str(q.get("name", ""))
         first = (re.findall(r"[a-z]+", name.lower()) or [""])[0]
-        want = _strengths(name)
+        want = _strengths(name) or {x for i in cart or [] if first and first in str(i.get("name", "")).lower() for x in _strengths(str(i.get("name", "")))}
         ok = False
         for rx in rx_on_file:
             if (re.findall(r"[a-z]+", rx.lower()) or [""])[0] != first:
                 continue
             have = _strengths(rx)
-            if not want or not have or want & have:
+            if not want or not have or want & have:  # a prescription saved without a strength covers the medicine
                 ok = True
                 break
         if not ok:
@@ -125,7 +126,13 @@ def rx_covers(requested: list[dict], rx_on_file: list[str]) -> bool:
 
 
 def _strengths(text: str) -> set[str]:
-    return {m.replace(" ", "").lower() for m in re.findall(r"\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|iu)", text or "", re.I)}
+    """Strengths as numbers ('40mg', '40 mg', 'Telma 40' -> {'40'}). Bare numbers count when no unit is written."""
+    t = text or ""
+    with_unit = re.findall(r"(\d+(?:\.\d+)?)\s*(?:mg|mcg|ml|g|iu)\b", t, re.I)
+    if with_unit:
+        return {n.rstrip("0").rstrip(".") if "." in n else n for n in with_unit}
+    bare = re.findall(r"(?<![\d.])(\d{1,4}(?:\.\d+)?)(?![\d.]|\s*(?:'s|s\b|x\b|tab|strip|pack|kg))", t, re.I)
+    return {n.rstrip("0").rstrip(".") if "." in n else n for n in bare}
 
 
 def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limits: Limits) -> Verdict:

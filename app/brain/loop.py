@@ -179,6 +179,8 @@ PAUSE_NOTE = {
 async def flood_reply(session: AsyncSession, req: TurnRequest) -> str | None:
     """A canned reply (no model call) when this sender is over the limit; None to answer normally."""
     system = req.speaker.get("role") == "system"
+    if system and (req.message_ref or "").startswith("task:"):
+        return None  # an order/ride update ("do not order again") must always reach the family
     window, burst = (SYSTEM_WINDOW, SYSTEM_BURST) if system else (PERSON_WINDOW, PERSON_BURST)
     if not system and guards.RED_FLAG_WORDS.search(req.text or ""):
         return None  # never throttle someone describing an emergency
@@ -347,6 +349,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
                 tools=None if last else tools.specs(),
                 max_tokens=6000,
                 effort=BRAIN_EFFORT,
+                essential=not is_system,  # past the hard cap only people's messages get answers
             )
         except router.AllModelsFailed:
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):

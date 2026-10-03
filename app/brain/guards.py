@@ -317,50 +317,56 @@ def duplicate_message(text: str, sent: list[tuple[str, bool]]) -> str | None:
 
 MSG_VERB = re.compile(
     r"\b(messag(?:e|ed|ing)|text(?:ed|ing)?|told|tell(?:ing)?|inform(?:ed|ing)?|sen[dt](?:ing)?|let\b.{0,25}\bknow|"
-    r"bata(?:ya|yi|ungi|unga|ti|ti hoon|ti hu|ya hai|di|diya| diya| di| dungi| deti)?|bhej(?:a|i|ungi|unga|ti|ti hoon|ti hu|di|diya| diya| di| dungi| deti)|"
+    r"bata(?:ya|yi|ungi|unga|ti|ti hoon|ti hu|ya hai|di|diya| diya| di| dungi| deti)|bhej(?:a|i|ungi|unga|ti|ti hoon|ti hu|di|diya| diya| di| dungi| deti)|"
     r"keh(?:a|ti|ungi| diya| di)|bol(?:a|i|ungi| diya| di| dungi)|janau(?:chi|chhi)|janaibi|janai|jaanabo|janiyechhi|bolechhi|sangitla|sangte|cheppanu|cheptanu)\b",
     re.I,
 )
 ORDER_CLAIM = re.compile(
     r"\b(updated|added to) (your|the) cart\b|\bi(?:'m| am) (?:now )?(ordering|booking|placing)\b|"
     r"\bsearch(?:ing)? (?:for )?.{0,30}\b(?:on|at) (1mg|apollo|pharmeasy|swiggy|zepto|instamart|blinkit|zomato|amazon)\b|"
-    r"\b(order|book) (?:kar )?(?:di(?:ya|ye)?|rahi|deti|dungi)\b",
+    r"\b(order|book) (?:kar )?(?:di(?:ya|ye)?|rahi|raha|deti|dungi|dunga)\b",
     re.I,
 )
 APPOINTMENT_BOOK = re.compile(r"\b(book|set|fix|schedule)\b.{0,25}\b(appointment|slot)\b|\bappointment (book|set|fix)\b", re.I)
 
 
-FIRST_PERSON = re.compile(
-    r"\b(i|i've|i'll|i'm|i have|maine|mainne|main|mai|maiṁ|humne|hamne|ami|amar|mu|nenu|naan|naanu|mi)\b|मैंने|मैं|আমি|ମୁଁ|నేను|நான்",
+OFFER = re.compile(
+    r"\?\s*$|^\s*(kya|should|shall|can|could|may|do you want|want me|would you like|chahenge|chahengi|bolo to)\b|\b(doon|dun|du)\s*\?|\byou (can|could|may|should)\b",
     re.I,
 )
-SELF_VERB = re.compile(r"\b(bataungi|bataunga|bhejungi|bhejunga|bol(?:ungi|unga)|kahungi|janaibi|janauchi|janauchhi|cheptanu|solren|sollren)\b", re.I)
+SUBJECT_TITLES = r"(?:\s+(?:ji|didi|di|bhaiya|bhai|garu|babu|aunty|uncle|sir|madam))?"
+OTHER_DOES = r"\s+(?:ne\b|told\b|sent\b|said\b|says\b|messaged\b|texted\b|called\b|informed\b|wrote\b|asked\b|has\s+(?:told|sent)|will\b|is\b|was\b)"
 
 
 def false_claims(text: str, *, others: dict[str, str], messaged: set[str], ordering_ok: bool) -> list[str]:
     """others: {first name lower: person id} for household members other than the speaker.
     messaged: ids Saheli sent to in this turn or the last few hours. ordering_ok: a task started now or is running.
-    Only claims Saheli makes about herself count ("I told Asha", "maine Asha ko bataya"); relaying what someone
-    else did ("Priya ne dawai bheji", "Kamala told me") is fine."""
+    A sentence that says a message went (or will go) to someone is Saheli's claim unless that person is the one
+    doing it ("Priya ne bheja", "Kamala told me"). Questions and offers ("Kya main Asha ko bata doon?") are not claims."""
     problems: list[str] = []
     for s in sentences(text):
         low = s.lower()
-        mine = bool(FIRST_PERSON.search(s) or SELF_VERB.search(s))
-        if mine and MSG_VERB.search(s):
-            for name, pid in others.items():
-                if re.search(rf"\b{re.escape(name)}\b", low) and pid not in messaged:
-                    problems.append(f"says you messaged or will message {name.title()}, but you did not: call send_message now, or do not say it")
-        if mine and ORDER_CLAIM.search(s) and not ordering_ok:
-            problems.append("says you are ordering, booking or searching a store, but no task is running: call start_task, or do not say it")
         if APPOINTMENT_BOOK.search(s) and not re.search(r"\bremind|\byaad", low):
             problems.append("offers to book a doctor's appointment, which you cannot do: offer to save it and remind them instead")
+        if OFFER.search(s):
+            continue
+        if MSG_VERB.search(s):
+            for name, pid in others.items():
+                if not re.search(rf"\b{re.escape(name)}\b", low) or pid in messaged:
+                    continue
+                if re.search(rf"\b{re.escape(name)}{SUBJECT_TITLES}{OTHER_DOES}", low):
+                    continue  # they did the telling, not Saheli
+                problems.append(f"says you messaged or will message {name.title()}, but you did not: call send_message now, or do not say it")
+        if ORDER_CLAIM.search(s) and not ordering_ok:
+            problems.append("says you are ordering, booking or searching a store, but no task is running: call start_task, or do not say it")
     return sorted(set(problems))
 
 
 # ── red flag gate ──────────────────────────────────────────────────────────────
 
 INJECTION = re.compile(
-    r"\b(ignore|forget|disregard|override)\b.{0,25}\b(your|all|previous|above|earlier|system)\b.{0,25}\b(instructions?|rules?|prompts?|programming|guidelines)\b|"
+    r"\b(ignore|forget|disregard|override)\b.{0,25}\b(your|system|saheli'?s?)\b.{0,25}\b(instructions?|rules?|prompts?|programming|guidelines)\b|"
+    r"\b(ignore|forget|disregard|override)\s+(?:all\s+)?(?:(?:the|of the)\s+)?(?:previous|prior|above)\s+(?:instructions?|prompts?|rules)\s*(?:[.!,]|$)|"
     r"\byou are now (?:an?|my|the)\b|\bpretend (?:to be|you are)\b|\bsystem prompt\b|\bdeveloper mode\b|\bjailbreak\b",
     re.I,
 )
@@ -369,7 +375,9 @@ RED_FLAG_WORDS = re.compile(
     r"bleed\w*|blood|khoon|vomit\w*|ulti|seizure|fits?|confus\w*|attack|dizz\w*|chakkar|severe|unbearable|bahut dard|overdose|"
     r"double dose|extra dose|two tablets|2 tablets|do goli|swell\w*|sujan|black stool|choking|burn\w*|hypo|shiver\w*|sweat\w*|paseena|"
     r"not responding|no response|unresponsive|not waking|isn'?t waking|won'?t wake|not breathing|jawab nahi|uth nahi|nahi uth|"
-    r"102|103|104|105)\b|सीने|सांस|गिर|बेहोश|खून|उल्टी|चक्कर|पसीना",
+    r"twice|do baar|galti se|by mistake|wrong (?:medicine|tablet)|kaam nahi kar|ladkhad\w*|tedha|neel[ae]|blue lips|honth|lakwa|"
+    r"bol nahi|bolne mein|102|103|104|105)\b|सीने|सांस|गिर|बेहोश|होश|खून|उल्टी|चक्कर|पसीना|उठ नहीं|उठ नही|जवाब नहीं|"
+    r"बोल नहीं|लकवा|टेढ़ा|नीले|नीला|दो बार|गलती से",
     re.I,
 )
 MED_QUESTION = re.compile(

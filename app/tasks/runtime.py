@@ -152,15 +152,20 @@ def _ride_fp(cart_fp: str | None, choice: str) -> str:
     return f"{cart_fp or ''}:{re.sub(r'[^a-z0-9]+', '', (choice or '').lower())}"
 
 
-def _match_option(options: list[dict], value: str) -> dict | None:
-    v = re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+def _match_option(options: list[dict], value: str) -> dict | str | None:
+    """The option the person named: an exact name first; a partial name only if it fits exactly one option.
+    Returns "ambiguous" when it could be more than one."""
+    norm = lambda x: re.sub(r"[^a-z0-9]+", " ", str(x or "").lower()).strip()  # noqa: E731
+    v = norm(value)
     if len(v) < 2:
         return None
-    for o in options:
-        t = re.sub(r"[^a-z0-9]+", " ", str(o.get("type") or "").lower()).strip()
-        if t and (t == v or t in v or v in t):
-            return o
-    return None
+    exact = [o for o in options if norm(o.get("type")) == v or norm(f"{o.get('type')} {o.get('fare') or ''}") == v]
+    if len(exact) == 1:
+        return exact[0]
+    partial = [o for o in options if norm(o.get("type")) and (norm(o.get("type")) in v or v in norm(o.get("type")))]
+    if len(partial) == 1:
+        return partial[0]
+    return "ambiguous" if partial or len(exact) > 1 else None
 
 
 async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str, by: str, by_is_elder: bool) -> str:
@@ -247,6 +252,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
             return "nothing to choose right now"
         options = (task.result or {}).get("options") or []
         opt = _match_option(options, value)
+        if opt == "ambiguous":
+            return "that could be more than one option; ask which exactly: " + "; ".join(f"{o.get('type')} {o.get('fare', '')}".strip() for o in options)
         if not opt:
             return "that is not one of the options; read them again: " + "; ".join(f"{o.get('type')} {o.get('fare', '')}".strip() for o in options)
         limits = Limits.from_dict(d.get("limits"))
@@ -269,7 +276,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
 async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
     if task.status in ("failed", "cancelled"):
         return f"already {task.status}"
-    if task.phase == "cancel":
+    if task.phase == "cancel" and task.status in LIVE:
         return "cancelling is already in progress; you will get a task update"
     task.cancel_requested = True
     note(task, f"cancel requested by {by}: {reason}")
@@ -314,7 +321,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             metrics.on_milestone(task, "ready")
             extra = " ".join(v.warn + v.approval)
             return "awaiting_confirm", "Ride options are ready; tell the person the fares (and any surge) and ask which one to book." + (f" {extra}" if extra else "")
-        if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file):
+        if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file, cart=out.get("items")):
             return "failed", "This medicine needs a prescription upload; ask the family to upload the prescription on the dashboard, then try again."
         if not out.get("items"):
             alts = guard.alternatives(out.get("alternatives"))[:4]
@@ -334,6 +341,11 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         extra = " ".join(v.warn + v.approval)
         return "awaiting_confirm", "The cart is ready; read the items and the total to the person and ask them to confirm." + (f" {extra}" if extra else "")
     if task.phase == "place":
+        if out.get("price_changed") and task.kind == "ride":
+            # Fares moved at booking: fetch fresh fares and let the person choose again.
+            task.phase, task.input_needed = "prepare", None
+            task.details = {**d, "confirm_token": None, "place_started": None, "choice": None, "cart_fp": None}
+            return "queued", f"The fare changed at booking ({out.get('new_total') or 'new fare'}); nothing was booked. Getting fresh fares to choose again."
         if out.get("price_changed"):
             task.result = {**(task.result or {}), "total": out.get("new_total") or (task.result or {}).get("total")}
             task.details = {**d, "cart_fp": guard.cart_fingerprint(task.result), "confirm_token": None}
@@ -488,10 +500,15 @@ async def tick(
                 elif task.status == "queued":
                     if task.phase == "place":
                         # Mark before calling the store, and commit, so a crash after the call cannot place twice.
-                        task.details = {**(task.details or {}), "place_started": clock.now().isoformat()}
+                        marker = clock.now().isoformat()
+                        task.details = {**(task.details or {}), "place_started": marker}
                         await session.commit()
-                        task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update())).scalar_one()
-                        if task.status != "queued":
+                        # Re-read from the database (not the identity map) under the lock: another tick or a cancel
+                        # may have changed it between the commit and here.
+                        task = (await session.execute(
+                            select(Task).where(Task.id == task_id).with_for_update().execution_options(populate_existing=True)
+                        )).scalar_one()
+                        if task.status != "queued" or task.cancel_requested or (task.details or {}).get("place_started") != marker:
                             continue
                     report = None
                     if task.phase in ("prepare", "place") and (task.details or {}).get("channel") != "browser":
@@ -515,6 +532,10 @@ async def tick(
                         status, message = _outcome(task, report)
                         task.status = status
                         note(task, f"{task.phase} → {status} (connector): {message}")
+                        if status == "done" and task.cancel_requested:
+                            task.phase, task.status = "cancel", "queued"
+                            task.deadline_at = clock.now() + TASK_LIFETIME
+                            message = "It was placed just before the cancel; cancelling it on the service now."
                         if status == "failed":
                             metrics.on_milestone(task, "failed")
                         stats["finished"] += 1
@@ -552,6 +573,7 @@ async def tick(
                         stats["finished"] += 1
                         if status == "done" and task.cancel_requested:
                             task.phase, task.status = "cancel", "queued"
+                            task.deadline_at = clock.now() + TASK_LIFETIME
                             message = "It was placed just before the cancel; cancelling it on the service now."
                         if status == "failed" and out.get("problem"):
                             # The next agent on this service reads what stopped this one (once per distinct problem).

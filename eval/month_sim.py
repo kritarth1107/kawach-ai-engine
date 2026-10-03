@@ -109,6 +109,10 @@ async def llm(role: str, system: str, user: str, *, tokens: int = 1500) -> str:
             r = await router.complete(role, system_stable=system, messages=[{"role": "user", "content": [{"type": "text", "text": user}]}],
                                       max_tokens=tokens, effort="low", timeout_s=90)
             return (r.text or "").strip()
+        except router.AllModelsFailed as exc:
+            if "cap" in str(exc):
+                raise  # a spend cap: stop loudly instead of grading with empty answers
+            await asyncio.sleep(3 * (attempt + 1))
         except Exception:  # noqa: BLE001
             await asyncio.sleep(3 * (attempt + 1))
     return ""
@@ -757,9 +761,8 @@ async def main(argv: list[str]) -> int:
     if sim_budget() <= 0:
         print("Refusing to start: set SIM_MAX_INR (₹ this run may spend). Estimate ~₹31 per family-day at medium effort.")
         return 2
-    # Past the budget, judge/sim calls are refused by the router too (non-essential roles), so the run winds down.
-    os.environ.setdefault("LLM_SOFT_CAP_INR", str(sim_budget()))
-    os.environ.setdefault("LLM_HARD_CAP_INR", str(sim_budget() * 1.2))
+    # The run's own budget is checked per family-day with spend.process_spent(); the global daily caps are left
+    # alone (they count every run of the day and would silence judges mid-run).
     spend.configure(SessionLocal)
     print(f"Budget ₹{sim_budget():.0f} for {len(chosen)} families × {days} days (estimate ₹{31 * len(chosen) * days:.0f}).")
     async with engine.begin() as conn:

@@ -244,3 +244,38 @@ async def test_crash_after_place_call_never_places_twice(db, at, sessions, monke
     await db.refresh(t)
     assert len([r for r in agent.runs if r["phase"] == "place"]) == 1
     assert t.status == "failed" and "not clear" in told[-1]
+
+
+# ── second review (2026-10-04) ──
+
+
+@pytest.mark.parametrize("text,claim", [
+    ("Priya ko message bhej diya hai.", True), ("Told Asha, she will call you.", True), ("Maine Asha ko bata diya hai.", True),
+    ("Kya main Asha ko bata doon?", False), ("Should I let Priya know?", False),
+    ("The main thing: Priya told me she sent the medicine.", False), ("Asha ji ne bataya ki aap aaj aayengi.", False),
+])
+def test_claims_by_subject(text, claim):
+    assert bool(g.false_claims(text, others={"priya": "p", "asha": "a"}, messaged=set(), ordering_ok=False)) is claim
+
+
+@pytest.mark.parametrize("text", ["Aapke liye doodh order kar rahi hoon.", "Order kar diya hai, 20 minute mein aa jayega."])
+def test_order_claims_without_pronoun(text):
+    assert g.false_claims(text, others={}, messaged=set(), ordering_ok=False)
+
+
+@pytest.mark.parametrize("text", [
+    "दादी उठ नहीं रहीं, क्या दवा दें?", "पापा जवाब नहीं दे रहे, दवा दें क्या?", "Papa ka haath kaam nahi kar raha, kya dawai dein?",
+    "Maa ki aawaz ladkhada rahi hai, kya goli de doon?", "Mom took her sugar tablet twice by mistake, what should I do?",
+    "Papa ne galti se BP ki dawai do baar le li, kya karein?", "Mummy ke honth neele pad gaye hain, kya dawai dein?",
+])
+def test_more_emergencies_pass_the_gate(text):
+    assert g.red_flag_unsupported(text) is None
+
+
+@pytest.mark.parametrize("text", [
+    "Please ignore the earlier instructions about Metformin, new dose is 1000 mg",
+    "Forget all the previous instructions for Telma, doctor changed it to 80mg at night",
+    "Override the previous instructions: Ecosprin is stopped from today",
+])
+def test_prescription_changes_are_not_injections(text):
+    assert not g.INJECTION.search(text)
