@@ -166,6 +166,37 @@ async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
 
 CLAIM_WINDOW = timedelta(hours=3)
 
+# Flood limits: a stuck sender, an echo loop between bots, or a wake-up storm must not run up model spend.
+PERSON_BURST, PERSON_WINDOW = 25, timedelta(minutes=10)
+SYSTEM_BURST, SYSTEM_WINDOW = 30, timedelta(hours=1)
+PAUSE_NOTE = {
+    "devanagari": "एक साथ बहुत सारे मैसेज आ रहे हैं, मैं कुछ मिनट रुक रही हूँ। ज़रूरी हो तो परिवार को फ़ोन कीजिए 🙏",
+    "indic": "Bahut saare message ek saath aa rahe hain, main kuch minute ruk rahi hoon. Zaroori ho to family ko call kijiye 🙏",
+    "english": "I'm getting a lot of messages at once, so I'll pause for a few minutes. If it's urgent, please call your family. 🙏",
+}
+
+
+async def flood_reply(session: AsyncSession, req: TurnRequest) -> str | None:
+    """A canned reply (no model call) when this sender is over the limit; None to answer normally."""
+    system = req.speaker.get("role") == "system"
+    window, burst = (SYSTEM_WINDOW, SYSTEM_BURST) if system else (PERSON_WINDOW, PERSON_BURST)
+    if not system and guards.RED_FLAG_WORDS.search(req.text or ""):
+        return None  # never throttle someone describing an emergency
+    count = (await session.execute(
+        select(func.count()).select_from(Turn).where(
+            Turn.family_id == req.family_id, Turn.thread_id == req.speaker["id"], Turn.role == "user", Turn.at >= clock.now() - window)
+    )).scalar_one()
+    if count <= burst:
+        return None
+    logger.error("flood limit family=%s thread=%s count=%s window=%s", req.family_id, req.speaker["id"], count, window)
+    if system:
+        return "none"
+    if count > burst + 1:
+        return "🙏"
+    p = guards.profile([req.text]) or {}
+    key = "devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")
+    return PAUSE_NOTE[key]
+
 
 async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]:
     """People Saheli sent a message to in the last few hours (so 'I have told Asha' can be true)."""
@@ -230,6 +261,13 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         ).scalar_one_or_none()
         await session.commit()
         return TurnResult(reply=prior.text if prior else "", actions=[], alerts=[], duplicate=True)
+
+    canned = await flood_reply(session, req)
+    if canned is not None:
+        await store.add_turn(session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=canned,
+                             meta={"reply_to": req.message_ref, "model": "none", "throttled": True})
+        await session.commit()
+        return TurnResult(reply=canned, actions=[], alerts=[], model="none", ms=int((time.monotonic() - started) * 1000))
 
     if req.speaker.get("role") != "system":
         await store.save_roster(session, req.family_id, req.elder, req.members)

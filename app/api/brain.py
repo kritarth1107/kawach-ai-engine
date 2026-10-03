@@ -187,6 +187,16 @@ async def agent_metrics(session: Annotated[AsyncSession, Depends(get_db)], days:
     return {**await metrics.rollup(session, days=max(1, min(days, 90))), "channels": await channels.health_table(session)}
 
 
+@router.get("/llm/spend")
+async def llm_spend(days: int = 7) -> dict:
+    """Model spend per day, role and model (estimated ₹), with today's total against the caps."""
+    from app.db.session import SessionLocal
+    from app.llm import spend
+
+    return {"today": round(await spend.spent_today(), 2), "softCap": spend.soft_cap(), "hardCap": spend.hard_cap(),
+            "rows": await spend.summary(SessionLocal, days=max(1, min(days, 90)))}
+
+
 @router.post("/jobs/daily")
 async def daily_job() -> dict:
     """Cloud Scheduler, 10:00 IST: medicines running low become a refill loop that wakes Saheli to ask about a reorder."""

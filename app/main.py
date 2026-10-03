@@ -11,6 +11,7 @@ from app.db.session import Base, engine
 from app.care import models as care_models  # noqa: F401
 from app.tasks import models as task_models  # noqa: F401
 from app.specialists import channels as specialist_channels  # noqa: F401
+from app.llm import spend as llm_spend
 from app.models import entities  # noqa: F401
 
 
@@ -23,6 +24,9 @@ async def ensure_database_schema() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await ensure_database_schema()
+    from app.db.session import SessionLocal
+
+    llm_spend.configure(SessionLocal)
     yield
 
 

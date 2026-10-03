@@ -88,6 +88,7 @@ class GeminiProvider:
             "in": getattr(meta, "prompt_token_count", 0) or 0,
             "out": getattr(meta, "candidates_token_count", 0) or 0,
             "cache_read": getattr(meta, "cached_content_token_count", 0) or 0,
+            "think": getattr(meta, "thoughts_token_count", 0) or 0,  # billed as output
         }
         # Keep the parts (with thought signatures) to replay on the same model; ids must match the calls.
         raw = {"parts": parts, "ids": [c.id for c in calls]}

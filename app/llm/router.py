@@ -180,11 +180,20 @@ async def complete(
     effort: str = "medium",
     timeout_s: float = 90.0,
     routes: list[Route] | None = None,
+    essential: bool | None = None,
 ) -> LLMReply:
     """system_stable blocks are cached in order (persona first, then the family's care record);
     system_dynamic is per-turn and never cached."""
     stable = [system_stable] if isinstance(system_stable, str) else list(system_stable)
     candidates = routes or routes_for(role)
+    from app.llm import spend
+
+    try:
+        mode = await spend.gate(role, essential)
+    except spend.SpendCapReached as exc:
+        raise AllModelsFailed(str(exc)) from exc
+    if mode == "cheap":
+        candidates, effort = spend.cheapest(candidates), "low"
     live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway
     errors: list[str] = []
     for route in live:
@@ -201,7 +210,8 @@ async def complete(
                 ),
                 timeout=timeout_s,
             )
-            logger.info("llm role=%s model=%s usage=%s", role, route.key, reply.usage)
+            inr = await spend.record(role, route.model, reply.usage or {})
+            logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, route.key, reply.usage, inr)
             return reply
         except ModelUnavailable as exc:
             trip(route, exc.status)

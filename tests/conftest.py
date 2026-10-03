@@ -16,6 +16,7 @@ async def db():
     from app.care import models  # noqa: F401
     from app.tasks import models as task_models  # noqa: F401
     from app.specialists import channels  # noqa: F401
+    from app.llm import spend  # noqa: F401
     from app.db.session import Base
     from app.models import entities  # noqa: F401
 

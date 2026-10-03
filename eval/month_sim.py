@@ -39,6 +39,7 @@ from app.care.domains import slug
 from app.care.models import OpenLoop
 from app.core import clock
 from app.db.session import Base, SessionLocal, engine
+from app.llm import spend
 from app.llm import router
 from app.sim.agent import FakeAgent
 from app.sim.world import SimHost
@@ -177,6 +178,7 @@ class Fam:
     taken: set = field(default_factory=set)  # (subject, med slug, day, time) actually taken
     told: set = field(default_factory=set)  # (subject, med slug, day, time) reported to Saheli
     checks: list[dict] = field(default_factory=list)  # hard-check results
+    stopped: str = ""  # why the run ended early (budget)
     audits: list[dict] = field(default_factory=list)
     verdicts: list[dict] = field(default_factory=list)
     quiz: list[dict] = field(default_factory=list)
@@ -589,6 +591,10 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
                  if spec["setup"] == "detailed" else f"Set up Saheli on day 1 as sparsely as described: {spec['setup_text']}")
     print(f"── {spec['key']} start")
     for day in range(1, days + 1):
+        if spend.process_spent() >= sim_budget():
+            print(f"── {spec['key']} STOPPED before day {day}: budget ₹{sim_budget():.0f} used (₹{spend.process_spent():.0f})")
+            f.stopped = f"budget reached before day {day}"
+            break
         t_day = time.monotonic()
         if day == 1:
             f.push(day_dt(1, "10:00"), "setup", {"who": setup_who, "intent": setup_ask})
@@ -731,6 +737,10 @@ def report(fams: list[Fam], secs: int) -> str:
     return "\n".join(L)
 
 
+def sim_budget() -> float:
+    return float(os.getenv("SIM_MAX_INR", "0") or 0)
+
+
 async def main(argv: list[str]) -> int:
     from app.care import models  # noqa: F401
     from app.models import entities  # noqa: F401
@@ -744,6 +754,14 @@ async def main(argv: list[str]) -> int:
             argv = argv[:i] + argv[i + 2:]
             days, par = (val, par) if flag == "--days" else (days, val)
     chosen = [f for f in FAMILIES if not argv or f["key"] in argv]
+    if sim_budget() <= 0:
+        print("Refusing to start: set SIM_MAX_INR (₹ this run may spend). Estimate ~₹31 per family-day at medium effort.")
+        return 2
+    # Past the budget, judge/sim calls are refused by the router too (non-essential roles), so the run winds down.
+    os.environ.setdefault("LLM_SOFT_CAP_INR", str(sim_budget()))
+    os.environ.setdefault("LLM_HARD_CAP_INR", str(sim_budget() * 1.2))
+    spend.configure(SessionLocal)
+    print(f"Budget ₹{sim_budget():.0f} for {len(chosen)} families × {days} days (estimate ₹{31 * len(chosen) * days:.0f}).")
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
@@ -758,7 +776,7 @@ async def main(argv: list[str]) -> int:
             return await run_family(spec, days, outdir)
 
     fams = await asyncio.gather(*(one(s) for s in chosen))
-    rep = report(fams, int(time.monotonic() - started))
+    rep = report(fams, int(time.monotonic() - started)) + f"\n\nEstimated model spend this run: ₹{spend.process_spent():.0f} (budget ₹{sim_budget():.0f}).\n"
     (outdir / "report.md").write_text(rep)
     print("\n" + rep + f"\n\nSaved to {outdir}")
     return 0
