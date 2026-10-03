@@ -19,24 +19,36 @@ from app.care import store
 from app.care.models import CareEvent, Turn
 from app.core import clock
 from app.learn import situations as sit
-from app.learn.anonymise import anonymise, leaks
+from app.learn.anonymise import anonymise, leaks, looks_like_junk
 from app.learn.models import LearningExample, ReplyLog
 
 logger = logging.getLogger(__name__)
 
 SCORE_AFTER = timedelta(hours=6)  # wait this long for a reaction
-REPLY_WINDOW = timedelta(hours=6)
+REPLY_WINDOW = timedelta(hours=6)  # messages Saheli starts: people answer later
+REPLY_WINDOW_REPLY = timedelta(hours=3)  # her replies in a conversation: after this it is a new topic
 DOSE_WINDOW = timedelta(minutes=90)
 KEEP_RAW_DAYS = 90  # raw reply_log rows (with the person's words) are deleted after this
 
-WARM = re.compile(r"\b(thank|thanks|shukriya|dhanyavad|dhanyawad|bahut (accha|achha|badiya)|great|lovely|wah|accha laga|sweet|love you|good)\b|😊|🙏|❤|🥰|👍|धन्यवाद|शुक्रिया", re.I)
+# Not "good", 🙏 or 👍 alone: devotional elders end every message with 🙏, and "all good" is not about Saheli.
+WARM = re.compile(
+    r"\b(thank|thanks|thank you|shukriya|dhanyavad|dhanyawad|bahut (accha|achha|badiya)|(very|so|really) (good|nice|helpful)|great help|lovely|"
+    r"wah|accha laga|achha laga|sweet|love you|khub bhalo|chhan|mast|nandri|dhanyavadalu|aabhar|meherbani|jeete raho|khush raho)\b|"
+    r"😊|❤|🥰|🤗|धन्यवाद|शुक्रिया|ধন্যবাদ|ଧନ୍ୟବାଦ|ధన్యవాద|நன்றி|ಧನ್ಯವಾದ|നന്ദി|આભાર|ਧੰਨਵਾਦ|खुश रहो|जीते रहो",
+    re.I,
+)
 CORRECTED = re.compile(
     r"\b(galat|wrong|not right|incorrect|nahi kaha|i didn'?t say|i never said|already told|pehle (hi )?bata|kitni baar|that'?s not|not what i|"
-    r"maine aisa nahi|aisa nahi|you said .{0,20} but|no,? (it'?s|its|the)|nahi,? (wo|woh|yeh|ye))\b",
+    r"maine aisa nahi|aisa nahi|you said .{0,20} but|no,? (it'?s|its|the)|nahi,? (wo|woh|yeh|ye)|already (told|said|took|taken|gave|did)|"
+    r"told you|i said|i don'?t take|not mine|which (hospital|medicine|tablet)|what (hospital|medicine|tablet)|konachi|kuthli|chukicha|"
+    r"bhul (bolcho|bolle|hoyeche)|tappu|thappu|ye meri nahi|wo nahi|galti)\b|"
+    r"ग़लत|गलत|ভুল|ଭୁଲ|తప్పు|தவறு|ತಪ್ಪು|തെറ്റ്|ખોટું|ਗਲਤ|चुकीचे",
     re.I,
 )
 WEIGHTS = {"replied_proactive": 0.3, "replied_reply": 0.15, "ignored_proactive": -0.2, "fast": 0.1, "warm": 0.25, "annoyed": -0.6,
            "corrected": -0.5, "dose_yes": 0.4, "dose_no": -0.2, "judge_pass": 0.2, "judge_fail": -0.8}
+PERSON_KEYS = ("name", "person", "who", "doctor", "doctor_name", "contact", "helper", "attendant", "maid", "nurse", "neighbour", "neighbor",
+               "hospital", "clinic", "city", "town", "area", "caregiver", "spouse", "relative")
 NO_REPLY_EXPECTED = {"thanks", "emergency", "dose_report", "vital_report"}
 
 
@@ -97,15 +109,22 @@ async def score_pending(sessions: async_sessionmaker, *, limit: int = 3000) -> i
             select(ReplyLog).where(ReplyLog.scored_at.is_(None), ReplyLog.at <= cutoff).order_by(ReplyLog.at).limit(limit)
         )).scalars())
         for r in rows:
+            window = REPLY_WINDOW_REPLY if r.kind == "reply" else REPLY_WINDOW
             nxt = (await session.execute(
                 select(Turn).where(Turn.family_id == r.family_id, Turn.thread_id == r.thread_id, Turn.role == "user",
-                                   Turn.at > r.at, Turn.at <= r.at + REPLY_WINDOW).order_by(Turn.at).limit(1)
+                                   Turn.at > r.at, Turn.at <= r.at + window).order_by(Turn.at).limit(1)
             )).scalar_one_or_none()
             r.replied = nxt is not None
             if nxt:
                 r.reply_delay_s = int((nxt.at - r.at).total_seconds())
-                r.tone = tone_of(nxt.text)
-                r.corrected = bool(CORRECTED.search(nxt.text or ""))
+                # The reaction belongs to the last message Saheli sent before it, not to every message in a burst.
+                later = (await session.execute(
+                    select(ReplyLog.id).where(ReplyLog.family_id == r.family_id, ReplyLog.thread_id == r.thread_id, ReplyLog.at > r.at,
+                                              ReplyLog.at < nxt.at).limit(1)
+                )).first()
+                if later is None:
+                    r.tone = tone_of(nxt.text)
+                    r.corrected = bool(CORRECTED.search(nxt.text or ""))
             if r.kind != "reply" and sit.MED_WORDS.search(r.text or ""):
                 took = (await session.execute(
                     select(CareEvent.id).where(and_(CareEvent.family_id == r.family_id, CareEvent.kind == "dose_taken",
@@ -133,11 +152,14 @@ async def _identity_words(session: AsyncSession, family_id: str) -> tuple[list[s
     facts = (await session.execute(select(CareFact).where(CareFact.family_id == family_id, CareFact.status.in_(("active", "pending"))))).scalars()
     meds = []
     for f in facts:
-        v = f.value or {}
-        if f.domain in ("doctor", "contact", "home", "family") and v.get("name"):
-            names.append(str(v["name"]))
+        v = f.value if isinstance(f.value, dict) else {}
         if f.domain == "medicine":
-            meds.append(str(v.get("name") or f.key.split(":", 1)[1]))
+            meds.append(str(v.get("name") or f.key.split(":", 1)[-1]))
+            continue
+        # anyone named anywhere in the record: doctor, maid, attendant, neighbour, hospital, town
+        for k in PERSON_KEYS:
+            if isinstance(v.get(k), str) and v[k].strip():
+                names.append(v[k])
     return [n for n in names if n], meds
 
 
@@ -165,8 +187,12 @@ async def build_corpus(sessions: async_sessionmaker, *, days: int = 3, limit: in
             if r.family_id not in words:
                 words[r.family_id] = await _identity_words(session, r.family_id)
             names, meds = words[r.family_id]
+            if looks_like_junk(r.user_text) or looks_like_junk(r.text):
+                out["skipped_junk"] = out.get("skipped_junk", 0) + 1
+                r.in_corpus = True
+                continue
             ctx, reply = anonymise(r.user_text, names=names, medicines=meds), anonymise(r.text, names=names, medicines=meds)
-            if leaks(ctx, names=names) or leaks(reply, names=names):
+            if leaks(ctx, names=names, medicines=meds) or leaks(reply, names=names, medicines=meds):
                 out["skipped_leak"] += 1
                 r.in_corpus = True  # never retried
                 continue

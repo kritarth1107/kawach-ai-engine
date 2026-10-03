@@ -12,9 +12,12 @@ from __future__ import annotations
 import asyncio
 import glob
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
+
+from sqlalchemy import text
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -32,12 +35,24 @@ async def main(argv: list[str]) -> int:
     from eval.month_families import FAMILIES
     from app.brain import guards
     from app.learn import models as lm, scoring, situations
-    from app.learn.anonymise import anonymise, leaks
+    from app.learn.anonymise import anonymise, leaks, looks_like_junk
     from app.learn.models import LearningExample
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    names = {f["key"]: [p["name"] for p in f["people"]] for f in FAMILIES}
+        # a rebuild replaces the earlier simulated examples (never touches real ones)
+        gone = await conn.execute(text("DELETE FROM learning_corpus WHERE signals->>'source' LIKE 'sim:%'"))
+        print(f"removed {gone.rowcount} earlier simulated examples")
+    from app.learn.anonymise import is_common
+
+    def everyone(f: dict) -> list[str]:
+        """People plus anyone named in the family's truth and events (doctor, maid, attendant, hospital, town)."""
+        blob = f.get("truth", "") + " " + f.get("setup_text", "") + " " + json.dumps(f.get("events") or [], ensure_ascii=False) + " " + f.get("city", "")
+        extra = {w for w in re.findall(r"\b[A-Z][a-z]{2,}\b", blob) if not is_common(w)}
+        aliases = [a for v in (f.get("name_aliases") or {}).values() for a in (v if isinstance(v, list) else [v])]
+        return [p["name"] for p in f["people"]] + sorted(extra) + [str(a) for a in aliases] + [f.get("city", "")]
+
+    names = {f["key"]: everyone(f) for f in FAMILIES}
     meds = {f["key"]: [m[0] if isinstance(m, (list, tuple)) else str(m) for ms in (f.get("meds") or {}).values() for m in (ms if isinstance(ms, list) else [ms])]
             for f in FAMILIES}
     roles = {p["id"]: ("elder" if p["recipient"] else ("self" if p["relation"] == "self" else "caregiver")) for f in FAMILIES for p in f["people"]}
@@ -61,12 +76,16 @@ async def main(argv: list[str]) -> int:
                             continue
                         to = m["to"]
                         prev = next((x for x in reversed(msgs[:i]) if x["who"] == to and x["kind"] == "human"), None) if m["kind"] == "reply" else None
-                        nxt = next((x for x in msgs[i + 1:] if x["who"] == to and x["kind"] == "human"), None)
+                        nxt_i = next((j for j in range(i + 1, len(msgs)) if msgs[j]["who"] == to and msgs[j]["kind"] == "human"), None)
+                        nxt = msgs[nxt_i] if nxt_i is not None else None
                         delay = int((_at(nxt["at"]) - _at(m["at"])).total_seconds()) if nxt else None
-                        replied = nxt is not None and delay is not None and delay <= 6 * 3600
+                        window = (3 if m["kind"] == "reply" else 6) * 3600  # as scoring.REPLY_WINDOW_REPLY / REPLY_WINDOW
+                        replied = nxt is not None and delay is not None and delay <= window
+                        # the reaction belongs to the last message Saheli sent this person before it
+                        last = replied and not any(x["who"] == "saheli" and x.get("to") == to for x in msgs[i + 1:nxt_i])
                         row = lm.ReplyLog(kind="proactive" if m["kind"] == "proactive" else "reply", situation="", replied=replied,
-                                          reply_delay_s=delay if replied else None, tone=scoring.tone_of(nxt["text"]) if replied else None,
-                                          corrected=bool(scoring.CORRECTED.search(nxt["text"])) if replied else None, dose_followed=None,
+                                          reply_delay_s=delay if replied else None, tone=scoring.tone_of(nxt["text"]) if last else None,
+                                          corrected=bool(scoring.CORRECTED.search(nxt["text"])) if last else None, dose_followed=None,
                                           judge_pass=bool(v.get("pass")))
                         role = roles.get(to, "caregiver")
                         sit = situations.tag(text=prev["text"] if prev else "", role="system" if m["kind"] == "proactive" else ("elder" if role == "elder" else "caregiver"),
@@ -75,7 +94,7 @@ async def main(argv: list[str]) -> int:
                         score = scoring.score_of(row)
                         ctx = anonymise(prev["text"] if prev else "", names=names.get(fam, []), medicines=meds.get(fam, []))
                         reply = anonymise(m["text"], names=names.get(fam, []), medicines=meds.get(fam, []))
-                        if leaks(ctx, names=names.get(fam, [])) or leaks(reply, names=names.get(fam, [])):
+                        if leaks(ctx, names=names.get(fam, []), medicines=meds.get(fam, [])) or leaks(reply, names=names.get(fam, []), medicines=meds.get(fam, [])) or looks_like_junk(ctx) or looks_like_junk(m["text"]):
                             skipped += 1
                             continue
                         rid += 1

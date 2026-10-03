@@ -23,7 +23,7 @@ async def collect(session, *, days: int = 14, limit: int = 300) -> list[dict]:
 
     from app.care import outcomes, store
     from app.core import clock
-    from app.learn.anonymise import anonymise, leaks
+    from app.learn.anonymise import anonymise, leaks, looks_like_junk
     from app.learn.models import ReplyLog
     from app.learn.scoring import _identity_words
 
@@ -42,7 +42,7 @@ async def collect(session, *, days: int = 14, limit: int = 300) -> list[dict]:
             continue
         names, meds = await _identity_words(session, r.family_id)
         said, reply = anonymise(r.user_text, names=names, medicines=meds), anonymise(r.text, names=names, medicines=meds)
-        if leaks(said + " " + reply, names=names) or said in seen:
+        if leaks(said + " " + reply, names=names, medicines=meds) or said in seen or looks_like_junk(r.user_text):
             continue
         seen.add(said)
         out.append({"id": f"f{r.id}", "situation": r.situation, "speaker": r.speaker_role or "elder", "lang": r.lang,

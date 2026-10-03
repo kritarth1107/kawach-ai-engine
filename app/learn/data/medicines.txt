@@ -1,0 +1,19 @@
+# Common Indian medicine brands and generics (scrubbed as [MED] in shared examples). One per line; words of 4+ letters.
+acitrom amaryl amlong amlokind amlodac amlopres amlodipine anxit arkamin atarax atenolol aten atorva atorvastatin azee azithral
+azithromycin becosules benadryl betaloc bisoprolol brufen budecort calpol carbamazepine cardace cardivas carvedilol cetzine
+cilacar clopidogrel clopilet combiflam concor coreg crocin cyra dabigatran dapagliflozin deplatt deriphyllin diamicron diclofenac
+digene dilzem dolo domstal donep donepezil dytor ecosprin eltroxin empagliflozin enalapril entacapone eptoin escitalopram
+eliquis apixaban famotidine febuxostat feburic forxiga furosemide gabapentin galvus gemer glargine glibenclamide gliclazide
+glimepiride glimestar glimy glipizide glucobay gluconorm glycomet glynase haloperidol humalog huminsulin humulin insugen istamet
+jalra januvia jardiance lantus lasix levipil levetiracetam levocetirizine levothyroxine limcee linagliptin lipitor lisinopril
+lonazep losar losartan metformin metolar metoprolol metosartan mixtard montair montelukast moxikind nebistar nebivolol neurobion
+nexito nexpro nicardia nifedipine novomix novorapid olmesartan olmezest omez omeprazole ondansetron pantocid pantop pantoprazole
+paracetamol pacimol pregabalin pregalin prolomet propranolol rablet rabeprazole ramipril razo rejunex repace revital ridol
+rivaroxaban xarelto rosuvas rosuvastatin rosuday sacubitril saxagliptin seroflo shelcal sitagliptin sompraz sorbitrate stamlo
+storvas syndopa tamsulosin telma telmisartan telmikind tenormin thyronorm torsemide tramadol trajenta ultracet urimax uprise
+valsartan vildagliptin vildapride voglibose volini warfarin warf wysolone prednisolone xarelto zerodol zifi zincovit zyloric
+allopurinol ativan alprazolam alprax clonazepam lorazepam zolpidem stilnoct sertraline daxid fluoxetine flunil mirtazapine mirtaz
+quetiapine qutipin risperidone sizodon olanzapine oleanz memantine admenta rivastigmine exelon levodopa carbidopa pramipexole
+ropinirole calcirol uprise calcium calcimax ostocalcium supradyn becadexamin evion folvite livogen dexorange fefol orofer
+ferrous thyrox thyronorm aspirin ecosprin ranitidine aciloc rantac sucralfate sucral cremaffin duphalac lactulose isabgol
+sinarest vicks crocin coldact cofsils ascoril benadryl grilinctus alex chericof honitus otrivin nasivion

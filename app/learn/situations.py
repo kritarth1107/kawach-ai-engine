@@ -36,7 +36,15 @@ SITUATIONS = {
 _R = lambda p: re.compile(p, re.I)  # noqa: E731
 GRIEF = _R(r"\b(miss|yaad aa|chale gaye|chali gayi|passed away|nahi rahe|nahi rahi|guzar|swarg|late (husband|wife)|kahan hai|kab aayeg|kab aayegi)\b|याद आ|गुज़र|नहीं रहे")
 LOW_MOOD = _R(r"\b(sad|lonely|alone|akela|akeli|udaas|upset|worried|anxious|tension|cry|ro rah|depress|hopeless|dukhi|pareshan|ghabra|dar lag)\w*|उदास|अकेल|दुखी|परेशान|घबरा")
-ANNOYED = _R(r"\b(bas karo|band karo|chup|stop (it|messag|remind)|annoying|irritat|pareshan mat|bekaar|useless|shut up|mat bhejo|too many messages|kitni baar)\b")
+# Complaints about Saheli or her messages ("useless fellow" about the attendant is not one).
+ANNOYED = _R(
+    r"\b(bas karo|band karo|chup|stop (it|messag|remind|sending|asking)|annoying|irritat|pareshan mat (karo|kar)|shut up|mat bhejo|too many messages|"
+    r"kitni baar|baar baar|bar bar|why again|told you|don'?t disturb|dont disturb|disturb mat|repeatedly|how many times|enough now|"
+    r"(useless|bekaar|faltu) (message|msg|app|reminder|baat|saheli)|you are useless|dimag mat|kiti vela|tras deu nako|abar keno|birokto|birakto|"
+    r"malli enduku|visugu|thirumba (thirumba|yen))\b|"
+    r"परेशान मत|बार बार|बार-बार|फिर से क्यों|আবার কেন|বিরক্ত|ବାରମ୍ବାର|చిరాకు|தொந்தரவு|ತೊಂದರೆ ಕೊಡಬೇಡ"
+)
+FINE = _R(r"\b(all good|i'?m (fine|ok|okay)|theek hoon|thik hoon|sab theek|bilkul theek|feeling better|much better)\b|बिल्कुल ठीक|ठीक हूँ|ठीक हूं|सब ठीक")
 STRESS = _R(r"\b(tired|exhausted|overwhelmed|stressed|burn(ed|t) out|can'?t cope|thak gay|thak gayi|no time|sleepless|neend nahi)\b")
 MED_Q = _R(r"\?.*|\b(can i|kya main|kya mai|should i|le sakt|kha sakt|pee sakt)\b")
 MED_WORDS = _R(r"\b(tablet|goli|dawai|dawa|medicine|dose|syrup|insulin|crocin|paracetamol|dolo|combiflam)\b|दवा|गोली")
@@ -63,7 +71,11 @@ def tag(*, text: str, role: str, tools: list[str], prompt: str = "") -> str:
         return "followup"
     if guards.INJECTION.search(t):
         return "injection"
-    if any(a.startswith("alert_caregiver") for a in used) or guards.RED_FLAG_WORDS.search(t) or guards.critical_reading(t):
+    if guards.RED_FLAG_WORDS.search(t) or guards.critical_reading(t):
+        return "emergency"
+    # An alert without a red flag in the words (an unanswered check, an order to approve) is an emergency only when
+    # the person did not say they are fine.
+    if any(a.startswith("alert_caregiver") for a in used) and not FINE.search(t) and not THANKS.search(t):
         return "emergency"
     if ANNOYED.search(t):
         return "annoyed"

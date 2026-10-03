@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.learn.anonymise import anonymise, leaks
+from app.learn.anonymise import anonymise, leaks, looks_like_junk
 from app.learn.models import ReplyLog
 
 SYSTEM = ("You are Saheli, a warm WhatsApp care companion for elderly people in India and their families. Reply in the "
@@ -44,6 +44,8 @@ def _anon_obj(x, names, meds):
 def to_example(trace: list[dict], *, situation: str, names: list[str], meds: list[str]) -> dict | None:
     """One Vertex SFT example from a turn trace, anonymised; None if anything identifying survives."""
     contents: list[dict] = []
+    if any(looks_like_junk(s.get("text") or "") for s in trace):
+        return None
     for step in trace:
         if step["role"] == "user":
             contents.append({"role": "user", "parts": [{"text": anonymise(step["text"], names=names, medicines=meds)}]})
@@ -66,7 +68,7 @@ def to_example(trace: list[dict], *, situation: str, names: list[str], meds: lis
     if not contents or contents[-1]["role"] != "model" or "text" not in contents[-1]["parts"][0]:
         return None
     flat = json.dumps(contents, ensure_ascii=False)
-    if leaks(flat, names=names):
+    if leaks(flat, names=names, medicines=meds):
         return None
     return {"systemInstruction": {"role": "system", "parts": [{"text": f"{SYSTEM} Situation: {situation}."}]}, "contents": contents}
 
