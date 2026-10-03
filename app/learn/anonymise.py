@@ -74,7 +74,7 @@ KIN_OTHER = {"باجی", "آپا", "امی", "ابو", "ڈاکٹر", "صاحب",
 _LET = r"[^\W\d_]|[\u0900-\u0DFF\u0600-\u06FF\u0300-\u036F\u200c\u200d]"
 SUFFIXES = ("s", "'s", "’s", "er", "r", "ra", "re", "ke", "ki", "ka", "ko", "ne", "se", "nu", "na", "ji", "da", "di", "an", "ar", "uku", "ukku", "ku")
 # Text that is not a person talking: simulator internals, code, a player's reasoning. Never goes into a shared corpus.
-JUNK = re.compile(r"^\s*thought\b|\bMy instructions are\b|\blet'?s check the ledger\b|orchestrator|\.raw_output|simulated_users|The user prompt says|\bdef \w+\(|^\s*import \w+|Traceback \(most|\bNOW:\s", re.M)
+JUNK = re.compile(r"^\s*(?i:thought)\b|^\s*(?i:thinking)\s*:|^\s*(?i:let me check (the|my|our) (ledger|notes|instructions|memory|records|log))\b|\bMy instructions are\b|\blet'?s check the ledger\b|orchestrator|\.raw_output|simulated_users|The user prompt says|\bdef \w+\(|^\s*import \w+|Traceback \(most|\bNOW:\s", re.M)
 
 
 @lru_cache(maxsize=1)
@@ -299,6 +299,19 @@ SUBJECT_NEXT = re.compile(
     r"bhaiya|didi|sahab|saab|uncle|aunty|and|aur|&)\b",
     re.I,
 )
+
+
+def names_seen(texts) -> list[str]:
+    """Capitalised unknown words a family uses mid-sentence anywhere in its chat ("…aaj Khuki aayi"): treated as names
+    in all of that family's text, so they are scrubbed even where they open a sentence or are written in lower case."""
+    seen: dict[str, int] = {}
+    for text in texts:
+        t = text or ""
+        for m in NAME_LIKE.finditer(t):
+            w = m.group(1)
+            if not is_common(w) and not _sentence_start(t, m.start()):
+                seen[w] = seen.get(w, 0) + 1
+    return sorted(seen)
 
 
 def _sentence_start(t: str, i: int) -> bool:

@@ -53,6 +53,12 @@ async def main(argv: list[str]) -> int:
         return [p["name"] for p in f["people"]] + sorted(extra) + [str(a) for a in aliases] + [f.get("city", "")]
 
     names = {f["key"]: everyone(f) for f in FAMILIES}
+    from app.learn.anonymise import names_seen
+
+    for fam in names:  # plus words this family's chat uses as names mid-sentence
+        texts = [m["text"] for run in (argv or DEFAULT_RUNS) for path in glob.glob(f"{run}/{fam}.jsonl") for line in open(path)
+                 for m in json.loads(line)["messages"]]
+        names[fam] = names[fam] + names_seen(texts)
     meds = {f["key"]: [m[0] if isinstance(m, (list, tuple)) else str(m) for ms in (f.get("meds") or {}).values() for m in (ms if isinstance(ms, list) else [ms])]
             for f in FAMILIES}
     roles = {p["id"]: ("elder" if p["recipient"] else ("self" if p["relation"] == "self" else "caregiver")) for f in FAMILIES for p in f["people"]}

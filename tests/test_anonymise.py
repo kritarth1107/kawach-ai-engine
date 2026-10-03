@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.care import store
 from app.core import clock
 from app.learn import scoring, situations
-from app.learn.anonymise import anonymise, indic_key, latin_key, leaks, looks_like_junk
+from app.learn.anonymise import anonymise, indic_key, latin_key, leaks, looks_like_junk, names_seen
 from app.learn.models import ReplyLog
 
 NAMES = ["Neha Joshi", "Savitri Gupta", "Gopal", "Venkatesh Iyer", "Subrata Banerjee", "Gurpreet Kaur", "Kamla", "Rahul", "Amit"]
@@ -182,3 +182,19 @@ def test_negated_symptom_is_not_an_emergency_tag():
 def test_live_nicknames_from_the_record_are_scrubbed():
     out = anonymise("Pinky aayi thi", names=["Priya Sharma", "Pinky"])
     assert "Pinky" not in out
+
+
+# ── third spot-check: names that open a sentence ──
+
+
+def test_names_seen_mid_sentence_are_scrubbed_everywhere():
+    chat = ["Aaj Khuki school gayi.", "Khuki kokhon ashbe?", "Neetu kitchen mein hai", "kal Neetu aayegi", "Shengdana tar nako"]
+    seen = names_seen(chat)
+    assert "Khuki" in seen and "Neetu" in seen and "Shengdana" not in seen
+    out = [anonymise(t, names=seen) for t in chat]
+    assert not any("Khuki" in o or "Neetu" in o for o in out) and out[-1] == "Shengdana tar nako"
+
+
+def test_more_reasoning_junk():
+    assert looks_like_junk("Thinking: the user wants a cab") and looks_like_junk("Let me check the ledger first.")
+    assert not looks_like_junk("Let me check with Ankit and tell you, Mummy ji")

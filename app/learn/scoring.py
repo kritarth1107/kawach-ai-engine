@@ -164,6 +164,11 @@ async def _identity_words(session: AsyncSession, family_id: str) -> tuple[list[s
             x = v.get(k)
             names += [str(a) for a in (x if isinstance(x, list) else [x]) if a]
     names += EXTRA_NAMES.get(family_id, [])
+    # Names nobody saved but the family writes mid-sentence somewhere ("aaj Khuki aayi"): scrub them everywhere.
+    from app.learn.anonymise import names_seen
+
+    texts = (await session.execute(select(Turn.text).where(Turn.family_id == family_id).order_by(Turn.id.desc()).limit(2000))).scalars()
+    names += names_seen(texts)
     return [n for n in names if n], meds
 
 

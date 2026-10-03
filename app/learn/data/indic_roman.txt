@@ -602,7 +602,6 @@ khoob
 khub
 khud
 khuda
-khukir
 khul
 khuli
 khup
@@ -742,7 +741,6 @@ naan
 naanu
 naashte
 nahi
-nahoum
 nai
 naina
 naki
@@ -886,7 +884,6 @@ rakhne
 rakhte
 rakhti
 ram
-rani
 rasam
 rasta
 raste
