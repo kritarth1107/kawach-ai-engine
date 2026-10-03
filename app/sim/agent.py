@@ -28,6 +28,8 @@ class FakeAgent:
     steps_per_run: int = 12
     runs: list[dict] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
+    sessions_stopped: list[str] = field(default_factory=list)
+    path: list[str] = field(default_factory=lambda: ["https://shop.test/", "https://shop.test/search?q=atta", "https://shop.test/cart", "https://shop.test/checkout"])
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
     _polls: dict[str, int] = field(default_factory=dict)
     _out: dict[str, dict] = field(default_factory=dict)
@@ -50,7 +52,7 @@ class FakeAgent:
         out = self._out[task_id]
         if "__fail__" in out:  # the run itself crashed or timed out: no report
             return AgentRun(task_id=task_id, session_id="", status="failed", output=None, error=out["__fail__"], steps=self.steps_per_run)
-        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(out), steps=self.steps_per_run)
+        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(out), steps=self.steps_per_run, path=list(self.path))
 
     async def stop(self, task_id: str, *, end_session: bool = False) -> None:
         self.stopped.append(task_id)
@@ -60,3 +62,6 @@ class FakeAgent:
 
     async def new_profile(self, name: str) -> str:
         return f"prof-{name}"
+
+    async def stop_session(self, session_id: str) -> None:
+        self.sessions_stopped.append(session_id)

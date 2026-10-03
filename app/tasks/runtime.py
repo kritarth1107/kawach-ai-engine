@@ -10,6 +10,7 @@ honoured at every step, including after placing (a cancel run on the service).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timedelta
@@ -37,6 +38,13 @@ Notify = Callable[[str, str, str], Awaitable[None]]  # (family_id, requested_by,
 
 
 rupees = guard.rupees
+IDLE_CLOSE = timedelta(minutes=5)  # a browser waiting on a person longer than this is stopped (login stays in the profile)
+
+
+def task_max_cost() -> float:
+    return float(os.getenv("TASK_MAX_COST_INR", "80"))
+
+
 MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
 MAX_SKILL_NOTES = 12
 
@@ -420,6 +428,44 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
         return None
 
 
+def route(urls: list[str], limit: int = 8) -> str:
+    """'https://x.com/search?q=atta', … -> '/ → /search → /cart → /checkout' (paths only, repeats removed)."""
+    from urllib.parse import urlparse
+
+    out: list[str] = []
+    for u in urls:
+        p = urlparse(u).path or "/"
+        p = re.sub(r"/\d{3,}|/[0-9a-f]{8,}(-[0-9a-f]{4,})*", "/…", p)[:40]
+        if not out or out[-1] != p:
+            out.append(p)
+    return " → ".join(out[:limit]) + (" → …" if len(out) > limit else "")
+
+
+async def release_sessions(sessions: async_sessionmaker, agent: BrowserAgent, limit: int = 50) -> int:
+    """Stop cloud browsers nobody is using: tasks that ended, or that wait on a person for more than a few minutes.
+    (A finished Browser Use run keeps its browser running and billing; the family's profile keeps the login.)"""
+    idle_before = clock.now() - IDLE_CLOSE
+    async with sessions() as session:
+        rows = list((await session.execute(
+            select(Task).where(Task.agent_session.is_not(None), or_(
+                Task.status.in_(("done", "failed", "cancelled")),
+                (Task.status.in_(("awaiting_confirm", "needs_input"))) & (Task.updated_at < idle_before),
+            )).limit(limit).with_for_update(skip_locked=True)
+        )).scalars())
+        released = 0
+        for t in rows:
+            if t.status == "needs_input" and t.input_needed == "otp":
+                continue  # the login page is waiting for the code in this browser
+            try:
+                await agent.stop_session(t.agent_session)
+            except Exception:  # noqa: BLE001 — already gone, or the service is down: forget it either way
+                logger.warning("stop session failed task=%s", t.id)
+            t.agent_session = None
+            released += 1
+        await session.commit()
+    return released
+
+
 MAX_TICK_ERRORS = 3
 
 
@@ -462,6 +508,10 @@ async def tick(
     host_for: Callable[[str], object] | None = None,
 ) -> dict:
     stats = {"started": 0, "polled": 0, "finished": 0, "expired": 0}
+    try:
+        stats["released"] = await release_sessions(sessions, agent)
+    except Exception:  # noqa: BLE001 — cleanup must never stop the tick
+        logger.exception("release sessions failed")
     async with sessions() as session:
         ids = list(
             (
@@ -539,6 +589,14 @@ async def tick(
                         if status == "failed":
                             metrics.on_milestone(task, "failed")
                         stats["finished"] += 1
+                    elif float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0)) >= task_max_cost():
+                        # Too many browser steps already: stop rather than keep paying for a task that is not working.
+                        task.status = "failed"
+                        message = ("This took too many tries on the website, so it was stopped to keep costs down; nothing was placed. "
+                                   "Offer to try another store, or the family can order in the app.") if task.phase != "place" else (
+                            "This took too many tries and was stopped. It is not clear whether it was placed: do not order again; check the app.")
+                        note(task, f"cost ceiling ₹{task_max_cost():.0f} reached")
+                        metrics.on_milestone(task, "failed")
                     else:
                         extra = f"Enter this code where the login asks for it: {task.details.get('otp')}. Then continue with the task." if task.phase == "otp" else ""
                         if task.phase == "otp":
@@ -575,6 +633,11 @@ async def tick(
                             task.phase, task.status = "cancel", "queued"
                             task.deadline_at = clock.now() + TASK_LIFETIME
                             message = "It was placed just before the cancel; cancelling it on the service now."
+                        if status in ("awaiting_confirm", "done") and run.path:
+                            # Remember the route that worked; the next agent on this store starts with it.
+                            text_ = f"worked ({task.phase}, {run.steps} steps): {route(run.path)}"
+                            if text_ not in await _learned(session, task.service):
+                                session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
                         if status == "failed" and out.get("problem"):
                             # The next agent on this service reads what stopped this one (once per distinct problem).
                             text_ = f"{task.phase} failed: {str(out['problem'])[:240]}"
