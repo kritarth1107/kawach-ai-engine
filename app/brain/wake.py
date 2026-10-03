@@ -55,6 +55,13 @@ KIND_PROMPTS = {
         "attaching buttons {{\"kind\": \"{set}\", \"key\": \"{key}\"}}. If the conversation already shows how it turned out, "
         "log_outcome instead of asking. Then close_loop {id} and reply none."
     ),
+    "checkin": (
+        "[Caregiver check-in] It is the weekly check-in on person {owner} themselves. Send them one short, warm message with "
+        "send_message asking how they are doing this week (sleep, stress, their own health). One question only. If PATTERNS "
+        "NOTICED lists something about the person they care for, add the most important one in one line, with its suggestion. "
+        "Also ask whether there was any fall, hospital visit or medicine change this week, attaching buttons "
+        "{{\"kind\": \"outcome\", \"key\": \"{key}\"}}. Then close_loop {id} and reply none."
+    ),
     "refill": (
         "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
         "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "

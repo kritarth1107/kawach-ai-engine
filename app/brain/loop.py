@@ -411,12 +411,24 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         if cur and req.speaker["id"] not in profiles:
             profiles[req.speaker["id"]] = cur
     dynamic += "\n\n" + writing_block(req, profiles)
+    # Learned style from other families (only this situation's lessons and examples; under the fixed rules).
+    from app.learn import playbook as learned
+    from app.learn import situations
+
+    role = "system" if is_system else ("elder" if req.speaker["id"] == req.elder["id"] else "caregiver")
+    lang = situations.lang_of(profiles.get(req.speaker["id"]))
+    situation = situations.tag(text=req.text, role=role, tools=[], prompt=req.text if is_system else "")
+    pb, arm = await learned.for_family(session, req.family_id)
+    pb_block = learned.block(pb, situation, lang)
+    if pb_block:
+        dynamic += "\n\n" + pb_block
     tool_texts: list[str] = []
     ctx = tools.TurnCtx(
         session=session, host=host, family_id=req.family_id, elder=req.elder, speaker=req.speaker,
         members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text,
         known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
+        situation=situation, playbook_version=pb.version if pb else 0, arm=arm,
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
@@ -479,10 +491,12 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
 
-    await store.add_turn(
+    turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
+    if not is_system:
+        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang)
     if data.history_full:  # fewer turns than a full history cannot need folding yet
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
@@ -495,6 +509,24 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         ms=int((time.monotonic() - started) * 1000),
         buttons=ctx.buttons if final and final != "none" else [],
     )
+
+
+async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, turn_id: int | None, role: str, lang: str) -> None:
+    """Log the reply for scoring, and note anything asked that Saheli could not do. Never costs the person their reply."""
+    from app.learn import gaps, scoring, situations
+
+    try:
+        used = [a["tool"] for a in ctx.actions if a.get("ok")]
+        ctx.situation = situations.tag(text=req.text, role=role, tools=used)
+        await scoring.record(session, family_id=req.family_id, thread_id=req.speaker["id"], turn_id=turn_id, kind="reply",
+                             situation=ctx.situation, speaker_role=role, lang=lang, user_text=req.text, text=final, tools=used,
+                             playbook_version=ctx.playbook_version, arm=ctx.arm)
+        how = gaps.detect(user_text=req.text, reply=final, actions=ctx.actions)
+        if how:
+            names = [req.elder.get("name", "")] + [m.get("name", "") for m in req.members]
+            await gaps.record(session, family_id=req.family_id, user_text=req.text, how=how, names=names)
+    except Exception:  # noqa: BLE001
+        logger.exception("learning log failed family=%s", req.family_id)
 
 
 async def maybe_compact(session: AsyncSession, family_id: str, thread_id: str) -> None:

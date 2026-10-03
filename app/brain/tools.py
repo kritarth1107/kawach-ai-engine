@@ -40,6 +40,9 @@ class TurnCtx:
     meds: dict = field(default_factory=dict)
     profiles: dict = field(default_factory=dict)
     buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp buttons attached to the reply
+    situation: str = "chit_chat"  # learning: what kind of moment this is (app.learn.situations)
+    playbook_version: int = 0
+    arm: str = "live"
 
     @property
     def elder_id(self) -> str:
@@ -89,6 +92,7 @@ def specs() -> list[ToolSpec]:
 async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
     """Run a tool; returns (json result, is_error). Errors go back to the model, never to the user."""
     if name not in _TOOLS:
+        ctx.actions.append({"tool": name, "args": args, "ok": False, "unknown": True, "error": f"unknown tool {name}"})
         return json.dumps({"error": f"unknown tool {name}"}), True
     try:
         async with ctx.session.begin_nested():
@@ -523,6 +527,12 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     if ctx.is_system and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
                         "(reply none now; alert_caregiver only if the loop's rule says so)")
+    if ctx.is_system:
+        from app.learn import timing
+
+        quiet = await timing.quiet_reason(ctx.session, ctx.family_id, to, ctx.situation)
+        if quiet:
+            problems.append(quiet)
     problems += guards.language_problems(text, ctx.profiles.get(to), who="they")
     now = clock.ist()
     problems += guards.ungrounded(text, known="\n".join(ctx.known), fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
@@ -560,10 +570,20 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
-    await store.add_turn(
+    turn_id = await store.add_turn(
         ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
         meta={"proactive": True, "delivered": res.get("delivered")},
     )
+    try:
+        from app.learn import scoring, situations
+
+        to_role = "elder" if a["to"] == ctx.elder_id else "caregiver"
+        await scoring.record(ctx.session, family_id=ctx.family_id, thread_id=a["to"], turn_id=turn_id,
+                             kind="proactive" if ctx.is_system else "relay", situation=ctx.situation if ctx.is_system else "relay",
+                             speaker_role=to_role, lang=situations.lang_of(ctx.profiles.get(a["to"])), user_text="", text=a["text"],
+                             tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm)
+    except Exception:  # noqa: BLE001 — learning must never stop a message
+        logger.exception("learning log failed (send_message)")
     return res
 
 
@@ -577,7 +597,10 @@ async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
     if not owner:
         return
     key = f"alert:{policy.issue_ref(a['reason'], a['issue'], clock.ist_day()).split(':', 2)[2]}:subj={ctx.elder_id}"
-    wake = clock.ist().replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    from app.learn import timing
+
+    tomorrow = clock.ist().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    wake = await timing.next_send_at(ctx.session, ctx.family_id, owner, "followup", default_hour=10, earliest=tomorrow)
     await store.open_loop(
         ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="followup",
         title=f"Yesterday's alert ({a['issue']}): {a['message'][:140]}. Ask how {ctx.elder.get('name', 'they')} is now.",

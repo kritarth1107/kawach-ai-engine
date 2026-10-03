@@ -206,6 +206,43 @@ async def dream_job(budget_s: float = 240.0) -> dict:
     return await dream.dream_all(SessionLocal, budget_s=max(10.0, min(budget_s, 280.0)))
 
 
+@router.post("/jobs/learn-weekly")
+async def learn_weekly_job() -> dict:
+    """Learn a new playbook draft from the anonymised corpus, gate it, and start its 10% canary."""
+    from app.db.session import SessionLocal
+    from app.learn import lessons
+
+    return await lessons.weekly(SessionLocal)
+
+
+@router.get("/learn/overview")
+async def learn_overview(weeks: int = 8) -> dict:
+    from app.db.session import SessionLocal
+    from app.learn import jobs
+
+    return await jobs.overview(SessionLocal, weeks=max(1, min(weeks, 52)))
+
+
+class PlaybookAction(BaseModel):
+    by: str = Field(min_length=1, max_length=64)
+
+
+@router.post("/learn/playbooks/{version}/approve")
+async def learn_approve(version: int, body: PlaybookAction) -> dict:
+    from app.db.session import SessionLocal
+    from app.learn import lessons
+
+    return await lessons.approve(SessionLocal, version, body.by)
+
+
+@router.post("/learn/playbooks/{version}/block")
+async def learn_block(version: int, body: PlaybookAction) -> dict:
+    from app.db.session import SessionLocal
+    from app.learn import lessons
+
+    return await lessons.block(SessionLocal, version, body.by)
+
+
 @router.post("/jobs/daily")
 async def daily_job() -> dict:
     """Cloud Scheduler, 10:00 IST: medicines running low become a refill loop that wakes Saheli to ask about a reorder."""
@@ -239,6 +276,34 @@ async def daily_job() -> dict:
     return {"refills": opened}  # patterns and baselines are learned in the nightly dream (app/care/dream.py)
 
 
+async def _plan_checkins() -> dict:
+    from sqlalchemy import select as sql_select
+
+    from app.care.models import FamilyRoster
+    from app.core import clock
+    from app.db.session import SessionLocal
+    from app.learn import timing
+
+    planned = 0
+    async with SessionLocal() as session:
+        rosters = list((await session.execute(sql_select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
+        for r in rosters:
+            elder = (r.elder or {}).get("id")
+            for m in r.members or []:
+                cg = m.get("id")
+                if not cg or cg == elder:
+                    continue
+                at = await timing.next_send_at(session, r.family_id, cg, "checkin", default_hour=18, earliest=clock.now())
+                await store.open_loop(
+                    session, family_id=r.family_id, subject_id=elder or cg, kind="checkin", title="Weekly caregiver check-in",
+                    detail={"key": f"week:{clock.ist_day()}:subj={elder}", "max_wakes": 1}, owner_id=cg, wake_at=at,
+                    alert_rule="dashboard", dedupe_key=f"checkin:{cg}:{clock.ist_day()}",
+                )
+                planned += 1
+        await session.commit()
+    return {"planned": planned}
+
+
 async def _roster(SessionLocal, fid: str):
     async with SessionLocal() as session:
         return await store.roster(session, fid)
@@ -256,8 +321,13 @@ CHECKIN_PROMPT = (
 
 
 @router.post("/jobs/weekly")
-async def weekly_job() -> dict:
-    """Cloud Scheduler, Sunday 18:00 IST: a short check-in with each caregiver about themselves."""
+async def weekly_job(plan: bool = False) -> dict:
+    """Cloud Scheduler, Sunday: a short check-in with each caregiver about themselves.
+
+    plan=false (Sunday 18:00): send now, one turn per family. plan=true (Sunday 08:00): schedule each caregiver's
+    check-in for the hour they have answered best (learned; 18:00 until there is history)."""
+    if plan:
+        return await _plan_checkins()
     import uuid as _uuid
 
     from sqlalchemy import select as sql_select

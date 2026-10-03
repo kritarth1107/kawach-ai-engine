@@ -169,5 +169,8 @@ async def dream_all(sessions: async_sessionmaker, *, budget_s: float = 240.0, wi
         stats["errors"] += len(rep["errors"])
     if not stats["left"]:
         stats["upkeep"] = await upkeep(sessions)
+        from app.learn import jobs as learn_jobs
+
+        stats["learn"] = await learn_jobs.nightly(sessions, with_models=with_models)
     logger.info("dream %s", stats)
     return stats

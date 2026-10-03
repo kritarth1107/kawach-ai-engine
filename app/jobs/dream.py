@@ -47,6 +47,7 @@ Return ONLY JSON:
 
 async def _ensure_v2_schema() -> None:
     from app.care import baselines, models  # noqa: F401
+    from app.learn import models as learn_models  # noqa: F401
     from app.db.session import Base
     from app.llm import spend  # noqa: F401
     from app.specialists import channels  # noqa: F401

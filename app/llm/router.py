@@ -69,6 +69,8 @@ DEFAULT_ROUTES: dict[str, list[str]] = {
     "extract": ["claude:claude-sonnet-5-5", "gemini:gemini-3.8-flash"],
     "classify": ["claude:claude-haiku-4-5", "gemini:gemini-3.8-flash"],
     "judge": ["claude:claude-opus-5-5", "gemini:gemini-3.1-pro-preview"],
+    "judge_fast": ["gemini:gemini-3.8-flash", "claude:claude-haiku-4-5"],
+    "learn": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"],
     "vision": ["gemini:gemini-3.8-flash", "claude:claude-sonnet-5-5"],
 }
 

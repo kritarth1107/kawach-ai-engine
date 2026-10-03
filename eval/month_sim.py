@@ -797,6 +797,7 @@ async def main(argv: list[str]) -> int:
     from app.models import entities  # noqa: F401
     from app.tasks import models as task_models  # noqa: F401
     from app.care import baselines  # noqa: F401  (every table the brain reads must exist)
+    from app.learn import models as learn_models  # noqa: F401
     from app.llm import spend as _spend  # noqa: F401
     from app.specialists import channels  # noqa: F401
 
