@@ -180,9 +180,10 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         reply = await router.complete(
             "brain",
             system_stable=stable,
-            system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now." if last else ""),
+            system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
             messages=msgs,
-            tools=tools.specs(),
+            # On the last step there are no tools, so the person always gets a reply.
+            tools=None if last else tools.specs(),
             max_tokens=6000,
             effort=BRAIN_EFFORT,
         )
@@ -190,7 +191,13 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         if not reply.tool_calls:
             break
         results = []
+        searches = sum(1 for a in ctx.actions if a["tool"] in ("recall", "search_records"))
         for call in reply.tool_calls:
+            if call.name in ("recall", "search_records") and searches >= 4:
+                # Searching memory again rarely finds what four searches did not: answer with what you have.
+                results.append({"id": call.id, "name": call.name, "is_error": True,
+                                "content": json.dumps({"refused": "You have searched enough. If it is not there, say plainly you do not have it and ask."})})
+                continue
             out, is_error = await tools.run(ctx, call.name, call.args)
             tool_texts.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
