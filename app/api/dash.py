@@ -512,6 +512,51 @@ class ConsentIn(BaseModel):
     granted: bool
 
 
+class ConsentActor(BaseModel):
+    actor: Actor
+
+
+class ForgetIn(BaseModel):
+    actor: Actor
+    what: str = Field(min_length=3, max_length=200)
+
+
+@router.get("/{family_id}/{elder_id}/memory-health")
+async def memory_health_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """Problems in the care record Saheli will ask about, her profile card of this person, and what was forgotten."""
+    from app.care import memory_upkeep
+    from app.care.models import CareEvent, MemoryNote
+
+    card = (await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id, MemoryNote.subject_id == elder_id,
+                                                           MemoryNote.slug == "profile-card"))).scalar_one_or_none()
+    forgotten = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.kind == "memory_forgotten")
+                                       .order_by(CareEvent.at.desc()).limit(20))).scalars()
+    return {
+        "issues": await memory_upkeep.health(session, family_id, elder_id),
+        "profileCard": card.body_md if card else None,
+        "forgotten": [{"id": e.id, "at": e.at.isoformat(), "what": (e.payload or {}).get("what"), "restored": bool((e.payload or {}).get("restored"))}
+                      for e in forgotten],
+    }
+
+
+@router.post("/{family_id}/{elder_id}/forget")
+async def forget_view(family_id: str, elder_id: str, body: ForgetIn, session: DB) -> dict:
+    from app.care import memory_upkeep
+
+    out = await memory_upkeep.forget(session, family_id, [elder_id, "family"], body.what, by=body.actor.id)
+    await session.commit()
+    return out
+
+
+@router.post("/{family_id}/{elder_id}/forgotten/{event_id}/restore")
+async def restore_view(family_id: str, elder_id: str, event_id: int, body: ConsentActor, session: DB) -> dict:
+    from app.care import memory_upkeep
+
+    out = await memory_upkeep.restore(session, family_id, event_id, by=body.actor.id)
+    await session.commit()
+    return out
+
+
 @router.get("/{family_id}/{elder_id}/outcomes")
 async def outcomes_view(family_id: str, elder_id: str, session: DB) -> dict:
     from app.care import outcomes

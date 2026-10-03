@@ -327,7 +327,8 @@ async def upsert_note(
         )
         .returning(MemoryNote)
     )
-    return (await session.execute(stmt)).scalar_one()
+    # populate_existing: a note loaded earlier in this session must show what was just written.
+    return (await session.execute(stmt, execution_options={"populate_existing": True})).scalar_one()
 
 
 async def notes(session: AsyncSession, family_id: str, subject_ids: list[str]) -> list[MemoryNote]:
@@ -335,6 +336,7 @@ async def notes(session: AsyncSession, family_id: str, subject_ids: list[str]) -
         select(MemoryNote)
         .where(MemoryNote.family_id == family_id, MemoryNote.subject_id.in_(subject_ids))
         .order_by(MemoryNote.subject_id, MemoryNote.slug)
+        .execution_options(populate_existing=True)  # notes are written with upserts; never return a stale copy
     )
     return list((await session.execute(q)).scalars())
 
@@ -532,7 +534,8 @@ async def recall(
 
     ev_rows = await session.execute(
         select(CareEvent)
-        .where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids), CareEvent.tsv.op("@@")(tsq))
+        .where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids), CareEvent.tsv.op("@@")(tsq),
+               CareEvent.payload["forgotten"].astext.is_(None))
         .order_by(func.ts_rank(CareEvent.tsv, tsq).desc(), CareEvent.at.desc())
         .limit(limit)
     )

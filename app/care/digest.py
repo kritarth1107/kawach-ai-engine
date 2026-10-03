@@ -104,10 +104,15 @@ def household(elder: dict, members: list[dict], speaker_id: str) -> str:
     return "\n".join(lines)
 
 
+RECALL_ONLY = {"diary", "weekly", "monthly"}  # long running logs: found by recall, not pasted into every turn
+FIRST = {"profile-card": 0, "life-so-far": 1}
+
+
 def notes_block(rows: list[MemoryNote], *, max_chars: int = 6000) -> str:
+    rows = sorted((n for n in rows if n.slug not in RECALL_ONLY), key=lambda n: (FIRST.get(n.slug, 2), n.subject_id))
     if not rows:
         return ""
-    out, used = ["PEOPLE AND LIFE (memory notes)"], 0
+    out, used = ["PEOPLE AND LIFE (memory notes; the profile card is the summary of who they are)"], 0
     for n in rows:
         body = n.body_md.strip()
         if used + len(body) > max_chars:

@@ -1,4 +1,6 @@
 import os
+
+os.environ.setdefault("MEMORY_EMBEDDINGS", "off")  # tests never call Vertex; memory tests inject a fake embedder
 from datetime import datetime, timezone
 
 import pytest
@@ -20,6 +22,7 @@ async def db():
     from app.care import baselines  # noqa: F401
     from app.learn import models as learn_models  # noqa: F401
     from eval.lab import queue as lab_queue  # noqa: F401
+    from app.care import memory_index  # noqa: F401
     from app.db.session import Base
     from app.models import entities  # noqa: F401
 

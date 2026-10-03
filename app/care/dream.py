@@ -117,9 +117,18 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
         for p in uniq:
             if await step(f"diary:{p['id']}", lambda s, p=p: diary(s, fid, p, day)):
                 report["diary"] += 1
+    from app.care import memory_index, memory_upkeep
+
+    owner = next((m.get("id") for m in roster.members or [] if "primary" in str(m.get("role", "")).lower()), None)
     for p in uniq:
         if await step(f"baseline:{p['id']}", lambda s, p=p: baselines.save(s, fid, p["id"])) is not None:
             report["baselines"] += 1
+        report["indexed"] = report.get("indexed", 0) + (await step(f"index:{p['id']}", lambda s, p=p: memory_index.nightly(s, fid, p["id"])) or 0)
+        roll = await step(f"rollups:{p['id']}", lambda s, p=p: memory_upkeep.rollups(s, fid, p["id"], with_models=with_models)) or {}
+        report["rollups"] = report.get("rollups", 0) + sum(1 for v in roll.values() if v)
+        report["memory_checks"] = report.get("memory_checks", 0) + (
+            await step(f"health:{p['id']}", lambda s, p=p: memory_upkeep.ask_about_health(s, fid, p["id"], owner if owner != p["id"] else None)) or 0)
+        await step(f"card:{p['id']}", lambda s, p=p: memory_upkeep.save_profile_card(s, fid, p))
         new = await step(f"patterns:{p['id']}", lambda s, p=p: patterns.record_new(s, fid, p["id"]))
         report["patterns"] += len(new or [])
     if with_models:

@@ -273,7 +273,9 @@ async def note(ctx: TurnCtx, a: dict) -> dict:
 )
 async def recall(ctx: TurnCtx, a: dict) -> dict:
     subjects = [ctx.subject(a.get("about")), "family"]
-    hits = await store.recall(ctx.session, ctx.family_id, subjects, a["query"], limit=15)
+    from app.care import memory_index
+
+    hits = await memory_index.search(ctx.session, ctx.family_id, subjects, a["query"], limit=15)
     return {"hits": [{"when": clock.ist(h.when).strftime("%d %b %Y %H:%M"), "source": h.source, "text": h.text} for h in hits]}
 
 
@@ -1109,3 +1111,20 @@ async def learning_consent(ctx: TurnCtx, a: dict) -> dict:
     if ctx.speaker_is_elder or ctx.is_system:
         raise ToolRefused("Only a caregiver can decide this; ask them.")
     return await outcomes.set_consent(ctx.session, ctx.family_id, ctx.elder_id, granted=bool(a["granted"]), by=ctx.speaker.get("id") or "")
+
+
+@tool(
+    "forget",
+    "Forget something on request: hides matching memory notes lines and logged events (they can be restored from the "
+    "dashboard). Use when someone says 'forget that', 'that was wrong, remove it', or asks you not to remember something. "
+    "For a care-record fact (medicine, allergy, rule) use stop instead.",
+    {"what": {"type": "string", "description": "Words that identify what to forget, e.g. 'fight with Rahul'"}, "about": ABOUT},
+    ["what"],
+)
+async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import memory_upkeep
+
+    subjects = [ctx.subject(a.get("about"))]
+    if not ctx.speaker_is_elder and subjects[0] == ctx.elder_id:
+        subjects.append("family")
+    return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "")

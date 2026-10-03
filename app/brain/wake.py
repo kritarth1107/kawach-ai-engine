@@ -62,6 +62,11 @@ KIND_PROMPTS = {
         "Also ask whether there was any fall, hospital visit or medicine change this week, attaching buttons "
         "{{\"kind\": \"outcome\", \"key\": \"{key}\"}}. Then close_loop {id} and reply none."
     ),
+    "memory_check": (
+        "[Memory check] Something in the care record needs a caregiver's answer: \"{title}\". Ask person {owner} that one "
+        "question with send_message, short and in their language. When they answer later, fix the record (remember / stop / "
+        "confirm_change). Then close_loop {id} and reply none."
+    ),
     "refill": (
         "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
         "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "

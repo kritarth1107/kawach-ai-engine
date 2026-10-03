@@ -125,6 +125,31 @@ def dose_baseline(meds: list[dict], doses: list, reminders: list) -> dict:
     return out
 
 
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF🙏]")
+
+
+def style_baseline(own_texts: list[str], scored: list) -> dict:
+    """How this person writes, and which reply lengths worked with them (from their reactions)."""
+    if len(own_texts) < 5:
+        return {}
+    words = [len(t.split()) for t in own_texts if t.strip()]
+    emoji = sum(1 for t in own_texts if EMOJI.search(t)) / len(own_texts)
+    out = {"their_words": round(median(words)), "emoji_rate": round(emoji, 2)}
+    good = [n for n, sc, _ in scored if sc is not None and sc >= 0.3]
+    bad = [n for n, sc, _ in scored if sc is not None and sc <= -0.2]
+    if len(good) >= 5:
+        out["good_reply_chars"] = round(median(good))
+    if len(bad) >= 5:
+        out["bad_reply_chars"] = round(median(bad))
+    target = out.get("good_reply_chars")
+    length = ("short" if out["their_words"] <= 8 else "medium" if out["their_words"] <= 25 else "longer")
+    if target:
+        length = f"about {max(8, round(target / 6))} words (what they responded well to)"
+    out["summary"] = (f"replies {length}; they write ~{out['their_words']} words; "
+                      + ("they use emoji, a little is fine" if emoji >= 0.3 else "they rarely use emoji, keep it plain"))
+    return out
+
+
 def reminder_suggestions(dose: dict) -> list[dict]:
     """A reminder time that fits how they live: taken consistently ≥45 min late, or the reminder rarely works."""
     out = []
@@ -150,7 +175,17 @@ async def compute(session: AsyncSession, family_id: str, subject_id: str) -> dic
         select(Turn.at).where(Turn.family_id == family_id, Turn.thread_id == subject_id, Turn.role == "user", Turn.at >= since)
     )).scalars())
     dose = dose_baseline(meds, [e for e in evs if e.kind.startswith("dose_")], [e for e in evs if e.kind == "reminder_sent"])
+    texts = list((await session.execute(
+        select(Turn.text).where(Turn.family_id == family_id, Turn.thread_id == subject_id, Turn.role == "user", Turn.at >= since)
+    )).scalars())
+    from app.learn.models import ReplyLog
+
+    scored = list((await session.execute(
+        select(ReplyLog.text_len, ReplyLog.score, ReplyLog.text).where(ReplyLog.family_id == family_id, ReplyLog.thread_id == subject_id,
+                                                                       ReplyLog.score.is_not(None), ReplyLog.at >= since)
+    )).all())
     return {
+        "style": style_baseline(texts, scored),
         "vitals": vitals_baseline([e for e in evs if e.kind == "vital"]),
         "rhythm": rhythm_baseline(turn_times, now=now),
         "doses": dose,
@@ -184,6 +219,9 @@ def usual_line(name: str, b: dict) -> str:
         v = (b.get("vitals") or {}).get(k)
         if v:
             bits.append(f"{label} usually ~{v['median']:.0f}")
+    st = b.get("style") or {}
+    if st.get("summary"):
+        bits.append(f"how they like replies: {st['summary']}")
     r = b.get("rhythm") or {}
     if r:
         bits.append(f"writes ~{r['messages_per_day']:.0f} messages a day, mostly {r['active_from']}–{r['active_to']}")

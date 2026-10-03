@@ -139,7 +139,9 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     now = clock.ist()
     day_events = await store.events(session, req.family_id, req.elder["id"], day=clock.ist_day())
     loops = await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]])
-    hits = await store.recall(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
+    from app.care import memory_index
+
+    hits = await memory_index.search(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
     from app.tasks import runtime as task_runtime
 
     tasks = await data.tasks()
