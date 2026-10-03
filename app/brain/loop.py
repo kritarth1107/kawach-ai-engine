@@ -8,13 +8,16 @@ import os
 import time
 from dataclasses import dataclass, field
 
+from datetime import timedelta
+
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.brain import policy, tools
+from app.brain import guards, policy, tools
 from app.brain.host import ToolHost
 from app.brain.persona import PERSONA, REPLY_FORMAT
 from app.care import digest, importer, store
+from app.care.domains import SLOTS
 from app.care.models import Turn
 from app.core import clock
 from app.llm import router
@@ -54,6 +57,24 @@ class TurnResult:
 async def _lock_family(session: AsyncSession, family_id: str) -> None:
     """One turn at a time per family, across instances; released at commit."""
     await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+
+
+async def medicine_times(session: AsyncSession, req: TurnRequest) -> dict[str, set[int]]:
+    rows = await store.facts(session, req.family_id, req.elder["id"], domains=["medicine"], statuses=("active",))
+    if req.speaker["id"] != req.elder["id"]:
+        rows += await store.facts(session, req.family_id, req.speaker["id"], domains=["medicine"], statuses=("active",))
+    return guards.med_times([(str(f.value.get("name") or f.key.split(":", 1)[1]), f.text + " " + " ".join(map(str, f.value.get("times") or []))) for f in rows])
+
+
+async def writing_profiles(session: AsyncSession, family_id: str, people: list[dict]) -> dict[str, dict]:
+    """How each person writes, from their last messages to Saheli."""
+    out = {}
+    for p in people:
+        turns = [t for t in await store.recent_turns(session, family_id, p["id"], limit=16) if t.role == "user"][-8:]
+        prof = guards.profile([t.text for t in turns])
+        if prof:
+            out[p["id"]] = prof
+    return out
 
 
 async def family_block(session: AsyncSession, req: TurnRequest) -> tuple[str, str, list[str]]:
@@ -115,6 +136,12 @@ async def turn_context(session: AsyncSession, req: TurnRequest) -> tuple[str, st
     return "\n\n".join(parts), known
 
 
+def writing_block(req: TurnRequest, profiles: dict[str, dict]) -> str:
+    people = [req.elder] + [m for m in req.members if m.get("id") != req.elder.get("id")]
+    lines = [f"  {p.get('name')}: {guards.describe(profiles.get(p['id']))}" for p in people if p.get("id")]
+    return "HOW EACH PERSON WRITES (write to each person this way, in replies and in send_message):\n" + "\n".join(lines)
+
+
 async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
     summ = await store.summary(session, req.family_id, req.speaker["id"])
     turns = await store.recent_turns(
@@ -135,6 +162,56 @@ async def history(session: AsyncSession, req: TurnRequest) -> list[dict]:
     while msgs and msgs[0]["role"] != "user":
         msgs.pop(0)
     return msgs
+
+
+CLAIM_WINDOW = timedelta(hours=3)
+
+
+async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]:
+    """People Saheli sent a message to in the last few hours (so 'I have told Asha' can be true)."""
+    since = clock.now() - CLAIM_WINDOW
+    rows = await session.execute(
+        select(Turn.thread_id).where(Turn.family_id == req.family_id, Turn.role == "assistant", Turn.at >= since, Turn.thread_id != req.speaker["id"])
+    )
+    return set(rows.scalars())
+
+
+async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, *, avoid: list[str], unreachable: list[str]) -> list[str]:
+    """Everything wrong with a reply before the person reads it (policy + guards)."""
+    known = "\n".join(ctx.known)
+    problems = policy.reply_problems(final, known_text=known, avoid_words=avoid, user_text=req.text, unreachable=unreachable)
+    if guards.leaked_reasoning(final):
+        problems.append("the reply contains your private notes (thoughts, the time, who is speaking); write only the message to the person")
+    fresh = req.text + "\n" + "\n".join(a.get("args", {}).__repr__() for a in ctx.actions)
+    now = clock.ist()
+    problems += guards.ungrounded(
+        final, known=known, fresh=fresh, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute,
+        allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
+    )
+    problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
+    earlier = [t.text for t in await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
+               if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
+    problems += guards.repeats(final, earlier)
+    me = req.speaker["id"]
+    others = {}
+    for m in [req.elder, *req.members]:
+        first = ((m.get("name") or "").split() or [""])[0].lower()
+        if m.get("id") and m["id"] != me and len(first) > 2:
+            others[first] = m["id"]
+    messaged = {a["args"].get("to") for a in ctx.actions if a["tool"] == "send_message" and a.get("ok")}
+    if any(a["tool"] == "alert_caregiver" and a.get("ok") for a in ctx.actions):
+        messaged |= {m["id"] for m in req.members if m.get("id") != req.elder["id"]}
+    messaged |= await recently_messaged(session, req)
+    from app.tasks import runtime as task_runtime
+
+    ordering_ok = any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions) or bool(await task_runtime.live_tasks(session, req.family_id))
+    problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok)
+    seen, out = set(), []
+    for p in problems:
+        if p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
@@ -175,12 +252,23 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
     msgs.append({"role": "user", "content": content})
 
+    is_system = req.speaker.get("role") == "system"
+    profiles = await writing_profiles(session, req.family_id, [req.elder, *[m for m in req.members if m.get("id") != req.elder["id"]]])
+    if not is_system:
+        cur = guards.profile([req.text])
+        if cur and req.speaker["id"] not in profiles:
+            profiles[req.speaker["id"]] = cur
+    dynamic += "\n\n" + writing_block(req, profiles)
+    tool_texts: list[str] = []
     ctx = tools.TurnCtx(
         session=session, host=host, family_id=req.family_id, elder=req.elder, speaker=req.speaker,
-        members=req.members, message_ref=req.message_ref,
+        members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text,
+        known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
+        meds=await medicine_times(session, req), profiles=profiles,
     )
+    ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
-    tool_texts: list[str] = []
+    guarded = False
     reply: router.LLMReply | None = None
     for step in range(MAX_STEPS):
         last = step == MAX_STEPS - 1
@@ -196,7 +284,19 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         )
         msgs.append(reply.as_message())
         if not reply.tool_calls:
-            break
+            text_now = (reply.text or "").strip()
+            if guarded or is_system or not text_now or last:
+                break
+            problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable)
+            if not problems:
+                break
+            guarded = True
+            logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
+            msgs.append({"role": "user", "content": [{"type": "text", "text": (
+                "(Check before sending, the person has not seen this yet: " + "; ".join(problems) + ". If you said you would do "
+                "something, do it now with the tool; otherwise drop the claim. Then write only the corrected message to the person.)"
+            )}]})
+            continue
         results = []
         searches = sum(1 for a in ctx.actions if a["tool"] in ("recall", "search_records"))
         for call in reply.tool_calls:
@@ -207,25 +307,14 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
                 continue
             out, is_error = await tools.run(ctx, call.name, call.args)
             tool_texts.append(out)
+            ctx.known.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else "").strip()
-    problems = policy.reply_problems(
-        final, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text,
-        unreachable=unreachable,
-    )
-    if problems and final:
-        msgs.append({"role": "user", "content": [{"type": "text", "text": "(Check before sending: " + "; ".join(problems) + ". Rewrite your reply to the person, fixing this. Write only the message.)"}]})
-        fixed = await router.complete(
-            "brain", system_stable=stable, system_dynamic=dynamic, messages=msgs, tools=tools.specs(), max_tokens=2000, effort="low"
-        )
-        if fixed.text.strip() and not policy.reply_problems(
-            fixed.text, known_text=known_record + "\n" + known_turn + "\n" + "\n".join(tool_texts), avoid_words=avoid, user_text=req.text,
-            unreachable=unreachable,
-        ):
-            final = fixed.text.strip()
-        logger.warning("reply guard family=%s problems=%s fixed=%s", req.family_id, problems, final == fixed.text.strip())
+    if guarded and not final:
+        # The fix came back empty: fall back to the last non-empty text the model wrote.
+        final = next((m.get("text", "").strip() for m in reversed(msgs) if m.get("role") == "assistant" and (m.get("text") or "").strip()), "")
 
     await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
@@ -270,6 +359,12 @@ async def maybe_compact(session: AsyncSession, family_id: str, thread_id: str) -
         await store.set_summary(session, family_id, thread_id, out.text.strip(), fold[-1].id)
     except router.AllModelsFailed:
         logger.warning("compaction skipped family=%s thread=%s", family_id, thread_id)
+
+
+def _msg_text(m: dict) -> str:
+    if m.get("role") == "assistant":
+        return m.get("text") or ""
+    return " ".join(c.get("text", "") for c in m.get("content") or [] if c.get("type") == "text")
 
 
 def result_json(r: TurnResult) -> dict:

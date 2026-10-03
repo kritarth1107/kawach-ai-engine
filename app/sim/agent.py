@@ -47,7 +47,10 @@ class FakeAgent:
         self._polls[task_id] = self._polls.get(task_id, 0) + 1
         if self._polls[task_id] < self.finish_after_polls:
             return AgentRun(task_id=task_id, session_id="", status="started")
-        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(self._out[task_id]), steps=self.steps_per_run)
+        out = self._out[task_id]
+        if "__fail__" in out:  # the run itself crashed or timed out: no report
+            return AgentRun(task_id=task_id, session_id="", status="failed", output=None, error=out["__fail__"], steps=self.steps_per_run)
+        return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(out), steps=self.steps_per_run)
 
     async def stop(self, task_id: str, *, end_session: bool = False) -> None:
         self.stopped.append(task_id)

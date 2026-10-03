@@ -16,7 +16,7 @@ CONTRACT_VERSION = 1
 
 # Statuses an agent report can lead to (the task row keeps the same names).
 STATUSES = ("queued", "running", "needs_input", "awaiting_confirm", "done", "failed", "cancelled")
-INPUTS = ("otp", "confirm", "fee", "choice")
+INPUTS = ("otp", "confirm", "fee", "choice", "swap")
 
 DEFAULT_BUDGET = {"order": 1500, "ride": 800}  # ₹; above this an elder's request needs a caregiver's OK
 MAX_QTY = {"shopping": 6, "pharmacy": 3}  # per line, unless the person asked for more

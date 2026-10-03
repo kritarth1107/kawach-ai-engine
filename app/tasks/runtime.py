@@ -37,6 +37,8 @@ Notify = Callable[[str, str, str], Awaitable[None]]  # (family_id, requested_by,
 
 
 rupees = guard.rupees
+MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
+MAX_SKILL_NOTES = 12
 
 
 def note(task: Task, text: str) -> None:
@@ -112,7 +114,7 @@ def describe(task: Task) -> str:
 
 
 async def _learned(session: AsyncSession, service: str) -> list[str]:
-    return list((await session.execute(select(SkillNote.note).where(SkillNote.service == service).order_by(SkillNote.id.desc()).limit(12))).scalars())
+    return list((await session.execute(select(SkillNote.note).where(SkillNote.service == service).order_by(SkillNote.id.desc()).limit(MAX_SKILL_NOTES))).scalars())
 
 
 async def _hints(session: AsyncSession, service: str) -> str:
@@ -183,6 +185,26 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.status = "done"
         note(task, f"cancel fee declined by {by}; order stays")
         return "kept the order; not cancelled"
+    if kind == "swap":
+        d = task.details or {}
+        alts = d.get("alternatives") or []
+        if value.lower() in ("no", "none", "drop", "cancel"):
+            task.status, task.cancel_requested = "cancelled", True
+            note(task, f"no alternative wanted ({by})")
+            return "dropped; nothing was ordered"
+        pick = next((a for a in alts if value.lower() in a["name"].lower() or a["name"].lower() in value.lower()), None)
+        if not pick:
+            return "that is not one of the alternatives; read them again: " + "; ".join(a["name"] for a in alts)
+        items = d.get("items") or []
+        new_items = [{"name": pick["name"], "qty": items[0].get("qty", 1) if items else 1}] if len(items) <= 1 else (
+            [i for i in items if not guard.missing_items([i], [])] + [{"name": pick["name"], "qty": 1}])
+        v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
+        if not v.ok:
+            return "cannot get that: " + "; ".join(v.block)
+        task.details = {**d, "items": new_items, "alternatives": None, "channel": None, "connector_card": None}
+        task.phase, task.status, task.input_needed = "prepare", "queued", None
+        note(task, f"swapped to {pick['name']} by {by}")
+        return f"getting {pick['name']} instead; the new cart comes back for a confirm"
     if kind == "choice":
         d = task.details or {}
         if d.get("approval") and by_is_elder:
@@ -237,9 +259,16 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             metrics.on_milestone(task, "ready")
             extra = " ".join(v.warn + v.approval)
             return "awaiting_confirm", "Ride options are ready; tell the person the fares (and any surge) and ask which one to book." + (f" {extra}" if extra else "")
-        if out.get("needs_prescription") and not limits.rx_on_file:
+        if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file):
             return "failed", "This medicine needs a prescription upload; ask the family to upload the prescription on the dashboard, then try again."
         if not out.get("items"):
+            alts = [a for a in out.get("alternatives") or [] if a.get("name")][:4]
+            if alts and out.get("cod_available") is not False:
+                # Out of stock: offer what the store has instead; nothing is swapped without the person choosing.
+                task.details = {**d, "alternatives": alts}
+                task.input_needed = "swap"
+                listed = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in alts)
+                return "needs_input", f"Not available ({out.get('problem') or 'out of stock'}). The store has: {listed}. Ask which one to get instead, or whether to drop it."
             return "failed", f"Could not build the cart ({out.get('problem') or 'unknown'})."
         v = guard.check_cart("order", spec.name, d.get("items") or [], out, limits)
         if not v.ok:
@@ -397,6 +426,14 @@ async def tick(
                         metrics.on_browser_run(task, run.steps)
                         await channels.record(session, task.service, "browser", run.status == "finished" and not (run.output or {}).get("blocked"), run.error)
                         out = run.output or {}
+                        retries = int((task.details or {}).get("retries", 0))
+                        if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("prepare", "otp"):
+                            # A crash or timeout of the browser run, not an answer from the store: try once more.
+                            task.details = {**(task.details or {}), "retries": retries + 1}
+                            task.status = "queued"
+                            note(task, f"run failed ({run.error or 'no report'}); retrying once")
+                            await session.commit()
+                            continue
                         if run.status != "finished" and not out:
                             out = {"blocked": False, "problem": run.error or run.status}
                         task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
@@ -410,8 +447,10 @@ async def tick(
                             task.phase, task.status = "cancel", "queued"
                             message = "It was placed just before the cancel; cancelling it on the service now."
                         if status == "failed" and out.get("problem"):
-                            # The next agent on this service reads what stopped this one.
-                            session.add(SkillNote(service=task.service, note=f"{task.phase} failed once: {str(out['problem'])[:240]}", created_at=clock.now()))
+                            # The next agent on this service reads what stopped this one (once per distinct problem).
+                            text_ = f"{task.phase} failed: {str(out['problem'])[:240]}"
+                            if text_ not in await _learned(session, task.service):
+                                session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
                     elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > RUN_TIMEOUT:
                         await agent.stop(task.agent_task)
                         task.status = "failed"

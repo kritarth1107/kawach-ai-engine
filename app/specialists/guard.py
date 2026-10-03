@@ -69,6 +69,25 @@ def cart_fingerprint(report: dict) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+UNIT_WORDS = {"pack", "packet", "pouch", "bottle", "strip", "tablet", "tablets", "box", "fresh", "with", "and", "the"}
+
+
+def _keywords(name: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z]+", (name or "").lower()) if len(w) >= 4 and w not in UNIT_WORDS]
+
+
+def missing_items(requested: list[dict], items: list[dict]) -> list[str]:
+    """Requested items with no line in the cart (by their main words)."""
+    names = " ".join(str(i.get("name", "")).lower() for i in items if i.get("available", True) is not False)
+    return [str(r.get("name")) for r in requested if _keywords(str(r.get("name"))) and not any(k in names for k in _keywords(str(r.get("name"))))]
+
+
+def rx_covers(requested: list[dict], rx_on_file: list[str]) -> bool:
+    """Every requested medicine has a prescription on file (matched by its first word)."""
+    on_file = {(re.findall(r"[a-z]+", r.lower()) or [""])[0] for r in rx_on_file}
+    return bool(requested) and all((re.findall(r"[a-z]+", str(q.get("name", "")).lower()) or [""])[0] in on_file for q in requested)
+
+
 def _strengths(text: str) -> set[str]:
     return {m.replace(" ", "").lower() for m in re.findall(r"\d+(?:\.\d+)?\s*(?:mg|mcg|ml|g|iu)", text or "", re.I)}
 
@@ -104,8 +123,12 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
                 v.block.append(f"{r.get('name')} is not in the cart: medicines are never substituted")
             elif want and not any(want & _strengths(str(i.get("name", ""))) for i in match):
                 v.block.append(f"{r.get('name')}: the cart has a different strength; medicines are never substituted")
-        if report.get("needs_prescription") and not limits.rx_on_file:
-            v.block.append("this medicine needs a prescription upload first")
+        if report.get("needs_prescription") and not rx_covers(requested, limits.rx_on_file):
+            v.block.append("this medicine needs a prescription upload first (none on file for it)")
+    else:
+        missing = missing_items(requested, items)
+        if missing:
+            v.warn.append(f"not in the cart (unavailable): {', '.join(missing)}; say so before they confirm")
     total = rupees(report.get("total"))
     if total and total > limits.budget and limits.requester_is_elder:
         v.approval.append(f"total ₹{total:.0f} is above the ₹{limits.budget} limit: a caregiver must OK it")
