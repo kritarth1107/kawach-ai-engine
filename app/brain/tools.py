@@ -39,6 +39,7 @@ class TurnCtx:
     known: list[str] = field(default_factory=list)
     meds: dict = field(default_factory=dict)
     profiles: dict = field(default_factory=dict)
+    buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp buttons attached to the reply
 
     @property
     def elder_id(self) -> str:
@@ -166,6 +167,10 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         payload={"key": w.fact.key},
         actor_id=ctx.speaker.get("id"),
     )
+    from app.care import outcomes
+
+    await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=domain, result=w.result,
+                                    text=a["sentence"], source_kind=ctx.source_kind, actor_id=ctx.speaker.get("id"))
     out: dict = {"result": w.result, "key": w.fact.key}
     if w.result == "pending":
         out["note"] = "This changes a fact a caregiver or prescription set; it waits for a caregiver to confirm."
@@ -219,6 +224,10 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind="fact_" + w.result,
         summary=f"{a['name']}: {a['reason']}", payload={"key": key}, actor_id=ctx.speaker.get("id"),
     )
+    from app.care import outcomes
+
+    await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=a["domain"], result=w.result,
+                                    text=f"{a['name']} stopped: {a['reason']}", source_kind=ctx.source_kind, actor_id=ctx.speaker.get("id"))
     if w.result == "stopped" and a["domain"] == "medicine":
         await ctx.host.call(
             "sync_medicine_schedule",
@@ -279,6 +288,12 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     if not pending:
         return {"result": "nothing_pending", "key": a["key"]}
     row = await store.resolve_pending(ctx.session, fact_id=pending[-1].id, approve=bool(a["approve"]), by=ctx.speaker["id"])
+    if row and a["approve"] and row.status in ("active", "stopped"):
+        from app.care import outcomes
+
+        await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, domain=row.domain,
+                                        result="stopped" if row.status == "stopped" else "superseded", text=row.text,
+                                        source_kind="caregiver_said", actor_id=ctx.speaker.get("id"))
     if row and row.domain == "medicine":
         v = row.value
         await ctx.host.call(
@@ -519,7 +534,12 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     "Send a WhatsApp message to someone in the family other than the person you are replying to: pass a message "
     "on to the elder from a caregiver, or, on a scheduled wake-up, start the follow-up you promised. Your normal "
     "reply already goes to the speaker; do not use this for that.",
-    {"to": {"type": "string", "description": "Person id from HOUSEHOLD"}, "text": {"type": "string"}},
+    {
+        "to": {"type": "string", "description": "Person id from HOUSEHOLD"},
+        "text": {"type": "string"},
+        "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback, key: the key given in the prompt}",
+                    "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback"]}, "key": {"type": "string"}}},
+    },
     ["to", "text"],
 )
 async def send_message(ctx: TurnCtx, a: dict) -> dict:
@@ -531,8 +551,13 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     problems = await send_problems(ctx, a["to"], a["text"])
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
+    payload = {"to": a["to"], "text": a["text"]}
+    if (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
+        from app.care import outcomes
+
+        payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]))
     res = await ctx.host.call(
-        "send_whatsapp", {"to": a["to"], "text": a["text"]},
+        "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
     await store.add_turn(
@@ -543,6 +568,22 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
 
 
 # ── alerts ─────────────────────────────────────────────────────────────────────
+
+
+async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
+    """Next morning, ask a caregiver how things turned out (one tap: all fine / saw doctor / hospital)."""
+    owner = next((m.get("id") for m in ctx.members if "primary" in str(m.get("role", "")).lower()), None) or next(
+        (m.get("id") for m in ctx.members if m.get("id") != ctx.elder_id), None)
+    if not owner:
+        return
+    key = f"alert:{policy.issue_ref(a['reason'], a['issue'], clock.ist_day()).split(':', 2)[2]}:subj={ctx.elder_id}"
+    wake = clock.ist().replace(hour=10, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    await store.open_loop(
+        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="followup",
+        title=f"Yesterday's alert ({a['issue']}): {a['message'][:140]}. Ask how {ctx.elder.get('name', 'they')} is now.",
+        detail={"key": key, "set": "outcome", "max_wakes": 1}, owner_id=owner, wake_at=wake, alert_rule="dashboard",
+        dedupe_key=f"followup:{key}",
+    )
 
 
 @tool(
@@ -588,6 +629,8 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
             "trigger_emergency_escalation", {"message": a["message"]},
             family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
         )
+    if decision.whatsapp and a["reason"] in ("red_flag", "safety"):
+        await _follow_up_alert(ctx, a)
     res = await ctx.host.call(
         "notify_caregivers",
         {"message": a["message"], "urgency": "high" if a["reason"] == "red_flag" else "medium", "kind": kind if decision.whatsapp else "care_note"},
@@ -974,3 +1017,72 @@ async def patterns_tool(ctx: TurnCtx, a: dict) -> dict:
     if not found:
         return {"patterns": [], "note": "Nothing stands out in the last two weeks."}
     return {"patterns": [{"title": p.title, "detail": p.detail, "suggestion": p.suggestion, "level": p.severity} for p in found]}
+
+
+# ── outcomes, feedback, consent ────────────────────────────────────────────────
+
+
+@tool(
+    "log_outcome",
+    "Record what happened: a fall, a hospital or emergency visit, a doctor visit, a medicine the doctor changed, "
+    "recovery, or all fine after a worry. Use it whenever someone tells you one of these (alerts still follow their "
+    "own rules). These are the facts Saheli learns from.",
+    {
+        "kind": {"type": "string", "enum": ["fall", "hospital_visit", "er_visit", "doctor_visit", "medicine_changed", "recovered", "all_fine", "other"]},
+        "summary": {"type": "string", "description": "One line in plain words, e.g. 'slipped in the bathroom, knee hurts'"},
+        "about": ABOUT,
+    },
+    ["kind", "summary"],
+)
+async def log_outcome(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import outcomes
+
+    fresh = await outcomes.record_outcome(ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), kind=a["kind"],
+                                          summary=a["summary"], source="said", actor_id=ctx.speaker.get("id"),
+                                          ref=ctx.message_ref and f"oc:{ctx.message_ref}:{a['kind']}")
+    return {"logged": fresh, "kind": a["kind"]}
+
+
+@tool(
+    "offer_buttons",
+    "Attach one-tap answers to your reply. kind 'feedback' (👍/👎) after you mention a pattern, with key "
+    "'pattern:<pattern key>:subj=<person id>' as given in PATTERNS NOTICED; kind 'outcome' (all fine / saw doctor / "
+    "hospital) or 'visit' (no change / medicine changed / later) when you ask how something turned out.",
+    {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback"]}, "key": {"type": "string"}},
+    ["kind", "key"],
+)
+async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import outcomes
+
+    ctx.buttons = outcomes.buttons(a["kind"], a["key"], ctx.profiles.get(ctx.speaker.get("id")))
+    return {"attached": [b["title"] for b in ctx.buttons]}
+
+
+@tool(
+    "feedback",
+    "Record that someone found something you said useful or not (when they say so in words): a pattern, an alert or a "
+    "suggestion. target is the key it was given (for patterns: 'pattern:<key>:subj=<id>').",
+    {"target": {"type": "string"}, "vote": {"type": "string", "enum": ["up", "down"]}, "about": ABOUT},
+    ["target", "vote"],
+)
+async def feedback(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import outcomes
+
+    await outcomes.record_feedback(ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), target=a["target"],
+                                   vote=a["vote"], by=ctx.speaker.get("id"), source="said")
+    return {"recorded": True}
+
+
+@tool(
+    "learning_consent",
+    "A caregiver says yes or no to sharing this family's anonymised data to make Saheli better for every family. "
+    "Their own memory keeps learning either way. Only caregivers can decide.",
+    {"granted": {"type": "boolean"}},
+    ["granted"],
+)
+async def learning_consent(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import outcomes
+
+    if ctx.speaker_is_elder or ctx.is_system:
+        raise ToolRefused("Only a caregiver can decide this; ask them.")
+    return await outcomes.set_consent(ctx.session, ctx.family_id, ctx.elder_id, granted=bool(a["granted"]), by=ctx.speaker.get("id") or "")

@@ -77,7 +77,7 @@ async def test_appointment_wakes_evening_before_and_two_hours_before(db, at):
     at("2026-10-02 09:00")
     c = ctx(db)
     out = await call(c, "remember", {"domain": "appointment", "name": "Dr Iyer", "details": {"doctor": "Dr Iyer", "when": "2026-10-05T11:00", "place": "Apollo"}, "sentence": "Dr Iyer 5 Oct 11:00"})
-    assert len(out["reminders"]) == 2
+    assert len(out["reminders"]) == 3  # evening before, 2 h before, and the follow-up after the visit
     loops = [l for l in await store.live_loops(db, FAM, [ELDER]) if l.kind == "appointment"]
     assert sorted(clock.ist(l.wake_at).strftime("%d %H:%M") for l in loops) == ["04 19:00", "05 09:00"]
     q = await call(c, "add_doctor_question", {"appointment": "Dr Iyer", "question": "Can the BP dose be lowered?"})

@@ -50,6 +50,11 @@ KIND_PROMPTS = {
         "the caregiver who saved it in one line if it is someone else. Mention the questions to ask from care_team if any, and "
         "offer to book a cab (start_task ride) only if they want one. Then close_loop {id} and reply none."
     ),
+    "followup": (
+        "[Scheduled follow-up] {title} Ask person {owner} one short, warm question in their language with send_message, "
+        "attaching buttons {{\"kind\": \"{set}\", \"key\": \"{key}\"}}. If the conversation already shows how it turned out, "
+        "log_outcome instead of asking. Then close_loop {id} and reply none."
+    ),
     "refill": (
         "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
         "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "
@@ -60,7 +65,9 @@ KIND_PROMPTS = {
 
 async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str:
     if loop.kind in KIND_PROMPTS:
-        return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver")
+        d = loop.detail or {}
+        return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver",
+                                              set=d.get("set", "outcome"), key=d.get("key", f"loop:{loop.id}"))
     last = (
         await session.execute(
             select(Turn)

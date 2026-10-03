@@ -367,14 +367,25 @@ async def recent(session: AsyncSession, family_id: str, subject_ids: list[str], 
         select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids), CareEvent.kind == "pattern",
                                 CareEvent.at >= clock.now() - timedelta(days=days)).order_by(CareEvent.at.desc())
     )).scalars())
+    from app.care import outcomes
+
+    votes = await outcomes.votes(session, family_id)
     seen, out = set(), []
     for r in rows:
         k = (r.subject_id, (r.payload or {}).get("key"))
         if k in seen:
             continue
         seen.add(k)
-        out.append({**(r.payload or {}), "noticed": r.at.isoformat(), "new": r.at >= clock.now() - timedelta(days=2)})
+        target = feedback_key(r.payload or {})
+        v = votes.get(target, {})
+        if v.get("down", 0) > v.get("up", 0):
+            continue  # the family said this kind of note is not useful: stop raising it
+        out.append({**(r.payload or {}), "target": target, "noticed": r.at.isoformat(), "new": r.at >= clock.now() - timedelta(days=2)})
     return out
+
+
+def feedback_key(p: dict) -> str:
+    return f"pattern:{p.get('key')}:subj={p.get('subject_id')}"
 
 
 def context_block(items: list[dict], names: dict[str, str]) -> str:
@@ -383,7 +394,9 @@ def context_block(items: list[dict], names: dict[str, str]) -> str:
     lines = ["PATTERNS NOTICED (from the last two weeks of logs; facts, not diagnoses):"]
     for p in items[:6]:
         tag = "NEW, not mentioned yet" if p.get("new") else "known"
-        lines.append(f"  - [{tag}] {names.get(p.get('subject_id'), 'them')}: {p['title']}. {p.get('detail', '')} Suggest: {p['suggestion']}")
-    lines.append("  Mention a NEW pattern once to a caregiver, in one or two lines, when it fits the conversation; to the elder only "
-                 "as a gentle offer (for example a better reminder time). Never present it as a diagnosis or an emergency.")
+        lines.append(f"  - [{tag}] {names.get(p.get('subject_id'), 'them')}: {p['title']}. {p.get('detail', '')} Suggest: {p['suggestion']} "
+                     f"(feedback key {p.get('target') or feedback_key(p)})")
+    lines.append("  Mention a NEW pattern once to a caregiver, in one or two lines, when it fits the conversation, then call "
+                 "offer_buttons kind feedback with its feedback key so they can tap 👍/👎. To the elder only as a gentle offer (for "
+                 "example a better reminder time). Never present it as a diagnosis or an emergency.")
     return "\n".join(lines)

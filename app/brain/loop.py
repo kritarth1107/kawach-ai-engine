@@ -52,6 +52,7 @@ class TurnResult:
     duplicate: bool = False
     shadow_writes: list[dict] = field(default_factory=list)
     ms: int = 0
+    buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp answers sent with the reply
 
 
 async def _lock_family(session: AsyncSession, family_id: str) -> None:
@@ -296,6 +297,20 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         await session.commit()
         return TurnResult(reply=prior.text if prior else "", actions=[], alerts=[], duplicate=True)
 
+    from app.care import outcomes
+
+    if outcomes.parse_button(req.text):
+        # A tapped Saheli button: record it and answer without a model call.
+        speaker_prof = (await writing_profiles(session, req.family_id, [req.speaker])).get(req.speaker["id"])
+        tapped = await outcomes.handle_button(session, family_id=req.family_id, elder_id=req.elder["id"], speaker_id=req.speaker["id"],
+                                              text=req.text, profile=speaker_prof)
+        if tapped:
+            await store.add_turn(session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=tapped,
+                                 meta={"reply_to": req.message_ref, "model": "none", "button": True})
+            await session.commit()
+            return TurnResult(reply=tapped, actions=[{"tool": "button", "args": {"id": req.text}, "ok": True}], alerts=[], model="none",
+                              ms=int((time.monotonic() - started) * 1000))
+
     canned = await flood_reply(session, req)
     if canned is not None:
         await store.add_turn(session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=canned,
@@ -412,6 +427,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         model=reply.model if reply else "",
         shadow_writes=getattr(host, "would_have", []),
         ms=int((time.monotonic() - started) * 1000),
+        buttons=ctx.buttons if final and final != "none" else [],
     )
 
 

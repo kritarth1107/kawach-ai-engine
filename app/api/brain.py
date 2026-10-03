@@ -253,12 +253,19 @@ async def _patterns_for_all(SessionLocal) -> int:
     return new
 
 
+async def _roster(SessionLocal, fid: str):
+    async with SessionLocal() as session:
+        return await store.roster(session, fid)
+
+
 CHECKIN_PROMPT = (
     "[Caregiver check-in] It is the weekly check-in on the caregivers themselves. For each caregiver in HOUSEHOLD "
     "(not the care recipient), send one short, warm message with send_message asking how they are doing this week "
     "(sleep, stress, their own health). One question only, no lists. When they answer later, log it with log_event "
     "kind mood about their own id. If PATTERNS NOTICED lists something about the person they care for, add the most "
-    "important one to that same message in one line, with its suggestion. After sending, reply none."
+    "important one to that same message in one line, with its suggestion. Also ask, in the same message, whether there was "
+    "any fall, hospital visit or medicine change this week, attaching buttons {{\"kind\": \"outcome\", \"key\": \"week:{day}:subj={elder}\"}}. "
+    "After sending, reply none."
 )
 
 
@@ -280,7 +287,9 @@ async def weekly_job() -> dict:
     for fid in fids:
         try:
             # One check-in per family per day: a scheduler retry is a duplicate turn, not a second message.
-            await system_turn(SessionLocal, LiveHost(), fid, CHECKIN_PROMPT, f"checkin:{clock.ist_day()}")
+            roster = await _roster(SessionLocal, fid)
+            prompt = CHECKIN_PROMPT.format(day=clock.ist_day(), elder=(roster.elder or {}).get("id", "") if roster else "")
+            await system_turn(SessionLocal, LiveHost(), fid, prompt, f"checkin:{clock.ist_day()}")
             ran += 1
         except Exception:  # noqa: BLE001
             logger.exception("caregiver check-in failed family=%s", fid)

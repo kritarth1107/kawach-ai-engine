@@ -495,6 +495,68 @@ async def report_view(family_id: str, elder_id: str, session: DB, days: int = 7,
     return r
 
 
+class OutcomeIn(BaseModel):
+    actor: Actor
+    kind: str = Field(pattern="^(fall|hospital_visit|er_visit|doctor_visit|medicine_changed|recovered|all_fine|other)$")
+    summary: str = Field(default="", max_length=400)
+
+
+class FeedbackIn(BaseModel):
+    actor: Actor
+    target: str = Field(max_length=250)
+    vote: str = Field(pattern="^(up|down)$")
+
+
+class ConsentIn(BaseModel):
+    actor: Actor
+    granted: bool
+
+
+@router.get("/{family_id}/{elder_id}/outcomes")
+async def outcomes_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import outcomes
+
+    return {"outcomes": await outcomes.recent(session, family_id, elder_id), "kinds": outcomes.OUTCOMES,
+            "consent": await outcomes.consent(session, family_id, elder_id)}
+
+
+@router.post("/{family_id}/{elder_id}/outcomes")
+async def outcomes_add(family_id: str, elder_id: str, body: OutcomeIn, session: DB) -> dict:
+    """'Log an event' on the dashboard (same as telling Saheli on WhatsApp)."""
+    from app.care import outcomes
+
+    await outcomes.record_outcome(session, family_id=family_id, subject_id=elder_id, kind=body.kind, summary=body.summary.strip(),
+                                  source="dashboard", actor_id=body.actor.id)
+    await session.commit()
+    return {"outcomes": await outcomes.recent(session, family_id, elder_id)}
+
+
+@router.post("/{family_id}/{elder_id}/feedback")
+async def feedback_add(family_id: str, elder_id: str, body: FeedbackIn, session: DB) -> dict:
+    from app.care import outcomes
+
+    await outcomes.record_feedback(session, family_id=family_id, subject_id=elder_id, target=body.target, vote=body.vote,
+                                   by=body.actor.id, source="dashboard")
+    await session.commit()
+    return {"ok": True}
+
+
+@router.get("/{family_id}/{elder_id}/consent")
+async def consent_view(family_id: str, elder_id: str, session: DB) -> dict:
+    from app.care import outcomes
+
+    return await outcomes.consent(session, family_id, elder_id)
+
+
+@router.post("/{family_id}/{elder_id}/consent")
+async def consent_set(family_id: str, elder_id: str, body: ConsentIn, session: DB) -> dict:
+    from app.care import outcomes
+
+    out = await outcomes.set_consent(session, family_id, elder_id, granted=body.granted, by=body.actor.id)
+    await session.commit()
+    return out
+
+
 @router.get("/{family_id}/{elder_id}/patterns")
 async def patterns_view(family_id: str, elder_id: str, session: DB) -> dict:
     """What Saheli noticed in the last two weeks without being asked (same as the WhatsApp 'patterns' tool)."""

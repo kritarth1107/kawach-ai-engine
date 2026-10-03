@@ -229,6 +229,15 @@ async def appointment_loops(session: AsyncSession, *, family_id: str, subject_id
             owner_id=owner_id, wake_at=wake, alert_rule="dashboard", dedupe_key=f"appt:{subject_id}:{f.key}:{tag}",
         )
         out.append(str(loop.id))
+    # The evening after the visit: how did it go, did the doctor change anything (one tap).
+    key = f"visit:{f.key}:subj={subject_id}"
+    loop = await store.open_loop(
+        session, family_id=family_id, subject_id=subject_id, kind="followup",
+        title=f"After the visit to {doctor} on {at}: ask how it went and whether any medicine changed",
+        detail={"key": key, "set": "visit", "max_wakes": 1}, owner_id=owner_id, wake_at=when + timedelta(hours=5),
+        alert_rule="dashboard", dedupe_key=f"followup:{key}",
+    )
+    out.append(str(loop.id))
     return out
 
 
