@@ -63,7 +63,25 @@ def slug(text: str) -> str:
 def fact_key(domain: str, name: str) -> str:
     if domain not in DOMAINS:
         raise ValueError(f"unknown care domain: {domain}")
+    if domain == "medicine":
+        return f"medicine:{medicine_slug(name)}"
     return f"{domain}:{slug(name)}"
+
+
+def medicine_slug(name: str) -> str:
+    """One key per medicine however it is written: 'Thyronorm 50', 'Thyronorm 50 mcg' and 'thyronorm' are the same."""
+    s = slug(name)
+    parts = [p for p in s.split("_") if not re.fullmatch(r"\d+(mg|mcg|ml|g|iu|units?)?", p) and p not in ("mg", "mcg", "ml", "iu", "units", "unit", "drops")]
+    return "_".join(parts) or s
+
+
+def merged_value(old: dict | None, new: dict | None) -> dict:
+    """A new statement fills in or changes fields; it does not erase what it leaves out."""
+    out = dict(old or {})
+    for k, v in (new or {}).items():
+        if v not in (None, "", []):
+            out[k] = v
+    return out
 
 
 def needs_confirmation(domain: str, new_source: str, old_source: str | None, changes_existing: bool) -> bool:

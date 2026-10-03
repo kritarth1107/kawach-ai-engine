@@ -397,7 +397,7 @@ async def write_as(f: Fam, who_id: str, ask: str) -> str:
         f"YOU: {p['name']}, {p['relation']} in the {f.spec['key']} family, {f.spec['city']}. {p['persona']}\n"
         f"WHAT YOU KNOW ABOUT YOUR FAMILY'S CARE: {f.spec['truth']}\nCURRENT MEDICINES: {json.dumps(f.truth_meds, ensure_ascii=False)}\n\n"
         f"YOUR RECENT CHAT WITH SAHELI:\n{recent_summary(f, who_id) or '(none yet)'}\n\nNOW: {ask}"
-    ), tokens=600)
+    ), tokens=3000)
     return "" if not txt or txt.upper().startswith("NONE") else txt.strip().strip('"')
 
 

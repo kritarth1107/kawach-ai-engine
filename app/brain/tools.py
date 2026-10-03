@@ -302,6 +302,11 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
 async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     subject = ctx.subject(a.get("about"))
     name = a["medicine"].split(":", 1)[-1]
+    first = slug(name).split("_")[0]
+    earlier = []
+    if a["outcome"] == "taken" and first:
+        recent = await store.events(ctx.session, ctx.family_id, subject, since=clock.now() - timedelta(hours=3), kinds=["dose_taken"])
+        earlier = [e for e in recent if first in (e.summary or "").lower() or first in json.dumps(e.payload or {}).lower()]
     summary = f"{name}: {a['outcome']}" + (f" ({a['note']})" if a.get("note") else "")
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind=f"dose_{a['outcome']}",
@@ -313,6 +318,12 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     out = {"logged": summary, "schedule": res}
+    if earlier:
+        out["possible_double_dose"] = (
+            f"{name} was already logged as taken at {clock.ist(earlier[-1].at).strftime('%H:%M')}. Ask gently whether this is a second "
+            "tablet. If it really was taken twice, tell the caregivers (alert_caregiver: red_flag for blood thinners, insulin, sugar or BP "
+            "medicines, otherwise safety) and do not advise on dosing yourself."
+        )
     if a["outcome"] == "empty_strip":
         out["next"] = "Ask how many tablets are left or whether to reorder (set_stock, then start_task with a pharmacy)."
     return out

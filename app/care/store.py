@@ -10,7 +10,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.care.domains import needs_confirmation
+from app.care.domains import medicine_slug, merged_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock
@@ -30,6 +30,22 @@ def _same(a: dict, b: dict) -> bool:
 
 
 async def active_fact(session: AsyncSession, family_id: str, subject_id: str, key: str) -> CareFact | None:
+    row = await _active_by_key(session, family_id, subject_id, key)
+    if row or not key.startswith("medicine:"):
+        return row
+    # Older records may carry a dose in the key (medicine:thyronorm_50): match on the medicine itself.
+    want = key.split(":", 1)[1]
+    for f in (
+        await session.execute(
+            select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject_id, CareFact.domain == "medicine", CareFact.status == "active").with_for_update()
+        )
+    ).scalars():
+        if medicine_slug(f.key.split(":", 1)[1]) == want:
+            return f
+    return None
+
+
+async def _active_by_key(session: AsyncSession, family_id: str, subject_id: str, key: str) -> CareFact | None:
     return (
         await session.execute(
             select(CareFact)
@@ -58,6 +74,9 @@ async def write_fact(
     """Save a fact. A change supersedes the old row; a weaker source changing a health fact waits as pending."""
     now = clock.now()
     old = await active_fact(session, family_id, subject_id, key)
+    if old:
+        key = old.key
+        value = merged_value(old.value, value)
     if old and _same(old.value, value):
         if source_kind in ("caregiver_said", "dashboard", "prescription") and stated_by and not old.confirmed_by:
             old.confirmed_by = stated_by
@@ -121,6 +140,7 @@ async def stop_fact(
     old = await active_fact(session, family_id, subject_id, key)
     if not old:
         return None
+    key = old.key
     now = clock.now()
     if needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
         row = CareFact(
@@ -167,6 +187,10 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     now = clock.now()
     if approve:
         old = await active_fact(session, row.family_id, row.subject_id, row.key)
+        if old and not row.value.get("stopped"):
+            # Approving a change keeps what it did not mention (times, dose) from the current record.
+            row.value = merged_value(old.value, row.value)
+            row.key = old.key
         if old:
             old.status = "superseded"
             old.valid_to = now

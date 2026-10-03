@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import digest, store
-from app.care.domains import DOMAINS, HEALTH_DOMAINS, fact_key, slug
+from app.care.domains import DOMAINS, HEALTH_DOMAINS, fact_key, merged_value, slug
 from app.care.models import CareFact, MemoryNote, OpenLoop, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 EXTRACT_PROMPT = f"""You maintain the care memory for an elderly person's family. You read a conversation between Saheli (their care companion) and family members, and list what should be remembered that the care record below does not already say.
 
-Only include what someone actually said or clearly confirmed. Do not infer diagnoses, guess doses, or record one-off chit-chat. Skip anything already in the care record unless it changed.
+Only include what a family member actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change.
 
 Domains: {", ".join(sorted(DOMAINS))}.
 
@@ -73,7 +73,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         f"{clock.ist(t.at).strftime('%d %b %H:%M')} {'Saheli' if t.role == 'assistant' else names.get(t.thread_id, t.thread_id)} "
         f"[{t.thread_id}]: {scrub_secrets(t.text)}"
         for t in pending
-        if t.thread_id != "saheli-scheduler"
+        if t.thread_id != "saheli-scheduler" and not (t.role == "assistant" and (t.meta or {}).get("proactive"))
     )
     record = digest.care_record(elder.get("name", ""), await store.facts(session, family_id, elder["id"]))
     people = "\n".join(f"{pid}: {n}" for pid, n in names.items())
@@ -95,10 +95,18 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         subject = f.get("about") if f.get("about") in member_ids else elder["id"]
         key = fact_key(domain, f["name"])
         existing = await store.active_fact(session, family_id, subject, key)
-        if domain in HEALTH_DOMAINS and not (existing and existing.value == (f.get("details") or {})):
+        details = f.get("details") or {}
+        if existing and store._same(existing.value, merged_value(existing.value, details)):
+            continue  # a restatement, nothing new
+        if existing:
+            key = existing.key
+        dup = (await session.execute(select(CareFact.id).where(CareFact.family_id == family_id, CareFact.subject_id == subject, CareFact.key == key, CareFact.status == "pending"))).first()
+        if domain in HEALTH_DOMAINS and dup:
+            continue  # already waiting for a caregiver
+        if domain in HEALTH_DOMAINS:
             # A health fact from a re-read waits for a caregiver, new or changed.
             row = CareFact(
-                family_id=family_id, subject_id=subject, domain=domain, key=key, value=f.get("details") or {},
+                family_id=family_id, subject_id=subject, domain=domain, key=key, value=merged_value(existing.value if existing else None, details),
                 text=f["sentence"], status="pending", source_kind="inferred", confidence=0.6,
                 valid_from=clock.now(), recorded_at=clock.now(), supersedes=existing.id if existing else None,
                 note=f"heard: {str(f.get('evidence', ''))[:200]}",
