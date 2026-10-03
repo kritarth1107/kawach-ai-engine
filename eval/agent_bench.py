@@ -38,6 +38,7 @@ async def main(out: str | None) -> int:
     clock.set_now(datetime(2026, 10, 2, 4, 30, tzinfo=timezone.utc))
     results = []
     for sc in SCENARIOS:
+        clock.set_now(datetime(2026, 10, 2, 4, 30, tzinfo=timezone.utc))  # scenarios may move the clock
         conn = await engine.connect()
         trans = await conn.begin()
         session = AsyncSession(bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint")

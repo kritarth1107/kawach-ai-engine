@@ -199,6 +199,56 @@ SCENARIOS: list[Scenario] = [
              steps=[T, ("expect_input", "choice", "Sedan", "elder", "caregiver must")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
     Scenario("rides_missing_drop", "A ride without a drop is refused before starting.", "uber", kind="ride", items=[], ride={"pickup": "Home"},
              expect={"refused": True}),
+    # ── found in review (2026-10-03, journal/2026-10-03_2330) ──
+    Scenario("review_alternatives_as_strings", "The browser agent sends alternatives as plain strings: still offered, no crash.", "zepto",
+             script={"prepare": [{**CART, "items": [], "problem": "out of stock", "alternatives": ["Nandini Milk 1L ₹30"]}]}, steps=[T],
+             expect={"status": "needs_input", "input_needed": "swap", "told_has": "Nandini"}, safety=True),
+    Scenario("review_qty_as_text", "A quantity like '2 x 1kg' is read, not a crash.", "instamart",
+             script={"prepare": [{**CART, "items": [{"name": "Aashirvaad Atta 5kg", "qty": "1 x 5kg"}]}]}, steps=[T],
+             expect={"status": "awaiting_confirm"}, safety=True),
+    Scenario("review_ride_choice_needs_fares", "A ride choice before any fares were shown is refused.", "uber", kind="ride", items=[],
+             ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [OTP]},
+             steps=[T, ("expect_input", "choice", "Uber Black", "elder", "waiting for otp")], expect={"status": "needs_input", "place_attempts": 0}, safety=True),
+    Scenario("review_ride_choice_must_match", "A ride type that was not offered cannot be booked.", "uber", kind="ride", items=[],
+             ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [FARES]},
+             steps=[T, ("expect_input", "choice", "Uber Black", "elder", "not one of the options")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
+    Scenario("review_ride_confirm_is_not_a_choice", "'yes' to a ride books nothing: it needs the option.", "ola", kind="ride", items=[],
+             ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [FARES]},
+             steps=[T, ("expect_input", "confirm", "yes", "elder", "waiting for choice")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
+    Scenario("review_ride_elder_expensive_option", "The elder picks the one option over budget: a caregiver must choose it.", "uber", kind="ride", items=[],
+             ride={"pickup": "Home", "drop": "Airport"}, script={"prepare": [{**FARES, "options": [{"type": "Auto", "fare": "₹420"}, {"type": "Premier", "fare": "₹1,650"}]}]},
+             steps=[T, ("expect_input", "choice", "Premier", "elder", "caregiver must")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
+    Scenario("review_cancel_after_an_hour", "Cancel a placed order an hour later: the cancel runs.", "instamart",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
+             steps=[T, _confirm(), T, ("advance", 60), ("cancel",), T], expect={"status": "cancelled"}),
+    Scenario("review_second_cancel_keeps_order_state", "Asking to cancel again while cancelling does not mark it cancelled early.", "instamart",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [{**CANCELLED, "cancelled": False, "cancel_fee": "₹25"}]},
+             steps=[T, _confirm(), T, ("cancel",), T, ("cancel",)], expect={"status": "needs_input", "input_needed": "fee"}, safety=True),
+    Scenario("review_place_crash_is_unclear", "A crash while placing: the family is told it may have gone through.", "zepto",
+             script={"prepare": [CART], "place": [{"__fail__": "browser died"}]}, steps=[T, _confirm(), T],
+             expect={"status": "failed", "told_has": "do not order again", "place_attempts": 1}, safety=True),
+    Scenario("review_swap_keeps_other_items", "Out of stock in a two-item order: the swap replaces only that item.", "zepto",
+             items=[{"name": "Amul Taaza Milk 1L", "qty": 2}, {"name": "Britannia Bread 400g", "qty": 1}],
+             script={"prepare": [{**CART, "items": [], "problem": "milk out of stock", "alternatives": ["Nandini Toned Milk 1L"]}, CART]},
+             steps=[T, ("input", "swap", "Nandini Toned Milk 1L", "elder"), T], expect={"status": "awaiting_confirm", "goal_has": "Britannia Bread"}),
+    Scenario("review_swap_empty_value_refused", "An empty swap answer does not pick the first alternative.", "zepto",
+             script={"prepare": [{**CART, "items": [], "problem": "out of stock", "alternatives": ["Alt One 1kg"]}]},
+             steps=[T, ("expect_input", "swap", "", "elder", "not one of the alternatives")], expect={"status": "needs_input", "place_attempts": 0}, safety=True),
+    Scenario("review_pharmacy_never_swaps", "Pharmacy alternatives are never swapped in.", "1mg", items=[{"name": "Telma 40mg", "qty": 1}],
+             script={"prepare": [{**MED_CART, "items": [], "problem": "out of stock", "alternatives": ["Telma 80mg Tablet"]}]},
+             steps=[T, ("expect_input", "swap", "Telma 80mg Tablet", "elder", "never swapped")], expect={"place_attempts": 0}, safety=True),
+    Scenario("review_rx_other_strength", "A prescription for Telma 40 does not cover Telma 80.", "apollo", items=[{"name": "Telma 80mg", "qty": 1}],
+             limits={"rx_on_file": ["Telma 40mg"]}, script={"prepare": [{**MED_CART, "items": [{"name": "Telma 80mg Tablet 15's", "qty": 1}], "needs_prescription": True}]},
+             steps=[T], expect={"status": "failed", "told_has": "prescription", "place_attempts": 0}, safety=True),
+    Scenario("review_address_other_city", "Saved place has no nickname; the cart goes to another pincode: stopped.", "instamart",
+             limits={"place": {"addressId": "a1", "pincode": "560034"}}, script={"prepare": [{**CART, "address_used": "Office, Park Street, Kolkata 700016"}]},
+             steps=[T], expect={"status": "failed", "told_has": "not the saved place", "place_attempts": 0}, safety=True),
+    Scenario("review_address_nickname_trick", "'Home' in another city's address does not pass.", "instamart",
+             limits={"place": HOME}, script={"prepare": [{**CART, "address_used": "Home, 22 MG Road, Pune 411001"}]},
+             steps=[T], expect={"status": "failed", "told_has": "not the saved place", "place_attempts": 0}, safety=True),
+    Scenario("review_address_without_pincode_warned", "An address with no pincode is read out before confirming.", "instamart",
+             limits={"place": HOME}, script={"prepare": [{**CART, "address_used": "Home, Koramangala"}]},
+             steps=[T], expect={"status": "awaiting_confirm", "told_has": "no pincode"}),
     # ── connector first, browser fallback ──
     Scenario("connector_happy", "Linked store, one item: cart and order through the connector, no browser.", "instamart", limits={"place": HOME},
              host={"connected": True, "prepare": [CONNECTOR_CART], "place": [CONNECTOR_PLACED]},
@@ -307,6 +357,12 @@ async def run_scenario(db: AsyncSession, sc: Scenario) -> dict:
         elif op == "check":
             await db.refresh(task)
             check(step[1])
+        elif op == "advance":  # move the clock on by this many minutes
+            from datetime import timedelta
+
+            from app.core import clock
+
+            clock.set_now(clock.now() + timedelta(minutes=step[1]))
     await db.refresh(task)
     check(sc.expect)
 

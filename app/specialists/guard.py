@@ -19,6 +19,27 @@ from app.specialists.contract import Limits
 PRICE_TOLERANCE = 10.0  # ₹ the placed total may differ from the confirmed total (rounding, tiny fees)
 
 
+def qty(value) -> int:
+    """A quantity from an agent report: 2, "2", "2 x 1kg" -> 2. Anything unreadable counts as 1."""
+    if isinstance(value, bool):
+        return 1
+    if isinstance(value, (int, float)):
+        return int(value)
+    m = re.search(r"\d+", str(value or ""))
+    return int(m.group(0)) if m else 1
+
+
+def alternatives(raw) -> list[dict]:
+    """Alternatives as [{"name", "price"}], whether the agent sent strings or objects."""
+    out = []
+    for a in raw or []:
+        if isinstance(a, str) and a.strip():
+            out.append({"name": a.strip()})
+        elif isinstance(a, dict) and str(a.get("name") or "").strip():
+            out.append({"name": str(a["name"]).strip(), **({"price": a["price"]} if a.get("price") else {})})
+    return out
+
+
 def rupees(text) -> float | None:
     if isinstance(text, (int, float)):
         return float(text)
@@ -51,7 +72,7 @@ def check_request(kind: str, agent: str, items: list[dict], limits: Limits, *, p
         for c in policy.order_conflicts(text, limits.allergies, limits.never_order):
             v.block.append(f"blocked by the care record: {c}")
         for i in items:
-            q = int(i.get("qty") or 1)
+            q = qty(i.get("qty"))
             if q < 1 or q > 50:
                 v.block.append(f"quantity {q} for {i.get('name')} is not sensible")
     elif kind == "ride":
@@ -64,7 +85,7 @@ def check_request(kind: str, agent: str, items: list[dict], limits: Limits, *, p
 
 
 def cart_fingerprint(report: dict) -> str:
-    items = sorted((str(i.get("name", "")).strip().lower(), int(i.get("qty") or 1)) for i in report.get("items") or [])
+    items = sorted((str(i.get("name", "")).strip().lower(), qty(i.get("qty"))) for i in report.get("items") or [])
     raw = json.dumps({"items": items, "total": rupees(report.get("total"))}, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
@@ -83,9 +104,24 @@ def missing_items(requested: list[dict], items: list[dict]) -> list[str]:
 
 
 def rx_covers(requested: list[dict], rx_on_file: list[str]) -> bool:
-    """Every requested medicine has a prescription on file (matched by its first word)."""
-    on_file = {(re.findall(r"[a-z]+", r.lower()) or [""])[0] for r in rx_on_file}
-    return bool(requested) and all((re.findall(r"[a-z]+", str(q.get("name", "")).lower()) or [""])[0] in on_file for q in requested)
+    """Every requested medicine has a prescription on file for the same medicine (first word) and strength."""
+    if not requested:
+        return False
+    for q in requested:
+        name = str(q.get("name", ""))
+        first = (re.findall(r"[a-z]+", name.lower()) or [""])[0]
+        want = _strengths(name)
+        ok = False
+        for rx in rx_on_file:
+            if (re.findall(r"[a-z]+", rx.lower()) or [""])[0] != first:
+                continue
+            have = _strengths(rx)
+            if not want or not have or want & have:
+                ok = True
+                break
+        if not ok:
+            return False
+    return True
 
 
 def _strengths(text: str) -> set[str]:
@@ -108,9 +144,9 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
     text = " ".join(str(i.get("name", "")) for i in items)
     for c in policy.order_conflicts(text, limits.allergies, limits.never_order):
         v.block.append(f"the cart has something the care record forbids: {c}")
-    asked = {str(r.get("name", "")).lower(): int(r.get("qty") or 1) for r in requested}
+    asked = {str(r.get("name", "")).lower(): qty(r.get("qty")) for r in requested}
     for i in items:
-        q = int(i.get("qty") or 1)
+        q = qty(i.get("qty"))
         want = max(asked.values()) if asked else 1
         if q > max(limits.max_qty, want):
             v.block.append(f"{q} × {i.get('name')} is more than was asked or allowed")
@@ -132,10 +168,17 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
     total = rupees(report.get("total"))
     if total and total > limits.budget and limits.requester_is_elder:
         v.approval.append(f"total ₹{total:.0f} is above the ₹{limits.budget} limit: a caregiver must OK it")
-    used = str(report.get("address_used") or "").lower()
-    pin = str((limits.place or {}).get("pincode") or "")
-    if used and pin and pin not in used and str((limits.place or {}).get("nickname", "")).lower() not in used:
-        v.block.append(f"the delivery address '{report.get('address_used')}' is not the saved place ({(limits.place or {}).get('nickname')}, {pin})")
+    used = str(report.get("address_used") or "")
+    pin = str((limits.place or {}).get("pincode") or "").strip()
+    if pin:
+        if not used:
+            v.warn.append(f"the store did not show the delivery address; check it is {(limits.place or {}).get('nickname')} ({pin}) before confirming")
+        else:
+            pins = re.findall(r"(?<!\d)\d{3}\s?\d{3}(?!\d)", used)
+            if pins and pin not in {p.replace(" ", "") for p in pins}:
+                v.block.append(f"the delivery address '{used}' is not the saved place ({(limits.place or {}).get('nickname')}, {pin})")
+            elif not pins:
+                v.warn.append(f"the store shows the address as '{used}' with no pincode; read it out and make sure it is {(limits.place or {}).get('nickname')} ({pin})")
     return v
 
 

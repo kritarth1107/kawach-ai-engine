@@ -51,7 +51,8 @@ async def build_limits(session: AsyncSession, *, family_id: str, subject_id: str
     allergies = [r.value.get("allergen") or r.key.split(":", 1)[1] for r in rows if r.domain == "allergy"]
     never = [r.value.get("item") or r.key.split(":", 1)[1].replace("_", " ") for r in rows if r.domain == "no_order"]
     diet = [r.text for r in rows if r.domain == "diet"]
-    rx = [r.value.get("name") or r.key.split(":", 1)[1] for r in rows if r.domain == "medicine" and r.value.get("prescription")]
+    rx = [f"{r.value.get('name') or r.key.split(':', 1)[1]} {r.value.get('dose') or ''}".strip()
+          for r in rows if r.domain == "medicine" and r.value.get("prescription")]
     return Limits(
         allergies=allergies, never_order=never, diet_rules=diet, budget=DEFAULT_BUDGET.get(kind, 1500),
         requester_is_elder=requester_is_elder, max_qty=MAX_QTY.get(agent, 6), place=place or {}, rx_on_file=rx,

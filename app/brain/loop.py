@@ -230,7 +230,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         if m.get("id") and m["id"] != me and len(first) > 2:
             others[first] = m["id"]
     messaged = {a["args"].get("to") for a in ctx.actions if a["tool"] == "send_message" and a.get("ok")}
-    if any(a["tool"] == "alert_caregiver" and a.get("ok") for a in ctx.actions):
+    if any(al.get("whatsapp") for al in ctx.alerts):  # a downgraded (dashboard-only) alert reached nobody
         messaged |= {m["id"] for m in req.members if m.get("id") != req.elder["id"]}
     messaged |= await recently_messaged(session, req)
     from app.tasks import runtime as task_runtime
@@ -256,6 +256,14 @@ PARTIAL = {
     "indic": "Maine aapki baat note kar li hai 🙏 Abhi poora jawab dene mein dikkat aa rahi hai, kuch minute baad phir likhiye.",
     "english": "I've noted what you told me 🙏 I'm having trouble answering fully right now; please write again in a few minutes.",
 }
+
+
+ACK = {"devanagari": "जी, ठीक है 🙏", "indic": "Ji, theek hai 🙏", "english": "Okay, noted 🙏"}
+
+
+def ack_reply(p: dict | None) -> str:
+    p = p or {}
+    return ACK["devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")]
 
 
 def partial_reply(p: dict | None) -> str:
@@ -378,9 +386,9 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else degraded).strip()
-    if guarded and not final:
-        # The fix came back empty: fall back to the last non-empty text the model wrote.
-        final = next((m.get("text", "").strip() for m in reversed(msgs) if m.get("role") == "assistant" and (m.get("text") or "").strip()), "")
+    if guarded and not final and not is_system:
+        # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
+        final = ack_reply(ctx.profiles.get(req.speaker["id"]))
 
     await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,

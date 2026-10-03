@@ -659,7 +659,9 @@ async def _task(ctx: TurnCtx, task_id: str):
         tid = uuid.UUID(task_id)
     except ValueError as exc:
         raise ToolRefused("Use the task id shown in ACTIVE TASKS.") from exc
-    task = await ctx.session.get(Task, tid, with_for_update=True)
+    # populate_existing: the turn already loaded this task for ACTIVE TASKS; re-read it under the lock so a tick's
+    # newer state (timeout, new cart, price change) is not overwritten with the old copy.
+    task = await ctx.session.get(Task, tid, with_for_update=True, populate_existing=True)
     if not task or task.family_id != ctx.family_id:
         raise ToolRefused("No such task for this family.")
     return task

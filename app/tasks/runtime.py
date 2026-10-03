@@ -145,87 +145,141 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     note(task, f"started {task.phase} run ({spec.name} agent, browser)")
 
 
+NO_WORDS = ("no", "nahi", "nahin", "na", "cancel", "drop", "none", "stop", "mat")
+
+
+def _ride_fp(cart_fp: str | None, choice: str) -> str:
+    return f"{cart_fp or ''}:{re.sub(r'[^a-z0-9]+', '', (choice or '').lower())}"
+
+
+def _match_option(options: list[dict], value: str) -> dict | None:
+    v = re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+    if len(v) < 2:
+        return None
+    for o in options:
+        t = re.sub(r"[^a-z0-9]+", " ", str(o.get("type") or "").lower()).strip()
+        if t and (t == v or t in v or v in t):
+            return o
+    return None
+
+
 async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str, by: str, by_is_elder: bool) -> str:
-    """The person answered: an OTP, a confirm, a fee approval or a choice. Returns what happens next."""
+    """The person answered: an OTP, a confirm, a fee approval, a ride choice or a swap. Returns what happens next.
+
+    The answer must be the one the task is waiting for (task.input_needed); anything else is refused, so a
+    stray "yes" or a ride name can never place something nobody was shown."""
     if task.status not in ("needs_input", "awaiting_confirm"):
         return f"not waiting for input (status {task.status})"
+    value = (value or "").strip()
+    d = task.details or {}
+    placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
+    if kind in ("confirm", "choice", "swap") and value.lower() in NO_WORDS and not placed:
+        task.status, task.cancel_requested = "cancelled", True
+        note(task, f"declined by {by}")
+        metrics.on_milestone(task, "cancelled")
+        return "declined; nothing was placed"
+    if task.input_needed and kind != task.input_needed:
+        return f"the task is waiting for {task.input_needed}, not {kind}; ask for that"
     if kind == "confirm":
-        if value.lower() not in ("yes", "confirm", "true"):
-            task.status, task.cancel_requested = "cancelled", True
-            note(task, f"declined by {by}")
-            metrics.on_milestone(task, "cancelled")
-            return "declined; nothing was placed"
-        d = task.details or {}
+        if task.kind != "order" or task.status != "awaiting_confirm":
+            return "nothing to confirm right now"
+        if value.lower() not in ("yes", "confirm", "true", "haan", "ha", "ok", "okay", "theek hai"):
+            return "say yes to place it, or no to drop it"
+        fp = d.get("cart_fp")
+        if not fp:
+            return "there is no cart to confirm yet; wait for the task update"
         # Who confirms matters: an elder may not confirm past the budget, whoever asked for the order.
         limit = d.get("order_limit") or Limits.from_dict(d.get("limits")).budget
         total = rupees((task.result or {}).get("total"))
-        if task.kind == "order" and by_is_elder and total and total > limit:
+        if by_is_elder and total and total > limit:
             return f"total ₹{total:.0f} is above the ₹{limit} limit: a caregiver must confirm (ask with alert_caregiver reason approval)"
         if d.get("approval") and by_is_elder:
             return f"{'; '.join(d['approval'])} (ask with alert_caregiver reason approval)"
-        fp = d.get("cart_fp") or guard.cart_fingerprint(task.result or {})
         task.details = {**d, "confirmed_by": by, "confirmed_total": (task.result or {}).get("total"), "confirmed_fp": fp,
-                        "confirm_token": guard.confirm_token(str(task.id), fp, by)}
+                        "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
         task.phase, task.status = "place", "queued"
+        task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"confirmed by {by}")
         return "confirmed; placing it now (NOT placed yet; you will get a task update when it is placed)"
     if kind == "otp":
-        if not re.fullmatch(r"\d{4,8}", value.strip()):
+        if not re.fullmatch(r"\d{4,8}", value):
             return "that is not a code; ask for the digits only"
         task.phase, task.status = "otp", "queued"
-        task.details = {**(task.details or {}), "otp": value.strip()}
+        task.details = {**d, "otp": value}
         note(task, "otp received")
         return "code received; continuing"
     if kind == "fee":
-        if value.lower() in ("yes", "approve", "true"):
-            task.details = {**(task.details or {}), "fee_ok": True}
+        if value.lower() in ("yes", "approve", "true", "haan", "ok"):
+            task.details = {**d, "fee_ok": True}
             task.phase, task.status = "cancel", "queued"
+            task.deadline_at = clock.now() + TASK_LIFETIME
             note(task, f"cancel fee approved by {by}")
             return "cancelling with the fee"
         task.status = "done"
         note(task, f"cancel fee declined by {by}; order stays")
         return "kept the order; not cancelled"
     if kind == "swap":
-        d = task.details or {}
-        alts = d.get("alternatives") or []
-        if value.lower() in ("no", "none", "drop", "cancel"):
-            task.status, task.cancel_requested = "cancelled", True
-            note(task, f"no alternative wanted ({by})")
-            return "dropped; nothing was ordered"
-        pick = next((a for a in alts if value.lower() in a["name"].lower() or a["name"].lower() in value.lower()), None)
+        if d.get("agent") == "pharmacy":
+            return "medicines are never swapped for another; ask the caregiver or doctor which medicine to order"
+        alts = guard.alternatives(d.get("alternatives"))
+        low = value.lower()
+        pick = next((a for a in alts if len(low) >= 3 and (low in a["name"].lower() or a["name"].lower() in low)), None)
         if not pick:
             return "that is not one of the alternatives; read them again: " + "; ".join(a["name"] for a in alts)
-        items = d.get("items") or []
-        new_items = [{"name": pick["name"], "qty": items[0].get("qty", 1) if items else 1}] if len(items) <= 1 else (
-            [i for i in items if not guard.missing_items([i], [])] + [{"name": pick["name"], "qty": 1}])
+        items = list(d.get("items") or [])
+        # Replace the requested item the alternative is closest to (by its main words); keep the rest.
+        words = set(re.findall(r"[a-z]{4,}", pick["name"].lower()))
+        best = max(range(len(items)), key=lambda i: len(words & set(re.findall(r"[a-z]{4,}", str(items[i].get("name", "")).lower()))), default=None)
+        if best is not None and (len(items) == 1 or words & set(re.findall(r"[a-z]{4,}", str(items[best].get("name", "")).lower()))):
+            new_items = items[:best] + [{"name": pick["name"], "qty": guard.qty(items[best].get("qty"))}] + items[best + 1:]
+        else:
+            new_items = items + [{"name": pick["name"], "qty": 1}]
         v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
         if not v.ok:
             return "cannot get that: " + "; ".join(v.block)
-        task.details = {**d, "items": new_items, "alternatives": None, "channel": None, "connector_card": None}
+        task.details = {**d, "items": new_items, "alternatives": None, "channel": None, "connector_card": None, "cart_fp": None}
         task.phase, task.status, task.input_needed = "prepare", "queued", None
+        task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"swapped to {pick['name']} by {by}")
         return f"getting {pick['name']} instead; the new cart comes back for a confirm"
     if kind == "choice":
-        d = task.details or {}
+        if task.kind != "ride" or task.status != "awaiting_confirm":
+            return "nothing to choose right now"
+        options = (task.result or {}).get("options") or []
+        opt = _match_option(options, value)
+        if not opt:
+            return "that is not one of the options; read them again: " + "; ".join(f"{o.get('type')} {o.get('fare', '')}".strip() for o in options)
+        limits = Limits.from_dict(d.get("limits"))
+        fare = rupees(opt.get("fare"))
+        if by_is_elder and fare and fare > limits.budget:
+            return f"the {opt.get('type')} fare ₹{fare:.0f} is above the ₹{limits.budget} limit: a caregiver must choose it (ask with alert_caregiver reason approval)"
         if d.get("approval") and by_is_elder:
             return f"{'; '.join(d['approval'])} (ask with alert_caregiver reason approval)"
-        fp = guard.cart_fingerprint({"items": [{"name": value}], "total": None}) + (d.get("cart_fp") or "")
-        task.details = {**d, "choice": value, "confirmed_by": by, "confirmed_fp": fp, "confirm_token": guard.confirm_token(str(task.id), fp, by)}
+        choice = f"{opt.get('type')} {opt.get('fare') or ''}".strip()
+        fp = _ride_fp(d.get("cart_fp"), choice)
+        task.details = {**d, "choice": choice, "confirmed_by": by, "confirmed_total": opt.get("fare"), "confirmed_fp": fp,
+                        "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
         task.phase, task.status = "place", "queued"
-        note(task, f"choice {value} by {by}")
-        return "booking that option now (NOT booked yet; you will get a task update)"
+        task.deadline_at = clock.now() + TASK_LIFETIME
+        note(task, f"choice {choice} by {by}")
+        return f"booking {choice} now (NOT booked yet; you will get a task update)"
     return f"unknown input {kind}"
 
 
 async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
     if task.status in ("failed", "cancelled"):
         return f"already {task.status}"
+    if task.phase == "cancel":
+        return "cancelling is already in progress; you will get a task update"
     task.cancel_requested = True
     note(task, f"cancel requested by {by}: {reason}")
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
     if task.status == "done" and placed:
         task.phase, task.status = "cancel", "queued"
+        task.deadline_at = clock.now() + TASK_LIFETIME
         return "already placed; cancelling it on the service now"
+    if task.phase == "place" and task.status == "queued" and (task.details or {}).get("place_started"):
+        return "placing has started; it will be cancelled right after if it went through"
     if task.status == "running" and task.phase == "place":
         return "placing is in progress; it will be cancelled right after if it went through"
     if task.status == "running" and task.agent_task:
@@ -254,7 +308,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             if not out.get("options"):
                 return "failed", f"No ride options came up ({out.get('problem') or 'unknown'})."
             v = guard.check_cart("ride", spec.name, [], out, limits)
-            task.details = {**d, "approval": v.approval, "cart_fp": guard.cart_fingerprint({"items": [{"name": o.get("type")} for o in out["options"]], "total": None})}
+            task.details = {**d, "approval": v.approval, "confirm_token": None,
+                            "cart_fp": guard.cart_fingerprint({"items": [{"name": f"{o.get('type')} {o.get('fare')}"} for o in out["options"]], "total": None})}
             task.input_needed = "choice"
             metrics.on_milestone(task, "ready")
             extra = " ".join(v.warn + v.approval)
@@ -262,7 +317,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file):
             return "failed", "This medicine needs a prescription upload; ask the family to upload the prescription on the dashboard, then try again."
         if not out.get("items"):
-            alts = [a for a in out.get("alternatives") or [] if a.get("name")][:4]
+            alts = guard.alternatives(out.get("alternatives"))[:4]
             if alts and out.get("cod_available") is not False:
                 # Out of stock: offer what the store has instead; nothing is swapped without the person choosing.
                 task.details = {**d, "alternatives": alts}
@@ -305,8 +360,10 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
 
 
 def _confirm_still_valid(task: Task) -> bool:
+    """The confirm still matches what is in the cart (or the fares shown) and its token is genuine."""
     d = task.details or {}
-    return d.get("confirmed_fp") == (d.get("cart_fp") if task.kind == "order" else d.get("confirmed_fp")) and guard.token_valid(
+    expected = d.get("cart_fp") if task.kind == "order" else _ride_fp(d.get("cart_fp"), d.get("choice") or "")
+    return bool(expected) and d.get("confirmed_fp") == expected and guard.token_valid(
         str(task.id), d.get("confirmed_fp") or "", d.get("confirmed_by") or "", d.get("confirm_token"))
 
 
@@ -331,6 +388,7 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
                 return {"placed": False, "unclear": True, "problem": "the store did not answer after the order was sent; check the app before trying again"}
             if st == "expired":
                 task.phase = "prepare"  # build a fresh card on the connector; the family confirms it again
+                task.details = {**(task.details or {}), "cart_fp": None, "confirm_token": None, "place_started": None}
                 return {"requeue": True}
             await channels.record(session, task.service, "connector", False, r.get("detail"))
             return None
@@ -347,6 +405,38 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
         return None
     except Exception as exc:  # noqa: BLE001 — a broken connector falls back to the browser
         await channels.record(session, task.service, "connector", False, str(exc)[:200])
+        return None
+
+
+MAX_TICK_ERRORS = 3
+
+
+async def _count_tick_error(session: AsyncSession, task_id) -> tuple[Task, str] | None:
+    """A task whose tick keeps crashing (a report the code cannot read) is stopped after a few tries and the
+    family is told, instead of being stuck 'running' and blocking that service for good."""
+    try:
+        task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update())).scalar_one_or_none()
+        if not task or task.status in ("done", "failed", "cancelled"):
+            return None
+        n = int((task.details or {}).get("tick_errors", 0)) + 1
+        task.details = {**(task.details or {}), "tick_errors": n}
+        message = None
+        if n >= MAX_TICK_ERRORS:
+            task.status = "failed"
+            message = ("Something went wrong while placing it. It is not clear whether it went through: do not order again; "
+                       "tell the caregiver to check the app.") if task.phase in ("place", "cancel") else (
+                "Something went wrong while working on it, so it was stopped; nothing was placed.")
+            note(task, f"stopped after {n} errors")
+            metrics.on_milestone(task, "failed")
+            await store.record_event(
+                session, family_id=task.family_id, subject_id=task.subject_id, kind="task_failed",
+                summary=f"{SKILLS[task.service]['label']}: {message}", payload={"task_id": str(task.id)},
+            )
+        await session.commit()
+        return (task, message) if message else None
+    except Exception:  # noqa: BLE001
+        logger.exception("could not count tick error task=%s", task_id)
+        await session.rollback()
         return None
 
 
@@ -387,7 +477,22 @@ async def tick(
                     task.details = {**(task.details or {}), "confirm_token": None}
                     message = "The cart changed after it was confirmed, so nothing was placed. Read it again and ask the person to confirm."
                     note(task, "confirm no longer matches the cart")
+                elif task.status == "queued" and task.phase == "place" and (task.details or {}).get("place_started"):
+                    # A place step started before and never recorded its result (a crash after the store call).
+                    # It may have gone through: never place again.
+                    task.status = "failed"
+                    message = ("It is not clear whether it was placed (the last attempt was interrupted). Do not order again; "
+                               "tell the caregiver to check the app.")
+                    note(task, "place interrupted; not retried")
+                    metrics.on_milestone(task, "failed")
                 elif task.status == "queued":
+                    if task.phase == "place":
+                        # Mark before calling the store, and commit, so a crash after the call cannot place twice.
+                        task.details = {**(task.details or {}), "place_started": clock.now().isoformat()}
+                        await session.commit()
+                        task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update())).scalar_one()
+                        if task.status != "queued":
+                            continue
                     report = None
                     if task.phase in ("prepare", "place") and (task.details or {}).get("channel") != "browser":
                         host = host_for(task.family_id) if host_for else None
@@ -436,6 +541,8 @@ async def tick(
                             continue
                         if run.status != "finished" and not out:
                             out = {"blocked": False, "problem": run.error or run.status}
+                            if task.phase == "place":
+                                out["unclear"] = True  # the run may have clicked place before it died
                         task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
                         status, message = _outcome(task, out)
                         task.status = status
@@ -454,7 +561,10 @@ async def tick(
                     elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > RUN_TIMEOUT:
                         await agent.stop(task.agent_task)
                         task.status = "failed"
-                        message = "The service took too long and the task was stopped; nothing was placed." if task.phase != "cancel" else "Cancel took too long; tell the caregiver."
+                        message = {
+                            "cancel": "Cancel took too long; tell the caregiver.",
+                            "place": "Placing took too long and was stopped. It is not clear whether it went through: do not order again; tell the caregiver to check the app.",
+                        }.get(task.phase, "The service took too long and the task was stopped; nothing was placed.")
                         note(task, "run timed out")
                 if message:
                     await store.record_event(
@@ -465,7 +575,10 @@ async def tick(
             except Exception:  # noqa: BLE001 — one task's failure must not stop the others
                 logger.exception("task tick failed task=%s", task_id)
                 await session.rollback()
-                continue
+                got = await _count_tick_error(session, task_id)
+                if not got:
+                    continue
+                task, message = got
         if message:
             await notify(task.family_id, task.requested_by, f"[Task update] {describe(task)}. {message}")
     return stats
