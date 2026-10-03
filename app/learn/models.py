@@ -43,6 +43,9 @@ class ReplyLog(Base):
     judge_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     in_corpus: Mapped[bool] = mapped_column(Boolean, default=False)
+    # the turn as the model saw it: what was said, each tool call with its (trimmed) result, the final reply.
+    # Raw (kept 90 days with the row); anonymised only when exported for training.
+    trace: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index("ix_reply_log_unscored", "scored_at", "at"),
@@ -85,6 +88,34 @@ class PlaybookVersion(Base):
     canary: Mapped[dict] = mapped_column(JSONB, default=dict)
     note: Mapped[str] = mapped_column(Text, default="")
     approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope: Mapped[list] = mapped_column(JSONB, default=list)  # situations this version changes ([] = all); its trial compares only these
+
+
+class RuleProposal(Base):
+    """A change to Saheli's rules suggested by the weekly review. Never applied without the founder's approval;
+    approved rules then go through the next playbook's safety trial like any lesson."""
+
+    __tablename__ = "rule_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    situation: Mapped[str] = mapped_column(String(32))
+    rule: Mapped[str] = mapped_column(Text)
+    why: Mapped[str] = mapped_column(Text, default="")
+    evidence: Mapped[list] = mapped_column(JSONB, default=list)
+    status: Mapped[str] = mapped_column(String(12), default="proposed")  # proposed | approved | rejected | in_playbook
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class LearnReport(Base):
+    """Weekly/nightly learning reports: grader calibration, drift, gap specs."""
+
+    __tablename__ = "learn_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True)  # calibration | drift | gap_specs
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)
 
 
 class CapabilityGap(Base):

@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core import clock
-from app.learn import gaps, grader, lessons, scoring, timing
+from app.learn import gaps, grader, lessons, review, scoring, timing
 from app.learn.models import LearningExample, PlaybookVersion, ReplyLog
 
 logger = logging.getLogger(__name__)
@@ -24,19 +24,21 @@ async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> 
     steps = [("scored", lambda: scoring.score_pending(sessions)), ("corpus", lambda: scoring.build_corpus(sessions))]
     if with_models:
         steps.append(("graded", lambda: grader.grade_sample(sessions)))
-    steps += [("canary", lambda: lessons.evaluate(sessions)), ("pruned", lambda: scoring.prune(sessions))]
+    steps += [("canary", lambda: lessons.evaluate(sessions)), ("drift", lambda: review.drift(sessions)), ("pruned", lambda: scoring.prune(sessions))]
     for name, fn in steps:
         try:
             out[name] = await fn()
         except Exception as exc:  # noqa: BLE001 — one step must not stop the others
             logger.exception("learn step %s failed", name)
             out[name] = {"error": str(exc)[:200]}
-    if with_models and clock.ist().weekday() == 6:  # Sunday night: learn a new draft
-        try:
-            out["weekly"] = await lessons.weekly(sessions)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("weekly lessons failed")
-            out["weekly"] = {"error": str(exc)[:200]}
+    if with_models and clock.ist().weekday() == 6:  # Sunday night: review the week, then learn a new draft
+        for name, fn in (("calibration", lambda: review.calibrate(sessions)), ("rule_proposals", lambda: review.propose_rules(sessions)),
+                         ("gap_specs", lambda: review.gap_specs(sessions)), ("weekly", lambda: lessons.weekly(sessions))):
+            try:
+                out[name] = await fn()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("weekly %s failed", name)
+                out[name] = {"error": str(exc)[:200]}
     timing.reset_cache()
     return out
 
@@ -59,13 +61,20 @@ async def overview(sessions: async_sessionmaker, *, weeks: int = 8) -> dict:
         corpus = (await session.execute(select(func.count()).select_from(LearningExample))).scalar_one()
         gap_rank = await gaps.ranking(session)
         timing_view = await timing.summary(session)
+        from app.learn.models import RuleProposal
+
+        proposals = list((await session.execute(select(RuleProposal).order_by(RuleProposal.created_at.desc()).limit(20))).scalars())
+    reports = {k: await review.latest(sessions, k) for k in ("calibration", "drift", "gap_specs")}
     return {
         "messages": int(totals[0] or 0), "scored": int(totals[1] or 0), "avgScore": round(float(totals[2]), 3) if totals[2] is not None else None,
         "corpus": int(corpus),
-        "playbooks": [{"version": p.version, "status": p.status, "createdAt": p.created_at.isoformat(), "note": p.note,
+        "playbooks": [{"version": p.version, "status": p.status, "scope": p.scope or [], "createdAt": p.created_at.isoformat(), "note": p.note,
                        "lessons": p.lessons, "examples": p.examples, "gate": p.gate, "canary": p.canary, "approvedBy": p.approved_by,
                        "liveSince": p.live_since.isoformat() if p.live_since else None} for p in pbs],
         "trend": [{"week": w.date().isoformat(), "situation": s, "n": int(n), "avgScore": round(float(a), 3)} for w, s, n, a in trend],
         "gaps": gap_rank,
         "timing": timing_view,
+        "ruleProposals": [{"id": r.id, "situation": r.situation, "rule": r.rule, "why": r.why, "evidence": r.evidence, "status": r.status,
+                           "at": r.created_at.isoformat()} for r in proposals],
+        "calibration": reports["calibration"], "drift": reports["drift"], "gapSpecs": reports["gap_specs"],
     }

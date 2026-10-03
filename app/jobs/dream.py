@@ -55,6 +55,9 @@ async def _ensure_v2_schema() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)
 
 
 async def _ensure_schema() -> None:

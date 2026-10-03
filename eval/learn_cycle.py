@@ -29,6 +29,9 @@ async def main(argv: list[str]) -> int:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)
     spend.configure(SessionLocal)
     async with SessionLocal() as s:
         for r in (await s.execute(select(FamilyRoster).where(or_(FamilyRoster.family_id.startswith("month-"), FamilyRoster.family_id.startswith("sim-"))))).scalars():

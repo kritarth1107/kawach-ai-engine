@@ -244,7 +244,7 @@ async def gate(role: str, essential: bool | None = None) -> str:
     essential: a real person is waiting for this answer. Defaults to the role (brain, vision). A brain call on a
     scheduler turn (wake-up, task update, weekly check-in) passes essential=False: it still runs cheap above the
     soft cap, and stops above the hard cap."""
-    in_role = role in ESSENTIAL_ROLES
+    in_role = role in ESSENTIAL_ROLES or role.startswith("brain")  # brain, brain_hard, brain_tuned
     essential = in_role if essential is None else essential
     spent = await spent_today()
     if spent >= hard_cap():

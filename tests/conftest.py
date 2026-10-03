@@ -31,6 +31,9 @@ async def db():
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)
     conn = await engine.connect()
     trans = await conn.begin()
     session = AsyncSession(bind=conn, expire_on_commit=False, join_transaction_mode="create_savepoint")

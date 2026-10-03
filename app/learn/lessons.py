@@ -107,15 +107,18 @@ def example_problems(ex: dict) -> list[str]:
 
 def gate(pb: PlaybookVersion) -> dict:
     report: dict = {"lessons": {}, "examples": {}, "passed": True}
+    approved = {r for rs in ((pb.gate or {}).get("approved_rules") or {}).values() for r in rs}
     for situation, items in (pb.lessons or {}).items():
         if situation not in SITUATIONS and situation != "general":
             report["passed"] = False
             report["lessons"][situation] = ["unknown situation"]
             continue
-        if len(items) > MAX_LESSONS + 1:
+        if len([x for x in items if x not in approved]) > MAX_LESSONS + 1:
             report["passed"] = False
             report["lessons"][situation] = ["too many lessons"]
         for lesson in items:
+            if lesson in approved:  # the founder approved this rule; it still goes through the trial
+                continue
             p = lesson_problems(lesson)
             if p:
                 report["passed"] = False
@@ -177,10 +180,19 @@ async def draft(sessions: async_sessionmaker) -> PlaybookVersion | None:
                 lessons[situation] = new
             examples[situation] = [{"context": r.context[:200], "reply": r.reply[:400], "lang": r.lang, "score": r.score} for r in picks]
             learned.append(situation)
+        from app.learn import review
+
+        rules = await review.approved_rules(session)
+        for situation, items in rules.items():
+            lessons[situation] = (list(lessons.get(situation) or []) + items)[: MAX_LESSONS + len(items)]
+            learned.append(situation)
         if not learned:
             return None
         pb = PlaybookVersion(version=await _next_version(session), status="draft", lessons=lessons, examples=examples,
-                             created_at=clock.now(), note=f"learned: {', '.join(sorted(learned))}; {len(rows)} examples")
+                             created_at=clock.now(), scope=[] if "general" in learned else sorted(set(learned)),  # a general rule touches every situation
+                             note=f"learned: {', '.join(sorted(set(learned)))}; {len(rows)} examples" + (f"; {sum(map(len, rules.values()))} approved rules" if rules else ""),
+                             gate={"approved_rules": rules})
+        await review.mark_in_playbook(session)
         session.add(pb)
         await session.commit()
         return pb
@@ -191,7 +203,7 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
         pb = await session.get(PlaybookVersion, version)
         if not pb or pb.status != "draft":
             return {"skipped": True}
-        pb.gate = gate(pb)
+        pb.gate = {**(pb.gate or {}), **gate(pb)}
         if not pb.gate["passed"]:
             pb.status = "rejected"
         elif os.getenv("LEARN_AUTO_CANARY", "on") == "on":
@@ -220,14 +232,15 @@ async def evaluate(sessions: async_sessionmaker) -> dict:
         rows = list((await session.execute(
             select(ReplyLog).where(ReplyLog.at >= canary.canary_since, ReplyLog.score.is_not(None))
         )).scalars())
-        c = [r for r in rows if r.arm == "canary" and r.playbook_version == canary.version]
-        live = [r for r in rows if r.arm == "live"]
+        scope = set(canary.scope or [])
+        c = [r for r in rows if r.arm == "canary" and r.playbook_version == canary.version and (not scope or r.situation in scope)]
+        live = [r for r in rows if r.arm == "live" and (not scope or r.situation in scope)]
         (mc, vc, nc), (ml, vl, nl) = _stats([r.score for r in c]), _stats([r.score for r in live])
 
         def rate(rs, f):
             return sum(1 for r in rs if f(r)) / len(rs) if rs else 0.0
 
-        res = {"n_canary": nc, "n_live": nl, "mean_canary": round(mc, 4), "mean_live": round(ml, 4),
+        res = {"scope": sorted(scope), "n_canary": nc, "n_live": nl, "mean_canary": round(mc, 4), "mean_live": round(ml, 4),
                "annoyed_canary": round(rate(c, lambda r: r.tone == "annoyed"), 4), "annoyed_live": round(rate(live, lambda r: r.tone == "annoyed"), 4),
                "judge_fail_canary": round(rate([r for r in c if r.judge_pass is not None], lambda r: r.judge_pass is False), 4),
                "judge_fail_live": round(rate([r for r in live if r.judge_pass is not None], lambda r: r.judge_pass is False), 4),
@@ -242,6 +255,11 @@ async def evaluate(sessions: async_sessionmaker) -> dict:
                 canary.status = "rejected"
             elif z >= Z:
                 decision = "better"
+                from app.learn import review
+
+                cal = await review.latest(sessions, "calibration")
+                if cal and cal.get("trusted") is False:
+                    decision = "better_but_grader_untrusted"
                 if os.getenv("LEARN_AUTO_PROMOTE", "off") == "on":
                     await _promote(session, canary, by="auto")
                     decision = "promoted"

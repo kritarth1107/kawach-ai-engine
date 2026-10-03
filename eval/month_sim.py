@@ -850,6 +850,9 @@ async def main(argv: list[str]) -> int:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
         await conn.run_sync(Base.metadata.create_all)
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)
     outdir = OUT / f"month-{datetime.now().strftime('%Y%m%d-%H%M')}"
     outdir.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()

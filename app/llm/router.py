@@ -81,6 +81,15 @@ def parse_route(spec: str) -> Route:
     return Route(provider=provider, model=model, location=location or "global")
 
 
+def configured_roles() -> set[str]:
+    """Roles with routes set in MODEL_ROUTES (not just defaults)."""
+    override = os.getenv("MODEL_ROUTES", "").strip()
+    try:
+        return set(json.loads(override)) if override else set()
+    except json.JSONDecodeError:
+        return set()
+
+
 def routes_for(role: str) -> list[Route]:
     """MODEL_ROUTES env (JSON {role: [specs]}) overrides the defaults per role."""
     override = os.getenv("MODEL_ROUTES", "").strip()

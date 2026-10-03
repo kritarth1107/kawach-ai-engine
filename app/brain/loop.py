@@ -229,6 +229,18 @@ def _remember_imported(family_id: str, elder_id: str) -> None:
     _IMPORTED[(family_id, elder_id)] = True
 
 
+# Hard moments get the strongest model when one is configured (MODEL_ROUTES "brain_hard": e.g. Opus or Gemini Pro);
+# everything else stays on the fast one. BRAIN_ROLE lets a training run point Saheli at a tuned model ("brain_tuned").
+HARD_SITUATIONS = {"emergency", "grief", "med_question", "injection", "caregiver_stressed", "low_mood"}
+
+
+def role_for(situation: str) -> str:
+    base = os.getenv("BRAIN_ROLE", "brain")
+    if base == "brain" and situation in HARD_SITUATIONS and "brain_hard" in router.configured_roles():
+        return "brain_hard"
+    return base
+
+
 CLAIM_WINDOW = timedelta(hours=3)
 
 # Flood limits: a stuck sender, an echo loop between bots, or a wake-up storm must not run up model spend.
@@ -405,6 +417,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {req.text}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
     msgs.append({"role": "user", "content": content})
+    turn_start = len(msgs) - 1
 
     is_system = req.speaker.get("role") == "system"
     profiles = await writing_profiles(session, req.family_id, [req.elder, *[m for m in req.members if m.get("id") != req.elder["id"]]], data)
@@ -434,6 +447,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
+    brain_role = role_for(situation)
     guarded = False
     degraded = ""
     reply: router.LLMReply | None = None
@@ -441,7 +455,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         last = step == MAX_STEPS - 1
         try:
             reply = await router.complete(
-                "brain",
+                brain_role,
                 system_stable=stable,
                 system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
                 messages=msgs,
@@ -498,7 +512,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
     if not is_system:
-        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang)
+        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final))
     if data.history_full:  # fewer turns than a full history cannot need folding yet
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
@@ -513,7 +527,28 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     )
 
 
-async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, turn_id: int | None, role: str, lang: str) -> None:
+TRACE_RESULT_CHARS = 1500
+
+
+def turn_trace(msgs: list[dict], start: int, final: str) -> list[dict]:
+    """This turn as the model saw it, from the person's message on: tool calls, trimmed results, the final reply."""
+    out: list[dict] = []
+    for m in msgs[start:]:
+        if m.get("role") == "user":
+            out.append({"role": "user", "text": _msg_text(m)[:2000]})
+        elif m.get("role") == "assistant":
+            calls = [{"name": c.name, "args": c.args} for c in m.get("tool_calls") or []]
+            if calls:
+                out.append({"role": "model", "calls": calls, **({"text": m.get("text")} if m.get("text") else {})})
+        elif m.get("role") == "tool":
+            out.append({"role": "tool", "results": [{"name": r.get("name"), "content": str(r.get("content"))[:TRACE_RESULT_CHARS],
+                                                     "error": bool(r.get("is_error"))} for r in m.get("results") or []]})
+    out.append({"role": "model", "text": final})
+    return out
+
+
+async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, turn_id: int | None, role: str, lang: str,
+                           trace: list | None = None) -> None:
     """Log the reply for scoring, and note anything asked that Saheli could not do. Never costs the person their reply."""
     from app.learn import gaps, scoring, situations
 
@@ -522,7 +557,7 @@ async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.T
         ctx.situation = situations.tag(text=req.text, role=role, tools=used)
         await scoring.record(session, family_id=req.family_id, thread_id=req.speaker["id"], turn_id=turn_id, kind="reply",
                              situation=ctx.situation, speaker_role=role, lang=lang, user_text=req.text, text=final, tools=used,
-                             playbook_version=ctx.playbook_version, arm=ctx.arm)
+                             playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace)
         how = gaps.detect(user_text=req.text, reply=final, actions=ctx.actions)
         if how:
             names = [req.elder.get("name", "")] + [m.get("name", "") for m in req.members]

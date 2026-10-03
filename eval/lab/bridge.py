@@ -33,6 +33,9 @@ def auth(x_lab_token: str = Header(default="")) -> None:
 async def _schema() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)
 
 
 @app.get("/lab/next", dependencies=[Depends(auth)])

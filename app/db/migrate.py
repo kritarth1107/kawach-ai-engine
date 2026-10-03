@@ -120,3 +120,22 @@ async def run_instinct_migrations(conn: AsyncConnection) -> None:
             "CREATE INDEX IF NOT EXISTS ix_memory_entities_aliases ON memory_entities USING GIN (aliases)"
         )
     )
+
+
+# Columns and indexes added to Saheli v2 tables after they first shipped. create_all() makes new tables but never
+# changes existing ones, so every startup (and the test, sim and job setups) runs these idempotent statements.
+V2_ALTERS = [
+    "ALTER TABLE reply_log ADD COLUMN IF NOT EXISTS trace JSONB",
+    "ALTER TABLE playbook_versions ADD COLUMN IF NOT EXISTS scope JSONB DEFAULT '[]'::jsonb",
+    "CREATE INDEX IF NOT EXISTS ix_turns_thread_id ON turns (family_id, thread_id, id)",
+]
+
+
+async def run_v2_migrations(conn: AsyncConnection) -> None:
+    for stmt in V2_ALTERS:
+        try:
+            await conn.execute(text(f"SAVEPOINT v2m"))
+            await conn.execute(text(stmt))
+            await conn.execute(text("RELEASE SAVEPOINT v2m"))
+        except Exception:  # noqa: BLE001 — a table that does not exist yet is created by create_all with the column
+            await conn.execute(text("ROLLBACK TO SAVEPOINT v2m"))

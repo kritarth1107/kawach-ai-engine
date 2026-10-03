@@ -8,3 +8,5 @@ __pycache__/
 dist/
 build/
 .coverage
+eval/tune_data/
+eval/compare_report.json

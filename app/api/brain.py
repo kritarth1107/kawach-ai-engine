@@ -235,6 +235,19 @@ async def learn_approve(version: int, body: PlaybookAction) -> dict:
     return await lessons.approve(SessionLocal, version, body.by)
 
 
+class RuleDecision(BaseModel):
+    by: str = Field(min_length=1, max_length=64)
+    approve: bool
+
+
+@router.post("/learn/rules/{rule_id}")
+async def learn_rule_decision(rule_id: int, body: RuleDecision) -> dict:
+    from app.db.session import SessionLocal
+    from app.learn import review
+
+    return await review.decide_rule(SessionLocal, rule_id, approve=body.approve, by=body.by)
+
+
 @router.post("/learn/playbooks/{version}/block")
 async def learn_block(version: int, body: PlaybookAction) -> dict:
     from app.db.session import SessionLocal

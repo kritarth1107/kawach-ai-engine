@@ -14,6 +14,9 @@
 #              draft, safety gate) — the "teach her how to talk" step
 #   lab N D    the Saheli Lab bots play N bot-designed families for D days (families from   Saheli's replies only
 #              /home/m4dm4x/OpenBot/Shared/saheli-lab/families); start eval/lab/start_bridge.sh first
+#   tune       export the anonymised fine-tuning data (free), then upload, start   tuning job: see TUNING_PLAN.md
+#              a Vertex tuning job and compare tuned vs base, each with its own "yes"
+#   failures   re-send past grader failures (eval/export_failures.py) to today's Saheli     ~₹150
 #   compare V  regress twice on the same families: without a playbook and with  ~₹1,700
 #              playbook V; the report says which replies scored better
 #
@@ -48,12 +51,34 @@ case "$stage" in
     export DATABASE_URL="${SIM_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_sim}"
     export MODEL_ROUTES='{"learn": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"]}'
     exec .venv/bin/python eval/learn_cycle.py ;;
+  tune)
+    # Free export, then (each with its own "yes") upload, start the Vertex tuning job, and compare tuned vs base.
+    : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
+    [ "$SIM_PROJECT" = "kavach-care" ] && { echo "Refusing: training must not run in the production project."; exit 2; }
+    : "${TUNE_BUCKET:?set TUNE_BUCKET, e.g. gs://kavach-train-data/saheli}"
+    export PYTHONPATH=. DATABASE_URL="${SIM_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_sim}"
+    out="eval/tune_data/$(date +%Y%m%d-%H%M)"
+    .venv/bin/python eval/tune.py export "$out"
+    read -r -p "Upload $out (train + validation, anonymised) to $TUNE_BUCKET in $SIM_PROJECT? Type yes: " ok; [ "$ok" = "yes" ] || exit 1
+    .venv/bin/python eval/tune.py upload "$out" "$TUNE_BUCKET" --project "$SIM_PROJECT" --yes
+    read -r -p "Start a paid Vertex tuning job (${TUNE_BASE:-gemini-3.5-flash}; see runs/TUNING_PLAN.md for cost)? Type yes: " ok; [ "$ok" = "yes" ] || exit 1
+    .venv/bin/python eval/tune.py start "$TUNE_BUCKET" --project "$SIM_PROJECT" --base "${TUNE_BASE:-gemini-3.5-flash}" --name "saheli-$(date +%Y%m%d)" --yes
+    echo "When the job succeeds: eval/tune.py status JOB, then eval/compare_models.py $out/holdout.jsonl --tuned ENDPOINT --project $SIM_PROJECT --max-inr 300 --yes"
+    exit 0 ;;
+  failures)
+    # Re-send past grader failures to today's Saheli (paid, small).
+    : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
+    [ "$SIM_PROJECT" = "kavach-care" ] && { echo "Refusing: training must not run in the production project."; exit 2; }
+    export SIM_MAX_INR="${SIM_MAX_INR:-150}" PYTHONPATH=. DEBUG=false GCP_PROJECT_ID="$SIM_PROJECT"
+    export MODEL_ROUTES='{"brain": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash"], "extract": ["gemini:gemini-3.8-flash"], "judge_fast": ["gemini:gemini-3.8-flash"], "judge": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"]}'
+    read -r -p "Replay past failures (up to ₹$SIM_MAX_INR in $SIM_PROJECT)? Type yes: " ok; [ "$ok" = "yes" ] || exit 1
+    exec .venv/bin/python eval/replay_failures.py "${1:-eval/fixtures/failures.jsonl}" --yes ;;
   compare)
     v="${1:?usage: eval/train.sh compare <playbook version>}"; shift
     echo "Two regress runs: LEARN_FORCE_VERSION=0 then $v (same families, same events)."
     LEARN_FORCE_VERSION=0 SIM_MAX_INR="${SIM_MAX_INR:-900}" "$0" regress "$@"
     LEARN_FORCE_VERSION="$v" SIM_MAX_INR="${SIM_MAX_INR:-900}" exec "$0" regress "$@" ;;
-  *) echo "usage: eval/train.sh free|smoke|regress|learning|full|lessons|compare V [families…]"; exit 2 ;;
+  *) echo "usage: eval/train.sh free|smoke|regress|learning|full|lessons|lab N D|tune|failures|compare V [families…]"; exit 2 ;;
 esac
 [ $# -gt 0 ] && fams=("$@")
 : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"

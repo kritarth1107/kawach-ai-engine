@@ -22,8 +22,9 @@ async def ensure_database_schema() -> None:
     async with engine.begin() as conn:
         await run_instinct_migrations(conn)
         await conn.run_sync(Base.metadata.create_all)
-        # Indexes added after a table already exists (create_all only makes new tables).
-        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_turns_thread_id ON turns (family_id, thread_id, id)"))
+        from app.db.migrate import run_v2_migrations
+
+        await run_v2_migrations(conn)  # columns/indexes added after tables first shipped
 
 
 @asynccontextmanager
