@@ -122,6 +122,11 @@ baat
 baatein
 baba
 babancha
+babu
+babuji
+bacchon
+bachchon
+bachon
 bada
 badal
 badh
@@ -181,6 +186,8 @@ bekar
 besan
 bhaari
 bhabhi
+bhagwaan
+bhagwan
 bhaiya
 bhakri
 bhala
@@ -255,6 +262,7 @@ cheez
 chettan
 chhan
 chhati
+chhena
 chhota
 chikki
 chilla
@@ -673,6 +681,7 @@ likha
 litres
 liya
 liye
+ludo
 lungi
 maa
 maaf
@@ -726,9 +735,11 @@ mins
 mir
 mirch
 miru
+mohabbat
 mondays
 mongolbar
 moong
+motia
 msg
 mujhe
 mujhse
@@ -804,6 +815,8 @@ pasand
 pata
 patla
 patrika
+paudha
+paudhe
 payasam
 payi
 payin
@@ -814,6 +827,8 @@ peene
 peeti
 pehle
 pet
+pheeka
+pheeki
 phir
 phool
 phulka
@@ -826,6 +841,7 @@ pishi
 pith
 piya
 pls
+poda
 poha
 pongal
 poocha
@@ -925,6 +941,7 @@ samajh
 sambar
 samne
 samosa
+sandhya
 sar
 sare
 sari
@@ -944,6 +961,7 @@ seri
 shaam
 shaant
 shab
+shabba
 shanivar
 shant
 shanti
@@ -996,6 +1014,7 @@ suna
 sundays
 suniye
 sunkar
+sunke
 sunn
 sunna
 sunne

@@ -188,7 +188,8 @@ def test_live_nicknames_from_the_record_are_scrubbed():
 
 
 def test_names_seen_mid_sentence_are_scrubbed_everywhere():
-    chat = ["Aaj Khuki school gayi.", "Khuki kokhon ashbe?", "Neetu kitchen mein hai", "kal Neetu aayegi", "Shengdana tar nako"]
+    chat = ["Aaj Khuki school gayi.", "phir Khuki ghar aayi", "Khuki kokhon ashbe?", "Neetu kitchen mein hai", "kal Neetu aayegi",
+            "aur Neetu bhi", "Shengdana tar nako"]
     seen = names_seen(chat)
     assert "Khuki" in seen and "Neetu" in seen and "Shengdana" not in seen
     out = [anonymise(t, names=seen) for t in chat]
@@ -198,3 +199,10 @@ def test_names_seen_mid_sentence_are_scrubbed_everywhere():
 def test_more_reasoning_junk():
     assert looks_like_junk("Thinking: the user wants a cab") and looks_like_junk("Let me check the ledger first.")
     assert not looks_like_junk("Let me check with Ankit and tell you, Mummy ji")
+
+
+def test_names_seen_skips_honorifics_and_capitalised_ordinary_words():
+    chat = ["Subrata babu ki Babu ne bola", "Can I have 1 small Chhena Poda", "aaj Chhena Poda khaya", "Bhagwan khush rakhe, Bhagwan bhala kare",
+            "aaj Gopal aaya", "phir Gopal gaya", "khana Pheeki thi", "pheeki dal, pheeki sabzi"]
+    seen = names_seen(chat)
+    assert seen == ["Gopal"]

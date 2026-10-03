@@ -68,6 +68,8 @@ KEEP = {"mummy", "papa", "maa", "amma", "appa", "baba", "dadi", "dada", "nani", 
         "bhaiya", "bhai", "saheli", "doctor", "sir", "madam", "bapa", "achan", "ammi", "abbu", "kaku", "kaki", "kaka", "mama", "mami",
         "mausi", "bua", "chacha", "chachi", "amma", "ammachi", "chechi", "anna", "akka", "aai", "ajji", "thatha", "paati", "tai", "dadu",
         "dida", "thakuma", "boudi", "nanna", "khala", "baji", "apa", "sahiba", "sahib", "begum", "ammijaan", "abbujaan"}
+HONORIFIC_WORDS = {"ji", "jee", "babu", "garu", "sahab", "saab", "sahib", "sahiba", "bhaiya", "bhai", "didi", "di", "aunty", "uncle", "madam",
+                   "sir", "bhabhi", "mausi", "chacha", "kaka", "kaki", "maasi", "baba", "babuji", "dada", "dadi", "begum", "mian", "miyan"}
 # Kinship and titles in other scripts that appear inside alias strings ("rehana baji" → keep the baji).
 KIN_OTHER = {"باجی", "آپا", "امی", "ابو", "ڈاکٹر", "صاحب", "صاحبہ", "بیگم", "ডাঃ", "ডাক্তার", "डॉ", "डॉ.", "डॉक्टर"}
 # A letter, or a mark that belongs to a letter (Indic vowel signs and viramas are not \w in Python).
@@ -305,13 +307,17 @@ def names_seen(texts) -> list[str]:
     """Capitalised unknown words a family uses mid-sentence anywhere in its chat ("…aaj Khuki aayi"): treated as names
     in all of that family's text, so they are scrubbed even where they open a sentence or are written in lower case."""
     seen: dict[str, int] = {}
+    lower: dict[str, int] = {}
     for text in texts:
         t = text or ""
         for m in NAME_LIKE.finditer(t):
             w = m.group(1)
-            if not is_common(w) and not _sentence_start(t, m.start()):
+            if not is_common(w) and w.lower() not in HONORIFIC_WORDS and not _sentence_start(t, m.start()):
                 seen[w] = seen.get(w, 0) + 1
-    return sorted(seen)
+        for w in re.findall(r"\b[a-z]{3,}\b", t):
+            lower[w] = lower.get(w, 0) + 1
+    # A name is used at least twice and is not mostly written in lower case (an ordinary word someone capitalised).
+    return sorted(w for w, n in seen.items() if n >= 2 and n >= lower.get(w.lower(), 0))
 
 
 def _sentence_start(t: str, i: int) -> bool:
