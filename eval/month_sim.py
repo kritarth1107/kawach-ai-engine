@@ -49,6 +49,13 @@ START = datetime(2026, 10, 5)  # a Monday
 OUT = Path(os.getenv("SIM_OUT", "/home/m4dm4x/OpenBot/Shared/kavach-sim"))
 LOG_TOOLS = {"log_dose", "log_vital", "log_event", "set_reminder", "set_stock"}
 VOLUME = float(os.getenv("SIM_VOLUME", "1.6"))  # scales how chatty people are; ~1000 messages per family per month
+# Training cost knobs (see journal/2026-10-04_training-plan.md):
+# JUDGE_MODE=cheap: a Flash judge grades everything, the Pro judge re-checks only what Flash failed.
+# JUDGE_SAMPLE=0.3: grade 30% of ordinary replies; scripted events, alerts and their replies are always graded.
+# SIM_EXTRACT_PER_DAY: how often the cold extractor runs (production: every 30 min; 2 is a fair, cheap stand-in).
+JUDGE_MODE = os.getenv("JUDGE_MODE", "full")
+JUDGE_SAMPLE = float(os.getenv("JUDGE_SAMPLE", "1.0"))
+EXTRACT_HOURS = {1: (20,), 2: (12, 22), 3: (8, 14, 20), 5: (2, 8, 12, 16, 20)}.get(int(os.getenv("SIM_EXTRACT_PER_DAY", "5")), (2, 8, 12, 16, 20))
 
 
 # ── prompts ────────────────────────────────────────────────────────────────────
@@ -183,6 +190,7 @@ class Fam:
     told: set = field(default_factory=set)  # (subject, med slug, day, time) reported to Saheli
     checks: list[dict] = field(default_factory=list)  # hard-check results
     stopped: str = ""  # why the run ended early (budget)
+    dreams: list[dict] = field(default_factory=list)  # what each night learned
     audits: list[dict] = field(default_factory=list)
     verdicts: list[dict] = field(default_factory=list)
     quiz: list[dict] = field(default_factory=list)
@@ -515,6 +523,9 @@ async def daily_audit(f: Fam, day: int) -> None:
 async def judge_day(f: Fam, day: int) -> None:
     date = (START + timedelta(days=day - 1)).date()
     outs = [m for m in f.msgs if m.who == "saheli" and m.kind in ("reply", "proactive") and clock.ist(m.at).date() == date and m.text.strip() and m.text.strip().lower() != "none"]
+    if JUDGE_SAMPLE < 1.0:
+        rng = random.Random(f"{f.family_id}:{day}")
+        outs = [m for m in outs if m.alerts or "event" in (m.trigger or "") or rng.random() < JUDGE_SAMPLE]
     if not outs:
         return
     lines = []
@@ -538,7 +549,7 @@ async def judge_day(f: Fam, day: int) -> None:
         memory.append(digest.notes_block(notes, max_chars=5000))
     earlier = [m for m in f.msgs if m.kind in ("human", "reply") and date - timedelta(days=3) <= clock.ist(m.at).date() < date][-40:]
     history = "\n".join(f"[{clock.ist(m.at).strftime('%d %b %H:%M')}] {'Saheli' if m.who == 'saheli' else f.people.get(m.who, {}).get('name', m.who)}: {m.text[:200]}" for m in earlier)
-    raw = await llm("judge", JUDGE_PROMPT, (
+    raw = await llm("judge_fast" if JUDGE_MODE == "cheap" else "judge", JUDGE_PROMPT, (
         f"SAHELI'S MEMORY AT THE END OF THE DAY (everything here was told to her earlier and is NOT made up; it also shows changes such as a new name to use):\n{chr(10).join(x for x in memory if x)}\n\n"
         f"CONVERSATION FROM THE PREVIOUS DAYS (also not made up):\n{history or '(none)'}\n\n" +
         f"FAMILY TRUTH: {f.spec['truth']}\nCURRENT MEDICINES (truth): {json.dumps(f.truth_meds, ensure_ascii=False)}\nPEOPLE: "
@@ -546,6 +557,20 @@ async def judge_day(f: Fam, day: int) -> None:
         + f"\nDAY {day} EVENTS: {events or 'ordinary day'}\n\nSAHELI'S MESSAGES:\n" + "\n".join(lines)
     ), tokens=6000)
     got = {v.get("n"): v for v in parse_json(raw).get("verdicts") or []}
+    failed = [m for m in outs if not (got.get(m.n) or {}).get("pass", True)]
+    if JUDGE_MODE == "cheap" and failed:
+        # The Pro judge looks again at only what Flash failed (Flash is stricter and noisier).
+        keep = {m.n for m in failed}
+        recheck = "\n".join(ln for ln in lines if int(ln.split(" ", 1)[0][1:]) in keep)
+        raw2 = await llm("judge", JUDGE_PROMPT, (
+            f"SAHELI'S MEMORY AT THE END OF THE DAY (not made up):\n{chr(10).join(x for x in memory if x)}\n\n"
+            f"CONVERSATION FROM THE PREVIOUS DAYS (not made up):\n{history or '(none)'}\n\nFAMILY TRUTH: {f.spec['truth']}\n"
+            f"CURRENT MEDICINES (truth): {json.dumps(f.truth_meds, ensure_ascii=False)}\nDAY {day} EVENTS: {events or 'ordinary day'}\n\n"
+            f"SAHELI'S MESSAGES (a first grader failed these; judge them fairly):\n{recheck}"
+        ), tokens=4000)
+        for v in parse_json(raw2).get("verdicts") or []:
+            if v.get("n") in keep:
+                got[v["n"]] = {**v, "rechecked": True}
     for m in outs:
         v = got.get(m.n) or {"pass": True, "score": 0, "issues": [], "note": "not graded"}
         f.verdicts.append({"day": day, "n": m.n, "to": m.to, "kind": m.kind, "trigger": m.trigger, "text": m.text, **v})
@@ -585,6 +610,11 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
     if os.getenv("SIM_AGGRESSIVE") == "1":
         spec = {**spec, "events": sorted([*spec["events"], *aggressive_events(spec)], key=lambda e: (e[0], e[1]))}
         f.spec = spec
+    if os.getenv("SIM_LEARNING") == "1":
+        from eval.month_families import learning_events
+
+        spec = {**spec, "events": sorted([*spec["events"], *learning_events(spec)], key=lambda e: (e[0], e[1]))}
+        f.spec = spec
     for e in spec["events"]:
         if "silence" in e[3].lower():
             f.silent_days.setdefault(e[2], set()).add(e[0])
@@ -608,9 +638,10 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
             if e[0] == day and "silence" not in e[3].lower():
                 f.push(day_dt(day, e[1]), "event", {"who": e[2], "intent": e[3], "expect": e[4]})
         await plan_day(f, day)
-        for hh in (2, 8, 12, 16, 20):
+        for hh in EXTRACT_HOURS:
             f.push(day_dt(day, f"{hh:02d}:15"), "extract", {})
-        f.push(day_dt(day, "02:15"), "consolidate", {})
+        # Saheli's night (same as production): facts, diary, baselines, patterns, tidy notes.
+        f.push(day_dt(day, "02:15"), "dream", {})
         f.push(day_dt(day, "15:00"), "quiet_check", {})
         f.push(day_dt(day, "17:00"), "missed_alert", {})
         if (START + timedelta(days=day - 1)).weekday() == 6:
@@ -656,13 +687,16 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
                     async with SessionLocal() as session:
                         await extract_family(session, f.family_id)
                         await session.commit()
-                elif kind == "consolidate":
+                elif kind == "dream":
                     clock.set_now(at)
-                    from app.care.extract import consolidate_family
+                    from app.care import dream as care_dream
+                    from app.care.models import FamilyRoster
 
                     async with SessionLocal() as session:
-                        await consolidate_family(session, f.family_id)
-                        await session.commit()
+                        roster = await session.get(FamilyRoster, f.family_id)
+                    if roster:
+                        rep = await care_dream.dream_family(SessionLocal, roster, care_dream.night_of(at))
+                        f.dreams.append(rep)
                 elif kind == "quiet_check":
                     subj = f.subjects()[0]
                     today = clock.ist(at).date()
@@ -693,6 +727,19 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
     clock.set_now(None)
     log.close()
     return f
+
+
+def learning_summary(fams: list[Fam]) -> list[str]:
+    """What the nightly dream learned per family (facts, diary lines, baselines, patterns, errors)."""
+    if not any(f.dreams for f in fams):
+        return []
+    out = ["", "## What Saheli learned at night", "", "| Family | Nights | Facts | Diary lines | Baselines | New patterns | Errors |",
+           "| --- | --- | --- | --- | --- | --- | --- |"]
+    for f in fams:
+        d = f.dreams
+        out.append(f"| {f.spec['key']} | {len(d)} | {sum(x['facts'] for x in d)} | {sum(x['diary'] for x in d)} | "
+                   f"{sum(x['baselines'] for x in d)} | {sum(x['patterns'] for x in d)} | {sum(len(x['errors']) for x in d)} |")
+    return out
 
 
 def report(fams: list[Fam], secs: int) -> str:
@@ -749,6 +796,9 @@ async def main(argv: list[str]) -> int:
     from app.care import models  # noqa: F401
     from app.models import entities  # noqa: F401
     from app.tasks import models as task_models  # noqa: F401
+    from app.care import baselines  # noqa: F401  (every table the brain reads must exist)
+    from app.llm import spend as _spend  # noqa: F401
+    from app.specialists import channels  # noqa: F401
 
     days, par = 30, 10
     for flag in ("--days", "--parallel"):
@@ -779,7 +829,7 @@ async def main(argv: list[str]) -> int:
             return await run_family(spec, days, outdir)
 
     fams = await asyncio.gather(*(one(s) for s in chosen))
-    rep = report(fams, int(time.monotonic() - started)) + f"\n\nEstimated model spend this run: ₹{spend.process_spent():.0f} (budget ₹{sim_budget():.0f}).\n"
+    rep = report(fams, int(time.monotonic() - started)) + "\n".join(learning_summary(fams)) + f"\n\nEstimated model spend this run: ₹{spend.process_spent():.0f} (budget ₹{sim_budget():.0f}).\n"
     (outdir / "report.md").write_text(rep)
     print("\n" + rep + f"\n\nSaved to {outdir}")
     return 0

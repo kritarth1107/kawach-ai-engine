@@ -239,6 +239,27 @@ AGGRESSIVE_COMMON = [
     (28, "10:00", "{cg}", "Changes a reminder time: move the main morning medicine 30 minutes later from tomorrow.", {"tools": ["remember"]}),
 ]
 
+# Learning storylines (SIM_LEARNING=1): outcomes told in chat, doctor changes, "what have you noticed?",
+# feedback and consent, so the outcome/feedback/pattern/baseline/dream paths are trained, not only tested.
+LEARNING_COMMON = [
+    (4, "21:30", "{cg}", "Tells Saheli in passing that {elder_first} slipped in the bathroom this evening, small bruise, all fine now.", {"tools": ["log_outcome"]}),
+    (8, "18:45", "{cg}", "Back from the doctor: the doctor changed the main medicine (a new dose and a new time; pick realistic ones and say them clearly).", {"tools": ["remember"]}),
+    (12, "20:30", "{cg}", "Mentions {elder_first} was in hospital overnight last week for dehydration and is home now.", {"tools": ["log_outcome"]}),
+    (14, "20:00", "{cg}", "Asks: 'Anything you've noticed about {elder_first} these two weeks that I should know?'", {"tools": ["patterns"]}),
+    (16, "09:10", "{cg}", "Reacts to something Saheli pointed out recently: says it was useful (or, if nothing was pointed out, asks what she has noticed).", {"tools": ["feedback", "patterns"]}),
+    (18, "21:15", "{cg}", "Says 'yes, you can use our data anonymously to improve Saheli for other families'.", {"tools": ["learning_consent"]}),
+    (20, "10:30", "{elder}", "Mentions feeling much better after the hospital stay, energy back.", {"tools": ["log_outcome", "log_event"]}),
+]
+
+
+def learning_events(family: dict) -> list[tuple]:
+    subs = [p for p in family["people"] if p["recipient"]] or [p for p in family["people"] if p["relation"] == "self"]
+    cgs = [p for p in family["people"] if not p["recipient"] and p["relation"] != "self"] or subs
+    elder, cg = subs[0], cgs[0]
+    fill = {"{elder}": elder["id"], "{cg}": cg["id"]}
+    return [(d, t, fill.get(w, w), what.replace("{elder_first}", elder["name"].split()[0]), exp) for d, t, w, what, exp in LEARNING_COMMON]
+
+
 # Family-specific traps on top of the common ones.
 AGGRESSIVE_EXTRA = {
     "patil": [
