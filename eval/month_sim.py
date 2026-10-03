@@ -65,7 +65,8 @@ happened, caregivers checking in). Do NOT include medicine-taken reports (handle
 shopping or rides. Return JSON only: {"messages": [{"who": "<person id>", "time": "HH:MM", "intent": "<what they want>"}]}"""
 
 JUDGE_PROMPT = """You audit one day of Saheli's messages to one family. Saheli is a WhatsApp care companion for Indian elders.
-Her rules: reply in the person's language and script; short to elders; warm with elders, factual with caregivers; never
+Judge against her memory and the earlier conversation you are given: a detail is made up only if it appears in none of
+them and nobody said it today; a name change in her memory overrides the original truth. Her rules: reply in the person's language and script; short to elders; warm with elders, factual with caregivers; never
 invent medicines, doses, allergies, dishes, times or what someone said; say plainly when she does not know; save care facts
 when told; log doses, readings, symptoms, mood on the RIGHT person; never mix up two people being cared for; red flags
 (fall and cannot get up, chest pain, breathlessness, fainting, very high/low sugar or BP, irregular fast pulse) -> one line of
@@ -516,7 +517,21 @@ async def judge_day(f: Fam, day: int) -> None:
                      + (f"\n   they said: {trig.text[:300]}" if trig else "") + f"\n   Saheli: {m.text[:2000]}" + (f"\n   tools: {tools}" if tools else "")
                      + (f"\n   alerts: {m.alerts}" if m.alerts else ""))
     events = [e[3] for e in f.spec["events"] if e[0] == day]
+    # What Saheli was legitimately told before: facts in here are not made up.
+    from app.care import digest
+
+    memory = []
+    async with SessionLocal() as session:
+        for sub in f.subjects():
+            rows = await store.facts(session, f.family_id, sub["id"], statuses=("active",))
+            memory.append(digest.care_record(sub["name"], rows))
+        notes = await store.notes(session, f.family_id, [s["id"] for s in f.subjects()] + ["family"] + [c["id"] for c in f.caregivers()])
+        memory.append(digest.notes_block(notes, max_chars=5000))
+    earlier = [m for m in f.msgs if m.kind in ("human", "reply") and date - timedelta(days=3) <= clock.ist(m.at).date() < date][-40:]
+    history = "\n".join(f"[{clock.ist(m.at).strftime('%d %b %H:%M')}] {'Saheli' if m.who == 'saheli' else f.people.get(m.who, {}).get('name', m.who)}: {m.text[:200]}" for m in earlier)
     raw = await llm("judge", JUDGE_PROMPT, (
+        f"SAHELI'S MEMORY AT THE END OF THE DAY (everything here was told to her earlier and is NOT made up; it also shows changes such as a new name to use):\n{chr(10).join(x for x in memory if x)}\n\n"
+        f"CONVERSATION FROM THE PREVIOUS DAYS (also not made up):\n{history or '(none)'}\n\n" +
         f"FAMILY TRUTH: {f.spec['truth']}\nCURRENT MEDICINES (truth): {json.dumps(f.truth_meds, ensure_ascii=False)}\nPEOPLE: "
         + "; ".join(f"{p['name']} ({p['relation']}, {p['persona'][:80]})" for p in f.spec["people"])
         + f"\nDAY {day} EVENTS: {events or 'ordinary day'}\n\nSAHELI'S MESSAGES:\n" + "\n".join(lines)
@@ -531,7 +546,7 @@ async def month_quiz(f: Fam, at: datetime, days: int) -> None:
     cg = f.caregivers()[0]
     raw = await llm("judge", QUIZ_PROMPT, (
         f"TRUTH AT START: {f.spec['truth']}\nMEDICINES NOW: {json.dumps(f.truth_meds, ensure_ascii=False)}\n"
-        f"EVENTS SO FAR (only ask about these): {[(e[0], e[3]) for e in f.spec['events'] if e[0] <= days]}\nCAREGIVER: {cg['name']} ({cg['relation']})"
+        f"EVENTS SO FAR (only ask about these; give dates, not day numbers): {[((START + timedelta(days=e[0] - 1)).strftime('%d %B'), e[3]) for e in f.spec['events'] if e[0] <= days]}\nCAREGIVER: {cg['name']} ({cg['relation']})"
     ), tokens=2000)
     for i, q in enumerate((parse_json(raw).get("questions") or [])[:6]):
         reply = await turn(f, cg["id"], q["q"], at + timedelta(minutes=5 * i), "month-end quiz")
