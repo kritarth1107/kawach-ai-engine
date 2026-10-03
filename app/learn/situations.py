@@ -44,6 +44,10 @@ ANNOYED = _R(
     r"malli enduku|visugu|thirumba (thirumba|yen))\b|"
     r"परेशान मत|बार बार|बार-बार|फिर से क्यों|আবার কেন|বিরক্ত|ବାରମ୍ବାର|చిరాకు|தொந்தரவு|ತೊಂದರೆ ಕೊಡಬೇಡ"
 )
+# "koi chakkar nahi", "no chest pain", "कोई चक्कर नहीं है": a symptom said to be absent (for tagging only; the
+# alert gate in the brain does not use this).
+NEGATED = _R(r"\b(?:no|not|without|koi|bina)\s+\S+(?:\s+\S+)?\s+(?:nahi|nahin|hai nahi)\b|\b(?:no|without)\s+\S+(?:\s+\S+)?|"
+             r"(?:कोई|बिना)\s+\S+(?:\s+\S+)?\s+नहीं|\S+\s+(?:nahi|nahin|नहीं)\s+(?:hai|है|hua|हुआ|aaya|आया|aa raha|aa rahi|आ रहा|आ रही|ho raha|ho rahi|हो रहा|हो रही|lag raha|lag rahi)\b")
 FINE = _R(r"\b(all good|i'?m (fine|ok|okay)|theek hoon|thik hoon|sab theek|bilkul theek|feeling better|much better)\b|बिल्कुल ठीक|ठीक हूँ|ठीक हूं|सब ठीक")
 STRESS = _R(r"\b(tired|exhausted|overwhelmed|stressed|burn(ed|t) out|can'?t cope|thak gay|thak gayi|no time|sleepless|neend nahi)\b")
 MED_Q = _R(r"\?.*|\b(can i|kya main|kya mai|should i|le sakt|kha sakt|pee sakt)\b")
@@ -71,7 +75,7 @@ def tag(*, text: str, role: str, tools: list[str], prompt: str = "") -> str:
         return "followup"
     if guards.INJECTION.search(t):
         return "injection"
-    if guards.RED_FLAG_WORDS.search(t) or guards.critical_reading(t):
+    if guards.RED_FLAG_WORDS.search(NEGATED.sub(" ", t)) or guards.critical_reading(t):
         return "emergency"
     # An alert without a red flag in the words (an unanswered check, an order to approve) is an emergency only when
     # the person did not say they are fine.

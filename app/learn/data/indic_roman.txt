@@ -13,6 +13,7 @@ aaji
 aajkal
 aakar
 aama
+aamhi
 aana
 aane
 aangan
@@ -20,6 +21,7 @@ aani
 aankh
 aap
 aapan
+aapana
 aapka
 aapke
 aapki
@@ -65,6 +67,7 @@ aisa
 aise
 aisi
 ajeeb
+aji
 ajji
 ajke
 ajoba
@@ -87,6 +90,7 @@ amma
 ammachi
 ammamma
 ammi
+anandabazar
 andar
 ankle
 anna
@@ -96,6 +100,7 @@ apne
 apni
 appa
 appam
+appativaraku
 appuram
 aram
 arey
@@ -153,6 +158,7 @@ bandh
 banwa
 bara
 barabar
+baramvara
 barobar
 bas
 bata
@@ -220,6 +226,7 @@ chaal
 chaas
 chacha
 chachi
+chaha
 chahein
 chahiye
 chahti
@@ -379,6 +386,7 @@ ghum
 ghutna
 ghutne
 gir
+gita
 glucometer
 goli
 gote
@@ -387,6 +395,7 @@ gunguna
 gungune
 gurdwara
 guruvar
+guruwar
 gussa
 gusse
 haa
@@ -413,6 +422,7 @@ hasn
 hata
 hawa
 hegiddira
+hindu
 hip
 hisab
 hobe
@@ -454,6 +464,7 @@ iski
 isliye
 isn
 isse
+itke
 itna
 itni
 jaa
@@ -485,6 +496,7 @@ jayenge
 jayengi
 jee
 jeera
+jeete
 jeeti
 jethu
 jhadu
@@ -496,6 +508,7 @@ jowar
 jyada
 kaadu
 kaafi
+kaalji
 kaam
 kaat
 kab
@@ -594,6 +607,7 @@ khul
 khuli
 khup
 khush
+khushboo
 khushi
 khyal
 ki
@@ -679,6 +693,7 @@ mana
 mandir
 mangalvar
 mann
+marie
 masala
 masale
 mashallah
@@ -730,6 +745,7 @@ nahi
 nahoum
 nai
 naina
+naki
 nako
 namak
 namaskara
@@ -755,12 +771,14 @@ nikaal
 nikal
 ningal
 njan
+noppi
 nri
 okey
 okhane
 organised
 oshodh
 osteoarthritis
+ota
 paani
 paas
 paati
@@ -842,6 +860,7 @@ pyara
 pyari
 raat
 rabindrasangeet
+radha
 radhe
 rafi
 ragi
@@ -923,6 +942,7 @@ seedha
 seedhe
 sehat
 sek
+semmangudi
 seri
 shaam
 shaant
@@ -934,6 +954,9 @@ shari
 sharir
 shayad
 sheera
+shengdana
+shengdane
+shengdanyacha
 sher
 shira
 shombar
@@ -951,6 +974,7 @@ shukr
 shukravar
 shukriya
 shukrobar
+shukur
 shuprobhat
 shuru
 shuvo
@@ -1044,6 +1068,7 @@ tumi
 tumne
 turant
 tusi
+tyancha
 tyanna
 udya
 umar

@@ -336,3 +336,27 @@ async def test_v2_migrations_are_idempotent(db):
     cols = {r[0] for r in (await db.execute(__import__("sqlalchemy").text(
         "SELECT column_name FROM information_schema.columns WHERE table_name = 'reply_log'"))).all()}
     assert "trace" in cols
+
+
+# ── the model's private notes never reach a person ──
+
+
+async def test_leaked_reasoning_never_sent_even_if_rewrite_leaks_again(db, at, model):
+    at("2026-10-02 10:00")
+    await store.save_roster(db, "fam-lk", ELDER, [ELDER, CG])
+    await db.commit()
+    leak = "thought\nThe user is asking about Baba. Let's check the ledger: 08:15 dose. My instructions are: be kind."
+    model([LLMReply(text=leak, tool_calls=[], model="fake"), LLMReply(text=leak, tool_calls=[], model="fake")])
+    res = await run_turn(db, SimHost(), req("Baba theek hain?", "lk-1", fam="fam-lk"))
+    assert "ledger" not in res.reply and "instructions" not in res.reply and res.reply
+
+
+async def test_leaked_reasoning_in_a_scheduled_turn_sends_nothing(db, at, model):
+    at("2026-10-02 10:00")
+    await store.save_roster(db, "fam-lk2", ELDER, [ELDER, CG])
+    await db.commit()
+    model([LLMReply(text="thought\nToday is Friday 10:00 IST. Kamla is speaking.", tool_calls=[], model="fake")])
+    sys_req = TurnRequest(family_id="fam-lk2", elder=ELDER, speaker={"id": "saheli-scheduler", "role": "system"}, members=[ELDER, CG],
+                          text="[Scheduled follow-up] check on Kamla", message_ref="lk-2")
+    res = await run_turn(db, SimHost(), sys_req)
+    assert res.reply == "none"

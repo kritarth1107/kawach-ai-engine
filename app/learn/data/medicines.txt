@@ -1,5 +1,5 @@
 # Common Indian medicine brands and generics (scrubbed as [MED] in shared examples). One per line; words of 4+ letters.
-acitrom amaryl amlong amlokind amlodac amlopres amlodipine anxit arkamin atarax atenolol aten atorva atorvastatin azee azithral
+augmentin amoxicillin amoxyclav acitrom amaryl amlong amlokind amlodac amlopres amlodipine anxit arkamin atarax atenolol aten atorva atorvastatin azee azithral
 azithromycin becosules benadryl betaloc bisoprolol brufen budecort calpol carbamazepine cardace cardivas carvedilol cetzine
 cilacar clopidogrel clopilet combiflam concor coreg crocin cyra dabigatran dapagliflozin deplatt deriphyllin diamicron diclofenac
 digene dilzem dolo domstal donep donepezil dytor ecosprin eltroxin empagliflozin enalapril entacapone eptoin escitalopram

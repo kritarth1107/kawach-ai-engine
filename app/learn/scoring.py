@@ -156,11 +156,19 @@ async def _identity_words(session: AsyncSession, family_id: str) -> tuple[list[s
         if f.domain == "medicine":
             meds.append(str(v.get("name") or f.key.split(":", 1)[-1]))
             continue
-        # anyone named anywhere in the record: doctor, maid, attendant, neighbour, hospital, town
+        # anyone named anywhere in the record: doctor, maid, attendant, neighbour, hospital, town, and nicknames
         for k in PERSON_KEYS:
             if isinstance(v.get(k), str) and v[k].strip():
                 names.append(v[k])
+        for k in ("aliases", "nickname", "nicknames", "also_called", "calls_her", "calls_him"):
+            x = v.get(k)
+            names += [str(a) for a in (x if isinstance(x, list) else [x]) if a]
+    names += EXTRA_NAMES.get(family_id, [])
     return [n for n in names if n], meds
+
+
+# Simulated families only: names the anonymiser must also remove (a lab family's name_aliases). Never filled in production.
+EXTRA_NAMES: dict[str, list[str]] = {}
 
 
 async def build_corpus(sessions: async_sessionmaker, *, days: int = 3, limit: int = 3000) -> dict:

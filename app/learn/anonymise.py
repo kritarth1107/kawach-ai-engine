@@ -34,7 +34,7 @@ ADDRESS = re.compile(
 # Not बेटा in Indic scripts: the word before it is usually a verb or a greeting ("खुश रहो बेटा", "शुभ रात्रि बेटा").
 HONORIFIC = re.compile(
     r"\b([A-Z][a-z]{2,})(?=\s+(?:ji|jee|beta|bhaiya|bhai|didi|di|sahab|saab|babu|garu|aunty|uncle|madam|sir|bhabhi|mausi|chacha|kaka|kaki|maasi)\b)|"
-    r"([ऀ-෿]{2,})(?=\s*(?:जी|भैया|दीदी|साहब|बाबू|आंटी|अंकल|গাৰু|বাবু|দিদি|ଜୀ|ବାବୁ|గారు|அவர்கள்))"
+    r"(?<![\u0900-\u0DFF])([\u0900-\u0DFF]{2,})(?=\s+(?:जी|भैया|दीदी|साहब|बाबू|গাৰু|বাবু|দিদি|ଜୀ|ବାବୁ|గారు|அவர்கள்)(?![\u0900-\u0DFF]))"
 )
 KIN_INDIC = {"आंटी", "मम्मी", "पापा", "बाबा", "अम्मा", "दादी", "नानी", "माँ", "मां", "अम्मी", "दादा", "नाना", "भैया", "दीदी", "बहन", "भाई", "बेटा", "बेटी",
              "डॉक्टर", "सर", "मैडम", "मम्मीजी", "पापाजी", "माताजी", "पिताजी", "बाबूजी", "चाचा", "चाची", "मौसी", "बुआ", "मामा", "मामी", "काका", "काकी"}
@@ -67,9 +67,14 @@ NAME_LIKE = re.compile(r"(?<![\w\[])([A-Z][a-z]{2,})(?![\w\]])")
 KEEP = {"mummy", "papa", "maa", "amma", "appa", "baba", "dadi", "dada", "nani", "nana", "beta", "beti", "ji", "aunty", "uncle", "didi",
         "bhaiya", "bhai", "saheli", "doctor", "sir", "madam", "bapa", "achan", "ammi", "abbu", "kaku", "kaki", "kaka", "mama", "mami",
         "mausi", "bua", "chacha", "chachi", "amma", "ammachi", "chechi", "anna", "akka", "aai", "ajji", "thatha", "paati", "tai", "dadu",
-        "dida", "thakuma", "boudi", "nanna", "khala"}
+        "dida", "thakuma", "boudi", "nanna", "khala", "baji", "apa", "sahiba", "sahib", "begum", "ammijaan", "abbujaan"}
+# Kinship and titles in other scripts that appear inside alias strings ("rehana baji" → keep the baji).
+KIN_OTHER = {"باجی", "آپا", "امی", "ابو", "ڈاکٹر", "صاحب", "صاحبہ", "بیگم", "ডাঃ", "ডাক্তার", "डॉ", "डॉ.", "डॉक्टर"}
+# A letter, or a mark that belongs to a letter (Indic vowel signs and viramas are not \w in Python).
+_LET = r"[^\W\d_]|[\u0900-\u0DFF\u0600-\u06FF\u0300-\u036F\u200c\u200d]"
+SUFFIXES = ("s", "'s", "’s", "er", "r", "ra", "re", "ke", "ki", "ka", "ko", "ne", "se", "nu", "na", "ji", "da", "di", "an", "ar", "uku", "ukku", "ku")
 # Text that is not a person talking: simulator internals, code, a player's reasoning. Never goes into a shared corpus.
-JUNK = re.compile(r"orchestrator|\.raw_output|simulated_users|The user prompt says|\bdef \w+\(|^\s*import \w+|Traceback \(most|\bNOW:\s", re.M)
+JUNK = re.compile(r"^\s*thought\b|\bMy instructions are\b|\blet'?s check the ledger\b|orchestrator|\.raw_output|simulated_users|The user prompt says|\bdef \w+\(|^\s*import \w+|Traceback \(most|\bNOW:\s", re.M)
 
 
 @lru_cache(maxsize=1)
@@ -153,8 +158,14 @@ def indic_key(word: str) -> str:
         if cp in _CHILLU:
             out.append(_CHILLU[cp])
             continue
+        if cp in (0x9F0, 0x9F1):  # Assamese ৰ, ৱ
+            out.append("R" if cp == 0x9F0 else "V")
+            continue
         if 0x980 <= cp <= 0xD7F:
             cp = 0x900 + (cp & 0x7F)  # same letter, Devanagari position
+        if cp == 0x93C and n and (0x900 + (ord(word[n - 1]) & 0x7F) if ord(word[n - 1]) >= 0x980 else ord(word[n - 1])) in (0x921, 0x922):
+            out[-1] = "R"  # ड़ / ঢ় written with a nukta sound like r ("Arora" = अरोड़ा)
+            continue
         if n == 0 and cp in (0x905, 0x906):
             out.append("A")
             continue
@@ -169,8 +180,8 @@ def _collapse(key: str) -> str:
 def _name_words(names) -> set[str]:
     out = set()
     for n in names:
-        for w in re.findall(r"[^\W\d_]{3,}", n or ""):
-            if w.lower() not in KEEP:
+        for w in re.findall(r"[A-Za-z]{3,}", n or ""):  # other scripts: matched as exact strings and by sound
+            if w.lower() not in KEEP and w.lower() not in ("dr", "doctor"):
                 out.add(w)
     return out
 
@@ -184,6 +195,17 @@ def _med_words(medicines) -> set[str]:
             if len(w) >= 4 and (w.lower() not in english() or len(words) == 1):
                 out.add(w)
     return out
+
+
+def _tag_for(word: str, people: dict[str, str]) -> str:
+    """The person tag for an alias in any script: the Latin name that sounds the same, else a new tag."""
+    first = word.split()[0] if word.split() else word
+    k = indic_key(first) if INDIC_WORD.fullmatch(first) else latin_key(first)
+    for w, tag in list(people.items()):
+        if w.isascii() and latin_key(w) == k:
+            return tag
+    people.setdefault(word.lower(), f"[PERSON{len(people) + 1}]")
+    return people[word.lower()]
 
 
 def _skeleton(key: str) -> str:
@@ -204,11 +226,32 @@ def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] 
         t = re.sub(rf"\b{re.escape(w)}\w*", meds[w.lower()], t, flags=re.I)
     t = re.sub(r"\b[A-Za-z]{4,}\b", lambda m: "[MED]" if m.group(0).lower() in brands() else m.group(0), t)
     people: dict[str, str] = {}
-    for w in sorted(_name_words(names), key=len, reverse=True):
+    words = sorted(_name_words(names), key=lambda w: (-len(w), w.lower()))  # same numbering on every rebuild
+    for w in words:
         people.setdefault(w.lower(), f"[PERSON{len(people) + 1}]")
-        # suffixed forms for longer names: Gopaler, Gopal-ke, Venkat's
-        tail = r"(?:['’-]?\w{0,4})" if len(w) >= 4 else r"(?:['’]s|-\w+)?"
-        t = re.sub(rf"\b{re.escape(w)}{tail}\b", people[w.lower()], t, flags=re.I)
+    # 1. Exact strings first, in any script: the full alias ("ডাঃ পারমিতা লাহিড়ী"), then each of its words.
+    for phrase in sorted({n.strip() for n in names if n and n.strip()}, key=len, reverse=True):
+        if not re.search(r"[^\x00-\x7f]", phrase) and " " not in phrase:
+            continue  # single Latin words: handled below with suffix rules
+        t = re.sub(rf"(?<!{_LET}){re.escape(phrase)}(?!{_LET})", lambda _m, ph=phrase: _tag_for(ph, people), t, flags=re.I)
+    for tok in sorted({x for n in names for x in (n or "").split()}, key=len, reverse=True):
+        if len(tok) < 2 or not re.search(r"[^\x00-\x7f]", tok) or tok in KIN_OTHER or tok in KIN_INDIC or tok.endswith((".", "ঃ")):
+            continue
+        t = re.sub(rf"(?<!{_LET}){re.escape(tok)}(?!{_LET})", _tag_for(tok, people), t)
+    # 2. Latin name words, also with suffixes (Gopaler, Gopal-ke, Venkat's) unless the longer word is an ordinary
+    #    word (Khan → not "khana").
+    for w in words:
+        tag = people[w.lower()]
+
+        def rep(m: re.Match, w=w, tag=tag) -> str:
+            whole, rest = m.group(0), m.group(0)[len(w):]
+            if whole.lower() == w.lower() or rest[:1] in ("'", "’", "-"):  # Khan's, Khan-ji
+                return tag
+            if (len(w) >= 5 or rest.lower() in SUFFIXES) and not is_common(whole):
+                return tag
+            return whole
+
+        t = re.sub(rf"\b{re.escape(w)}(?:['’-]?\w{{0,4}})\b", rep, t, flags=re.I)
     # The same names and medicines written in an Indian script.
     name_keys = {latin_key(w): people[w.lower()] for w in _name_words(names) if len(latin_key(w)) >= 2}
     med_keys = {_skeleton(latin_key(w)): meds[w.lower()] for w in _med_words(medicines) if len(_skeleton(latin_key(w))) >= 3}
@@ -234,8 +277,33 @@ def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] 
         return "[NAME]"
 
     t = HONORIFIC.sub(hon, t)
-    t = NAME_LIKE.sub(lambda m: m.group(1) if is_common(m.group(1)) else "[NAME]", t)
-    return t
+    # A capitalised unknown word at the start of a sentence is usually just a word in a language our lists don't
+    # cover (Aamhi, Tyancha, Shengdana); scrub it there only if it is also capitalised mid-sentence.
+    mid = {m.group(1) for m in NAME_LIKE.finditer(t) if not _sentence_start(t, m.start())}
+
+    def name_like(m: re.Match) -> str:
+        w = m.group(1)
+        if is_common(w):
+            return w
+        if _sentence_start(t, m.start()) and w not in mid and not SUBJECT_NEXT.match(t, m.end()):
+            return w
+        return "[NAME]"
+
+    return NAME_LIKE.sub(name_like, t)
+
+
+# What usually follows a person's name as the subject: "Gopal has…", "Asha ne…", "Ravi ko…", "Mala ji…".
+SUBJECT_NEXT = re.compile(
+    r"\s+(?:has|have|had|is|was|will|would|can|could|did|does|didn'?t|hasn'?t|isn'?t|wasn'?t|said|says|told|called|came|went|"
+    r"left|asked|wants|took|gave|ne|ko|ki|ka|ke|ji|jee|se|bhi|aaye|aayi|aaya|gaya|gayi|gaye|bola|boli|bole|kaha|garu|da|di|"
+    r"bhaiya|didi|sahab|saab|uncle|aunty|and|aur|&)\b",
+    re.I,
+)
+
+
+def _sentence_start(t: str, i: int) -> bool:
+    before = t[:i].rstrip(" \t*\"'“‘(-•")
+    return not before or before[-1] in ".!?\n:;…।"
 
 
 def leaks(text: str, *, names: list[str] | tuple = (), medicines: list[str] | tuple = ()) -> list[str]:
@@ -250,6 +318,10 @@ def leaks(text: str, *, names: list[str] | tuple = (), medicines: list[str] | tu
     for w in _name_words(names):
         if re.search(rf"\b{re.escape(w)}\b", text, re.I):
             out.append(f"name:{w}")
+    for tok in {x for n in names for x in (n or "").split()}:
+        if len(tok) >= 2 and re.search(r"[^\x00-\x7f]", tok) and tok not in KIN_OTHER and tok not in KIN_INDIC and not tok.endswith((".", "ঃ")):
+            if re.search(rf"(?<!{_LET}){re.escape(tok)}(?!{_LET})", text):
+                out.append(f"name:{tok}")
     keys = {latin_key(w): w for w in _name_words(names) if len(latin_key(w)) >= 2}
     meds = {_skeleton(latin_key(w)): w for w in _med_words(medicines) if len(_skeleton(latin_key(w))) >= 3}
     for word in INDIC_WORD.findall(text):

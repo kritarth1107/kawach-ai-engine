@@ -503,6 +503,12 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else degraded).strip()
+    if final and final != "none" and guards.leaked_reasoning(final):
+        # Last line of defence: the model's own notes never reach a person, even when the rewrite leaked again or the
+        # turn was a scheduled one (those skip the rewrite).
+        logger.error("leaked reasoning blocked family=%s", req.family_id)
+        final = "none" if is_system else ""
+        guarded = True
     if guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))

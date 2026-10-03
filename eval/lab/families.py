@@ -118,6 +118,8 @@ def to_spec(f: dict) -> dict:
         "key": f["key"], "city": f["city"], "setup": f["setup"], "meta": f["meta"], "people": people, "truth": f["truth"],
         "meds": f["meds"], "setup_text": f["setup_text"],
         "events": [(e["day"], e["time"], e["who"], e["what"], e.get("expect") or {}) for e in f["events"]],
+        # for the anonymiser only (never shown to players or Saheli)
+        "aliases": sorted({a for k, v in (f.get("name_aliases") or {}).items() for a in [k, *(v if isinstance(v, list) else [v])] if a}),
     }
 
 

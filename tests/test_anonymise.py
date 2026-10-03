@@ -129,3 +129,56 @@ async def test_late_answer_to_a_reply_is_a_new_topic(db, at):
     await scoring.score_pending(sessions)
     row = (await db.execute(select(ReplyLog).where(ReplyLog.family_id == "fam-n"))).scalars().one()
     assert row.replied is False
+
+
+# ── second spot-check (reviews/corpus-spotcheck-2.md) ──
+
+
+@pytest.mark.parametrize("alias", ["अरोड़ा", "ৰিমি", "বৰুৱা", "ജിൻസി", "പിള്ള", "જહાંગીર", "ମହାନ୍ତି", "రావు", "காமாட்சி", "সেনগুপ্ত",
+                                   "ডাঃ পারমিতা লাহিড়ী", "شبانہ", "ڈاکٹر شمیم جعفری", "farru", "jassi"])
+def test_exact_aliases_always_removed(alias):
+    out = anonymise(f"kal {alias} aaye the", names=[alias])
+    assert alias not in out and "kal" in out and "aaye the" in out
+    assert leaks(out, names=[alias]) == []
+
+
+def test_alias_tag_matches_the_latin_name():
+    out = anonymise("Arora ji aur अरोड़ा ji", names=["Ved Arora", "अरोड़ा"])
+    tags = [w for w in out.split() if w.startswith("[PERSON")]
+    assert len(tags) == 2 and tags[0] == tags[1]
+
+
+@pytest.mark.parametrize("text", ["bohot halka aur badhiya khana hai", "dahi ke saath khane ja rahi hain", "अच्छा लगा आंटी जी",
+                                  "सब्जी बनी है", "या जीरा डाल दो", "Shengdana tar mi kadhich vaprat nahi, allergy ahe", "Aamhi udya yeto."])
+def test_second_round_over_scrub(text):
+    assert anonymise(text, names=["Nusrat Khan", "Javed Khan"]) == text
+
+
+def test_khan_still_scrubbed_with_real_suffixes():
+    out = anonymise("Khan sahab aur Khan-ji aaye, Khan's car", names=["Javed Khan"])
+    assert "Khan" not in out
+
+
+def test_unknown_name_mid_sentence_still_scrubbed():
+    assert anonymise("Then Pinni came. Pinni left.", names=[]).count("[NAME]") == 2
+
+
+def test_person_numbering_is_stable():
+    names = ["Zoya Ali", "Amit Shah", "Bina Rao"]
+    assert anonymise("Amit, Bina, Zoya", names=names) == anonymise("Amit, Bina, Zoya", names=list(reversed(names)))
+
+
+def test_reasoning_is_junk():
+    assert looks_like_junk("thought\nThe user is asking about Baba")
+    assert looks_like_junk("Ok. My instructions are: be kind")
+
+
+def test_negated_symptom_is_not_an_emergency_tag():
+    assert situations.tag(text="तबीयत बिल्कुल ठीक है कोई चक्कर नहीं है", role="elder", tools=[]) != "emergency"
+    assert situations.tag(text="chakkar nahi aa raha", role="elder", tools=[]) != "emergency"
+    assert situations.tag(text="chakkar aa raha hai, gir gayi", role="elder", tools=[]) == "emergency"
+
+
+def test_live_nicknames_from_the_record_are_scrubbed():
+    out = anonymise("Pinky aayi thi", names=["Priya Sharma", "Pinky"])
+    assert "Pinky" not in out

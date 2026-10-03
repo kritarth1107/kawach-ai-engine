@@ -439,7 +439,11 @@ def red_flag_unsupported(user_text: str) -> str | None:
 
 # ── leaked reasoning ───────────────────────────────────────────────────────────
 
-LEAK = re.compile(r"^\s*(thought|thinking|reasoning)\s*\n|^\s*(today is|now:|speaking:)\b.{0,80}\bist\b", re.I | re.S)
+LEAK = re.compile(
+    r"^\s*(thought|thinking|reasoning)\b\s*(\n|:|\[|the user\b)|^\s*(today is|now:|speaking:)\b.{0,80}\bist\b|"
+    r"^\s*thought\s+\S+\s+(reports|says|asks|is asking|is speaking)\b|\bmy instructions (are|say)\b|\blet'?s check the ledger\b|\bthe user \(|\bi have successfully (logged|alerted|saved)\b",
+    re.I | re.S,
+)
 
 
 def leaked_reasoning(text: str) -> bool:
