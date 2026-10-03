@@ -89,6 +89,13 @@ def test_situations(text, role, tools_, want):
     assert situations.tag(text=text, role=role, tools=tools_, prompt=text if role == "system" else "") == want
 
 
+def test_names_never_saved_are_scrubbed_too():
+    out = anon.anonymise("Gopal has not measured his BP. Mala ji mandir gayi hain. सुनीता दीदी आ रही हैं।", names=[])
+    assert "Gopal" not in out and "Mala" not in out and "सुनीता" not in out
+    keep = anon.anonymise("Mummy ji, aaj bahut accha laga. Radhe Radhe! ठीक है बेटा", names=[])
+    assert keep == "Mummy ji, aaj bahut accha laga. Radhe Radhe! ठीक है बेटा"
+
+
 def test_anonymise_and_leaks():
     t = "Ankit ne kaha Kamla ji ko Telma 40 do, call 9876543210, Flat 4B, MG Road, 560034"
     out = anon.anonymise(t, names=["Kamla Sharma", "Ankit Sharma"], medicines=["Telma"])

@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import select  # noqa: E402
+from sqlalchemy import or_, select  # noqa: E402
 
 from app.db.session import Base, SessionLocal, engine  # noqa: E402
 
@@ -31,7 +31,7 @@ async def main(argv: list[str]) -> int:
         await conn.run_sync(Base.metadata.create_all)
     spend.configure(SessionLocal)
     async with SessionLocal() as s:
-        for r in (await s.execute(select(FamilyRoster).where(FamilyRoster.family_id.startswith(("month-", "sim-"))))).scalars():
+        for r in (await s.execute(select(FamilyRoster).where(or_(FamilyRoster.family_id.startswith("month-"), FamilyRoster.family_id.startswith("sim-"))))).scalars():
             if (r.elder or {}).get("id") and not (await outcomes.consent(s, r.family_id, r.elder["id"]))["granted"]:
                 await outcomes.set_consent(s, r.family_id, r.elder["id"], granted=True, by="training")
         await s.commit()

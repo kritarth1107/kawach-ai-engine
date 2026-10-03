@@ -10,6 +10,10 @@
 #   learning   10 families × 21 days, learning storylines (patterns,         ~₹2,500
 #              outcomes, baselines, nightly dream), cheap judge
 #   full       10 families × 30 days, aggressive, full Pro judge             ~₹9,500 (only before launch)
+#   lessons    learn a playbook from the simulated runs so far (score, corpus,  ~₹50
+#              draft, safety gate) — the "teach her how to talk" step
+#   compare V  regress twice on the same families: without a playbook and with  ~₹1,700
+#              playbook V; the report says which replies scored better
 #
 # Required: SIM_PROJECT (a separate GCP project for training, never the production project) and ADC
 # credentials for it. The run stops at SIM_MAX_INR whatever the stage.
@@ -26,7 +30,20 @@ case "$stage" in
   regress) days=7;  fams=(); budget=${SIM_MAX_INR:-1200}; export SIM_AGGRESSIVE=1 JUDGE_MODE=cheap JUDGE_SAMPLE=0.4 SIM_EXTRACT_PER_DAY=2 ;;
   learning) days=21; fams=(); budget=${SIM_MAX_INR:-3000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=cheap JUDGE_SAMPLE=0.3 SIM_EXTRACT_PER_DAY=2 ;;
   full)    days=30; fams=(); budget=${SIM_MAX_INR:-10000}; export SIM_AGGRESSIVE=1 SIM_LEARNING=1 JUDGE_MODE=full JUDGE_SAMPLE=1.0 SIM_EXTRACT_PER_DAY=5 ;;
-  *) echo "usage: eval/train.sh free|smoke|regress|learning|full [families…]"; exit 2 ;;
+  lessons)
+    : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
+    [ "$SIM_PROJECT" = "kavach-care" ] && { echo "Refusing: training must not run in the production project."; exit 2; }
+    read -r -p "Learn a playbook from the simulator database (~₹50 in $SIM_PROJECT)? Type yes: " ok; [ "$ok" = "yes" ] || exit 1
+    export PYTHONPATH=. DEBUG=false GCP_PROJECT_ID="$SIM_PROJECT" LEARN_MIN_EXAMPLES="${LEARN_MIN_EXAMPLES:-15}"
+    export DATABASE_URL="${SIM_DATABASE_URL:-postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_sim}"
+    export MODEL_ROUTES='{"learn": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"]}'
+    exec .venv/bin/python eval/learn_cycle.py ;;
+  compare)
+    v="${1:?usage: eval/train.sh compare <playbook version>}"; shift
+    echo "Two regress runs: LEARN_FORCE_VERSION=0 then $v (same families, same events)."
+    LEARN_FORCE_VERSION=0 SIM_MAX_INR="${SIM_MAX_INR:-900}" "$0" regress "$@"
+    LEARN_FORCE_VERSION="$v" SIM_MAX_INR="${SIM_MAX_INR:-900}" exec "$0" regress "$@" ;;
+  *) echo "usage: eval/train.sh free|smoke|regress|learning|full|lessons|compare V [families…]"; exit 2 ;;
 esac
 [ $# -gt 0 ] && fams=("$@")
 : "${SIM_PROJECT:?set SIM_PROJECT to a separate GCP project for training (not kavach-care)}"
