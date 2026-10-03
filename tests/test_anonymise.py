@@ -206,3 +206,11 @@ def test_names_seen_skips_honorifics_and_capitalised_ordinary_words():
             "aaj Gopal aaya", "phir Gopal gaya", "khana Pheeki thi", "pheeki dal, pheeki sabzi"]
     seen = names_seen(chat)
     assert seen == ["Gopal"]
+
+
+def test_kinship_words_never_become_names():
+    chat = ["kal Savitri Auntie aayi", "phir Savitri Auntie boli", "आंटी जी, मैं डॉक्टर से पूछ लूंगी"]
+    seen = names_seen(chat)
+    assert "Auntie" not in seen
+    out = anonymise(chat[2], names=["Savitri Gupta", "Auntie", *seen])
+    assert "आंटी जी" in out

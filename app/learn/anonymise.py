@@ -67,7 +67,8 @@ NAME_LIKE = re.compile(r"(?<![\w\[])([A-Z][a-z]{2,})(?![\w\]])")
 KEEP = {"mummy", "papa", "maa", "amma", "appa", "baba", "dadi", "dada", "nani", "nana", "beta", "beti", "ji", "aunty", "uncle", "didi",
         "bhaiya", "bhai", "saheli", "doctor", "sir", "madam", "bapa", "achan", "ammi", "abbu", "kaku", "kaki", "kaka", "mama", "mami",
         "mausi", "bua", "chacha", "chachi", "amma", "ammachi", "chechi", "anna", "akka", "aai", "ajji", "thatha", "paati", "tai", "dadu",
-        "dida", "thakuma", "boudi", "nanna", "khala", "baji", "apa", "sahiba", "sahib", "begum", "ammijaan", "abbujaan"}
+        "dida", "thakuma", "boudi", "nanna", "khala", "auntie", "aunties", "aunty", "aunt", "uncles", "uncleji", "auntyji", "mummyji",
+        "papaji", "mataji", "pitaji", "baji", "apa", "sahiba", "sahib", "begum", "ammijaan", "abbujaan"}
 HONORIFIC_WORDS = {"ji", "jee", "babu", "garu", "sahab", "saab", "sahib", "sahiba", "bhaiya", "bhai", "didi", "di", "aunty", "uncle", "madam",
                    "sir", "bhabhi", "mausi", "chacha", "kaka", "kaki", "maasi", "baba", "babuji", "dada", "dadi", "begum", "mian", "miyan"}
 # Kinship and titles in other scripts that appear inside alias strings ("rehana baji" → keep the baji).
@@ -259,6 +260,8 @@ def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] 
     med_keys = {_skeleton(latin_key(w)): meds[w.lower()] for w in _med_words(medicines) if len(_skeleton(latin_key(w))) >= 3}
     if name_keys or med_keys:
         def indic(m: re.Match) -> str:
+            if m.group(0) in KIN_INDIC or m.group(0) in COMMON_INDIC:  # आंटी is never a name, whatever it sounds like
+                return m.group(0)
             k = indic_key(m.group(0))
             if k in name_keys:
                 return name_keys[k]
@@ -312,7 +315,7 @@ def names_seen(texts) -> list[str]:
         t = text or ""
         for m in NAME_LIKE.finditer(t):
             w = m.group(1)
-            if not is_common(w) and w.lower() not in HONORIFIC_WORDS and not _sentence_start(t, m.start()):
+            if not is_common(w) and w.lower() not in HONORIFIC_WORDS and w.lower() not in KEEP and not _sentence_start(t, m.start()):
                 seen[w] = seen.get(w, 0) + 1
         for w in re.findall(r"\b[a-z]{3,}\b", t):
             lower[w] = lower.get(w, 0) + 1
@@ -344,6 +347,8 @@ def leaks(text: str, *, names: list[str] | tuple = (), medicines: list[str] | tu
     keys = {latin_key(w): w for w in _name_words(names) if len(latin_key(w)) >= 2}
     meds = {_skeleton(latin_key(w)): w for w in _med_words(medicines) if len(_skeleton(latin_key(w))) >= 3}
     for word in INDIC_WORD.findall(text):
+        if word in KIN_INDIC or word in COMMON_INDIC:
+            continue
         k = indic_key(word)
         if k in keys:
             out.append(f"name:{keys[k]}")
