@@ -46,7 +46,7 @@ sep aug jan feb mar apr jun jul bolus after before with without because about fr
 nothing everything everyone someone kuch koi sab sabhi mera meri mere tera teri hamara hamari humne hum tum tumhe unko usko isko
 yeh ye woh wo yahan wahan jab tab kyunki lekin magar par phir aaram dhyan khana pani neend dard chinta khush
 """.split())
-COMMON_INDIC = {"ठीक", "शुभ", "बहुत", "धन्यवाद", "नमस्ते", "हाँ", "हां", "जी", "अच्छा", "सुप्रभात", "शुक्रिया", "जय", "श्री", "राम", "कृष्णा",
+COMMON_INDIC = {"ठीक", "है", "हैं", "था", "थी", "हो", "शुभ", "बहुत", "धन्यवाद", "नमस्ते", "हाँ", "हां", "जी", "अच्छा", "सुप्रभात", "शुक्रिया", "जय", "श्री", "राम", "कृष्णा",
                 "राधे", "खुश", "प्यारे", "मेरे", "मेरी", "आपका", "आपकी", "नहीं", "सब", "चलो", "अरे", "आज", "कल", "रात", "सुबह", "शाम"}
 NAME_LIKE = re.compile(r"(?<![\w\[])([A-Z][a-z]{2,})(?![\w\]])")
 KEEP = {"mummy", "papa", "maa", "amma", "appa", "baba", "dadi", "dada", "nani", "nana", "beta", "beti", "ji", "aunty", "uncle", "didi",
