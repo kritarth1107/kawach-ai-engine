@@ -45,6 +45,17 @@ Return ONLY JSON:
 }"""
 
 
+async def _ensure_v2_schema() -> None:
+    from app.care import baselines, models  # noqa: F401
+    from app.db.session import Base
+    from app.llm import spend  # noqa: F401
+    from app.specialists import channels  # noqa: F401
+    from app.tasks import models as task_models  # noqa: F401
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
 async def _ensure_schema() -> None:
     async with engine.begin() as conn:
         await run_instinct_migrations(conn)
@@ -242,8 +253,19 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.all:
-        out = asyncio.run(dream_all_elders())
-        print(json.dumps(out, indent=2))
+        async def _both() -> dict:
+            # v1 memory entities (older families) and Saheli v2's night (app/care/dream.py), one job, one schedule.
+            from app.care import dream as v2_dream
+            from app.llm import spend
+
+            spend.configure(SessionLocal)
+            out = {"v1": await dream_all_elders()}
+            await _ensure_v2_schema()
+            out["v2"] = await v2_dream.dream_all(SessionLocal, budget_s=3000)
+            return out
+
+        out = asyncio.run(_both())
+        print(json.dumps(out, indent=2, default=str))
         return
 
     if args.elder_id:

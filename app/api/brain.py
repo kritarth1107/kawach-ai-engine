@@ -197,6 +197,15 @@ async def llm_spend(days: int = 7) -> dict:
             "rows": await spend.summary(SessionLocal, days=max(1, min(days, 90)))}
 
 
+@router.post("/jobs/dream")
+async def dream_job(budget_s: float = 240.0) -> dict:
+    """Saheli's night for families not done yet tonight (the nightly Cloud Run Job runs the same, without a budget)."""
+    from app.care import dream
+    from app.db.session import SessionLocal
+
+    return await dream.dream_all(SessionLocal, budget_s=max(10.0, min(budget_s, 280.0)))
+
+
 @router.post("/jobs/daily")
 async def daily_job() -> dict:
     """Cloud Scheduler, 10:00 IST: medicines running low become a refill loop that wakes Saheli to ask about a reorder."""
@@ -227,30 +236,7 @@ async def daily_job() -> dict:
             )
             opened += 1
         await session.commit()
-    found = await _patterns_for_all(SessionLocal)
-    return {"refills": opened, "patterns": found}
-
-
-async def _patterns_for_all(SessionLocal) -> int:
-    """Daily: look for patterns in every family's last two weeks (elder and anyone with self care)."""
-    from sqlalchemy import select as sql_select
-
-    from app.care import patterns
-    from app.care.models import FamilyRoster
-
-    async with SessionLocal() as session:
-        rosters = list((await session.execute(sql_select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
-    new = 0
-    for r in rosters:
-        people = {(r.elder or {}).get("id")} | {m.get("id") for m in r.members or []}
-        for pid in [p for p in people if p]:
-            try:
-                async with SessionLocal() as session:
-                    new += len(await patterns.record_new(session, r.family_id, pid))
-                    await session.commit()
-            except Exception:  # noqa: BLE001 — one family's data must not stop the others
-                logger.exception("patterns failed family=%s subject=%s", r.family_id, pid)
-    return new
+    return {"refills": opened}  # patterns and baselines are learned in the nightly dream (app/care/dream.py)
 
 
 async def _roster(SessionLocal, fid: str):

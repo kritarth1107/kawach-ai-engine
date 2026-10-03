@@ -6,6 +6,7 @@ on:
     branches: [master, main]
     paths:
       - "app/jobs/**"
+      - "app/care/dream.py"
       - ".github/workflows/deploy-memory-dream.yml"
 
 concurrency:
@@ -61,7 +62,7 @@ jobs:
           GCP_PROJECT_ID: ${{ env.GCP_PROJECT_ID }}
           GCP_REGION: ${{ env.GCP_REGION }}
           VERTEX_LOCATION: global
-          VERTEX_CHAT_MODEL: gemini-3.1-pro-preview
+          VERTEX_CHAT_MODEL: gemini-3.8-flash
           VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
           EMBED_DIM: "768"
           DATABASE_URL: "${DATABASE_URL}"
