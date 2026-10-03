@@ -69,7 +69,7 @@ async def test_tapped_button_needs_no_model(db, at, model):
     assert m.calls == 0 and out.model == "none" and "recovery" in out.reply.lower()
     got = await outcomes.recent(db, FAM, ELDER)
     assert got[0]["kind"] == "hospital_visit" and got[0]["source"] == "button"
-    loops = [l for l in (await db.execute(OpenLoop.__table__.select())).all() if l.dedupe_key == f"followup:{key}"]
+    loops = [l for l in (await db.execute(OpenLoop.__table__.select())).all() if l.dedupe_key == f"followup:{key}" and l.family_id == FAM]
     assert loops and loops[0].status == "done"
 
 
@@ -101,7 +101,7 @@ async def test_red_flag_alert_schedules_a_next_day_follow_up(db, at):
     c.user_text = "I fell in the bathroom"
     out, err = await tools.run(c, "alert_caregiver", {"reason": "red_flag", "issue": "fall-bathroom", "message": "Kamla fell", "confidence": 0.95})
     assert not err
-    loops = [l for l in (await db.execute(OpenLoop.__table__.select())).all() if l.kind == "followup"]
+    loops = [l for l in (await db.execute(OpenLoop.__table__.select())).all() if l.kind == "followup" and l.family_id == FAM]
     assert len(loops) == 1 and loops[0].owner_id == CG and clock.ist(loops[0].wake_at).strftime("%d %H:%M") == "03 10:00"
 
 

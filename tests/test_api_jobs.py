@@ -103,6 +103,11 @@ async def test_daily_job_opens_refill_once(api, at, db):
 
 async def test_weekly_checkin_is_once_per_day_even_if_retried(api, at, db):
     at("2026-10-04 18:00")
+    from sqlalchemy import delete
+
+    from app.care.models import FamilyRoster
+
+    await db.execute(delete(FamilyRoster).where(FamilyRoster.family_id != FAM))  # only this family (rolled back after the test)
     await store.save_roster(db, FAM, ELDER, [ELDER, CG])
     await db.commit()
     api.model.replies = [
