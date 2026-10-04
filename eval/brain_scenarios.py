@@ -224,7 +224,7 @@ async def tasks_tick(run: Run, when: str) -> None:
     clock.set_now(ist(when))
 
     async def profile_for(task):
-        return "prof-sim"
+        return f"prof-{task.family_id}-{task.service}"
 
     async def notify(family_id, requested_by, prompt):
         await system_turn(SessionLocal, run.host, family_id, f"{prompt} (Requested by {requested_by}.)", f"task:{uuid.uuid4().hex[:8]}")

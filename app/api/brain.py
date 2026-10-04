@@ -179,6 +179,16 @@ async def tasks_job() -> dict:
     return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify, host_for=host_for)
 
 
+@router.post("/jobs/browser-sweep")
+async def browser_sweep_job() -> dict:
+    """Cloud Scheduler, every 10 min: stop cloud browsers older than 20 min that no live task uses (cost safety)."""
+    from app.brain.tools import task_agent
+    from app.db.session import SessionLocal
+    from app.tasks import sandbox
+
+    return await sandbox.sweep(SessionLocal, task_agent())
+
+
 @router.get("/agents/metrics")
 async def agent_metrics(session: Annotated[AsyncSession, Depends(get_db)], days: int = 7) -> dict:
     """Shopping / pharmacy / rides agents: success rate, time to cart and to placed, cost, channels, failures, alerts."""

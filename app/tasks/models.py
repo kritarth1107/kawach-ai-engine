@@ -55,3 +55,6 @@ class SkillNote(Base):
     service: Mapped[str] = mapped_column(String(24), index=True)
     note: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+from app.tasks import sandbox as _sandbox  # noqa: E402,F401  (registers browser_sessions and service_logins)

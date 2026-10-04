@@ -25,6 +25,7 @@ from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
+from app.tasks import sandbox
 from app.tasks.models import SkillNote, Task
 from app.tasks.skills import SKILLS
 
@@ -148,17 +149,23 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     goal = _goal(task) + (f"\n{extra}" if extra else "")
     learned, skill_ids = await _skills_and_notes(session, task.service)
     task.details = {**(task.details or {}), "skills_used": skill_ids}
+    profile_id = None
+    if not task.agent_session:
+        profile_id = await profile_for(task)
+        await sandbox.bind_profile(session, task.family_id, task.service, profile_id)  # raises if it belongs to someone else
     run = await agent.run(
         goal=goal,
         hints=spec.hints(task.service, learned),
         schema=spec.schema(task),
         session_id=task.agent_session,
-        profile_id=None if task.agent_session else await profile_for(task),
+        profile_id=profile_id,
         start_url=None if task.agent_session else SKILLS[task.service]["start_url"],
         max_steps=spec.steps.get(task.phase, 40),
         metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
         llm=spec.model,
     )
+    await sandbox.started(session, session_id=run.session_id, task_id=str(task.id), family_id=task.family_id, service=task.service,
+                          profile_id=profile_id)
     task.agent_session, task.agent_task = run.session_id, run.task_id
     task.status, task.input_needed, task.runs = "running", None, task.runs + 1
     task.details = {**(task.details or {}), "run_started": clock.now().isoformat(), "channel": "browser"}
@@ -470,7 +477,8 @@ async def release_sessions(sessions: async_sessionmaker, agent: BrowserAgent, li
                 continue  # the login page is waiting for the code in this browser
             try:
                 await agent.stop_session(t.agent_session)
-            except Exception:  # noqa: BLE001 — already gone, or the service is down: forget it either way
+                await sandbox.stopped(session, t.agent_session, f"task {t.status}")
+            except Exception:  # noqa: BLE001 — already gone, or the service is down: the sweeper retries from the ledger
                 logger.warning("stop session failed task=%s", t.id)
             t.agent_session = None
             released += 1
@@ -619,7 +627,11 @@ async def tick(
                     run: AgentRun = await agent.poll(task.agent_task)
                     stats["polled"] += 1
                     if run.status in ("finished", "failed", "stopped"):
+                        before = float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0))
                         metrics.on_browser_run(task, run.steps)
+                        sandbox.audit(task, phase=task.phase, status=run.status, steps=run.steps, path=run.path,
+                                      cost=float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0)) - before, error=run.error)
+                        await sandbox.note_login(session, task.family_id, task.service, run.output or {})
                         await channels.record(session, task.service, "browser", run.status == "finished" and not (run.output or {}).get("blocked"), run.error)
                         out = run.output or {}
                         retries = int((task.details or {}).get("retries", 0))
@@ -663,6 +675,7 @@ async def tick(
                                 session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
                     elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > RUN_TIMEOUT:
                         await agent.stop(task.agent_task)
+                        sandbox.audit(task, phase=task.phase, status="timeout", steps=run.steps, path=run.path, cost=0)
                         task.status = "failed"
                         message = {
                             "cancel": "Cancel took too long; tell the caregiver.",

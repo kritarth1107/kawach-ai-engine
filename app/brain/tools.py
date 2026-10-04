@@ -1201,3 +1201,27 @@ async def forget_skill(ctx: TurnCtx, a: dict) -> dict:
             raise ToolRefused("No such skill.")
         return await skillbook.decide(ctx.session, ctx.family_id, s.id, action="remove", by=by)
     return await skillbook.forget_matching(ctx.session, ctx.family_id, [subject], a.get("what") or "", by=by)
+
+
+@tool(
+    "service_status",
+    "Is the family logged in on a store or ride app (Uber, Ola, Rapido, Apollo, 1mg, PharmEasy, Swiggy, Zepto, Blinkit, Zomato)? "
+    "Answers from what the order agents last saw; it does not open the app. Use for 'Uber login hai?' or before promising an order.",
+    {"service": {"type": "string", "description": "Leave out for all"}},
+    [],
+)
+async def service_status(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import sandbox
+    from app.tasks.skills import SKILLS
+
+    rows = {r["service"]: r for r in await sandbox.logins(ctx.session, ctx.family_id)}
+    want = str(a.get("service") or "").lower().replace(" ", "")
+    keys = [k for k in SKILLS if not want or want in (k, SKILLS[k]["label"].lower().replace(" ", ""))] or list(SKILLS)
+    out = []
+    for k in keys:
+        r = rows.get(k)
+        state = r["state"] if r else "never used"
+        out.append({"service": SKILLS[k]["label"], "login": state, "lastWorked": (r or {}).get("lastLoginOkAt"),
+                    "note": {"ok": "logged in last time", "expired": "will need a login code next time",
+                             "unknown": "not known yet", "never used": "not set up; the first order asks for a login code"}[state]})
+    return {"apps": out}

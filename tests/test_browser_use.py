@@ -23,7 +23,7 @@ class H:
         self.sessions, self.agent, self.told = sessions, agent, []
 
     async def profile_for(self, task):
-        return "prof-fam"
+        return f"prof-{task.family_id}-{task.service}"
 
     async def notify(self, fid, by, prompt):
         self.told.append(prompt)
@@ -56,7 +56,7 @@ async def test_browser_stopped_while_waiting_and_place_starts_fresh_with_profile
     await db.commit()
     await h.tick(); await h.tick()
     place = [r for r in h.agent.runs if r["phase"] == "place"][0]
-    assert place["session"] is None and place["profile"] == "prof-fam"  # new browser, same saved login
+    assert place["session"] is None and place["profile"] == "prof-fam-bu-zepto"  # new browser, same saved login
     assert "if it is empty" in place["goal"]
     await db.refresh(t)
     assert t.status == "done"

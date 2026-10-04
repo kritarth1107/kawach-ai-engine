@@ -22,7 +22,7 @@ from app.care.models import CareEvent, CareFact, OpenLoop
 from app.core import clock
 from app.core.security import verify_api_secret
 from app.db.session import get_db
-from app.tasks import runtime
+from app.tasks import runtime, sandbox
 from app.tasks.models import Task
 from app.tasks.skills import SKILLS
 
@@ -67,6 +67,7 @@ def task_json(t: Task) -> dict:
         "details": d, "status": t.status, "phase": t.phase, "inputNeeded": t.input_needed, "cancelRequested": t.cancel_requested,
         "result": t.result, "history": t.history, "requestedBy": t.requested_by, "hasLiveView": bool(t.agent_session),
         "createdAt": t.created_at.isoformat(), "updatedAt": t.updated_at.isoformat(),
+        "audit": sandbox.audit_text(t),
     }
 
 
@@ -713,3 +714,9 @@ async def skills_decide(family_id: str, elder_id: str, skill_id: int, body: Skil
         raise HTTPException(status_code=422, detail="; ".join(out.get("problems") or [out.get("error") or "not changed"]))
     await session.commit()
     return out
+
+
+@router.get("/{family_id}/{elder_id}/logins")
+async def logins_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """Login state of each store/ride app for this family, from the agents' own runs."""
+    return {"logins": await sandbox.logins(session, family_id)}

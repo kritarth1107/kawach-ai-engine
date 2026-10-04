@@ -311,7 +311,7 @@ async def run_scenario(db: AsyncSession, sc: Scenario) -> dict:
     started = time.monotonic()
 
     async def profile_for(task):
-        return "prof-bench"
+        return f"prof-{task.family_id}-{task.service}"
 
     async def notify(family_id, requested_by, prompt):
         told.append(prompt)

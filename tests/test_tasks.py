@@ -20,7 +20,7 @@ class Harness:
         self.sessions, self.agent, self.told = sessions, agent, []
 
     async def profile_for(self, task):
-        return "prof-1"
+        return f"prof-{task.family_id}-{task.service}"
 
     async def notify(self, family_id, requested_by, prompt):
         self.told.append(prompt)
@@ -47,7 +47,7 @@ async def test_order_prepare_confirm_place(db, at, sessions):
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and t.result["total"] == "₹318"
     assert "confirm" in h.told[-1]
-    assert "Do NOT place" in h.agent.runs[0]["goal"] and h.agent.runs[0]["profile"] == "prof-1"
+    assert "Do NOT place" in h.agent.runs[0]["goal"] and h.agent.runs[0]["profile"] == "prof-fam-t-instamart"
     assert "Cash on Delivery" in h.agent.runs[0]["hints"]
     msg = await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
     assert msg.startswith("confirmed; placing it now")
