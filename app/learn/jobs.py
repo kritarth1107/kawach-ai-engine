@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core import clock
@@ -66,6 +66,7 @@ async def overview(sessions: async_sessionmaker, *, weeks: int = 8) -> dict:
         proposals = list((await session.execute(select(RuleProposal).order_by(RuleProposal.created_at.desc()).limit(20))).scalars())
     reports = {k: await review.latest(sessions, k) for k in ("calibration", "drift", "gap_specs")}
     return {
+        "backup": await last_backup(sessions),
         "messages": int(totals[0] or 0), "scored": int(totals[1] or 0), "avgScore": round(float(totals[2]), 3) if totals[2] is not None else None,
         "corpus": int(corpus),
         "playbooks": [{"version": p.version, "status": p.status, "scope": p.scope or [], "createdAt": p.created_at.isoformat(), "note": p.note,
@@ -78,3 +79,20 @@ async def overview(sessions: async_sessionmaker, *, weeks: int = 8) -> dict:
                            "at": r.created_at.isoformat()} for r in proposals],
         "calibration": reports["calibration"], "drift": reports["drift"], "gapSpecs": reports["gap_specs"],
     }
+
+
+async def last_backup(sessions: async_sessionmaker) -> dict | None:
+    """Newest row the backup job wrote (backup/backup.py creates the table itself)."""
+    async with sessions() as session:
+        try:
+            row = (await session.execute(text(
+                "SELECT day, ok, finished_at, bytes, detail FROM backup_runs ORDER BY id DESC LIMIT 1"))).first()
+            ok_row = (await session.execute(text(
+                "SELECT finished_at FROM backup_runs WHERE ok ORDER BY id DESC LIMIT 1"))).first()
+        except Exception:  # noqa: BLE001 — no backup has run yet
+            return None
+    if not row:
+        return None
+    return {"day": row[0].isoformat(), "ok": bool(row[1]), "finishedAt": row[2].isoformat() if row[2] else None,
+            "bytes": int(row[3] or 0), "error": (row[4] or {}).get("error"),
+            "lastOkAt": ok_row[0].isoformat() if ok_row and ok_row[0] else None}

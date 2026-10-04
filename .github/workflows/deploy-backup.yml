@@ -1,0 +1,88 @@
+name: Deploy nightly backup job
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - "backup/**"
+      - ".github/workflows/deploy-backup.yml"
+
+concurrency:
+  group: deploy-backup-gcp
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: kavach-care
+  GCP_REGION: asia-south1
+  ARTIFACT_REPO: kavach
+  IMAGE_NAME: kavach-backup
+  JOB_NAME: kavach-backup
+  CLOUDSQL: kavach-care:asia-south1:kavach-ai-pg
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and push image
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+          IMAGE=${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.ARTIFACT_REPO }}/${{ env.IMAGE_NAME }}
+          docker build -t "$IMAGE:${{ github.sha }}" -t "$IMAGE:latest" backup
+          docker push "$IMAGE:${{ github.sha }}"
+          docker push "$IMAGE:latest"
+          echo "IMAGE=$IMAGE:${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Deploy Cloud Run Job
+        env:
+          KAWACH_PG_PASSWORD: ${{ secrets.KAWACH_PG_PASSWORD }}
+        run: |
+          set -euo pipefail
+          [ -n "${KAWACH_PG_PASSWORD:-}" ] || { echo "::error::Missing KAWACH_PG_PASSWORD"; exit 1; }
+          # Secret Manager holds the R2 token scoped to the backup bucket, the age public key and the Mongo URI.
+          # The age private key is never given to this job.
+          for s in backup-r2-endpoint backup-r2-access-key-id backup-r2-secret-access-key backup-age-recipient backend-mongodb-uri; do
+            gcloud secrets describe "$s" --project=${{ env.GCP_PROJECT_ID }} >/dev/null 2>&1 \
+              || { echo "::error::Secret $s missing (see golive/RUNBOOK.md, backups)"; exit 1; }
+          done
+          cat > /tmp/backup-env.yaml <<EOF
+          BACKUP_TARGET: r2
+          BACKUP_R2_BUCKET: kavach-backups
+          BACKUP_PG_URL: "postgresql://kawach:${KAWACH_PG_PASSWORD}@/kawach_ai?host=/cloudsql/${{ env.CLOUDSQL }}"
+          EOF
+          ARGS=(--project=${{ env.GCP_PROJECT_ID }} --region=${{ env.GCP_REGION }} --image="$IMAGE"
+                --memory=2Gi --cpu=1 --max-retries=1 --task-timeout=3600
+                --set-cloudsql-instances=${{ env.CLOUDSQL }} --env-vars-file=/tmp/backup-env.yaml
+                --set-secrets=BACKUP_R2_ENDPOINT=backup-r2-endpoint:latest,BACKUP_R2_ACCESS_KEY_ID=backup-r2-access-key-id:latest,BACKUP_R2_SECRET_ACCESS_KEY=backup-r2-secret-access-key:latest,BACKUP_AGE_RECIPIENT=backup-age-recipient:latest,BACKUP_MONGODB_URI=backend-mongodb-uri:latest
+                --quiet)
+          if gcloud run jobs describe ${{ env.JOB_NAME }} --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.GCP_REGION }} >/dev/null 2>&1; then
+            gcloud run jobs update ${{ env.JOB_NAME }} "${ARGS[@]}"
+          else
+            gcloud run jobs create ${{ env.JOB_NAME }} "${ARGS[@]}"
+          fi
+
+      - name: Ensure nightly scheduler (03:30 IST)
+        continue-on-error: true
+        run: |
+          SA="${{ secrets.GCP_SERVICE_ACCOUNT }}"
+          if gcloud scheduler jobs describe kavach-backup-nightly --project=${{ env.GCP_PROJECT_ID }} --location=${{ env.GCP_REGION }} >/dev/null 2>&1; then
+            exit 0
+          fi
+          gcloud scheduler jobs create http kavach-backup-nightly \
+            --project=${{ env.GCP_PROJECT_ID }} --location=${{ env.GCP_REGION }} \
+            --schedule="30 3 * * *" --time-zone="Asia/Kolkata" \
+            --uri="https://${{ env.GCP_REGION }}-run.googleapis.com/v2/projects/${{ env.GCP_PROJECT_ID }}/locations/${{ env.GCP_REGION }}/jobs/${{ env.JOB_NAME }}:run" \
+            --http-method=POST --oauth-service-account-email="${SA}" --quiet
