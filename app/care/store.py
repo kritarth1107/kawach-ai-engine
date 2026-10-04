@@ -34,8 +34,8 @@ async def active_fact(session: AsyncSession, family_id: str, subject_id: str, ke
     row = await _active_by_key(session, family_id, subject_id, key)
     if row or not key.startswith("medicine:"):
         return row
-    # Older records may carry a dose in the key (medicine:thyronorm_50): match on the medicine itself.
-    want = key.split(":", 1)[1]
+    # Older records may carry a dose in the key (medicine:thyronorm_50): match on the medicine itself, either way round.
+    want = medicine_slug(key.split(":", 1)[1])
     for f in (
         await session.execute(
             select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject_id, CareFact.domain == "medicine", CareFact.status == "active").with_for_update()

@@ -85,9 +85,9 @@ class Skill(Base):
 
 NOT_FOR_SKILLS = re.compile(
     r"\b(medicines?|medication|meds?|tablets?|pills?|insulin|dose|doses|dosage|dawa|dawai|goli|दवा|दवाई|गोली|"
-    r"allerg\w*|emergenc\w*|alerts?|red ?flags?|ambulance|"
+    r"allerg\w*|emergenc\w*|red ?flags?|ambulance|(no|stop|skip|don'?t|never|send|raise) (the )?alerts?|alerts? (the )?(family|caregiver|son|daughter)|"
     r"pay(ment)?|cod|cash|upi|card|budget|price|order|"
-    r"secret|hide|don'?t tell|never tell|private|privacy|password|otp|"
+    r"secret|hide|don'?t tell|never tell|keep (it |this )?private|private (from|info\w*)|privacy|password|otp|"
     r"reminder time|change (the )?reminder|stop (the )?reminders?|no reminders?|"
     r"ignore|override|rules?|instructions?|system prompt|pretend|act as)\b",
     re.I,
@@ -97,18 +97,22 @@ NOT_FOR_SKILLS = re.compile(
 AI_INSTRUCTIONS = re.compile(
     r"\b(you are|you'?re now|you must|you have to|you will now|act (as|like)|behave (as|like)|pretend|role ?-?play|"
     r"from now on|henceforth|always (say|reply|respond|answer)|say that|tell (her|him|them) that|reply with|respond with|repeat after|"
-    r"system|developer|prompt|jailbreak|bypass|disable|(turn|switch) off|unlock|admin|"
+    r"system|developer|system prompt|the prompt|your prompt|prompt injection|jailbreak|bypass|disable|(turn|switch) off|unlock|admin|"
     r"lie to|lying to|tell (a )?lies?|deceive|trick (her|him|them)|fake|keep (it |this )?(a )?secret|between us|"
-    r"jh[oa]+o?th?|chh?upa\w*|mat batana|mat bata|kisi ko mat|niyam|nirdesh|bhool ja\w*)\b|"
-    r"\b(mention|say|tell|share|inform|report|let)\b.{0,30}\bto (her |his |their |the )?(son|daughter|family|caregiver|doctor|anyone|"
+    r"jh(o+|u)th?|chh?upa\w*|mat bata\w*|na bata\w*|nahi?n? bata\w*|kisi ko mat|kisi ko na|niyam|nirdesh|bhool ja\w*)\b|"
+    r"\b(mention|say|tell|share|inform|report)\b.{0,30}\bto (her |his |their |the )?(son|daughter|family|caregiver|doctor|anyone|"
     r"husband|wife|brother|sister|bahu|beta|beti|kids|children)\b|"
-    r"झूठ|छुपा|मत बताना|नियम|निर्देश|अनदेखा",
+    r"झूठ|छुपा|मत बता|ना बता|नहीं बता|नियम(?!ित)|निर्देश|अनदेखा",
     re.I,
 )
 CODEISH = re.compile(r"[<>{}\[\]`|\\]|#{2,}|\b(system|assistant|user|human)\s*:", re.I)
 ZERO_WIDTH = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]")
 SPACED_OUT = re.compile(r"(?:\b\w\b[\s.\-_*]+){4,}\b\w\b")
 SQUASH_TOKENS = ("ignore", "override", "disregard", "instruction", "jailbreak", "systemprompt", "pretend", "bypass", "forget")
+
+
+# Cyrillic and Greek letters that look Latin ("Yоu аre now"): a family skill in English or an Indian language never needs them
+LOOKALIKE_SCRIPTS = re.compile("[\u0370-\u03ff\u0400-\u04ff\u0500-\u052f]")
 
 
 def normalize(text: str) -> str:
@@ -141,6 +145,8 @@ def problems(text: str, *, family: bool = False) -> list[str]:
     if family:
         if CODEISH.search(t):
             out.append("contains code-like text")
+        if LOOKALIKE_SCRIPTS.search(t):
+            out.append("mixes in look-alike letters from another alphabet")
         spaced = SPACED_OUT.search(t)
         if spaced and any(tok in re.sub(r"[^a-z]", "", spaced.group(0).lower()) for tok in SQUASH_TOKENS):
             out.append("contains spaced-out words")
@@ -157,10 +163,24 @@ SWEET = ("sweet", "sweets", "mithai", "meetha", "dessert", "sugar", "chini", "ja
          "rasgulla", "kheer", "ice cream", "chocolate", "cake", "मिठाई", "मीठा", "चीनी")
 SALTY = ("pickle", "achaar", "achar", "papad", "namkeen", "chips", "salty", "extra salt", "अचार", "पापड़", "नमकीन")
 NONVEG = ("chicken", "mutton", "fish", "egg", "eggs", "meat", "non-veg", "nonveg", "anda", "machli", "gosht", "अंडा", "मछली")
-DIET_CONFLICTS = {"sugar": SWEET, "diabet": SWEET, "salt": SALTY, "hypertension": SALTY, "vegetarian": NONVEG, "jain": NONVEG,
+DIET_CONFLICTS = {"sugar": SWEET, "diabet": SWEET, "salt": SALTY, "hypertension": SALTY, "vegetarian": NONVEG, "veg": NONVEG, "jain": NONVEG,
                   "no_egg": ("egg", "eggs", "anda", "अंडा"), "no_onion": ("onion", "pyaz", "pyaaz", "प्याज")}
 LANGUAGES = ("english", "hindi", "hinglish", "marathi", "tamil", "telugu", "bengali", "bangla", "gujarati", "kannada", "malayalam",
              "punjabi", "odia", "oriya", "urdu", "assamese")
+# names for the same language, and mixes that fit it (Hinglish suits a Hindi or an English speaker)
+SAME_LANGUAGE = {"bangla": "bengali", "oriya": "odia"}
+FITS = {"hinglish": {"hindi", "english"}, "hindi": {"hinglish"}, "english": {"hinglish"}}
+
+
+def _diet_rule_hits(name: str, text: str, key: str) -> bool:
+    """Does this diet/condition record carry the rule `key`? Whole words only: 'non_vegetarian' is not vegetarian."""
+    words = set(re.split(r"[_\W]+", f"{name} {text}".lower()))
+    if "non" in words or "nonveg" in words or "non-veg" in text.lower():
+        if key in ("vegetarian", "veg", "jain"):
+            return False
+    if "_" in key:
+        return key in f"{name}_".lower() or key.replace("_", " ") in text.lower()
+    return any(w == key or (key in ("sugar", "diabet", "salt") and w.startswith(key)) for w in words)
 
 
 def _mentions(low: str, word: str) -> bool:
@@ -194,16 +214,17 @@ def conflicts_with(facts: list, text: str) -> list[str]:
                 out.append(f"mentions {item}, which is on the never-order list")
         elif f.domain in ("diet", "condition"):
             for key, words in DIET_CONFLICTS.items():
-                if key in name or key in (f.text or "").lower().replace(" ", "_"):
+                if _diet_rule_hits(name, f.text or "", key):
                     hit = next((w for w in words if _mentions(low, w)), None)
                     if hit:
                         out.append(f"mentions {hit}, against '{f.text}' in the care record")
                         break
         elif f.domain == "language":
-            langs_on_record += [lg for lg in LANGUAGES if lg in f"{name} {f.text} {v}".lower()]
+            langs_on_record += [SAME_LANGUAGE.get(lg, lg) for lg in LANGUAGES if lg in f"{name} {f.text} {v}".lower()]
     if langs_on_record:
-        named = [lg for lg in LANGUAGES if _mentions(low, lg)]
-        if named and not set(named) & set(langs_on_record):
+        named = [SAME_LANGUAGE.get(lg, lg) for lg in LANGUAGES if _mentions(low, lg)]
+        ok = set(langs_on_record) | {x for lg in langs_on_record for x in FITS.get(lg, set())}
+        if named and not set(named) & ok:
             out.append(f"names {named[0].title()}, but the care record says {langs_on_record[0].title()}: change the language in the care record instead")
     return sorted(set(out))
 

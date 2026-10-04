@@ -173,8 +173,17 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     is_sys = req.speaker.get("role") == "system"
     moment = _situations.tag(text=req.text, role="system" if is_sys else ("elder" if req.speaker["id"] == req.elder["id"] else "caregiver"),
                              tools=[], prompt=req.text if is_sys else "")
-    # family skills shape tone only; in an emergency or a rule-breaking message they are left out entirely
+    # family skills shape tone only; in an emergency or a rule-breaking message they are left out entirely, and they stay
+    # out while an emergency is still going on (a red flag or an alert in the last hour), for a photo with no words,
+    # and for a scheduled turn about an alert
     safety = moment in ("emergency", "injection") or bool(guards.RED_FLAG_WORDS.search(req.text or ""))
+    safety = safety or (bool(req.images) and not (req.text or "").strip()) or (is_sys and "alert" in (req.text or "").lower())
+    if not safety:
+        hour_ago = clock.now() - timedelta(hours=1)
+        safety = any(e.kind in ("alert_whatsapp", "alert_dashboard", "red_flag") and e.at >= hour_ago for e in day_events)
+        for thread in {req.elder["id"], req.speaker["id"]}:
+            recent = [t for t in await data.turns(thread) if t.role == "user" and t.at >= hour_ago]
+            safety = safety or any(guards.RED_FLAG_WORDS.search(t.text or "") for t in recent)
     how = await skillbook.context_block(session, req.family_id, to["id"], (to.get("name") or "").split(" ")[0], safety=safety)
     if how:
         parts.append(how)

@@ -484,3 +484,126 @@ async def test_preview_says_what_an_undo_would_do(client, db, at):
     nv = (await history(db, "note"))[-1]
     p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{nv.id}/preview")).json()
     assert p["effect"] == "remove"
+
+
+# ── phase 2 review fixes ───────────────────────────────────────────────────
+
+VIEWER = {"id": "v-v", "name": "Neel", "role": "family member"}
+
+
+async def test_rejecting_a_pending_medicine_change_keeps_its_reminders(db, at):
+    at("2026-10-02 09:00")
+    host = SimHost()
+    await med(db, ctx(db, host=host))
+    await med(db, ctx(db, host=host), dose="1000 mg", times=("08:00", "20:00"))
+    change = (await history(db, "fact", "medicine:metformin"))[-1]
+    out, _ = await call(ctx(db, E, host=host), "undo_change", {"id": change.id})
+    assert out["result"] == "pending"
+    out, err = await call(ctx(db, host=host), "confirm_change", {"key": "medicine:metformin", "approve": False})
+    assert not err and (await active(db)).value["dose"] == "1000 mg" and sched(host) == ["08:00", "20:00"]
+
+
+async def test_only_caregivers_can_confirm_a_change(db, at):
+    at("2026-10-02 09:00")
+    await med(db, ctx(db))
+    created = (await history(db, "fact", "medicine:metformin"))[-1]
+    await call(ctx(db, E), "undo_change", {"id": created.id})  # the elder's undo waits for an OK
+    for who in (VIEWER, {"id": "d-v", "name": "Dr", "role": "family doctor"}):
+        c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=who, members=[E, C, who])
+        out, err = await call(c, "confirm_change", {"key": "medicine:metformin", "approve": True})
+        assert err and "caregiver" in out["refused"]
+    assert await active(db)
+
+
+async def test_prune_keeps_what_the_next_undo_compares_against(db, at):
+    at("2025-01-01 09:00")
+    await note(db, "- loves bhajans")
+    at("2025-02-01 09:00")
+    await note(db, "- loves bhajans\n- son in Pune")
+    at("2026-10-02 09:00")
+    await note(db, "- loves bhajans\n- son in Pune\n- wrong line")
+    assert await versions.prune(db) == 1  # only the January version goes
+    wrong = (await history(db, "note"))[-1]
+    out, err = await call(ctx(db), "undo_change", {"id": wrong.id})
+    assert not err and await body(db) == "- loves bhajans\n- son in Pune"
+
+
+async def test_a_rejected_proposal_does_not_block_undo_and_its_rejection_can_be_undone(db, at):
+    at("2026-10-02 09:00")
+    await med(db, ctx(db))
+    first = (await history(db, "fact", "medicine:metformin"))[-1]
+    await call(ctx(db, E), "remember", {"domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "250 mg"},
+                                        "sentence": "Metformin 250 mg"})
+    await call(ctx(db), "confirm_change", {"key": "medicine:metformin", "approve": False})
+    reject = (await history(db, "fact", "medicine:metformin"))[-1]
+    assert reject.op == "reject"
+    v = await versions.view(db, first)
+    assert v["canUndo"]
+    out, err = await call(ctx(db), "undo_change", {"id": reject.id})  # undoing the "no" proposes it again
+    assert not err and out["result"] == "pending"
+    assert (await active(db)).value["dose"] == "500 mg"
+
+
+async def test_old_dose_in_key_medicine_is_found_and_its_reminders_stop(db, at):
+    at("2026-10-02 09:00")
+    host = SimHost()
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="medicine", key="medicine:thyronorm_50",
+                           value={"name": "Thyronorm 50", "times": ["07:00"]}, text="Thyronorm 50 at 07:00", source_kind="caregiver_said", stated_by=CG)
+    await host.call("sync_medicine_schedule", {"key": "medicine:thyronorm_50", "name": "Thyronorm", "times": ["07:00"], "active": True},
+                    family_id=FAM, subject_id=ELDER, actor_id=CG)
+    assert (await store.active_fact(db, FAM, ELDER, "medicine:thyronorm")).key == "medicine:thyronorm_50"
+    out, err = await call(ctx(db, host=host), "stop", {"domain": "medicine", "name": "Thyronorm", "reason": "doctor stopped it"})
+    assert not err and out["key"] == "medicine:thyronorm_50" and sched(host, "medicine:thyronorm_50") == []
+
+
+async def test_forget_restore_per_person_and_lines_back_in_place(db, at):
+    at("2026-10-02 09:00")
+    await note(db, "- loves bhajans\n- fight with Rahul about money\n- walks daily")
+    await store.upsert_note(db, family_id=FAM, subject_id="family", slug="house", title="House", body_md="- Rahul money matters\n- gas on Tuesdays")
+    out, _ = await call(ctx(db), "forget", {"what": "Rahul money"})
+    assert out["forgotten"] == 2
+    mine = next(r for r in await history(db, "note") if r.subject_id == ELDER and r.op == "forget")
+    fam = next(r for r in await versions.changes(db, FAM, ["family"]) if r.op == "forget")
+    out, err = await call(ctx(db, E), "undo_change", {"id": mine.id})  # the elder brings back only her own line
+    assert not err and out["restored"] == 1
+    assert await body(db) == "- loves bhajans\n- fight with Rahul about money\n- walks daily"  # in its old place
+    assert "Rahul" not in (await store.notes(db, FAM, ["family"]))[0].body_md
+    out, err = await call(ctx(db), "undo_change", {"id": fam.id})  # the caregiver can still bring back the rest
+    assert not err and out["restored"] == 1 and "Rahul" in (await store.notes(db, FAM, ["family"]))[0].body_md
+
+
+async def test_forgotten_text_is_never_shown_in_history_and_viewers_cannot_list(db, at):
+    at("2026-10-02 09:00")
+    await note(db, "- fought with Rahul about money\n- loves bhajans")
+    await call(ctx(db), "forget", {"what": "Rahul money"})
+    out, err = await call(ctx(db), "memory_changes", {})
+    assert not err and "Rahul" not in json.dumps(out) and any("forgot 1 line" in c["change"] for c in out["changes"])
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=VIEWER, members=[E, C, VIEWER])
+    out, err = await call(c, "memory_changes", {})
+    assert err
+
+
+def test_line_undo_respects_repeats_and_blank_lines():
+    assert versions.invert("A\nB\nA\nC", "A\nB", "A\nB\nA") == "A\nB\nC"
+    assert versions.invert("A\nB", "A\nB\nA", "A\nB") == "A\nB\nA"
+    assert versions.invert("# T\n\npara\n\nwrong", "# T\n\npara", "# T\n\npara\n\nwrong") == "# T\n\npara\n"
+
+
+async def test_preview_warns_when_a_prescription_fact_will_wait(client, db, at):
+    at("2026-10-02 09:00")
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="medicine", key="medicine:metformin",
+                           value={"name": "Metformin", "dose": "500 mg", "times": ["08:00"]}, text="Metformin 500 mg", source_kind="prescription")
+    created = (await history(db, "fact", "medicine:metformin"))[-1]
+    p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{created.id}/preview")).json()
+    assert p["effect"] == "pending" and "prescription" in p["text"]
+
+
+async def test_self_care_history_has_no_family_notes(client, db, at):
+    at("2026-10-02 09:00")
+    await store.upsert_note(db, family_id=FAM, subject_id=CG, slug="self", title="Self", body_md="- gym")
+    await store.upsert_note(db, family_id=FAM, subject_id="family", slug="house", title="House", body_md="- gas")
+    h = (await client.get(f"/v2/dash/{FAM}/{CG}/memory-history", params={"actor": CG})).json()["changes"]
+    assert {c["subjectId"] for c in h} == {CG}
+    fam = (await versions.changes(db, FAM, ["family"]))[0]
+    r = await client.post(f"/v2/dash/{FAM}/{CG}/memory-history/{fam.id}", json={"actor": {"id": CG, "name": "Asha"}})
+    assert r.status_code == 404

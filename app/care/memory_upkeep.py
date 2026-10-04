@@ -263,20 +263,39 @@ async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *
         return {"restored": 0}
     if row.subject_id not in subjects:
         return {"restored": 0}
+    from app.care import versions
+
     p = row.payload or {}
+    done = set(p.get("restored_subjects") or [])
+    mine = [s for s in subjects if s not in done]
     n = 0
+    by_note: dict[tuple[str, str], list[dict]] = {}
     for item in p.get("note_lines") or []:
-        if item.get("subject") not in subjects:
-            continue
-        note = await _note(session, family_id, item["subject"], item["slug"])
-        body = ((note.body_md + "\n") if note and note.body_md else "") + item["line"]
-        await store.upsert_note(session, family_id=family_id, subject_id=item["subject"], slug=item["slug"], title=item.get("title") or item["slug"],
+        if item.get("subject") in mine:
+            by_note.setdefault((item["subject"], item["slug"]), []).append(item)
+    for (subj, slug), items in by_note.items():
+        note = await _note(session, family_id, subj, slug)
+        # put the lines back where they were, using the note as it was just before the forget
+        fv = (await session.execute(select(versions.MemoryVersion).where(
+            versions.MemoryVersion.family_id == family_id, versions.MemoryVersion.subject_id == subj, versions.MemoryVersion.kind == "note",
+            versions.MemoryVersion.target == slug, versions.MemoryVersion.op == "forget",
+            versions.MemoryVersion.value["forget_event"].astext == str(forget_event_id)))).scalars().first()
+        before = (await versions.previous(session, fv)).body if fv and await versions.previous(session, fv) else None
+        current = note.body_md if note else ""
+        if before is not None:
+            body = versions.invert(current, before, fv.body)
+        else:
+            body = "\n".join([*versions.lines(current), *[i["line"] for i in items]])
+        await store.upsert_note(session, family_id=family_id, subject_id=subj, slug=slug, title=items[0].get("title") or slug,
                                 body_md=body, op="restore", actor_id=by, reason=f"brought back what was forgotten: {(p.get('what') or '')[:100]}")
-        n += 1
+        n += len(items)
     for eid in p.get("events") or []:
         e = await session.get(CareEvent, eid)
-        if e and e.family_id == family_id and e.subject_id in subjects:
+        if e and e.family_id == family_id and e.subject_id in mine and (e.payload or {}).get("forgotten"):
             e.payload = {k: v for k, v in (e.payload or {}).items() if k not in ("forgotten", "forgotten_by")}
             n += 1
-    row.payload = {**p, "restored": True, "restored_by": by}
+    # the forget is fully undone only when every person and note it touched is back
+    done |= set(mine)
+    touched = {i.get("subject") for i in p.get("note_lines") or []} | {row.subject_id}
+    row.payload = {**p, "restored_subjects": sorted(done), "restored": touched <= done, "restored_by": by}
     return {"restored": n}

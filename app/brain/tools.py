@@ -249,12 +249,9 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
     await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=a["domain"], result=w.result,
                                     text=f"{a['name']} stopped: {a['reason']}", source_kind=ctx.source_kind, actor_id=ctx.speaker.get("id"))
     if w.result == "stopped" and a["domain"] == "medicine":
-        await ctx.host.call(
-            "sync_medicine_schedule",
-            {"key": key, "name": a["name"], "times": [], "active": False},
-            family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
-        )
-    return {"result": w.result, "key": key}
+        # the record's own key (an older record may be 'medicine:thyronorm_50' for a request about 'thyronorm')
+        await _sync_medicine(ctx, subject, w.fact.key, {"name": a["name"], **(w.fact.value or {})}, active=False)
+    return {"result": w.result, "key": w.fact.key}
 
 
 @tool(
@@ -302,8 +299,8 @@ async def recall(ctx: TurnCtx, a: dict) -> dict:
     ["key", "approve"],
 )
 async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
-    if ctx.speaker_is_elder:
-        raise ToolRefused("Only a caregiver can confirm this change.")
+    if not ctx.is_caregiver:
+        raise ToolRefused("Only a caregiver (primary or co-caregiver) can confirm this change.")
     pending = [
         f for f in await store.facts(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",)) if f.key == a["key"]
     ]
@@ -316,17 +313,9 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
         await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, domain=row.domain,
                                         result="stopped" if row.status == "stopped" else "superseded", text=row.text,
                                         source_kind="caregiver_said", actor_id=ctx.speaker.get("id"))
-    if row and row.domain == "medicine":
-        v = row.value
-        await ctx.host.call(
-            "sync_medicine_schedule",
-            {
-                "key": row.key, "name": v.get("name", row.key), "dose": v.get("dose"), "times": v.get("times", []),
-                "food_timing": v.get("food_timing"), "days": v.get("days"), "instructions": v.get("instructions"),
-                "active": row.status == "active",
-            },
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
-        )
+    # reminders change only when a change was approved; a rejected proposal leaves the medicine (and its reminders) as they were
+    if row and row.domain == "medicine" and a["approve"] and row.status in ("active", "stopped"):
+        await _sync_medicine(ctx, ctx.elder_id, row.key, row.value, active=row.status == "active")
     return {"result": row.status if row else "not_found", "key": a["key"]}
 
 
@@ -1187,11 +1176,15 @@ async def memory_changes(ctx: TurnCtx, a: dict) -> dict:
 
     if ctx.is_system:
         raise ToolRefused("Memory history is for the family to ask about.")
-    rows = await versions.changes(ctx.session, ctx.family_id, _history_subjects(ctx, a.get("about")), words=a.get("what") or "", limit=12)
+    if not ctx.is_caregiver and not ctx.speaker_is_elder:
+        raise ToolRefused("Only the elder or a caregiver can see what changed in memory.")
+    subjects = _history_subjects(ctx, a.get("about"))
+    rows = await versions.changes(ctx.session, ctx.family_id, subjects, words=a.get("what") or "", limit=12)
     names = {m.get("id"): m.get("name") for m in [*ctx.members, ctx.elder] if m.get("id") and m.get("name")}
+    hidden = await versions.forgotten_lines(ctx.session, ctx.family_id, subjects)
     out = []
     for v in rows:
-        d = await versions.view(ctx.session, v, names=names)
+        d = await versions.view(ctx.session, v, names=names, hidden=hidden)
         out.append({"id": d["id"], "what": d["label"], "change": d["summary"], "by": d["by"], "where": d["where"],
                     "when": clock.ist(v.at).strftime("%d %b %H:%M"), "canUndo": d["canUndo"]})
     return {"changes": out}
@@ -1266,6 +1259,15 @@ async def _apply_fact_plan(ctx: TurnCtx, plan, reason: str) -> dict:
         if plan.action == "retract":
             await store.resolve_pending(ctx.session, fact_id=plan.fact_id, approve=False, by=by or "")
             result = "retracted"
+        elif plan.action == "repropose":
+            if plan.stop:
+                w = await store.stop_fact(ctx.session, family_id=ctx.family_id, subject_id=plan.subject_id, key=plan.key, reason=reason or "proposed again",
+                                          source_kind=ctx.source_kind, stated_by=by, source_ref=f"undo:{plan.version_id}", force_confirm=True)
+            else:
+                w = await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=plan.subject_id, domain=plan.domain, key=plan.key,
+                                           value=plan.value, text=plan.text or plan.key.split(":", 1)[-1], source_kind=ctx.source_kind,
+                                           source_ref=f"undo:{plan.version_id}", stated_by=by, replace=True, force_confirm=True)
+            result = w.result if w else "nothing"
         elif plan.action == "stop":
             w = await store.stop_fact(ctx.session, family_id=ctx.family_id, subject_id=plan.subject_id, key=plan.key, reason=reason or "undone",
                                       source_kind=ctx.source_kind, stated_by=by, source_ref=f"undo:{plan.version_id}", force_confirm=plan.needs_ok)

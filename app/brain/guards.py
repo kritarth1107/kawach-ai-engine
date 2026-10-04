@@ -378,7 +378,7 @@ INJECTION = re.compile(
     re.I,
 )
 RED_FLAG_WORDS = re.compile(
-    r"\b(chest|breath\w*|saans|fell|fall(en)?|gir\w*|unconscious|behosh|hosh|faint\w*|stroke|slurr\w*|droop\w*|numb\w*|paraly\w*|"
+    r"\b(chest|seen[ae]|chh?aa?ti|heart|breath\w*|saans|fell|fall(en)?|gir\w*|unconscious|behosh|hosh|faint\w*|stroke|slurr\w*|droop\w*|numb\w*|paraly\w*|"
     r"bleed\w*|blood|khoon|vomit\w*|ulti|seizure|fits?|confus\w*|attack|dizz\w*|chakkar|severe|unbearable|bahut dard|overdose|"
     r"double dose|extra dose|two tablets|2 tablets|do goli|swell\w*|sujan|black stool|choking|burn\w*|hypo|shiver\w*|sweat\w*|paseena|"
     r"not responding|no response|unresponsive|not waking|isn'?t waking|won'?t wake|not breathing|jawab nahi|uth nahi|nahi uth|"

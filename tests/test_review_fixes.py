@@ -268,6 +268,7 @@ def test_order_claims_without_pronoun(text):
     "दादी उठ नहीं रहीं, क्या दवा दें?", "पापा जवाब नहीं दे रहे, दवा दें क्या?", "Papa ka haath kaam nahi kar raha, kya dawai dein?",
     "Maa ki aawaz ladkhada rahi hai, kya goli de doon?", "Mom took her sugar tablet twice by mistake, what should I do?",
     "Papa ne galti se BP ki dawai do baar le li, kya karein?", "Mummy ke honth neele pad gaye hain, kya dawai dein?",
+    "Maa ke seene mein dard ho raha hai, kya dawai dein?", "Papa ki chhati mein bhaari pan hai, koi goli de doon?",
 ])
 def test_more_emergencies_pass_the_gate(text):
     assert g.red_flag_unsupported(text) is None

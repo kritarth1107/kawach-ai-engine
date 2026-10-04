@@ -741,24 +741,27 @@ class UndoIn(BaseModel):
 
 @router.get("/{family_id}/{elder_id}/memory-history")
 async def memory_history(family_id: str, elder_id: str, session: DB, kind: str | None = None, target: str | None = None,
-                         what: str = "", limit: int = 40) -> dict:
-    """What changed in this person's memory (and the family notes): newest first, with who, where, why, and undo/restore."""
+                         what: str = "", limit: int = 40, actor: str = "") -> dict:
+    """What changed in this person's memory (and the family notes, except on a caregiver's own self-care page): newest
+    first, with who, where, why, and undo/restore. Lines someone asked to forget show as '(forgotten)'."""
     from app.care import versions
 
     if kind and kind not in versions.KINDS:
         raise HTTPException(status_code=400, detail="unknown kind")
-    rows = await versions.changes(session, family_id, [elder_id, "family"], kinds=(kind,) if kind else None, target=target,
+    subjects = _page_subjects(elder_id, Actor(id=actor or "-"))
+    rows = await versions.changes(session, family_id, subjects, kinds=(kind,) if kind else None, target=target,
                                   words=what, limit=min(max(limit, 1), 100), include_baseline=bool(target))
-    return {"changes": [await versions.view(session, v) for v in rows]}
+    hidden = await versions.forgotten_lines(session, family_id, subjects)
+    return {"changes": [await versions.view(session, v, hidden=hidden) for v in rows]}
 
 
 @router.get("/{family_id}/{elder_id}/memory-history/{version_id}/preview")
-async def memory_undo_preview(family_id: str, elder_id: str, version_id: int, session: DB, mode: str = "undo") -> dict:
+async def memory_undo_preview(family_id: str, elder_id: str, version_id: int, session: DB, mode: str = "undo", actor: str = "") -> dict:
     """What an undo (or restore) would do, in plain words, before the caregiver confirms. Changes nothing."""
     from app.care import versions
 
     v = await versions.get(session, family_id, version_id)
-    if not v or v.subject_id not in (elder_id, "family"):
+    if not v or v.subject_id not in _page_subjects(elder_id, Actor(id=actor or "-")):
         raise HTTPException(status_code=404, detail="no such change")
     return await versions.preview(session, v, "restore" if mode == "restore" else "undo")
 
@@ -769,7 +772,7 @@ async def memory_undo(family_id: str, elder_id: str, version_id: int, body: Undo
     from app.care import versions
 
     v = await versions.get(session, family_id, version_id)
-    if not v or v.subject_id not in (elder_id, "family"):
+    if not v or v.subject_id not in _page_subjects(elder_id, body.actor):
         raise HTTPException(status_code=404, detail="no such change")
     ctx = _ctx(session, family_id, elder_id, body.actor, confirmed=body.confirm)
     return await _run(session, ctx, "undo_change", {"id": version_id, "mode": body.mode, "reason": body.reason})

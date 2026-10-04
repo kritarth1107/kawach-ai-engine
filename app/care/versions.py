@@ -242,38 +242,62 @@ def diff(before: str, after: str) -> tuple[list[str], list[str]]:
     return added, removed
 
 
-def invert(current_text: str, before: str, added: list[str], removed: list[str]) -> str:
-    """Take back one change on today's text: drop the lines it added and put back the lines it removed, each after the
-    line it followed before when that line is still there (so later changes stay)."""
-    out = lines(current_text)
-    for ln in added:
-        if ln in out:
-            out.remove(ln)
-    prev_of: dict[str, str | None] = {}
-    last = None
+def invert(current_text: str, before: str, after: str) -> str:
+    """Take back one change (before → after) on today's text: drop exactly the lines it added (the same repeat of a
+    repeated line) and put back the lines it removed, each after the line it followed before when that line is still
+    there. Lines changed since, and blank lines, stay."""
+    raw = (current_text or "").splitlines()
+    cb, ca = Counter(lines(before)), Counter(lines(after))
+    for ln, extra in (ca - cb).items():
+        for k in range(ca[ln], ca[ln] - extra, -1):  # the added copies are the last ones in `after`
+            at = [i for i, x in enumerate(raw) if x == ln]
+            if at:
+                del raw[at[k - 1] if len(at) >= k else at[-1]]
+    have = Counter(x for x in raw if x.strip())
+    seen: Counter = Counter()
+    prev_line: str | None = None
     for ln in lines(before):
-        prev_of.setdefault(ln, last)
-        last = ln
-    for ln in removed:
-        if ln in out:
-            continue
-        anchor = prev_of.get(ln)
-        if anchor is None:
-            out.insert(0, ln)
-        elif anchor in out:
-            out.insert(out.index(anchor) + 1, ln)
-        else:
-            out.append(ln)
-    return "\n".join(out)
+        seen[ln] += 1
+        # the copies this change removed are the last ones in `before`; bring one back unless it is already there again
+        if seen[ln] > ca[ln] and have[ln] < cb[ln]:
+            if prev_line is None:
+                raw.insert(0, ln)
+            elif prev_line in raw:
+                raw.insert(len(raw) - raw[::-1].index(prev_line), ln)
+            else:
+                raw.append(ln)
+            have[ln] += 1
+        prev_line = ln
+    return "\n".join(raw)
+
+
+async def forgotten_lines(session: AsyncSession, family_id: str, subject_ids: list[str]) -> set[str]:
+    """Note lines someone asked Saheli to forget (and not restored): never shown again in history."""
+    from app.care.models import CareEvent
+
+    rows = (await session.execute(select(CareEvent.payload).where(CareEvent.family_id == family_id, CareEvent.kind == "memory_forgotten",
+                                                                  CareEvent.subject_id.in_(subject_ids)))).scalars()
+    out: set[str] = set()
+    for p in rows:
+        p = p or {}
+        done = set(p.get("restored_subjects") or ([] if not p.get("restored") else [i.get("subject") for i in p.get("note_lines") or []]))
+        out |= {i["line"] for i in p.get("note_lines") or [] if i.get("subject") not in done and i.get("line")}
+    return out
+
+
+def _hide(text: str, hidden: set[str]) -> str:
+    return "\n".join("(forgotten)" if ln in hidden else ln for ln in (text or "").splitlines()) if hidden else text
 
 
 SOURCE_LABEL = {"whatsapp": "on WhatsApp", "dashboard": "on the dashboard", "nightly": "Saheli's nightly review", "saheli": "Saheli",
                 "snapshot": "restored from a backup", "system": "Saheli", "prescription": "a prescription", "import": "imported"}
 
 
-async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str] | None = None) -> dict:
-    """One change for people: what it was, who made it, the lines it added or removed, and whether it can be undone."""
+async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str] | None = None, hidden: set[str] | None = None) -> dict:
+    """One change for people: what it was, who made it, the lines it added or removed, and whether it can be undone.
+    Lines someone asked to forget (`hidden`) are shown as '(forgotten)', never as text."""
     names = names or {}
+    hidden = hidden or set()
     who = names.get(v.actor_id or "") or ("Saheli" if not v.actor_id or v.actor_id in ("saheli", "dream") else "someone in the family")
     out = {
         "id": v.id, "kind": v.kind, "subjectId": v.subject_id, "target": v.target, "version": v.version, "op": v.op,
@@ -284,10 +308,15 @@ async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str]
     if v.kind == "note":
         prev = await previous(session, v)
         added, removed = diff(prev.body if prev else "", v.body)
+        if v.op == "forget":
+            hidden = hidden | set(removed)  # what was forgotten is never repeated back
+        added = ["(forgotten)" if ln in hidden else ln for ln in added]
+        removed = ["(forgotten)" if ln in hidden else ln for ln in removed]
         out.update(label=v.title or v.target, added=added[:LIST_LINES], removed=removed[:LIST_LINES],
-                   more=max(0, len(added) + len(removed) - 2 * LIST_LINES), body=v.body)
+                   more=max(0, len(added) + len(removed) - 2 * LIST_LINES), body=_hide(v.body, hidden))
         out["summary"] = (
             "removed the note" if out["deleted"] else
+            f"forgot {len(removed)} line{'s' if len(removed) != 1 else ''}" if v.op == "forget" else
             f"added: {added[0][:120]}" if added and not removed else
             f"removed: {removed[0][:120]}" if removed and not added else
             f"rewrote {len(removed)} line(s) as {len(added)}" if added or removed else "no change in text"
@@ -301,9 +330,9 @@ async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str]
         out.update(label=f"How they like things: {v.title[:80]}", body=v.body, summary=f"{v.op} ({v.status}): {v.body[:140]}")
     else:
         out.update(label="Reply style (learned nightly)", body=v.body, summary=f"now: {v.body[:140]}")
-    can = v.op not in ("baseline", "reject") and v.kind != "style"
+    can = v.op != "baseline" and v.kind != "style"
     if can and v.kind in ("fact", "skill"):  # these undo only from the newest change
-        last = await latest(session, v.family_id, v.subject_id, v.kind, v.target)
+        last = await (last_effective(session, v) if v.kind == "fact" else latest(session, v.family_id, v.subject_id, v.kind, v.target))
         can = not last or last.id == v.id
     out["canUndo"] = can
     out["canRestore"] = v.kind in ("note", "skill") or (v.kind == "fact" and v.status in ("active", "stopped"))
@@ -321,7 +350,7 @@ class Refused(Exception):
 class FactPlan:
     """What the care record must do to undo or restore a fact change (carried out by app.brain.tools)."""
 
-    action: str  # rewrite | restart | stop | retract | nothing
+    action: str  # rewrite | restart | stop | retract | repropose | nothing
     domain: str
     key: str
     subject_id: str
@@ -330,6 +359,7 @@ class FactPlan:
     fact_id: uuid.UUID | None = None
     needs_ok: bool = False  # a caregiver must confirm before it takes effect
     version_id: int = 0
+    stop: bool = False  # repropose: the proposal was to end the fact
 
 
 async def _fact_state_before(session: AsyncSession, v: MemoryVersion) -> tuple[str, dict, str]:
@@ -354,10 +384,29 @@ async def _fact_state_before(session: AsyncSession, v: MemoryVersion) -> tuple[s
 
 
 async def _fact_now(session: AsyncSession, family_id: str, subject_id: str, key: str):
-    from app.care.models import CareFact
+    """The active fact for this key, matching an older dose-in-key medicine record the same way the care record does."""
+    from app.care import store
 
-    return (await session.execute(select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject_id,
-                                                         CareFact.key == key, CareFact.status == "active"))).scalar_one_or_none()
+    return await store.active_fact(session, family_id, subject_id, key)
+
+
+async def last_effective(session: AsyncSession, v: MemoryVersion) -> MemoryVersion | None:
+    """The newest change that still shapes this fact: a proposal that was turned down (and the turning down) don't count,
+    so one rejected proposal never blocks undoing the change before it."""
+    rows = (await session.execute(select(MemoryVersion).where(
+        MemoryVersion.family_id == v.family_id, MemoryVersion.subject_id == v.subject_id, MemoryVersion.kind == "fact",
+        MemoryVersion.target == v.target).order_by(MemoryVersion.id.desc()).limit(50))).scalars()
+    rejected: set[str | None] = set()
+    for r in rows:
+        if r.op == "reject":
+            if r.id == v.id:
+                return r
+            rejected.add(r.ref)
+            continue
+        if r.op == "pending" and r.ref in rejected and r.id != v.id:
+            continue
+        return r
+    return None
 
 
 def _same(a: dict, b: dict) -> bool:
@@ -389,12 +438,17 @@ async def _plan_to(session: AsyncSession, v: MemoryVersion, state: str, value: d
 async def plan_fact_undo(session: AsyncSession, v: MemoryVersion, *, caregiver: bool, actor_id: str, confirmed: bool = False) -> FactPlan:
     from app.care.models import CareFact
 
-    if v.op == "reject":
-        raise Refused("A rejected change did nothing to undo; say the change again if it is right.")
-    last = await latest(session, v.family_id, v.subject_id, "fact", v.target)
+    last = await last_effective(session, v)
     if last and last.id != v.id:
         raise Refused(f"There is a newer change to this ({last.body[:80]}); undo that one first, or say what is right now.")
     domain = v.title or v.target.split(":", 1)[0]
+    if v.op == "reject":
+        # undoing a "no" (or a take-back) proposes the change again; it still waits for a caregiver
+        row = await session.get(CareFact, uuid.UUID(v.ref)) if v.ref else None
+        if not row:
+            raise Refused("That proposal is gone; say the change again if it is right.")
+        return FactPlan(action="repropose", domain=domain, key=v.target, subject_id=v.subject_id, value=dict(row.value or {}), text=row.text,
+                        needs_ok=True, version_id=v.id, stop=bool((row.value or {}).get("stopped")))
     if v.op == "pending":
         row = await session.get(CareFact, uuid.UUID(v.ref)) if v.ref else None
         if not row or row.status != "pending":
@@ -451,9 +505,8 @@ async def undo_note(session: AsyncSession, v: MemoryVersion, *, reason: str = ""
         raise Refused("That is how the note was before history started; pick a later change to undo.")
     prev = await previous(session, v)
     before = prev.body if prev else ""
-    added, removed = diff(before, v.body)  # a removed note has an empty body, so undoing it brings every line back
     note = await _note_row(session, v.family_id, v.subject_id, v.target)
-    new = invert(note.body_md if note else "", before, added, removed)
+    new = invert(note.body_md if note else "", before, v.body)  # a removed note has an empty body, so every line comes back
     title = (note.title if note else "") or (prev.title if prev else "") or v.title
     return await _set_note(session, v, title, new, op="undo", reason=reason or "undo", undoes=v.id)
 
@@ -530,6 +583,15 @@ async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiv
             if plan.action == "retract":
                 return {"effect": "retract", "text": f"This takes back the proposed change to {name}. The record stays as it is now.",
                         "button": "Yes, take it back"}
+            if plan.action == "repropose":
+                return {"effect": "pending", "text": f"This proposes the change to {name} again; it waits for a caregiver to confirm.",
+                        "button": "Yes, propose it again"}
+            from app.care.domains import SOURCE_RANK
+
+            now = await _fact_now(session, v.family_id, v.subject_id, v.target)
+            if now and plan.action in ("rewrite", "stop") and SOURCE_RANK.get(now.source_kind, 0) > SOURCE_RANK["caregiver_said"]:
+                return {"effect": "pending", "text": f"{name} came from a {now.source_kind}, so this waits for a caregiver to confirm it "
+                                                     "before anything changes (reminders stay as they are).", "button": "Yes, ask for confirmation"}
             if plan.action == "stop":
                 word = {"medicine": f"This stops {name} now and switches off its reminders.",
                         "allergy": f"This removes the allergy to {name} from the care record now.",
@@ -543,12 +605,14 @@ async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiv
         if v.kind == "note":
             note = await _note_row(session, v.family_id, v.subject_id, v.target)
             current_text = note.body_md if note else ""
+            if mode == "undo" and v.op == "forget" and (v.value or {}).get("forget_event"):
+                return {"effect": "change", "text": "This brings back what was asked to be forgotten, in every note and record it was hidden from.",
+                        "button": "Yes, bring it back"}
             if mode == "undo":
                 if v.op == "baseline":
                     raise Refused("That is how the note was before history started; pick a later change to undo.")
                 prev = await previous(session, v)
-                added, removed = diff(prev.body if prev else "", v.body)
-                new = invert(current_text, prev.body if prev else "", added, removed)
+                new = invert(current_text, prev.body if prev else "", v.body)
             else:
                 new = "" if (v.value or {}).get("deleted") else v.body
             gone, back = diff(current_text, new)[1], diff(current_text, new)[0]
@@ -588,8 +652,10 @@ async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiv
 
 
 async def prune(session: AsyncSession, *, keep_for: timedelta = KEEP_FOR) -> int:
-    """Drop versions older than a year, except the newest of each item."""
-    newest = select(func.max(MemoryVersion.id)).group_by(MemoryVersion.family_id, MemoryVersion.subject_id, MemoryVersion.kind,
-                                                         MemoryVersion.target)
-    res = await session.execute(delete(MemoryVersion).where(MemoryVersion.at < clock.now() - keep_for, MemoryVersion.id.not_in(newest)))
+    """Drop versions older than a year, except the newest old one of each item: it is what the next change is compared
+    against, so an undo never mistakes a year-old note for a new one."""
+    cutoff = clock.now() - keep_for
+    keep = (select(func.max(MemoryVersion.id)).where(MemoryVersion.at < cutoff)
+            .group_by(MemoryVersion.family_id, MemoryVersion.subject_id, MemoryVersion.kind, MemoryVersion.target))
+    res = await session.execute(delete(MemoryVersion).where(MemoryVersion.at < cutoff, MemoryVersion.id.not_in(keep)))
     return res.rowcount or 0
