@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
  && apt-get update && apt-get install -y --no-install-recommends postgresql-client-16 mongodb-database-tools \
  && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir boto3==1.35.*
+RUN pip install --no-cache-dir boto3==1.35.* pymongo==4.10.*
 
 WORKDIR /backup
 COPY backup.py .

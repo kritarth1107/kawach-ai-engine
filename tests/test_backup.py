@@ -3,7 +3,7 @@
 import importlib.util
 import json
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -48,7 +48,7 @@ def test_libpq_url():
 def _seed(store, d, ok=True):
     p = backup.date_prefix(d)
     store.put_bytes(f"{p}/postgres.dump.age", b"x")
-    store.put_bytes(f"{p}/manifest.json", json.dumps({"ok": ok}).encode())
+    store.put_bytes(f"{p}/manifest.json", json.dumps({"ok": ok, "parts": {"postgres": {"key": f"{p}/postgres.dump.age", "sha256": "x"}}}).encode())
 
 
 def test_prune_keeps_policy_and_ignores_failed_days(tmp_path):
@@ -71,17 +71,74 @@ def test_prune_keeps_policy_and_ignores_failed_days(tmp_path):
 
 def test_restore_refuses_prod_and_missing(tmp_path):
     store = backup.DirStore(str(tmp_path))
+    empty = lambda kind, url: False  # noqa: E731
     with pytest.raises(SystemExit, match="no backup"):
         backup.restore(store, "2026-10-04", "id", pg_url="postgresql://x/scratch", mongo_uri=None,
-                       prod=backup.Sources("postgresql://x/prod", None))
+                       prod=backup.Sources("postgresql://x/prod", None), has_data=empty)
     _seed(store, date(2026, 10, 4))
     with pytest.raises(SystemExit, match="production"):
         backup.restore(store, "2026-10-04", "id", pg_url="postgresql://x/prod", mongo_uri=None,
-                       prod=backup.Sources("postgresql://x/prod", None))
+                       prod=backup.Sources("postgresql://x/prod", None), has_data=empty)
     _seed(store, date(2026, 10, 3), ok=False)
     with pytest.raises(SystemExit, match="did not finish"):
         backup.restore(store, "2026-10-03", "id", pg_url="postgresql://x/scratch", mongo_uri=None,
-                       prod=backup.Sources("postgresql://x/prod", None))
+                       prod=backup.Sources("postgresql://x/prod", None), has_data=empty)
+
+
+def test_restore_refuses_any_target_with_data_and_a_missing_part(tmp_path):
+    store = backup.DirStore(str(tmp_path))
+    _seed(store, date(2026, 10, 4))
+    full = lambda kind, url: True  # noqa: E731
+    # production under another spelling (proxy URL, no env vars on this laptop) still has data: refused
+    with pytest.raises(SystemExit, match="already has data"):
+        backup.restore(store, "2026-10-04", "id", pg_url="postgresql://127.0.0.1:5432/kawach_ai?sslmode=disable", mongo_uri=None,
+                       prod=backup.Sources(None, None), has_data=full)
+    with pytest.raises(SystemExit, match="no mongo part"):
+        backup.restore(store, "2026-10-04", "id", pg_url=None, mongo_uri="mongodb://x/scratch", prod=backup.Sources(None, None),
+                       has_data=lambda k, u: False)
+
+
+def test_retention_survives_a_failed_sunday_and_first():
+    today = date(2026, 12, 6)
+    good = [d for d in days(120, today) if d not in (date(2026, 9, 1), date(2026, 11, 29))]
+    keep = backup.keep_dates(good, today)
+    assert date(2026, 9, 2) in keep  # September is still kept (from the 2nd)
+    assert date(2026, 11, 28) in keep  # that week's Saturday stands in for the failed Sunday
+
+
+def test_failed_rerun_never_replaces_the_days_good_backup(tmp_path, monkeypatch):
+    store = backup.DirStore(str(tmp_path))
+    fail = {"mongo": False}
+
+    def fake_dump(cmd, out, recipient):
+        if cmd[0] == "mongodump" and fail["mongo"]:
+            raise RuntimeError("mongodump exit 1")
+        out.write_bytes(f"{cmd[0]}-{datetime.now().timestamp()}".encode())
+
+    monkeypatch.setattr(backup, "dump_encrypted", fake_dump)
+    monkeypatch.setattr(backup, "family_rows", lambda url: [])
+    src = backup.Sources("postgresql://x/prod", "mongodb://x/prod")
+    first = backup.run_backup(store, src, "age1x", now=datetime(2026, 10, 4, 3, 30, tzinfo=backup.IST))
+    assert first["ok"]
+    fail["mongo"] = True
+    second = backup.run_backup(store, src, "age1x", now=datetime(2026, 10, 4, 14, 0, tzinfo=backup.IST))
+    assert not second["ok"]
+    day = json.loads(store.get_bytes("2026/10/04/manifest.json"))
+    assert day["ok"] and day["run"] == "033000" and store.get_bytes(day["parts"]["postgres"]["key"])
+    assert backup.list_days(store) == ["2026/10/04"]
+    fail["mongo"] = False
+    third = backup.run_backup(store, src, "age1x", now=datetime(2026, 10, 4, 15, 0, tzinfo=backup.IST))
+    day = json.loads(store.get_bytes("2026/10/04/manifest.json"))
+    assert third["ok"] and day["run"] == "150000" and store.get_bytes(first["parts"]["postgres"]["key"]) is None
+
+
+def test_snapshots_of_a_deleted_family_are_erased(tmp_path):
+    store = backup.DirStore(str(tmp_path))
+    for i in range(30):
+        store.put_bytes(backup.family_key("gone", date(2026, 3, 1) + timedelta(days=i)), b"x")
+        store.put_bytes(backup.family_key("here", date(2026, 9, 10) + timedelta(days=i)), b"x")
+    backup.prune_families(store, date(2026, 10, 9))
+    assert store.keys("families/gone/") == [] and store.keys("families/here/")
 
 
 async def test_overview_shows_last_backup(db):

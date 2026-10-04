@@ -37,16 +37,24 @@ IST = timezone(timedelta(hours=5, minutes=30))
 KEEP_DAILY, KEEP_WEEKLY, KEEP_MONTHLY = 14, 8, 12
 KEEP_MONTHLY_FAMILY = 24  # per-family snapshots are small, so they reach back two years
 FAMILY_PREFIX = "families/"
+FAMILY_GONE_AFTER = timedelta(days=90)  # no snapshot for 90 days: the family's memory was deleted, so its snapshots go too
 
 
 # ── retention ────────────────────────────────────────────────────────────────
 
 def keep_dates(dates: list[date], today: date, *, monthly: int = KEEP_MONTHLY) -> set[date]:
-    """14 newest daily, plus the 8 newest Sundays and the `monthly` newest 1st-of-months (counted among all dates)."""
+    """14 newest daily, plus the last backup of each of the 8 newest weeks (Sunday, or the latest before it if Sunday
+    failed) and the first backup of each of the `monthly` newest months (the 1st, or the next good day)."""
     ds = sorted({d for d in dates if d <= today}, reverse=True)
     keep = set(ds[:KEEP_DAILY])
-    keep |= set([d for d in ds if d.weekday() == 6][:KEEP_WEEKLY])
-    keep |= set([d for d in ds if d.day == 1][:monthly])
+    weeks: dict[tuple[int, int], date] = {}
+    for d in ds:  # newest first: the first one seen in a week is its last backup
+        weeks.setdefault(tuple(d.isocalendar()[:2]), d)
+    keep |= set(sorted(weeks.values(), reverse=True)[:KEEP_WEEKLY])
+    months: dict[tuple[int, int], date] = {}
+    for d in reversed(ds):  # oldest first: the first one seen in a month is its first backup
+        months.setdefault((d.year, d.month), d)
+    keep |= set(sorted(months.values(), reverse=True)[:monthly])
     keep |= {d for d in dates if d > today}  # clock skew: never delete the future
     return keep
 
@@ -287,7 +295,10 @@ def prune_families(store, today: date) -> list[str]:
         by_family.setdefault(parts[0], {})[d] = k
     gone = []
     for days_ in by_family.values():
-        keep = keep_dates(list(days_), today, monthly=KEEP_MONTHLY_FAMILY)
+        if max(days_) < today - FAMILY_GONE_AFTER:
+            keep: set[date] = set()  # erased: nothing of a deleted family lingers in the bucket
+        else:
+            keep = keep_dates(list(days_), today, monthly=KEEP_MONTHLY_FAMILY)
         for d, k in days_.items():
             if d not in keep:
                 store.delete(k)
@@ -349,9 +360,12 @@ def sources_from_env() -> Sources:
 
 
 def run_backup(store, src: Sources, recipient: str, *, now: datetime | None = None) -> dict:
+    """Each run writes under its own folder (YYYY/MM/DD/HHMMSS/); the day's manifest.json points at the run to restore.
+    A failed re-run never replaces a good backup of the same day."""
     now = now or datetime.now(IST)
     day = now.astimezone(IST).date()
     prefix = date_prefix(day)
+    run_id = now.astimezone(IST).strftime("%H%M%S")
     manifest: dict = {
         "day": day.isoformat(), "startedAt": now.isoformat(), "ok": False, "parts": {},
         "tools": {"pg_dump": tool_version(["pg_dump", "--version"]), "mongodump": tool_version(["mongodump", "--version"]),
@@ -369,7 +383,7 @@ def run_backup(store, src: Sources, recipient: str, *, now: datetime | None = No
             for name, fname, cmd in jobs:
                 out = Path(tmp) / fname
                 dump_encrypted(cmd, out, recipient)
-                key = f"{prefix}/{fname}"
+                key = f"{prefix}/{run_id}/{fname}"
                 store.put(key, out)
                 manifest["parts"][name] = {"key": key, "bytes": out.stat().st_size, "sha256": sha256(out)}
             manifest["ok"] = True
@@ -382,8 +396,19 @@ def run_backup(store, src: Sources, recipient: str, *, now: datetime | None = No
             except Exception as exc:  # noqa: BLE001
                 manifest["familiesError"] = str(exc)[:300]
         manifest["finishedAt"] = datetime.now(IST).isoformat()
+        manifest["run"] = run_id
         body = json.dumps(manifest, indent=2).encode()
-        store.put_bytes(f"{prefix}/manifest.json", body)
+        raw = store.get_bytes(f"{prefix}/manifest.json")
+        old = json.loads(raw) if raw else None
+        if manifest["ok"] or not (old and old.get("ok")):
+            store.put_bytes(f"{prefix}/manifest.json", body)
+            if manifest["ok"] and old and old.get("ok"):
+                new_keys = {p["key"] for p in manifest["parts"].values()}
+                for p in old.get("parts", {}).values():  # the earlier run of today is superseded
+                    if p.get("key") not in new_keys:
+                        store.delete(p["key"])
+        else:
+            store.put_bytes(f"{prefix}/{run_id}/manifest.json", body)  # kept for a look; today's good backup stays as it was
         if manifest["ok"]:
             store.put_bytes("latest.json", body)
     record_run(manifest)
@@ -417,11 +442,29 @@ def prune(store, today: date) -> list[str]:
 
 
 def list_days(store) -> list[str]:
-    return sorted({k.rsplit("/", 1)[0] for k in store.keys() if parse_prefix(k)})
+    return sorted({"/".join(k.split("/")[:3]) for k in store.keys() if parse_prefix(k)})
+
+
+def target_has_data(kind: str, url: str) -> bool:
+    """Does this database already hold data? Production always does; a scratch database for a restore does not."""
+    if kind == "postgres":
+        out = subprocess.run(["psql", libpq_url(url), "-qAt", "-c",
+                              "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog', 'information_schema')"],
+                             capture_output=True, text=True, check=True, timeout=60)
+        return int((out.stdout or "0").strip() or 0) > 0
+    from pymongo import MongoClient
+
+    client = MongoClient(url, serverSelectionTimeoutMS=10_000)
+    try:
+        return any(client[name].list_collection_names() for name in client.list_database_names() if name not in ("admin", "local", "config"))
+    finally:
+        client.close()
 
 
 def restore(store, day: str, identity: str, *, pg_url: str | None, mongo_uri: str | None,
-            prod: Sources, target_prod: bool = False, yes: bool = False) -> dict:
+            prod: Sources, target_prod: bool = False, yes: bool = False, has_data=target_has_data) -> dict:
+    """Restore into scratch databases. Any target that already holds data (production, under whatever URL spelling) is
+    refused unless --target-prod --yes is given."""
     d = date.fromisoformat(day)
     raw = store.get_bytes(f"{date_prefix(d)}/manifest.json")
     if not raw:
@@ -429,9 +472,17 @@ def restore(store, day: str, identity: str, *, pg_url: str | None, mongo_uri: st
     manifest = json.loads(raw)
     if not manifest.get("ok"):
         raise SystemExit(f"backup for {day} did not finish: {manifest.get('error')}")
-    for target, prod_url in ((pg_url, prod.pg_url), (mongo_uri, prod.mongo_uri)):
-        if target and prod_url and target.rstrip("/") == prod_url.rstrip("/") and not (target_prod and yes):
+    overwrite = target_prod and yes
+    for name, target, prod_url in (("postgres", pg_url, prod.pg_url), ("mongo", mongo_uri, prod.mongo_uri)):
+        if not target:
+            continue
+        if name not in manifest.get("parts", {}):
+            raise SystemExit(f"the {day} backup has no {name} part to restore")
+        if prod_url and target.rstrip("/") == prod_url.rstrip("/") and not overwrite:
             raise SystemExit("refusing to restore over production; pass --target-prod --yes to really do it")
+        if not overwrite and has_data(name, target):
+            raise SystemExit(f"refusing: the {name} target already has data (production?). Restore into an empty scratch database, "
+                             "or pass --target-prod --yes to overwrite it")
     done = {}
     with tempfile.TemporaryDirectory() as tmp:
         for name, target in (("postgres", pg_url), ("mongo", mongo_uri)):

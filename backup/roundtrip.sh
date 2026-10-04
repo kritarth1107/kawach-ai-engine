@@ -19,7 +19,7 @@ for _ in $(seq 60); do docker exec "$NET-mongo" mongosh --quiet --eval 'db.runCo
 sleep 2
 
 psql() { docker exec -i "$NET-pg" psql -U postgres -v ON_ERROR_STOP=1 -qtA "$@"; }
-psql -c "CREATE DATABASE prod" >/dev/null; psql -c "CREATE DATABASE scratch" >/dev/null
+psql -c "CREATE DATABASE prod" >/dev/null; psql -c "CREATE DATABASE scratch" >/dev/null; psql -c "CREATE DATABASE scratch2" >/dev/null
 psql -d prod <<'SQL' >/dev/null
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE care_facts (id serial primary key, family_id text, body text, embedding vector(3));
@@ -50,8 +50,9 @@ run family fam-3 "$DAY" --out /work/fam3.json >/dev/null
 F=$(python3 -c "import json;d=json.load(open('$WORK/fam3.json'));print(d['family_id'], len(d['facts']))")
 [ "$F" = "fam-3 72" ] || { echo "FAIL: family snapshot content $F"; exit 1; }
 
-# restoring over the source must be refused
+# restoring over the source must be refused, however its URL is spelled (it already has data)
 if run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/prod" >/dev/null 2>&1; then echo "FAIL: restore over prod allowed"; exit 1; fi
+if run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg/prod?sslmode=disable" >/dev/null 2>&1; then echo "FAIL: restore over prod (other URL) allowed"; exit 1; fi
 
 run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/scratch" >/dev/null
 
@@ -64,9 +65,11 @@ docker exec "$NET-mongo" mongosh --quiet kavach --eval 'db.dropDatabase()' >/dev
 run restore "$DAY" --mongo-uri "mongodb://$NET-mongo:27017" --target-prod --yes >/dev/null
 M=$(docker exec "$NET-mongo" mongosh --quiet kavach --eval 'db.users.countDocuments() + "," + db.families.findOne().name')
 [ "$M" = "300,Kritarth’s Family" ] || { echo "FAIL: mongo mismatch $M"; exit 1; }
+# and Mongo that has data is refused without the flags
+if run restore "$DAY" --mongo-uri "mongodb://$NET-mongo:27017/?directConnection=true" >/dev/null 2>&1; then echo "FAIL: restore over live mongo allowed"; exit 1; fi
 
 # a damaged file must be caught by the checksum
 f=$(find "$WORK/store" -name 'postgres.dump.age'); printf 'x' >>"$f"
-if run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/scratch" >/dev/null 2>&1; then echo "FAIL: damaged backup restored"; exit 1; fi
+OUT=$(run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/scratch2" 2>&1 || true); echo "$OUT" | grep -q "checksum mismatch" || { echo "FAIL: damaged backup not caught by the checksum: $OUT"; exit 1; }
 
 echo "OK: postgres $A, mongo $M, 7 family snapshots ($F), encrypted, prod-guard and checksum checks pass"
