@@ -128,9 +128,13 @@ async def save_family(session: AsyncSession, family_id: str, subject_id: str, bo
             return {"saved": False, "id": prior.id, "status": prior.status, "problems": ["already decided"]}
         same = same or prior
     status = "active" if source == "caregiver" else "proposed"
+    from app.care import versions
+
+    prior = None
     if same:
         if same.status == "blocked" and source != "caregiver":
             return {"saved": False, "id": same.id, "status": "blocked", "problems": ["a caregiver removed this before"]}
+        prior = versions.skill_state(same)
         same.body, same.title = body, title or same.title
         same.status = "active" if source == "caregiver" else (same.status if same.status == "active" else status)
         same.updated_at, same.updated_by, same.version = now, by, same.version + 1
@@ -141,6 +145,9 @@ async def save_family(session: AsyncSession, family_id: str, subject_id: str, bo
                   steps=[], source=source, evidence=(evidence or [])[-20:], status=status, created_at=now, updated_at=now, updated_by=by)
         session.add(s)
     await session.flush()
+    if prior is None or prior != versions.skill_state(s):
+        await versions.record_skill(session, s, "write", prior=prior, actor_id=by or None,
+                                    source="nightly" if source == "dream" else None)
     await _cap_active(session, family_id, subject_id)
     return {"saved": True, "id": s.id, "status": s.status, "title": s.title}
 
@@ -149,8 +156,12 @@ async def _cap_active(session: AsyncSession, family_id: str, subject_id: str) ->
     rows = list((await session.execute(select(Skill).where(
         Skill.scope == "family", Skill.family_id == family_id, Skill.subject_id == subject_id, Skill.status == "active",
     ).order_by(Skill.updated_at.desc()))).scalars())
+    from app.care import versions
+
     for r in rows[MAX_ACTIVE_PER_PERSON:]:
+        prior = versions.skill_state(r)
         r.status = "archived"
+        await versions.record_skill(session, r, "archive", prior=prior, reason=f"more than {MAX_ACTIVE_PER_PERSON} in use; the oldest was set aside")
 
 
 async def family_skills(session: AsyncSession, family_id: str, subject_ids: list[str] | None = None,
@@ -168,9 +179,12 @@ async def _family_row(session: AsyncSession, family_id: str, skill_id: int) -> S
 
 async def decide(session: AsyncSession, family_id: str, skill_id: int, *, action: str, by: str, body: str | None = None) -> dict:
     """approve | edit | remove | restore, for one family skill."""
+    from app.care import versions
+
     s = await _family_row(session, family_id, skill_id)
     if not s:
         return {"ok": False, "error": "not found"}
+    prior = versions.skill_state(s)
     now = clock.now()
     if action == "edit":
         new = re.sub(r"\s+", " ", (body or "").strip())
@@ -187,8 +201,9 @@ async def decide(session: AsyncSession, family_id: str, skill_id: int, *, action
     else:
         return {"ok": False, "error": f"unknown action {action}"}
     s.updated_at, s.updated_by, s.version = now, by, s.version + 1
+    await session.flush()
+    await versions.record_skill(session, s, {"edit": "write"}.get(action, action), prior=prior, actor_id=by or None)
     if s.status == "active":
-        await session.flush()
         await _cap_active(session, family_id, s.subject_id or "")
     return {"ok": True, "skill": view(s)}
 
@@ -197,11 +212,15 @@ async def forget_matching(session: AsyncSession, family_id: str, subject_ids: li
     ws = [w for w in re.findall(r"\w+", (words or "").lower()) if len(w) > 2]
     if not ws:
         return {"removed": []}
+    from app.care import versions
+
     gone = []
     for s in await family_skills(session, family_id, subject_ids):
         hay = f"{s.title} {s.body}".lower()
         if sum(w in hay for w in ws) >= max(1, (len(ws) + 1) // 2):
+            prior = versions.skill_state(s)
             s.status, s.updated_at, s.updated_by, s.version = "blocked", clock.now(), by, s.version + 1
+            await versions.record_skill(session, s, "remove", prior=prior, actor_id=by or None, reason=f"forget: {words[:100]}")
             gone.append(s.title)
     return {"removed": gone}
 
@@ -325,8 +344,13 @@ async def curate(session: AsyncSession) -> dict:
     for s in (await session.execute(select(Skill).where(Skill.scope == "store", Skill.status == "stale", last < now - ARCHIVE_AFTER))).scalars():
         s.status, s.updated_at = "archived", now
         archived += 1
+    from app.care import versions
+
     for s in (await session.execute(select(Skill).where(Skill.scope == "family", Skill.status == "proposed",
                                                         Skill.updated_at < now - STALE_AFTER))).scalars():
+        prior = versions.skill_state(s)
         s.status, s.updated_at = "archived", now
+        await versions.record_skill(session, s, "archive", prior=prior, actor_id="saheli", source="nightly",
+                                    reason="no caregiver answer for 30 days")
         archived += 1
     return {"stale": staled, "archived": archived}

@@ -183,3 +183,4 @@ class FamilyRoster(Base):
 
 
 from app.care import skillbook as _skillbook  # noqa: E402,F401  (registers the skills table)
+from app.care import versions as _versions  # noqa: E402,F401  (registers memory_versions)

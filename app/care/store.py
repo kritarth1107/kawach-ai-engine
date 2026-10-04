@@ -10,6 +10,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.care import versions
 from app.care.domains import medicine_slug, merged_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
@@ -70,13 +71,20 @@ async def write_fact(
     stated_by: str | None = None,
     confidence: float = 1.0,
     note: str | None = None,
+    replace: bool = False,
+    force_confirm: bool = False,
 ) -> FactWrite:
-    """Save a fact. A change supersedes the old row; a weaker source changing a health fact waits as pending."""
+    """Save a fact. A change supersedes the old row; a weaker source changing a health fact waits as pending.
+
+    replace: the value is the whole new value (an undo or restore), not fields merged into the old one.
+    force_confirm: wait for a caregiver even where the source alone would not (an undo that restarts or changes a health fact).
+    """
     now = clock.now()
     old = await active_fact(session, family_id, subject_id, key)
     if old:
         key = old.key
-        value = merged_value(old.value, value)
+        if not replace:
+            value = merged_value(old.value, value)
     if old and _same(old.value, value):
         if source_kind in ("caregiver_said", "dashboard", "prescription") and stated_by and not old.confirmed_by:
             old.confirmed_by = stated_by
@@ -100,8 +108,10 @@ async def write_fact(
         supersedes=old.id if old else None,
         note=note,
     )
-    if old and needs_confirmation(domain, source_kind, old.source_kind, changes_existing=True):
+    if force_confirm or (old and needs_confirmation(domain, source_kind, old.source_kind, changes_existing=True)):
         row.status = "pending"
+        if force_confirm:
+            row.confidence = min(confidence, 0.7)
         session.add(row)
         await session.flush()
         await open_loop(
@@ -109,10 +119,11 @@ async def write_fact(
             family_id=family_id,
             subject_id=subject_id,
             kind="confirm_fact",
-            title=f"Confirm change: {old.text} → {text}",
-            detail={"fact_id": str(row.id), "key": key, "old": old.value, "new": value},
+            title=f"Confirm change: {old.text} → {text}" if old else f"Confirm: {text}",
+            detail={"fact_id": str(row.id), "key": key, "old": old.value if old else None, "new": value},
             dedupe_key=f"confirm:{subject_id}:{key}",
         )
+        await versions.record_fact(session, row, "pending")
         return FactWrite("pending", row, old)
 
     if old:
@@ -122,6 +133,7 @@ async def write_fact(
     row.status = "active"
     session.add(row)
     await session.flush()
+    await versions.record_fact(session, row, "write")
     return FactWrite("superseded" if old else "created", row, old)
 
 
@@ -135,14 +147,16 @@ async def stop_fact(
     source_kind: str,
     stated_by: str | None = None,
     source_ref: str | None = None,
+    force_confirm: bool = False,
 ) -> FactWrite | None:
-    """End a fact (a stopped medicine, a lifted diet rule). A weak source only proposes the stop."""
+    """End a fact (a stopped medicine, a lifted diet rule). A weak source only proposes the stop (and so does
+    force_confirm: an undo that would end a health fact waits for a caregiver)."""
     old = await active_fact(session, family_id, subject_id, key)
     if not old:
         return None
     key = old.key
     now = clock.now()
-    if needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
+    if force_confirm or needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
         row = CareFact(
             id=uuid.uuid4(),
             family_id=family_id,
@@ -172,11 +186,13 @@ async def stop_fact(
             detail={"fact_id": str(row.id), "key": key, "old": old.value, "stop": True},
             dedupe_key=f"confirm:{subject_id}:{key}",
         )
+        await versions.record_fact(session, row, "pending")
         return FactWrite("pending", row, old)
     old.status = "stopped"
     old.valid_to = now
     old.note = reason
     await session.flush()
+    await versions.record_fact(session, old, "stop")
     return FactWrite("stopped", old)
 
 
@@ -188,8 +204,10 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     if approve:
         old = await active_fact(session, row.family_id, row.subject_id, row.key)
         if old and not row.value.get("stopped"):
-            # Approving a change keeps what it did not mention (times, dose) from the current record.
-            row.value = merged_value(old.value, row.value)
+            # Approving a change keeps what it did not mention (times, dose) from the current record,
+            # except an undo or restore, which carries the whole value it goes back to.
+            if not (row.source_ref or "").startswith("undo:"):
+                row.value = merged_value(old.value, row.value)
             row.key = old.key
         if old:
             old.status = "superseded"
@@ -210,6 +228,7 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
         .values(status="done", updated_at=now, closed_note="approved" if approve else "rejected")
     )
     await session.flush()
+    await versions.record_fact(session, row, "approve" if approve else "reject")
     return row
 
 
@@ -299,8 +318,32 @@ async def events(
 
 
 async def upsert_note(
-    session: AsyncSession, *, family_id: str, subject_id: str, slug: str, title: str, body_md: str
+    session: AsyncSession,
+    *,
+    family_id: str,
+    subject_id: str,
+    slug: str,
+    title: str,
+    body_md: str,
+    op: str = "write",
+    actor_id: str | None = None,
+    source: str | None = None,
+    reason: str | None = None,
+    undoes: int | None = None,
+    meta: dict | None = None,
 ) -> MemoryNote:
+    """Write a note and keep the version (who, from where, why: from versions.attribution unless given here).
+    Writing the same text again changes nothing."""
+    existing = (
+        await session.execute(
+            select(MemoryNote)
+            .where(MemoryNote.family_id == family_id, MemoryNote.subject_id == subject_id, MemoryNote.slug == slug)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if existing and existing.body_md == body_md and existing.title == title:
+        return existing
+    await versions.before_note(session, existing)
     now = clock.now()
     stmt = (
         insert(MemoryNote)
@@ -328,7 +371,9 @@ async def upsert_note(
         .returning(MemoryNote)
     )
     # populate_existing: a note loaded earlier in this session must show what was just written.
-    return (await session.execute(stmt, execution_options={"populate_existing": True})).scalar_one()
+    note = (await session.execute(stmt, execution_options={"populate_existing": True})).scalar_one()
+    await versions.record_note(session, note, op=op, meta=meta, actor_id=actor_id, source=source, reason=reason, undoes=undoes)
+    return note
 
 
 async def notes(session: AsyncSession, family_id: str, subject_ids: list[str]) -> list[MemoryNote]:

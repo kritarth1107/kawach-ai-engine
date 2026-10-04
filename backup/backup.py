@@ -4,6 +4,12 @@
     python backup.py list                      # dates in the store
     python backup.py restore DATE [--pg-url URL] [--mongo-uri URI] [--target-prod --yes]
     python backup.py latest                    # newest manifest as JSON (for verify.sh)
+    python backup.py family FAMILY_ID [DATE] [--out FILE]   # one family's memory snapshot, decrypted (JSON)
+
+Besides the full dumps, every night writes one small encrypted JSON snapshot per family (care record with its history,
+memory notes, family skills, baselines, open loops) under families/<id>/YYYY/MM/DD.json.age, kept longer (24 monthly).
+The engine brings one back with `python -m app.jobs.restore_family FILE` (dry run first; changes are undoable and
+care-record changes wait for a caregiver).
 
 The job holds only the age *public* key (BACKUP_AGE_RECIPIENT), so a leaked job cannot read a backup.
 Restores need the private key file (BACKUP_AGE_IDENTITY_FILE) and go to a scratch database unless
@@ -29,16 +35,18 @@ from pathlib import Path
 
 IST = timezone(timedelta(hours=5, minutes=30))
 KEEP_DAILY, KEEP_WEEKLY, KEEP_MONTHLY = 14, 8, 12
+KEEP_MONTHLY_FAMILY = 24  # per-family snapshots are small, so they reach back two years
+FAMILY_PREFIX = "families/"
 
 
 # ── retention ────────────────────────────────────────────────────────────────
 
-def keep_dates(dates: list[date], today: date) -> set[date]:
-    """14 newest daily, plus the 8 newest Sundays and the 12 newest 1st-of-months (both counted among all dates)."""
+def keep_dates(dates: list[date], today: date, *, monthly: int = KEEP_MONTHLY) -> set[date]:
+    """14 newest daily, plus the 8 newest Sundays and the `monthly` newest 1st-of-months (counted among all dates)."""
     ds = sorted({d for d in dates if d <= today}, reverse=True)
     keep = set(ds[:KEEP_DAILY])
     keep |= set([d for d in ds if d.weekday() == 6][:KEEP_WEEKLY])
-    keep |= set([d for d in ds if d.day == 1][:KEEP_MONTHLY])
+    keep |= set([d for d in ds if d.day == 1][:monthly])
     keep |= {d for d in dates if d > today}  # clock skew: never delete the future
     return keep
 
@@ -82,8 +90,8 @@ class DirStore:
         p = self.root / key
         return p.read_bytes() if p.exists() else None
 
-    def keys(self) -> list[str]:
-        return sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*") if p.is_file())
+    def keys(self, prefix: str = "") -> list[str]:
+        return sorted(k for k in (str(p.relative_to(self.root)) for p in self.root.rglob("*") if p.is_file()) if k.startswith(prefix))
 
     def delete(self, key: str) -> None:
         (self.root / key).unlink(missing_ok=True)
@@ -117,10 +125,10 @@ class S3Store:
         except self.s3.exceptions.NoSuchKey:
             return None
 
-    def keys(self) -> list[str]:
+    def keys(self, prefix: str = "") -> list[str]:
         out, token = [], None
         while True:
-            kw = {"Bucket": self.bucket, **({"ContinuationToken": token} if token else {})}
+            kw = {"Bucket": self.bucket, "Prefix": prefix, **({"ContinuationToken": token} if token else {})}
             page = self.s3.list_objects_v2(**kw)
             out += [o["Key"] for o in page.get("Contents", [])]
             if not page.get("IsTruncated"):
@@ -183,6 +191,122 @@ def dump_encrypted(dump_cmd: list[str], out: Path, recipient: str) -> None:
 
 def decrypt(src: Path, dst: Path, identity: str) -> None:
     subprocess.run(["age", "-d", "-i", identity, "-o", str(dst), str(src)], check=True)
+
+
+def encrypt_bytes(data: bytes, recipient: str) -> bytes:
+    return subprocess.run(["age", "-r", recipient], input=data, capture_output=True, check=True).stdout
+
+
+# ── per-family memory snapshots ──────────────────────────────────────────────
+
+FAMILY_TABLES = ("care_facts", "memory_notes", "skills", "person_baselines", "open_loops")
+
+
+def family_sql(have: set[str]) -> str:
+    """One JSON line per family with its memory. Only tables that exist are read (a fresh database has fewer)."""
+    sources = [f"SELECT family_id FROM {t}" for t in ("care_facts", "memory_notes") if t in have]
+    if "skills" in have:
+        sources.append("SELECT family_id FROM skills WHERE scope = 'family' AND family_id IS NOT NULL")
+    if not sources:
+        return ""
+    fields = ["'family_id', f.family_id", "'taken_at', now()"]
+    if "care_facts" in have:
+        fields.append("'facts', COALESCE((SELECT json_agg(c) FROM care_facts c WHERE c.family_id = f.family_id), '[]'::json)")
+    if "memory_notes" in have:
+        fields.append("'notes', COALESCE((SELECT json_agg(json_build_object('subject_id', n.subject_id, 'slug', n.slug, 'title', n.title,"
+                      " 'body_md', n.body_md, 'version', n.version, 'updated_at', n.updated_at)) FROM memory_notes n"
+                      " WHERE n.family_id = f.family_id), '[]'::json)")
+    if "skills" in have:
+        fields.append("'skills', COALESCE((SELECT json_agg(s) FROM skills s WHERE s.scope = 'family' AND s.family_id = f.family_id), '[]'::json)")
+    if "person_baselines" in have:
+        fields.append("'baselines', COALESCE((SELECT json_agg(b) FROM person_baselines b WHERE b.family_id = f.family_id), '[]'::json)")
+    if "open_loops" in have:
+        fields.append("'open_loops', COALESCE((SELECT json_agg(o) FROM open_loops o WHERE o.family_id = f.family_id"
+                      " AND o.status = 'open'), '[]'::json)")
+    # ::jsonb::text keeps each family on one line (json_agg puts newlines between elements)
+    return (f"SELECT json_build_object({', '.join(fields)})::jsonb::text FROM (SELECT DISTINCT family_id FROM ({' UNION '.join(sources)}) u) f"
+            " WHERE f.family_id IS NOT NULL AND f.family_id NOT LIKE 'shadow:%' ORDER BY f.family_id")
+
+
+def _psql(pg_url: str, sql: str) -> list[str]:
+    out = subprocess.run(["psql", pg_url, "-v", "ON_ERROR_STOP=1", "-qAt", "-c", sql], capture_output=True, text=True, check=True,
+                         timeout=900)
+    return [ln for ln in out.stdout.splitlines() if ln.strip()]
+
+
+def family_rows(pg_url: str) -> list[str]:
+    checks = ", ".join(f"to_regclass('public.{t}') IS NOT NULL" for t in FAMILY_TABLES)
+    flags = _psql(pg_url, f"SELECT {checks}")[0].split("|")
+    have = {t for t, f in zip(FAMILY_TABLES, flags) if f == "t"}
+    sql = family_sql(have)
+    return _psql(pg_url, sql) if sql else []
+
+
+def safe_id(family_id: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_." else "_" for c in family_id)[:120] or "_"
+
+
+def family_key(family_id: str, day: date) -> str:
+    return f"{FAMILY_PREFIX}{safe_id(family_id)}/{date_prefix(day)}.json.age"
+
+
+def snapshot_families(store, rows: list[str], recipient: str, day: date, *, encrypt=None, workers: int = 8) -> dict:
+    """Encrypt and upload one snapshot per family; a family that fails is counted, not fatal."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    encrypt = encrypt or (lambda data: encrypt_bytes(data, recipient))
+
+    def one(line: str) -> tuple[str, int]:
+        fid = json.loads(line)["family_id"]
+        data = encrypt(line.encode())
+        store.put_bytes(family_key(fid, day), data)
+        return fid, len(data)
+
+    done, failed, total = 0, [], 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(one, r) for r in rows]
+        for f in futures:
+            try:
+                _, n = f.result()
+                done, total = done + 1, total + n
+            except Exception as exc:  # noqa: BLE001
+                failed.append(str(exc)[:120])
+    return {"count": done, "bytes": total, "failed": len(failed), **({"errors": failed[:5]} if failed else {})}
+
+
+def prune_families(store, today: date) -> list[str]:
+    by_family: dict[str, dict[date, str]] = {}
+    for k in store.keys(FAMILY_PREFIX):
+        parts = k[len(FAMILY_PREFIX):].split("/")
+        if len(parts) != 4 or not parts[3].endswith(".json.age"):
+            continue
+        try:
+            d = date(int(parts[1]), int(parts[2]), int(parts[3].split(".")[0]))
+        except ValueError:
+            continue
+        by_family.setdefault(parts[0], {})[d] = k
+    gone = []
+    for days_ in by_family.values():
+        keep = keep_dates(list(days_), today, monthly=KEEP_MONTHLY_FAMILY)
+        for d, k in days_.items():
+            if d not in keep:
+                store.delete(k)
+                gone.append(k)
+    return gone
+
+
+def family_snapshot(store, family_id: str, identity: str, day: str | None = None) -> bytes:
+    keys = store.keys(f"{FAMILY_PREFIX}{safe_id(family_id)}/")
+    if day:
+        want = family_key(family_id, date.fromisoformat(day))
+        keys = [k for k in keys if k == want]
+    if not keys:
+        raise SystemExit(f"no snapshot for {family_id}" + (f" on {day}" if day else ""))
+    with tempfile.TemporaryDirectory() as tmp:
+        enc, plain = Path(tmp) / "s.age", Path(tmp) / "s.json"
+        store.get(keys[-1], enc)
+        decrypt(enc, plain, identity)
+        return plain.read_bytes()
 
 
 def record_run(manifest: dict) -> None:
@@ -251,6 +375,12 @@ def run_backup(store, src: Sources, recipient: str, *, now: datetime | None = No
             manifest["ok"] = True
         except Exception as exc:  # noqa: BLE001
             manifest["error"] = str(exc)[:500]
+        if manifest["ok"] and src.pg_url:
+            # the full dump is the backup; per-family snapshots are a convenience, so their failure is reported, not fatal
+            try:
+                manifest["families"] = snapshot_families(store, family_rows(src.pg_url), recipient, day)
+            except Exception as exc:  # noqa: BLE001
+                manifest["familiesError"] = str(exc)[:300]
         manifest["finishedAt"] = datetime.now(IST).isoformat()
         body = json.dumps(manifest, indent=2).encode()
         store.put_bytes(f"{prefix}/manifest.json", body)
@@ -258,7 +388,7 @@ def run_backup(store, src: Sources, recipient: str, *, now: datetime | None = No
             store.put_bytes("latest.json", body)
     record_run(manifest)
     if manifest["ok"]:
-        manifest["pruned"] = prune(store, day)
+        manifest["pruned"] = prune(store, day) + prune_families(store, day)
     return manifest
 
 
@@ -329,6 +459,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("run")
     sub.add_parser("list")
     sub.add_parser("latest")
+    fam = sub.add_parser("family")
+    fam.add_argument("family_id")
+    fam.add_argument("day", nargs="?")
+    fam.add_argument("--out")
     r = sub.add_parser("restore")
     r.add_argument("day")
     r.add_argument("--pg-url", default=os.environ.get("RESTORE_PG_URL"))
@@ -348,6 +482,14 @@ def main(argv: list[str] | None = None) -> int:
         raw = store.get_bytes("latest.json")
         print(raw.decode() if raw else "{}")
         return 0 if raw else 1
+    if a.cmd == "family":
+        data = family_snapshot(store, a.family_id, need("BACKUP_AGE_IDENTITY_FILE"), a.day)
+        if a.out:
+            Path(a.out).write_bytes(data)
+            print(f"wrote {a.out} ({len(data)} bytes)")
+        else:
+            sys.stdout.write(data.decode())
+        return 0
     if not a.pg_url and not a.mongo_uri:
         raise SystemExit("give --pg-url and/or --mongo-uri (a scratch database)")
     out = restore(store, a.day, need("BACKUP_AGE_IDENTITY_FILE"), pg_url=a.pg_url and libpq_url(a.pg_url), mongo_uri=a.mongo_uri,

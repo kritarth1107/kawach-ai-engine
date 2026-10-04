@@ -44,6 +44,12 @@ grep -q '"ok": true' "$WORK/run.json" || { cat "$WORK/run.json"; echo "FAIL: bac
 if grep -rqa "Metformin" "$WORK/store"; then echo "FAIL: plaintext in backup"; exit 1; fi
 DAY=$(run list | tail -1 | tr / -)
 
+# one encrypted memory snapshot per family, readable with the private key
+grep -q '"count": 7' "$WORK/run.json" || { cat "$WORK/run.json"; echo "FAIL: family snapshots"; exit 1; }
+run family fam-3 "$DAY" --out /work/fam3.json >/dev/null
+F=$(python3 -c "import json;d=json.load(open('$WORK/fam3.json'));print(d['family_id'], len(d['facts']))")
+[ "$F" = "fam-3 72" ] || { echo "FAIL: family snapshot content $F"; exit 1; }
+
 # restoring over the source must be refused
 if run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/prod" >/dev/null 2>&1; then echo "FAIL: restore over prod allowed"; exit 1; fi
 
@@ -63,4 +69,4 @@ M=$(docker exec "$NET-mongo" mongosh --quiet kavach --eval 'db.users.countDocume
 f=$(find "$WORK/store" -name 'postgres.dump.age'); printf 'x' >>"$f"
 if run restore "$DAY" --pg-url "postgresql://postgres:pw@$NET-pg:5432/scratch" >/dev/null 2>&1; then echo "FAIL: damaged backup restored"; exit 1; fi
 
-echo "OK: postgres $A, mongo $M, encrypted, prod-guard and checksum checks pass"
+echo "OK: postgres $A, mongo $M, 7 family snapshots ($F), encrypted, prod-guard and checksum checks pass"

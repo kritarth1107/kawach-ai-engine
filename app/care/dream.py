@@ -99,11 +99,14 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
     report: dict = {"family": fid, "day": day, "facts": 0, "diary": 0, "baselines": 0, "patterns": 0, "notes": 0, "errors": []}
 
     async def step(name, fn):
+        from app.care import versions
+
         try:
-            async with sessions() as session:
-                result = await fn(session)
-                await session.commit()
-                return result
+            with versions.attribution(actor_id="saheli", source="nightly", reason=f"nightly review of {day}"):
+                async with sessions() as session:
+                    result = await fn(session)
+                    await session.commit()
+                    return result
         except Exception as exc:  # noqa: BLE001 — one step's failure must not stop the night
             logger.exception("dream step %s failed family=%s", name, fid)
             report["errors"].append(f"{name}: {str(exc)[:120]}")
@@ -161,9 +164,10 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
             res = await session.execute(delete(SkillNote).where(SkillNote.service == svc, SkillNote.id.not_in(keep)))
             out["skill_notes_removed"] += res.rowcount or 0
         out["confirmations_expired"] = await expire_stale_confirmations(session)
-        from app.care import skillbook
+        from app.care import skillbook, versions
 
         out["skills"] = await skillbook.curate(session)
+        out["versions_pruned"] = await versions.prune(session)
         await session.commit()
     return out
 

@@ -195,7 +195,10 @@ async def compute(session: AsyncSession, family_id: str, subject_id: str) -> dic
 
 
 async def save(session: AsyncSession, family_id: str, subject_id: str) -> dict:
+    from app.care import versions
+
     data = await compute(session, family_id, subject_id)
+    await versions.record_style(session, family_id, subject_id, (await get(session, family_id, subject_id)).get("style"), data.get("style"))
     stmt = insert(Baseline).values(family_id=family_id, subject_id=subject_id, computed_at=clock.now(), data=data)
     await session.execute(stmt.on_conflict_do_update(index_elements=[Baseline.family_id, Baseline.subject_id],
                                                      set_={"computed_at": stmt.excluded.computed_at, "data": stmt.excluded.data}))

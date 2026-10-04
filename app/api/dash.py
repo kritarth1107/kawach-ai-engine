@@ -112,10 +112,11 @@ async def events(family_id: str, elder_id: str, session: DB, day: str | None = N
     return {"events": [event_json(e) for e in rows]}
 
 
-def _ctx(session: AsyncSession, family_id: str, elder_id: str, actor: Actor) -> tools.TurnCtx:
+def _ctx(session: AsyncSession, family_id: str, elder_id: str, actor: Actor, *, confirmed: bool = False) -> tools.TurnCtx:
     return tools.TurnCtx(
         session=session, host=make_host(), family_id=family_id, elder={"id": elder_id, "name": ""},
         speaker={"id": actor.id, "name": actor.name, "role": "caregiver"}, members=[{"id": elder_id}, {"id": actor.id}],
+        channel="dashboard", confirmed=confirmed,
     )
 
 
@@ -203,7 +204,8 @@ async def save_note(family_id: str, elder_id: str, body: NoteIn, session: DB) ->
     subject = body.subject_id if body.subject_id in (elder_id, "family") else elder_id
     from app.care.redact import scrub_secrets
 
-    n = await store.upsert_note(session, family_id=family_id, subject_id=subject, slug=body.slug, title=body.title, body_md=scrub_secrets(body.body))
+    n = await store.upsert_note(session, family_id=family_id, subject_id=subject, slug=body.slug, title=body.title, body_md=scrub_secrets(body.body),
+                                actor_id=body.actor.id, source="dashboard")
     await store.record_event(session, family_id=family_id, subject_id=elder_id, kind="dashboard_edit", summary=f"note: {body.title}", actor_id=body.actor.id)
     await session.commit()
     return {"saved": True, "version": n.version}
@@ -720,3 +722,36 @@ async def skills_decide(family_id: str, elder_id: str, skill_id: int, body: Skil
 async def logins_view(family_id: str, elder_id: str, session: DB) -> dict:
     """Login state of each store/ride app for this family, from the agents' own runs."""
     return {"logins": await sandbox.logins(session, family_id)}
+
+
+class UndoIn(BaseModel):
+    actor: Actor
+    mode: str = Field(default="undo", pattern="^(undo|restore)$")
+    reason: str = Field(default="", max_length=300)
+    # the caregiver confirmed in the dialog: an undo may end or restart a medicine, allergy or condition at once
+    confirm: bool = False
+
+
+@router.get("/{family_id}/{elder_id}/memory-history")
+async def memory_history(family_id: str, elder_id: str, session: DB, kind: str | None = None, target: str | None = None,
+                         what: str = "", limit: int = 40) -> dict:
+    """What changed in this person's memory (and the family notes): newest first, with who, where, why, and undo/restore."""
+    from app.care import versions
+
+    if kind and kind not in versions.KINDS:
+        raise HTTPException(status_code=400, detail="unknown kind")
+    rows = await versions.changes(session, family_id, [elder_id, "family"], kinds=(kind,) if kind else None, target=target,
+                                  words=what, limit=min(max(limit, 1), 100), include_baseline=bool(target))
+    return {"changes": [await versions.view(session, v) for v in rows]}
+
+
+@router.post("/{family_id}/{elder_id}/memory-history/{version_id}")
+async def memory_undo(family_id: str, elder_id: str, version_id: int, body: UndoIn, session: DB) -> dict:
+    """Undo one change, or put an item back as it was at that version (same tool Saheli uses on WhatsApp)."""
+    from app.care import versions
+
+    v = await versions.get(session, family_id, version_id)
+    if not v or v.subject_id not in (elder_id, "family"):
+        raise HTTPException(status_code=404, detail="no such change")
+    ctx = _ctx(session, family_id, elder_id, body.actor, confirmed=body.confirm)
+    return await _run(session, ctx, "undo_change", {"id": version_id, "mode": body.mode, "reason": body.reason})

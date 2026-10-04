@@ -228,8 +228,7 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     words = [w for w in re.findall(r"\w{3,}", (what or "").lower())]
     if not words:
         return {"forgotten": 0}
-    n = 0
-    removed_lines = []
+    removed_lines, rewrites = [], []
     notes = list((await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id, MemoryNote.subject_id.in_(subject_ids))
                                         .execution_options(populate_existing=True))).scalars())
     for note in notes:
@@ -237,21 +236,22 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
         for ln in (note.body_md or "").splitlines():
             (drop if all(w in ln.lower() for w in words) else keep).append(ln)
         if drop:
-            await store.upsert_note(session, family_id=family_id, subject_id=note.subject_id, slug=note.slug, title=note.title, body_md="\n".join(keep))
+            rewrites.append((note, "\n".join(keep)))
             removed_lines += [{"subject": note.subject_id, "slug": note.slug, "title": note.title, "line": d} for d in drop]
-            await memory_index.unindex(session, family_id, f"note:{note.slug}")
-            n += len(drop)
     events = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids)))).scalars()
-    hidden = []
-    for e in events:
-        if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten"):
-            e.payload = {**(e.payload or {}), "forgotten": True, "forgotten_by": by}
-            await memory_index.unindex(session, family_id, f"event:{e.id}")
-            hidden.append(e.id)
-            n += 1
-    await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
-                             payload={"what": what, "by": by, "note_lines": removed_lines, "events": hidden, "forgotten": True}, actor_id=by)
-    return {"forgotten": n}
+    hide = [e for e in events if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten")]
+    # the record first, so each note's version can point at it (undoing any of them restores the whole forget)
+    eid = await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
+                                   payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True},
+                                   actor_id=by)
+    for note, body in rewrites:
+        await store.upsert_note(session, family_id=family_id, subject_id=note.subject_id, slug=note.slug, title=note.title, body_md=body,
+                                op="forget", actor_id=by, reason=f"forget: {what[:120]}", meta={"forget_event": eid})
+        await memory_index.unindex(session, family_id, f"note:{note.slug}")
+    for e in hide:
+        e.payload = {**(e.payload or {}), "forgotten": True, "forgotten_by": by}
+        await memory_index.unindex(session, family_id, f"event:{e.id}")
+    return {"forgotten": len(removed_lines) + len(hide)}
 
 
 async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *, by: str) -> dict:
@@ -263,7 +263,8 @@ async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *
     for item in p.get("note_lines") or []:
         note = await _note(session, family_id, item["subject"], item["slug"])
         body = ((note.body_md + "\n") if note and note.body_md else "") + item["line"]
-        await store.upsert_note(session, family_id=family_id, subject_id=item["subject"], slug=item["slug"], title=item.get("title") or item["slug"], body_md=body)
+        await store.upsert_note(session, family_id=family_id, subject_id=item["subject"], slug=item["slug"], title=item.get("title") or item["slug"],
+                                body_md=body, op="restore", actor_id=by, reason=f"brought back what was forgotten: {(p.get('what') or '')[:100]}")
         n += 1
     for eid in p.get("events") or []:
         e = await session.get(CareEvent, eid)
