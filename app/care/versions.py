@@ -290,6 +290,7 @@ def _hide(text: str, hidden: set[str]) -> str:
 
 
 SOURCE_LABEL = {"whatsapp": "on WhatsApp", "dashboard": "on the dashboard", "nightly": "Saheli's nightly review", "saheli": "Saheli",
+                "background": "Saheli's 30-minute review",
                 "snapshot": "restored from a backup", "system": "Saheli", "prescription": "a prescription", "import": "imported"}
 
 
@@ -302,7 +303,9 @@ async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str]
     out = {
         "id": v.id, "kind": v.kind, "subjectId": v.subject_id, "target": v.target, "version": v.version, "op": v.op,
         "title": v.title, "status": v.status, "actorId": v.actor_id, "by": who, "source": v.source,
-        "where": SOURCE_LABEL.get(v.source, v.source), "reason": v.reason, "undoes": v.undoes, "at": v.at.isoformat(),
+        # a forget's reason holds the very words to forget: never repeat them
+        "where": SOURCE_LABEL.get(v.source, v.source), "reason": "asked to forget something" if v.op == "forget" else v.reason,
+        "undoes": v.undoes, "at": v.at.isoformat(),
         "deleted": bool((v.value or {}).get("deleted")),
     }
     if v.kind == "note":

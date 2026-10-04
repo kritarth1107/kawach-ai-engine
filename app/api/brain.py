@@ -115,10 +115,13 @@ async def extract_job() -> dict:
     done = {}
     async with SessionLocal() as session:
         families = await families_with_new_turns(session)
+    from app.care import versions
+
     for fid in families:
         try:
-            async with SessionLocal() as session:
-                done[fid] = await extract_family(session, fid)
+            with versions.attribution(actor_id="saheli", source="background", reason="re-read of new messages"):
+                async with SessionLocal() as session:
+                    done[fid] = await extract_family(session, fid)
                 await session.commit()
         except Exception as exc:  # noqa: BLE001
             logger.exception("extract failed family=%s", fid)
@@ -140,11 +143,14 @@ async def consolidate_job() -> dict:
         expired = await expire_stale_confirmations(session)
         await session.commit()
     rewritten = 0
+    from app.care import versions
+
     for fid in fids:
         try:
-            async with SessionLocal() as session:
-                rewritten += await consolidate_family(session, fid)
-                await session.commit()
+            with versions.attribution(actor_id="saheli", source="nightly", reason="nightly tidy-up of long notes"):
+                async with SessionLocal() as session:
+                    rewritten += await consolidate_family(session, fid)
+                    await session.commit()
         except Exception:  # noqa: BLE001
             logger.exception("consolidate failed family=%s", fid)
     return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired}

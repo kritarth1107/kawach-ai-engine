@@ -113,6 +113,9 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             )
             session.add(row)
             await session.flush()
+            from app.care import versions
+
+            await versions.record_fact(session, row, "pending")  # the proposal shows in memory history like any other
             await store.open_loop(
                 session, family_id=family_id, subject_id=subject, kind="confirm_fact",
                 title=f"Confirm: {f['sentence']}", detail={"fact_id": str(row.id), "key": key, "new": row.value},

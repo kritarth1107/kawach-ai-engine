@@ -3,6 +3,7 @@ line for notes, through the care record's rules for facts (never silently ending
 can itself be undone."""
 
 import json
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from app.api import dash
 from app.brain import tools
 from app.care import baselines, skillbook, store, versions
 from app.care.models import CareFact, MemoryNote, OpenLoop
+from app.core.clock import now as clock_now
 from app.core.security import verify_api_secret
 from app.db.session import get_db
 from app.main import app
@@ -607,3 +609,50 @@ async def test_self_care_history_has_no_family_notes(client, db, at):
     fam = (await versions.changes(db, FAM, ["family"]))[0]
     r = await client.post(f"/v2/dash/{FAM}/{CG}/memory-history/{fam.id}", json={"actor": {"id": CG, "name": "Asha"}})
     assert r.status_code == 404
+
+
+# ── audit fixes ────────────────────────────────────────────────────────────
+
+
+async def test_memory_changes_says_why_and_task_status_says_what_the_browser_did(db, at):
+    at("2026-10-02 09:00")
+    with versions.attribution(actor_id=CG, source="dashboard", reason="Ankit lives in Pune now"):
+        await note(db, "- son Ankit in Pune")
+    out, err = await call(ctx(db), "memory_changes", {})
+    assert not err and out["changes"][0]["why"] == "Ankit lives in Pune now"
+    from app.sim.agent import CART
+    from app.tasks import runtime, sandbox
+
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=CG, service="zepto", kind="order", goal="Atta",
+                             details={"items": [{"name": "Aashirvaad Atta 5kg", "qty": 1}]})
+    sandbox.audit(t, phase="prepare", status="finished", steps=12, path=["https://www.zeptonow.com/search"], cost=12)
+    await db.flush()
+    out, err = await call(ctx(db), "task_status", {})
+    assert not err and out["tasks"][0]["browser"] and "zeptonow.com" in out["tasks"][0]["browser"][0]
+    assert CART  # the fake store answer exists (sanity for the import above)
+
+
+async def test_saheli_suggestion_is_put_to_the_caregiver_once_and_closes_when_answered(db, at):
+    at("2026-10-02 02:00")
+    from app.brain import wake
+    from app.learn.models import ReplyLog
+
+    for i in range(12):  # she answers evening check-ins, rarely morning ones
+        hour, replied = (18, True) if i % 2 else (9, i % 4 == 0)
+        db.add(ReplyLog(family_id=FAM, thread_id=ELDER, at=clock_now() - timedelta(days=i + 1), kind="proactive", situation="checkin",
+                        text="hello", sent_hour=hour, replied=replied))
+    await db.flush()
+    out = await skillbook.propose_from_timing(db, FAM, ELDER)
+    assert out and out["status"] == "proposed"
+    s = await db.get(skillbook.Skill, out["id"])
+    assert "in the evening" in s.body
+    assert await skillbook.ask_caregiver(db, FAM, ELDER, out, CG)
+    assert not await skillbook.ask_caregiver(db, FAM, ELDER, out, CG)  # never asked twice
+    loop = (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "confirm_skill"))).scalar_one()
+    prompt = await wake.wake_prompt(db, loop, ELDER)
+    assert f"save_family_skill with id {s.id}" in prompt and f"forget_skill with id {s.id}" in prompt
+    # the caregiver says yes on WhatsApp: the suggestion is used and the question is closed
+    out2, err = await call(ctx(db), "save_family_skill", {"id": s.id})
+    assert not err and out2["skill"]["status"] == "active"
+    await db.refresh(loop)
+    assert loop.status == "done"

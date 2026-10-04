@@ -62,6 +62,11 @@ KIND_PROMPTS = {
         "Also ask whether there was any fall, hospital visit or medicine change this week, attaching buttons "
         "{{\"kind\": \"outcome\", \"key\": \"{key}\"}}. Then close_loop {id} and reply none."
     ),
+    "confirm_skill": (
+        "[Skill suggestion] {title} Ask person {owner} once, short and in their language, with send_message whether you should "
+        "use this with them (it only changes your tone or timing). Keep this loop open: when they answer later, call "
+        "save_family_skill with id {skill} for yes or forget_skill with id {skill} for no, then close_loop {id}. Reply none."
+    ),
     "memory_check": (
         "[Memory check] Something in the care record needs a caregiver's answer: \"{title}\". Ask person {owner} that one "
         "question with send_message, short and in their language. When they answer later, fix the record (remember / stop / "
@@ -79,7 +84,7 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     if loop.kind in KIND_PROMPTS:
         d = loop.detail or {}
         return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver",
-                                              set=d.get("set", "outcome"), key=d.get("key", f"loop:{loop.id}"))
+                                              set=d.get("set", "outcome"), key=d.get("key", f"loop:{loop.id}"), skill=d.get("skill_id", ""))
     last = (
         await session.execute(
             select(Turn)

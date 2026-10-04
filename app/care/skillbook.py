@@ -374,6 +374,7 @@ async def decide(session: AsyncSession, family_id: str, skill_id: int, *, action
     s.updated_at, s.updated_by, s.version = now, by, s.version + 1
     await session.flush()
     await versions.record_skill(session, s, {"edit": "write"}.get(action, action), prior=prior, actor_id=by or None)
+    await _close_ask(session, family_id, s.id, f"{action} by {by or 'family'}")  # answered on the dashboard or WhatsApp
     if s.status == "active":
         await _cap_active(session, family_id, s.subject_id or "")
     return {"ok": True, "skill": view(s)}
@@ -392,6 +393,7 @@ async def forget_matching(session: AsyncSession, family_id: str, subject_ids: li
             prior = versions.skill_state(s)
             s.status, s.updated_at, s.updated_by, s.version = "blocked", clock.now(), by, s.version + 1
             await versions.record_skill(session, s, "remove", prior=prior, actor_id=by or None, reason=f"forget: {words[:100]}")
+            await _close_ask(session, family_id, s.id, f"removed by {by or 'family'}")
             gone.append(s.title)
     return {"removed": gone}
 
@@ -432,6 +434,64 @@ async def propose_from_style(session: AsyncSession, family_id: str, subject_id: 
     out = await save_family(session, family_id, subject_id, f"{length}; {emoji}.", title="Reply style", source="dream", by="dream",
                             evidence=[{"style": {k: style.get(k) for k in ("their_words", "good_reply_chars", "bad_reply_chars", "emoji_rate")}}])
     return out if out.get("saved") else None
+
+
+PARTS_OF_DAY = {"in the morning": (8, 12), "in the afternoon": (12, 16), "in the evening": (16, 21)}
+
+
+async def propose_from_timing(session: AsyncSession, family_id: str, subject_id: str) -> dict | None:
+    """The nightly dream suggests a best-time skill once their replies to Saheli's own check-ins clearly favour one part of
+    the day (at least 10 answered-or-not check-ins, 4 in that part, and a reply rate 20 points above their usual)."""
+    from app.learn import timing
+
+    rows = [r for r in await timing._person_rows(session, family_id, subject_id) if r.replied is not None]
+    if len(rows) < 10:
+        return None
+    stats = {part: [0, 0] for part in PARTS_OF_DAY}
+    for r in rows:
+        for part, (a, b) in PARTS_OF_DAY.items():
+            if a <= (r.sent_hour or 0) < b:
+                stats[part][0] += 1
+                stats[part][1] += 1 if r.replied else 0
+    usual = sum(1 for r in rows if r.replied) / len(rows)
+    best = max((p for p in stats if stats[p][0] >= 4), key=lambda p: stats[p][1] / stats[p][0], default=None)
+    if not best or stats[best][1] / stats[best][0] < usual + 0.2:
+        return None
+    out = await save_family(session, family_id, subject_id, f"They answer best {best}; non-urgent check-ins work better then.",
+                            title="Best time", source="dream", by="dream",
+                            evidence=[{"timing": {p: {"sent": v[0], "replied": v[1]} for p, v in stats.items()}}])
+    return out if out.get("saved") else None
+
+
+async def ask_caregiver(session: AsyncSession, family_id: str, subject_id: str, out: dict | None, owner_id: str | None) -> bool:
+    """A new suggestion from the nightly review is put to the primary caregiver once on WhatsApp (next morning): the open
+    loop shows in Saheli's context, so a later 'haan' / 'nahi' approves or removes it. Never asked twice."""
+    from app.care import store
+    from app.care.models import OpenLoop
+
+    if not out or not out.get("saved") or out.get("status") != "proposed" or not owner_id:
+        return False
+    s = await session.get(Skill, int(out["id"]))
+    key = f"skill:{s.id}"
+    asked = (await session.execute(select(OpenLoop.id).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == key).limit(1))).first()
+    if asked:
+        return False
+    await store.open_loop(
+        session, family_id=family_id, subject_id=subject_id, kind="confirm_skill",
+        title=f"Saheli suggests (skill {s.id}): \"{s.body}\" Use it?", detail={"skill_id": s.id, "max_wakes": 1}, owner_id=owner_id,
+        wake_at=clock.ist().replace(hour=11, minute=0, second=0, microsecond=0) + timedelta(days=1), alert_rule="dashboard", dedupe_key=key,
+    )
+    return True
+
+
+async def _close_ask(session: AsyncSession, family_id: str, skill_id: int, note: str) -> None:
+    from sqlalchemy import update
+
+    from app.care.models import OpenLoop
+
+    await session.execute(update(OpenLoop).where(OpenLoop.family_id == family_id, OpenLoop.kind == "confirm_skill", OpenLoop.status == "open",
+                                                 OpenLoop.dedupe_key == f"skill:{skill_id}")
+                          .values(status="done", closed_note=note, updated_at=clock.now()))
 
 
 # ── store skills ─────────────────────────────────────────────────────────────

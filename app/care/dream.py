@@ -129,8 +129,18 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
             report["baselines"] += 1
             from app.care import skillbook
 
-            if await step(f"skill:{p['id']}", lambda s, p=p, base=base: skillbook.propose_from_style(s, fid, p["id"], base.get("style") or {})):
-                report["skills_proposed"] = report.get("skills_proposed", 0) + 1
+            ask_to = owner if owner != p["id"] else None
+
+            async def suggest(s, p=p, base=base, ask_to=ask_to):
+                n = 0
+                for out in (await skillbook.propose_from_style(s, fid, p["id"], base.get("style") or {}),
+                            await skillbook.propose_from_timing(s, fid, p["id"])):
+                    if out:
+                        n += 1
+                        await skillbook.ask_caregiver(s, fid, p["id"], out, ask_to)
+                return n
+
+            report["skills_proposed"] = report.get("skills_proposed", 0) + (await step(f"skill:{p['id']}", suggest) or 0)
         report["indexed"] = report.get("indexed", 0) + (await step(f"index:{p['id']}", lambda s, p=p: memory_index.nightly(s, fid, p["id"])) or 0)
         roll = await step(f"rollups:{p['id']}", lambda s, p=p: memory_upkeep.rollups(s, fid, p["id"], with_models=with_models)) or {}
         report["rollups"] = report.get("rollups", 0) + sum(1 for v in roll.values() if v)

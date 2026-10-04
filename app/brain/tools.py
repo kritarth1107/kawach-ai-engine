@@ -826,6 +826,28 @@ async def cancel_task(ctx: TurnCtx, a: dict) -> dict:
     return {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}
 
 
+@tool(
+    "task_status",
+    "How the family's recent orders and rides went, in plain words, including what the browser did on the website (each run, "
+    "its steps, the sites visited and the rough cost). Use for 'order ka kya hua?', 'what did the agent do?', 'why did it fail?'. "
+    "Leave out task_id for the latest few.",
+    {"task_id": {"type": "string"}},
+    [],
+)
+async def task_status(ctx: TurnCtx, a: dict) -> dict:
+    from sqlalchemy import select
+
+    from app.tasks import runtime, sandbox
+    from app.tasks.models import Task
+
+    if a.get("task_id"):
+        rows = [await _task(ctx, a["task_id"])]
+    else:
+        rows = list((await ctx.session.execute(select(Task).where(Task.family_id == ctx.family_id).order_by(Task.created_at.desc()).limit(5))).scalars())
+    return {"tasks": [{"id": str(t.id), "summary": runtime.describe(t), "status": t.status, "phase": t.phase,
+                       "browser": sandbox.audit_text(t), "when": clock.ist(t.created_at).strftime("%d %b %H:%M")} for t in rows]}
+
+
 # ── care views: refills, emergency card, care team, reports, wellbeing, family tasks, spending ──
 # Each reads the same data the dashboard shows (app.care.features), so WhatsApp and the dashboard agree.
 
@@ -1186,7 +1208,7 @@ async def memory_changes(ctx: TurnCtx, a: dict) -> dict:
     for v in rows:
         d = await versions.view(ctx.session, v, names=names, hidden=hidden)
         out.append({"id": d["id"], "what": d["label"], "change": d["summary"], "by": d["by"], "where": d["where"],
-                    "when": clock.ist(v.at).strftime("%d %b %H:%M"), "canUndo": d["canUndo"]})
+                    "why": d["reason"] or None, "when": clock.ist(v.at).strftime("%d %b %H:%M"), "canUndo": d["canUndo"]})
     return {"changes": out}
 
 

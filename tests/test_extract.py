@@ -52,6 +52,10 @@ async def test_extract_puts_health_facts_on_hold(db, at, fake):
     assert counts == {"facts": 1, "pending": 1, "stops": 0, "notes": 1}
     facts = {f.key: f for f in await store.facts(db, FAM, ELDER["id"])}
     assert facts["medicine:ecosprin"].status == "pending"
+    from app.care import versions
+
+    hist = await versions.changes(db, FAM, [ELDER["id"]], kinds=("fact",), target="medicine:ecosprin")
+    assert [v.op for v in hist] == ["pending"]  # a proposal heard in a re-read shows in memory history too
     assert facts["home:cook"].status == "active" and facts["home:cook"].source_kind == "inferred"
     loops = await store.live_loops(db, FAM, [ELDER["id"]])
     assert loops[0].kind == "confirm_fact"
