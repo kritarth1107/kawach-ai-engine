@@ -105,6 +105,19 @@ AI_INSTRUCTIONS = re.compile(
     r"झूठ|छुपा|मत बता|ना बता|नहीं बता|नियम(?!ित)|निर्देश|अनदेखा",
     re.I,
 )
+# A skill may never change who hears about a problem, or how a symptom is taken: that is the safety rules' job.
+SAFETY_DENY = re.compile(
+    r"\b(escalat\w*|inform\w*|contact\w*|call\w*|phon\w*|messag\w*|bother\w*|disturb\w*|notif\w*|tell\w*|alert\w*|worry|involve)\b"
+    r".{0,40}\b(family|son|daughter|doctor|caregiver|children|kids|husband|wife|brother|sister|bahu|beta|beti|anyone|anybody|someone|kisi\w*)\b|"
+    r"\bkeep (the )?(family|son|daughter|doctor|caregiver|children|kids)\b.{0,15}\bout\b|"
+    r"\b(mat|na|nahi?n?) (bol\w*|bata\w*|kar\w*|de\w*)\b|\b(phone|call|message|msg|pareshan|tang)\b.{0,15}\b(mat|na|nahi?n?)\b|"
+    r"\b(stop|don'?t|do not|never|no need to|avoid) (ask\w*|check\w*|remind\w*|track\w*)\b.{0,30}\b(sugar|bp|pressure|pain|dard|health|"
+    r"medicine|dawa\w*|readings?|symptoms?|feel\w*|breath\w*|chest|fever|bukhar)\b|"
+    r"\b(just gas|only gas|nothing serious|not serious|exaggerat\w*|overreact\w*|drama|attention[- ]seek\w*|lightly|"
+    r"ignore (her|his|their) (complaints?|pain|symptoms?)|don'?t worry about (her|his|their) (complaints?|pain|symptoms?|health))\b|"
+    r"मत बोल|फ़?फोन मत|परेशान मत|किसी को न",
+    re.I,
+)
 CODEISH = re.compile(r"[<>{}\[\]`|\\]|#{2,}|\b(system|assistant|user|human)\s*:", re.I)
 ZERO_WIDTH = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\u00ad]")
 SPACED_OUT = re.compile(r"(?:\b\w\b[\s.\-_*]+){4,}\b\w\b")
@@ -138,6 +151,7 @@ def problems(text: str, *, family: bool = False) -> list[str]:
     checks = [(lessons.FORBIDDEN, "touches a fixed rule or medical content"), (NOT_FOR_SKILLS, "belongs in the care record or the fixed rules")]
     if family:
         checks.append((AI_INSTRUCTIONS, "reads like an instruction to Saheli, not how they like things"))
+        checks.append((SAFETY_DENY, "touches who gets told or how a symptom is treated; Saheli's safety rules decide that"))
     for rx, why in checks:
         m = rx.search(t)
         if m:
@@ -147,6 +161,12 @@ def problems(text: str, *, family: bool = False) -> list[str]:
             out.append("contains code-like text")
         if LOOKALIKE_SCRIPTS.search(t):
             out.append("mixes in look-alike letters from another alphabet")
+        from app.brain import guards
+
+        # symptom and emergency words (not the dose-mistake words like "twice", which are ordinary in a tone note)
+        red = next((m for m in guards.RED_FLAG_WORDS.finditer(t) if m.group(0).lower() not in ("twice", "do baar", "galti se", "by mistake")), None)
+        if red:
+            out.append(f"mentions a symptom or an emergency ({red.group(0)}); Saheli's safety rules handle those")
         spaced = SPACED_OUT.search(t)
         if spaced and any(tok in re.sub(r"[^a-z]", "", spaced.group(0).lower()) for tok in SQUASH_TOKENS):
             out.append("contains spaced-out words")
