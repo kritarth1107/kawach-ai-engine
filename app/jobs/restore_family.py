@@ -82,8 +82,8 @@ async def apply(session: AsyncSession, snap: dict, *, by: str = "restore") -> di
             done["facts_pending"] += 1 if w.result == "pending" else 0
         for item in p["skills"]:
             sk = next(s for s in snap.get("skills") or [] if s["id"] == item["id"])
-            if sk["status"] in ("active", "proposed") and skillbook.problems(sk["body"]):
-                done["skipped"].append(f"skill {sk['id']}: wording no longer allowed")
+            if sk["status"] in ("active", "proposed") and await skillbook.family_problems(session, fid, sk.get("subject_id") or "", sk["body"]):
+                done["skipped"].append(f"skill {sk['id']}: no longer allowed (wording or the care record)")
                 continue
             cur = await session.get(skillbook.Skill, sk["id"])
             if cur and cur.family_id == fid and cur.scope == "family":

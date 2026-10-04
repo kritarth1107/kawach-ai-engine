@@ -311,7 +311,7 @@ async def events(
         q = q.where(CareEvent.at >= since)
     if kinds:
         q = q.where(CareEvent.kind.in_(kinds))
-    return list((await session.execute(q.order_by(CareEvent.at).limit(limit))).scalars())
+    return list((await session.execute(q.order_by(CareEvent.at, CareEvent.id).limit(limit))).scalars())  # id breaks ties: same-second events keep their order
 
 
 # ── notes ──────────────────────────────────────────────────────────────────────

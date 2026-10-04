@@ -472,7 +472,7 @@ async def _skill_to(session: AsyncSession, v: MemoryVersion, state: dict, *, op:
     body = state.get("body") if state.get("body") is not None else s.body
     status = state.get("status") or s.status
     if status in ("active", "proposed"):
-        bad = skillbook.problems(body)
+        bad = await skillbook.family_problems(session, v.family_id, s.subject_id or "", body)
         if bad:
             raise Refused("That older wording is not allowed any more: " + "; ".join(bad))
     if s.body == body and s.status == status and s.title == (state.get("title") or s.title):

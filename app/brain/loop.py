@@ -168,7 +168,14 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     from app.care import skillbook
 
     to = req.elder if req.speaker["id"] == req.elder["id"] or req.speaker.get("role") == "system" else req.speaker
-    how = await skillbook.context_block(session, req.family_id, to["id"], (to.get("name") or "").split(" ")[0])
+    from app.learn import situations as _situations
+
+    is_sys = req.speaker.get("role") == "system"
+    moment = _situations.tag(text=req.text, role="system" if is_sys else ("elder" if req.speaker["id"] == req.elder["id"] else "caregiver"),
+                             tools=[], prompt=req.text if is_sys else "")
+    # family skills shape tone only; in an emergency or a rule-breaking message they are left out entirely
+    safety = moment in ("emergency", "injection") or bool(guards.RED_FLAG_WORDS.search(req.text or ""))
+    how = await skillbook.context_block(session, req.family_id, to["id"], (to.get("name") or "").split(" ")[0], safety=safety)
     if how:
         parts.append(how)
     if hits:
