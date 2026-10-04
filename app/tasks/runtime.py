@@ -330,6 +330,8 @@ async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task,
             logger.warning("stop failed task=%s", task.id)
     task.status = "cancelled"
     note(task, "stopped before placing")
+    if task.agent_session:
+        sandbox.audit(task, phase=task.phase, status="stopped", steps=0, path=[], cost=0, error=f"cancelled by the family: {reason}"[:120])
     return "stopped; nothing was placed"
 
 
@@ -514,6 +516,7 @@ async def _count_tick_error(session: AsyncSession, task_id) -> tuple[Task, str] 
         message = None
         if n >= MAX_TICK_ERRORS:
             task.status = "failed"
+            sandbox.audit(task, phase=task.phase, status="failed", steps=0, path=[], cost=0, error=f"stopped after {n} errors in Kavach")
             message = ("Something went wrong while placing it. It is not clear whether it went through: do not order again; "
                        "tell the caregiver to check the app.") if task.phase in ("place", "cancel") else (
                 "Something went wrong while working on it, so it was stopped; nothing was placed.")

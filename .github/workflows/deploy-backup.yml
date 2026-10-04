@@ -74,8 +74,8 @@ jobs:
             gcloud run jobs create ${{ env.JOB_NAME }} "${ARGS[@]}"
           fi
 
+      # not continue-on-error: a missing nightly trigger means no backups, so the run must fail visibly
       - name: Ensure nightly scheduler (03:30 IST)
-        continue-on-error: true
         run: |
           SA="${{ secrets.GCP_SERVICE_ACCOUNT }}"
           if gcloud scheduler jobs describe kavach-backup-nightly --project=${{ env.GCP_PROJECT_ID }} --location=${{ env.GCP_REGION }} >/dev/null 2>&1; then

@@ -224,3 +224,58 @@ async def test_profile_once_used_by_another_family_is_refused(db, at):
     await db.flush()
     with pytest.raises(sandbox.ProfileConflict):
         await sandbox.bind_profile(db, "fam-b", "zepto", "p1")  # its old, still logged-in profile stays fam-a's
+
+
+# ── audit (2026-10-04): every store and ride app, and every exit leaves a line ──
+
+from app.tasks.skills import SKILLS  # noqa: E402
+
+ALL_SERVICES = sorted(SKILLS)
+
+
+@pytest.mark.parametrize("service", ALL_SERVICES)
+async def test_profiles_never_cross_families_or_services_for_every_app(db, service):
+    other = next(s for s in ALL_SERVICES if s != service)
+    await sandbox.bind_profile(db, "fam-a", service, f"p-{service}")
+    await sandbox.bind_profile(db, "fam-a", service, f"p-{service}")  # the same family again is fine
+    with pytest.raises(sandbox.ProfileConflict):
+        await sandbox.bind_profile(db, "fam-b", service, f"p-{service}")
+    with pytest.raises(sandbox.ProfileConflict):
+        await sandbox.bind_profile(db, "fam-a", other, f"p-{service}")
+
+
+def test_pharmacy_and_ride_apps_are_all_covered():
+    assert {"apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"} <= set(ALL_SERVICES)
+
+
+async def test_each_family_gets_its_own_profile_per_app_through_the_runtime(db, at, sessions):
+    at("2026-10-04 10:00")
+    agent = FakeAgent(script={"prepare": [CART]})
+    h = H(sessions, agent)
+    for fam in ("fam-x", "fam-y"):
+        for svc in ("apollo", "pharmeasy"):
+            await order(db, fam, svc)
+    await h.tick()
+    used = {(r["profile"]) for r in agent.runs}
+    assert used == {"prof-fam-x-apollo", "prof-fam-x-pharmeasy", "prof-fam-y-apollo", "prof-fam-y-pharmeasy"}
+
+
+async def test_cancel_and_crash_exits_leave_an_audit_line(db, at, sessions, monkeypatch):
+    at("2026-10-04 10:00")
+    h = H(sessions, FakeAgent(script={"prepare": [CART]}, finish_after_polls=99))
+    t = await order(db)
+    await h.tick()
+    await db.refresh(t)
+    await runtime.request_cancel(db, h.agent, t, by="e", reason="changed my mind")
+    await db.commit()
+    assert any("cancelled by the family" in line for line in sandbox.audit_text(t))
+    t2 = await order(db, "fam-crash")
+
+    async def boom(*a, **k):
+        raise RuntimeError("unreadable report")
+
+    monkeypatch.setattr(runtime, "_start_run", boom)
+    for _ in range(runtime.MAX_TICK_ERRORS):
+        await h.tick()
+    await db.refresh(t2)
+    assert t2.status == "failed" and any("errors in Kavach" in line for line in sandbox.audit_text(t2))

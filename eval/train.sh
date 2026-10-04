@@ -5,6 +5,7 @@
 #
 # Stages (estimates at ~₹31 per family-day full judge, ~₹12 cheap judge; see journal/2026-10-04_*_training-plan.md):
 #   free       unit tests + agent bench + guard replay                       ₹0
+#   mutate     break each safety rule on purpose; a test must catch it (~3 min)  ₹0
 #   smoke      3 families × 3 days, cheap judge                              ~₹110
 #   regress    10 families × 7 days, aggressive events, cheap judge          ~₹850
 #   learning   10 families × 21 days, learning storylines (patterns,         ~₹2,500
@@ -27,6 +28,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 stage="${1:-}"; shift || true
 case "$stage" in
+  mutate)
+    PYTHONPATH=. .venv/bin/python eval/mutation_check.py
+    exit $? ;;
   free)
     .venv/bin/python -m pytest -q
     PYTHONPATH=. .venv/bin/python eval/agent_bench.py
