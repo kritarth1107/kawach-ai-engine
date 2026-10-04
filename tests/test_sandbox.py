@@ -154,3 +154,73 @@ async def test_login_state_audit_and_service_status(db, at, sessions):
 async def test_task_rows_unchanged_shape(db):
     t = Task  # the audit lives in details; no new task columns
     assert "audit" not in t.__table__.columns
+
+
+# ── review fixes (2026-10-04, phase 1 review) ──
+
+
+async def test_sweeper_keeps_a_browser_waiting_for_the_familys_yes(db, at, sessions):
+    at("2026-10-04 10:00")
+    h = H(sessions, FakeAgent(script={"prepare": [CART]}))
+    t = await order(db)
+    await h.tick(2)
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.agent_session
+    at("2026-10-04 10:30")
+    out = await sandbox.sweep(sessions, h.agent)
+    await db.refresh(t)
+    assert out["stopped"] == 0 and t.agent_session  # the place run will reuse this browser
+
+
+async def test_swept_browser_is_cleared_from_its_task(db, at, sessions):
+    at("2026-10-04 10:00")
+    h = H(sessions, FakeAgent(script={"prepare": [CART]}))
+    t = await order(db)
+    await h.tick(2)
+    await db.refresh(t)
+    sid = t.agent_session
+    t.status = "failed"  # ended without the runtime closing it (a crash path)
+    await db.commit()
+    at("2026-10-04 10:30")
+    assert (await sandbox.sweep(sessions, h.agent))["stopped"] == 1
+    await db.refresh(t)
+    assert t.agent_session is None and sid in h.agent.sessions_stopped
+
+
+async def test_reused_browser_counts_from_its_latest_run(db, at, sessions):
+    at("2026-10-04 10:00")
+    await sandbox.started(db, session_id="s-1", task_id="t", family_id="fam", service="zepto", profile_id=None)
+    at("2026-10-04 10:25")
+    await sandbox.started(db, session_id="s-1", task_id="t", family_id="fam", service="zepto", profile_id=None)
+    row = await db.get(sandbox.BrowserSession, "s-1")
+    assert row.started_at == clock.now()
+
+
+async def test_browser_is_recorded_even_if_the_tick_fails_later(db, at, sessions, monkeypatch):
+    at("2026-10-04 10:00")
+    h = H(sessions, FakeAgent(script={"prepare": [CART]}))
+    await order(db)
+    real_note = runtime.note
+    calls = {"n": 0}
+
+    def note_then_crash(task, text_):
+        real_note(task, text_)
+        if text_.startswith("started"):
+            calls["n"] += 1
+            raise RuntimeError("database hiccup")
+
+    monkeypatch.setattr(runtime, "note", note_then_crash)
+    await h.tick()
+    monkeypatch.setattr(runtime, "note", real_note)
+    rows = await open_rows(db)
+    assert len(h.agent.runs) == calls["n"] == 1 and len(rows) == 1  # the browser is on the ledger, so the sweeper can stop it
+
+
+async def test_profile_once_used_by_another_family_is_refused(db, at):
+    at("2026-10-04 10:00")
+    await sandbox.bind_profile(db, "fam-a", "zepto", "p1")
+    await sandbox.started(db, session_id="s-a", task_id="t", family_id="fam-a", service="zepto", profile_id="p1")
+    await sandbox.bind_profile(db, "fam-a", "zepto", "p2")  # fam-a moves to a new profile
+    await db.flush()
+    with pytest.raises(sandbox.ProfileConflict):
+        await sandbox.bind_profile(db, "fam-b", "zepto", "p1")  # its old, still logged-in profile stays fam-a's

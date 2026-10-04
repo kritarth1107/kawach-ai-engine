@@ -238,12 +238,13 @@ async def test_crash_after_place_call_never_places_twice(db, at, sessions, monke
             raise RuntimeError("database hiccup after the store call")
 
     monkeypatch.setattr(runtime, "_start_run", start_then_crash)
-    await tick()  # place run started, then crash before the commit
+    await tick()  # place run started (and recorded at once), then a crash later in the tick
     monkeypatch.setattr(runtime, "_start_run", real)
     await tick(); await tick()
     await db.refresh(t)
+    # never a second place run; the run that did start is followed to its real result instead of being lost
     assert len([r for r in agent.runs if r["phase"] == "place"]) == 1
-    assert t.status == "failed" and "not clear" in told[-1]
+    assert t.status == "done" and "Placed" in told[-1]
 
 
 # ── second review (2026-10-04) ──

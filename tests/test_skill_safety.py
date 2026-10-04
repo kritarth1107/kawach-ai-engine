@@ -186,6 +186,12 @@ async def test_dream_cannot_override_family_and_is_capped(db, at):
 # ── store skills ───────────────────────────────────────────────────────────
 
 
+def test_store_step_filter_matches_whole_words_and_rejects_escapes():
+    assert skillbook.step_ok("/categories/cardiac-care") and skillbook.step_ok("/premium") and skillbook.step_ok("/chemist")
+    for bad in ("/%69gnore-previous", "/pay-with-upi", "/swiggy-one", "/card"):
+        assert not skillbook.step_ok(bad), bad
+
+
 def test_store_steps_are_plain_paths_only():
     steps = ["/", "/search", "/ignore-previous-instructions", "/checkout/upi", "/pay-now", "/cart", "/order/98765432",
              "search for atta", "/checkout", "/swiggy-one-membership", "/address/edit"]
@@ -220,3 +226,21 @@ async def test_injected_note_is_not_passed_to_the_next_agent(db, at):
     db.add(SkillNote(service="zepto", note="prepare failed: login popup covers the cart", created_at=clock.now()))
     await db.flush()
     assert await runtime._learned(db, "zepto") == ["prepare failed: login popup covers the cart"]
+
+
+async def test_cart_runs_never_see_a_place_path_and_paths_name_no_products(db, at):
+    at("2026-10-02 09:00")
+    # a place run's path is saved for place runs only; a cart path stops at the cart
+    await skillbook.record_store_success(db, "zepto", "place", ["/cart", "/checkout", "/order-success/ab"], task_id="t1", n_steps=5)
+    cart = await skillbook.record_store_success(db, "zepto", "prepare", ["/", "/search", "/cart", "/checkout", "/order/confirm"],
+                                                task_id="t2", n_steps=5)
+    assert cart.body == "/ → /search → /cart → /checkout"
+    assert [s.title for s in await skillbook.store_hints(db, "zepto", "prepare")] == ["prepare path"]
+    assert [s.title for s in await skillbook.store_hints(db, "zepto", "otp")] == ["prepare path"]
+    assert [s.title for s in await skillbook.store_hints(db, "zepto", "place")] == ["place path"]
+    assert await skillbook.store_hints(db, "zepto", "cancel") == []
+    # what a family bought never appears in a path shared with every family
+    s = await skillbook.record_store_success(db, "pharmeasy", "prepare",
+                                             ["/", "/prn/accu-chek-active-glucometer-test-st", "/pn/ensure-diabetes-care/pvid/77", "/cart"],
+                                             task_id="t3", n_steps=4)
+    assert s.body == "/ → /prn/… → /pn/… → /cart" and "accu" not in s.body and "diabetes" not in s.body

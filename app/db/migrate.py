@@ -128,6 +128,7 @@ V2_ALTERS = [
     "ALTER TABLE reply_log ADD COLUMN IF NOT EXISTS trace JSONB",
     "ALTER TABLE playbook_versions ADD COLUMN IF NOT EXISTS scope JSONB DEFAULT '[]'::jsonb",
     "CREATE INDEX IF NOT EXISTS ix_turns_thread_id ON turns (family_id, thread_id, id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_logins_profile ON service_logins (profile_id) WHERE profile_id IS NOT NULL",
 ]
 
 

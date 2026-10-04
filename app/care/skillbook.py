@@ -395,44 +395,85 @@ async def propose_from_style(session: AsyncSession, family_id: str, subject_id: 
 
 # ── store skills ─────────────────────────────────────────────────────────────
 
-PATH_STEP = re.compile(r"^/[A-Za-z0-9/_\-.…~%+]*$")
+PATH_STEP = re.compile(r"^/[A-Za-z0-9/_\-.…~+]*$")  # no %-escapes: an encoded word could hide anything
+# Whole path words only (split on / - _ . ~ +), so '/categories/cardiac-care' is fine and '/pay-with-upi' is not.
 STEP_DENY = re.compile(
-    r"ignore|instruct|prompt|system|override|bypass|jailbreak|pretend|admin|secret|password|token|api.?key|"
-    r"upi|wallet|net.?banking|card|cvv|pay.?now|prepaid|paylater|emi|tip|donat|subscri|membership|gold|plus|one-?free|insurance|"
-    r"refer|invite|coupon|promo|address|location|edit|remove|delete|cancel",
+    r"^(ignore|instructions?|instruct|prompts?|system|override|bypass|jailbreak|pretend|admin|secret|password|token|apikey|"
+    r"upi|wallet|netbanking|banking|card|cards|cvv|pay|payment|payments|paynow|prepaid|paylater|emi|tips?|donate|donation|subscribe|subscription|"
+    r"membership|gold|plus|one|insurance|refer|referral|invite|coupons?|promo|address|addresses|location|edit|remove|delete|cancel)$",
     re.I,
 )
 
 
+def _words(step: str) -> list[str]:
+    return [w for w in re.split(r"[/\-_.~+]", step or "") if w]
+
+
+# Pages past the cart: a cart-building run must never be shown the way there (only the place run, after a yes, may go).
+POST_CHECKOUT = re.compile(r"order|success|confirm|thank|track|book|request|placed|receipt|invoice|status|payment", re.I)
+# Path words kept as they are; anything else (a product or dish name, an id) becomes "…", so a path never says what a
+# family bought.
+STRUCTURAL = {
+    "search", "s", "cart", "checkout", "login", "signin", "account", "category", "categories", "c", "cn", "collection", "collections",
+    "offers", "home", "store", "stores", "shop", "product", "products", "item", "items", "p", "pd", "prn", "pn", "pvid", "prid", "dp",
+    "listing", "listings", "restaurant", "restaurants", "menu", "dish", "dishes", "pharmacy", "medicine", "medicines", "otc", "go", "ride",
+    "rides", "trip", "pickup", "drop", "instamart", "food", "grocery", "groceries", "delivery", "summary", "review", "place", "cod",
+}
+
+
+def phase_of(phase: str) -> str:
+    return "prepare" if phase in ("prepare", "otp") else phase
+
+
 def step_ok(step: str) -> bool:
     """A store-skill step is a plain page path that does not touch payment, upsells, the address or instructions."""
-    return bool(PATH_STEP.match(step or "")) and not STEP_DENY.search(step) and not re.search(r"\d{4,}", step)
+    return bool(PATH_STEP.match(step or "")) and not any(STEP_DENY.match(w) for w in _words(step)) and not re.search(r"\d{4,}", step)
 
 
-def _clean_steps(steps: list[str]) -> list[str]:
+def structural(step: str) -> str:
+    """'/prn/accu-chek-glucometer/prid/123' → '/prn/…': structure kept, names and ids gone."""
+    keep = []
+    for seg in [x for x in (step or "").split("/") if x]:
+        if seg.lower() not in STRUCTURAL:
+            keep.append("…")
+            break
+        keep.append(seg.lower())
+    return "/" + "/".join(keep)
+
+
+def _clean_steps(steps: list[str], phase: str = "prepare") -> list[str]:
     from app.learn import anonymise
 
-    out = []
+    out: list[str] = []
     for st in steps[:10]:
         st = anonymise.anonymise(normalize(str(st))[:80])
         if anonymise.leaks(st) or re.search(r"\[(PERSON|NAME|PHONE|ADDRESS|PIN|ID|MED)", st):
             continue
         if not step_ok(st):  # order ids, phones, OTPs, pincodes, payment pages, instructions in a URL
             continue
-        out.append(st)
+        if phase_of(phase) == "prepare" and POST_CHECKOUT.search(st):
+            break  # nothing after the cart goes into a cart-building path
+        st = structural(st)
+        if not out or out[-1] != st:
+            out.append(st)
     return out
 
 
 def store_skill_ok(s: Skill) -> bool:
     steps = s.steps or [x.strip() for x in (s.body or "").split("→")]
-    return bool(steps) and all(step_ok(x) for x in steps) and s.body == " → ".join(steps)
+    if not steps or s.body != " → ".join(steps):
+        return False
+    if not all(step_ok(x) and structural(x) == x for x in steps):
+        return False
+    return not (s.title.startswith("prepare") and any(POST_CHECKOUT.search(x) for x in steps))
 
 
 async def record_store_success(session: AsyncSession, service: str, phase: str, steps: list[str], *, task_id: str, n_steps: int,
                                used: list[int] | None = None) -> Skill | None:
     """A run that worked: credit the skills it was given, and save its path as a skill (or reinforce the same path)."""
     await record_store_use(session, used or [], ok=True)
-    clean = _clean_steps(steps)
+    phase = phase_of(phase)
+    clean = _clean_steps(steps, phase)
     if len(clean) < 2:
         return None
     now = clock.now()
@@ -478,10 +519,11 @@ def _rate(s: Skill) -> float:
     return (s.successes + 1) / (s.uses + 2)
 
 
-async def store_hints(session: AsyncSession, service: str, limit: int = STORE_HINTS) -> list[Skill]:
-    """Top active store skills by (smoothed) success rate. A skill that no longer passes the step check, or fails more
-    than it works after a few uses, is not handed out."""
-    rows = list((await session.execute(select(Skill).where(Skill.scope == "store", Skill.service == service, Skill.status == "active"))).scalars())
+async def store_hints(session: AsyncSession, service: str, phase: str = "prepare", limit: int = STORE_HINTS) -> list[Skill]:
+    """Top active store skills for this phase only (a cart run never sees a place path) by (smoothed) success rate.
+    A skill that no longer passes the step check, or fails more than it works after a few uses, is not handed out."""
+    rows = list((await session.execute(select(Skill).where(Skill.scope == "store", Skill.service == service, Skill.status == "active",
+                                                           Skill.title == f"{phase_of(phase)} path"))).scalars())
     rows = [s for s in rows if store_skill_ok(s) and (s.uses < 4 or _rate(s) >= MIN_STORE_RATE)]
     rows.sort(key=lambda s: (_rate(s), s.successes, s.updated_at), reverse=True)
     return rows[:limit]
