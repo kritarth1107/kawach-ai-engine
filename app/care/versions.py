@@ -506,6 +506,84 @@ async def restore_skill(session: AsyncSession, v: MemoryVersion, *, by: str, rea
                            reason=reason or f"restored version {v.version}", undoes=None, by=by)
 
 
+# ── what an undo or restore would do (the dashboard says it before the caregiver confirms) ──
+
+
+def _fact_name(v: MemoryVersion, value: dict | None = None) -> str:
+    val = value or v.value or {}
+    return str(val.get("name") or val.get("allergen") or v.target.split(":", 1)[-1].replace("_", " "))
+
+
+async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiver: bool = True, confirmed: bool = True) -> dict:
+    """{effect, text, button} for undo/restore of v, without changing anything. effect: change | stop | restart | retract |
+    remove | nothing | refused."""
+    try:
+        if v.kind == "style":
+            raise Refused("Reply style is relearned every night; add a 'How they like things' skill instead.")
+        if v.kind == "fact":
+            plan = await (plan_fact_undo(session, v, caregiver=caregiver, actor_id="", confirmed=confirmed) if mode == "undo"
+                          else plan_fact_restore(session, v, caregiver=caregiver, confirmed=confirmed))
+            name = _fact_name(v, plan.value)
+            med = plan.domain == "medicine"
+            if plan.action == "nothing":
+                return {"effect": "nothing", "text": "Nothing would change: the care record already says that.", "button": ""}
+            if plan.action == "retract":
+                return {"effect": "retract", "text": f"This takes back the proposed change to {name}. The record stays as it is now.",
+                        "button": "Yes, take it back"}
+            if plan.action == "stop":
+                word = {"medicine": f"This stops {name} now and switches off its reminders.",
+                        "allergy": f"This removes the allergy to {name} from the care record now.",
+                        "condition": f"This removes {name} from the conditions now."}.get(plan.domain, f"This removes '{v.body[:80]}' from the care record.")
+                return {"effect": "stop", "text": word, "button": "Yes, stop it" if med else "Yes, remove it"}
+            if plan.action == "restart":
+                return {"effect": "restart", "text": f"This puts {name} back on the care record now" + (" and turns its reminders back on." if med else "."),
+                        "button": "Yes, restart it" if med else "Yes, put it back"}
+            return {"effect": "change", "text": f"The care record goes back to: {plan.text or name}." + (" Its reminders change to match." if med else ""),
+                    "button": "Yes, change it"}
+        if v.kind == "note":
+            note = await _note_row(session, v.family_id, v.subject_id, v.target)
+            current_text = note.body_md if note else ""
+            if mode == "undo":
+                if v.op == "baseline":
+                    raise Refused("That is how the note was before history started; pick a later change to undo.")
+                prev = await previous(session, v)
+                added, removed = diff(prev.body if prev else "", v.body)
+                new = invert(current_text, prev.body if prev else "", added, removed)
+            else:
+                new = "" if (v.value or {}).get("deleted") else v.body
+            gone, back = diff(current_text, new)[1], diff(current_text, new)[0]
+            if not gone and not back:
+                return {"effect": "nothing", "text": "Nothing would change: the note already reads like that.", "button": ""}
+            if not lines(new):
+                return {"effect": "remove", "text": f"This removes the note '{v.title}'. It stays in the history.", "button": "Yes, remove it"}
+            bits = ([f"takes out {len(gone)} line{'s' if len(gone) != 1 else ''}"] if gone else []) + (
+                [f"brings back {len(back)} line{'s' if len(back) != 1 else ''}"] if back else [])
+            return {"effect": "change", "text": f"This {' and '.join(bits)} in '{v.title}'.", "button": "Yes, undo" if mode == "undo" else "Yes, put back"}
+        from app.care import skillbook
+
+        s = await session.get(skillbook.Skill, int(v.target))
+        if mode == "undo":
+            prev = await previous(session, v)
+            last = await latest(session, v.family_id, v.subject_id, "skill", v.target)
+            if last and last.id != v.id:
+                raise Refused("It changed again after that; undo the newest change first.")
+            if not prev:
+                return {"effect": "remove", "text": "Saheli stops using this.", "button": "Yes, stop using it"}
+            body, status = prev.body, prev.status
+        else:
+            body, status = v.body, v.status
+        if s and s.body == body and s.status == status:
+            return {"effect": "nothing", "text": "Nothing would change.", "button": ""}
+        if status in ("active", "proposed"):
+            bad = await skillbook.family_problems(session, v.family_id, v.subject_id, body)
+            if bad:
+                raise Refused("That older wording is not allowed any more: " + "; ".join(bad))
+        used = {"active": "and Saheli uses it", "proposed": "as a suggestion"}.get(status or "", "but Saheli does not use it")
+        return {"effect": "change", "text": f"It goes back to “{body[:120]}” {used}.", "button": "Yes, undo" if mode == "undo" else "Yes, put back"}
+    except Refused as exc:
+        return {"effect": "refused", "text": str(exc), "button": ""}
+
+
 # ── upkeep ───────────────────────────────────────────────────────────────────
 
 

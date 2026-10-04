@@ -435,3 +435,52 @@ async def test_dashboard_self_care_undo_counts_as_caregiver(client, db, at):
     h = (await client.get(f"/v2/dash/{FAM}/{CG}/memory-history", params={"kind": "fact"})).json()["changes"]
     r = await client.post(f"/v2/dash/{FAM}/{CG}/memory-history/{h[0]['id']}", json={"actor": actor, "reason": "typo"})
     assert r.json()["result"] == "superseded"
+
+
+# ── review fixes ───────────────────────────────────────────────────────────
+
+
+async def test_one_caregiver_cannot_restore_anothers_self_care_forget(client, db, at):
+    at("2026-10-02 09:00")
+    a, b = {"id": CG, "name": "Asha"}, {"id": CG2, "name": "Ravi"}
+    await store.upsert_note(db, family_id=FAM, subject_id=CG, slug="self", title="Self", body_md="- my therapy on Fridays\n- gym")
+    await store.upsert_note(db, family_id=FAM, subject_id="family", slug="house", title="House", body_md="- therapy room upstairs")
+    # Asha forgets from her own self-care page: the shared family notes are not touched
+    r = await client.post(f"/v2/dash/{FAM}/{CG}/forget", json={"actor": a, "what": "therapy"})
+    assert r.json()["forgotten"] == 1
+    assert "therapy room" in (await store.notes(db, FAM, ["family"]))[0].body_md
+    from app.care.models import CareEvent
+
+    ev = (await db.execute(select(CareEvent).where(CareEvent.family_id == FAM, CareEvent.kind == "memory_forgotten"))).scalar_one()
+    # Ravi, on Kamla's page, can neither see nor restore it
+    health = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-health")).json()
+    assert health["forgotten"] == []
+    r = await client.post(f"/v2/dash/{FAM}/{ELDER}/forgotten/{ev.id}/restore", json={"actor": b})
+    assert r.json()["restored"] == 0
+    assert "therapy" not in next(n for n in await store.notes(db, FAM, [CG]) if n.slug == "self").body_md
+    # Asha can, from her own page
+    r = await client.post(f"/v2/dash/{FAM}/{CG}/forgotten/{ev.id}/restore", json={"actor": a})
+    assert r.json()["restored"] == 1
+
+
+async def test_preview_says_what_an_undo_would_do(client, db, at):
+    at("2026-10-02 09:00")
+    actor = {"id": CG, "name": "Asha"}
+    await client.post(f"/v2/dash/{FAM}/{ELDER}/facts", json={"actor": actor, "domain": "medicine", "name": "Metformin",
+                                                              "details": {"name": "Metformin", "dose": "500 mg", "times": ["08:00"]},
+                                                              "sentence": "Metformin 500 mg at 08:00"})
+    created = (await history(db, "fact", "medicine:metformin"))[-1]
+    p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{created.id}/preview")).json()
+    assert p["effect"] == "stop" and "stops Metformin" in p["text"] and "reminders" in p["text"] and p["button"] == "Yes, stop it"
+    assert await active(db)  # a preview changes nothing
+    await client.post(f"/v2/dash/{FAM}/{ELDER}/facts", json={"actor": actor, "domain": "medicine", "name": "Metformin",
+                                                              "details": {"name": "Metformin", "dose": "1000 mg"}, "sentence": "Metformin 1000 mg"})
+    change = (await history(db, "fact", "medicine:metformin"))[-1]
+    p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{change.id}/preview")).json()
+    assert p["effect"] == "change" and "500 mg" in p["text"]
+    p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{created.id}/preview")).json()
+    assert p["effect"] == "refused" and "newer change" in p["text"]
+    await note(db, "- likes poha")
+    nv = (await history(db, "note"))[-1]
+    p = (await client.get(f"/v2/dash/{FAM}/{ELDER}/memory-history/{nv.id}/preview")).json()
+    assert p["effect"] == "remove"

@@ -95,4 +95,5 @@ async def last_backup(sessions: async_sessionmaker) -> dict | None:
         return None
     return {"day": row[0].isoformat(), "ok": bool(row[1]), "finishedAt": row[2].isoformat() if row[2] else None,
             "bytes": int(row[3] or 0), "error": (row[4] or {}).get("error"),
+            "families": (row[4] or {}).get("families"), "familiesError": (row[4] or {}).get("familiesError"),
             "lastOkAt": ok_row[0].isoformat() if ok_row and ok_row[0] else None}

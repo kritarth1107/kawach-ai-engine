@@ -1228,8 +1228,9 @@ async def undo_change(ctx: TurnCtx, a: dict) -> dict:
         if v.kind == "style":
             raise versions.Refused("Reply style is relearned every night; save how they like to be spoken to with save_family_skill instead.")
         if v.kind == "note" and mode == "undo" and v.op == "forget" and (v.value or {}).get("forget_event"):
+            mine = [ctx.elder_id] if not ctx.is_caregiver else list(dict.fromkeys([ctx.elder_id, "family", by]))
             with versions.attribution(reason=reason or "undo forget", undoes=v.id):
-                got = await memory_upkeep.restore(ctx.session, ctx.family_id, int(v.value["forget_event"]), by=by)
+                got = await memory_upkeep.restore(ctx.session, ctx.family_id, int(v.value["forget_event"]), by=by, subjects=mine)
             out = {"result": "done" if got.get("restored") else "nothing", "restored": got.get("restored", 0)}
         elif v.kind == "note":
             out = await (versions.undo_note if mode == "undo" else versions.restore_note)(ctx.session, v, reason=reason)

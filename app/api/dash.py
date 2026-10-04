@@ -524,6 +524,12 @@ class ForgetIn(BaseModel):
     what: str = Field(min_length=3, max_length=200)
 
 
+def _page_subjects(elder_id: str, actor: Actor) -> list[str]:
+    """Whose memory a page reaches: the person, plus the shared family notes, except on a caregiver's own self-care
+    page (their private record never mixes with the family's)."""
+    return [elder_id] if actor.id == elder_id else [elder_id, "family"]
+
+
 @router.get("/{family_id}/{elder_id}/memory-health")
 async def memory_health_view(family_id: str, elder_id: str, session: DB) -> dict:
     """Problems in the care record Saheli will ask about, her profile card of this person, and what was forgotten."""
@@ -532,7 +538,8 @@ async def memory_health_view(family_id: str, elder_id: str, session: DB) -> dict
 
     card = (await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id, MemoryNote.subject_id == elder_id,
                                                            MemoryNote.slug == "profile-card"))).scalar_one_or_none()
-    forgotten = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.kind == "memory_forgotten")
+    forgotten = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == elder_id,
+                                                               CareEvent.kind == "memory_forgotten")
                                        .order_by(CareEvent.at.desc()).limit(20))).scalars()
     return {
         "issues": await memory_upkeep.health(session, family_id, elder_id),
@@ -546,7 +553,7 @@ async def memory_health_view(family_id: str, elder_id: str, session: DB) -> dict
 async def forget_view(family_id: str, elder_id: str, body: ForgetIn, session: DB) -> dict:
     from app.care import memory_upkeep
 
-    out = await memory_upkeep.forget(session, family_id, [elder_id, "family"], body.what, by=body.actor.id)
+    out = await memory_upkeep.forget(session, family_id, _page_subjects(elder_id, body.actor), body.what, by=body.actor.id)
     await session.commit()
     return out
 
@@ -555,7 +562,7 @@ async def forget_view(family_id: str, elder_id: str, body: ForgetIn, session: DB
 async def restore_view(family_id: str, elder_id: str, event_id: int, body: ConsentActor, session: DB) -> dict:
     from app.care import memory_upkeep
 
-    out = await memory_upkeep.restore(session, family_id, event_id, by=body.actor.id)
+    out = await memory_upkeep.restore(session, family_id, event_id, by=body.actor.id, subjects=_page_subjects(elder_id, body.actor))
     await session.commit()
     return out
 
@@ -743,6 +750,17 @@ async def memory_history(family_id: str, elder_id: str, session: DB, kind: str |
     rows = await versions.changes(session, family_id, [elder_id, "family"], kinds=(kind,) if kind else None, target=target,
                                   words=what, limit=min(max(limit, 1), 100), include_baseline=bool(target))
     return {"changes": [await versions.view(session, v) for v in rows]}
+
+
+@router.get("/{family_id}/{elder_id}/memory-history/{version_id}/preview")
+async def memory_undo_preview(family_id: str, elder_id: str, version_id: int, session: DB, mode: str = "undo") -> dict:
+    """What an undo (or restore) would do, in plain words, before the caregiver confirms. Changes nothing."""
+    from app.care import versions
+
+    v = await versions.get(session, family_id, version_id)
+    if not v or v.subject_id not in (elder_id, "family"):
+        raise HTTPException(status_code=404, detail="no such change")
+    return await versions.preview(session, v, "restore" if mode == "restore" else "undo")
 
 
 @router.post("/{family_id}/{elder_id}/memory-history/{version_id}")

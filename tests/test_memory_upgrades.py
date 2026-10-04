@@ -83,7 +83,7 @@ async def test_forget_and_restore(db, at):
     assert "Rahul" not in note.body_md and "bhajans" in note.body_md
     assert not [h for h in await store.recall(db, FAM, [ELDER], "Rahul money") if "Rahul" in h.text]
     fe = (await db.execute(select(CareEvent).where(CareEvent.kind == "memory_forgotten"))).scalars().one()
-    assert (await memory_upkeep.restore(db, FAM, fe.id, by=CG))["restored"] == 2
+    assert (await memory_upkeep.restore(db, FAM, fe.id, by=CG, subjects=[ELDER, "family"]))["restored"] == 2
     db.expire_all()
     body = (await store.notes(db, FAM, [ELDER]))[0].body_md
     assert body.count("Rahul") == 1 and "bhajans" in body

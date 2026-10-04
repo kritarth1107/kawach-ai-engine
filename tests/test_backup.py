@@ -100,5 +100,8 @@ async def test_overview_shows_last_backup(db):
                           " ('2026-10-03', true, '2026-10-03T22:00:00Z', 1234, '{}'),"
                           " ('2026-10-04', false, '2026-10-04T22:00:00Z', 0, '{\"error\": \"pg_dump exit 1\"}')"))
     out = await jobs.last_backup(sessions)
-    assert out["day"] == "2026-10-04" and out["ok"] is False and out["error"] == "pg_dump exit 1"
+    assert out["day"] == "2026-10-04" and out["ok"] is False and out["error"] == "pg_dump exit 1" and out["families"] is None
+    await db.execute(text("INSERT INTO backup_runs (day, ok, finished_at, bytes, detail) VALUES"
+                          " ('2026-10-05', true, '2026-10-05T22:00:00Z', 9, '{\"families\": {\"count\": 3, \"failed\": 0}}')"))
+    assert (await jobs.last_backup(sessions))["families"] == {"count": 3, "failed": 0}
     assert out["lastOkAt"].startswith("2026-10-03")

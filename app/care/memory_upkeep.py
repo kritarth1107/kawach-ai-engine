@@ -254,13 +254,20 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     return {"forgotten": len(removed_lines) + len(hide)}
 
 
-async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *, by: str) -> dict:
+async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *, by: str, subjects: list[str]) -> dict:
+    """Bring back what one forget hid. Only a forget made on one of `subjects` (the person whose page or chat this is,
+    and the family notes) can be restored, and only lines and events about those subjects come back: one caregiver can
+    never bring back what another hid from their own self-care record."""
     row = await session.get(CareEvent, forget_event_id)
     if not row or row.family_id != family_id or row.kind != "memory_forgotten" or (row.payload or {}).get("restored"):
+        return {"restored": 0}
+    if row.subject_id not in subjects:
         return {"restored": 0}
     p = row.payload or {}
     n = 0
     for item in p.get("note_lines") or []:
+        if item.get("subject") not in subjects:
+            continue
         note = await _note(session, family_id, item["subject"], item["slug"])
         body = ((note.body_md + "\n") if note and note.body_md else "") + item["line"]
         await store.upsert_note(session, family_id=family_id, subject_id=item["subject"], slug=item["slug"], title=item.get("title") or item["slug"],
@@ -268,7 +275,7 @@ async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *
         n += 1
     for eid in p.get("events") or []:
         e = await session.get(CareEvent, eid)
-        if e:
+        if e and e.family_id == family_id and e.subject_id in subjects:
             e.payload = {k: v for k, v in (e.payload or {}).items() if k not in ("forgotten", "forgotten_by")}
             n += 1
     row.payload = {**p, "restored": True, "restored_by": by}
