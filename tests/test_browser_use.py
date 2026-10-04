@@ -96,13 +96,15 @@ async def test_route_that_worked_is_remembered(db, at, sessions):
     h = H(sessions, FakeAgent(script={"prepare": [CART]}))
     await order(db)
     await h.tick(); await h.tick()
-    notes = (await db.execute(select(SkillNote).where(SkillNote.service == "zepto"))).scalars().all()
-    assert any(n.note.startswith("worked (prepare, 12 steps): / → /search → /cart → /checkout") for n in notes)
+    from app.care.skillbook import Skill
+
+    skills = (await db.execute(select(Skill).where(Skill.scope == "store", Skill.service == "zepto"))).scalars().all()
+    assert [s.body for s in skills] == ["/ → /search → /cart → /checkout"] and skills[0].successes == 1
     t2 = await runtime.create(db, family_id="fam-bu2", subject_id="e", requested_by="e", service="zepto", kind="order", goal="Dal",
                               details={"items": [{"name": "Toor dal 1kg", "qty": 1}]})
     await db.commit()
     await h.tick()
-    assert "worked (prepare" in h.agent.runs[-1]["hints"]
+    assert "path that worked (prepare path, 1 of 1 runs): / → /search → /cart → /checkout" in h.agent.runs[-1]["hints"]
 
 
 def test_route_compacts_ids_and_repeats():

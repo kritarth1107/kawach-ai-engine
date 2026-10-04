@@ -121,8 +121,13 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
 
     owner = next((m.get("id") for m in roster.members or [] if "primary" in str(m.get("role", "")).lower()), None)
     for p in uniq:
-        if await step(f"baseline:{p['id']}", lambda s, p=p: baselines.save(s, fid, p["id"])) is not None:
+        base = await step(f"baseline:{p['id']}", lambda s, p=p: baselines.save(s, fid, p["id"]))
+        if base is not None:
             report["baselines"] += 1
+            from app.care import skillbook
+
+            if await step(f"skill:{p['id']}", lambda s, p=p, base=base: skillbook.propose_from_style(s, fid, p["id"], base.get("style") or {})):
+                report["skills_proposed"] = report.get("skills_proposed", 0) + 1
         report["indexed"] = report.get("indexed", 0) + (await step(f"index:{p['id']}", lambda s, p=p: memory_index.nightly(s, fid, p["id"])) or 0)
         roll = await step(f"rollups:{p['id']}", lambda s, p=p: memory_upkeep.rollups(s, fid, p["id"], with_models=with_models)) or {}
         report["rollups"] = report.get("rollups", 0) + sum(1 for v in roll.values() if v)
@@ -156,6 +161,9 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
             res = await session.execute(delete(SkillNote).where(SkillNote.service == svc, SkillNote.id.not_in(keep)))
             out["skill_notes_removed"] += res.rowcount or 0
         out["confirmations_expired"] = await expire_stale_confirmations(session)
+        from app.care import skillbook
+
+        out["skills"] = await skillbook.curate(session)
         await session.commit()
     return out
 

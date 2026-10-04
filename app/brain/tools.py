@@ -1128,3 +1128,76 @@ async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
     if not ctx.speaker_is_elder and subjects[0] == ctx.elder_id:
         subjects.append("family")
     return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "")
+
+
+# ── skills: how a person likes things ──────────────────────────────────────────
+
+
+@tool(
+    "list_skills",
+    "What you have learned about how a person likes things (tone, timing, habits), and which are waiting for a caregiver's OK. "
+    "Use when asked 'what have you learned about Maa?' or before changing how you approach someone.",
+    {"about": ABOUT},
+    [],
+)
+async def list_skills(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import skillbook
+
+    rows = await skillbook.family_skills(ctx.session, ctx.family_id, [ctx.subject(a.get("about"))])
+    return {"skills": [{"id": s.id, "text": s.body, "status": s.status, "from": s.source} for s in rows]}
+
+
+@tool(
+    "save_family_skill",
+    "Remember how a person likes to be approached, e.g. 'remind her after puja, not before', 'short Hinglish, no emoji', "
+    "'he gets anxious if you ask twice'. Tone, timing and habits only: medicines, doses, reminder times, allergies, alerts, "
+    "orders and privacy go in the care record, not here. Saved from a caregiver it is used at once; the elder can set her own. "
+    "To approve one you suggested (status proposed), call this with its id.",
+    {"text": {"type": "string", "description": "One short plain sentence, no numbers"}, "about": ABOUT,
+     "id": {"type": "integer", "description": "An existing skill to approve or replace"}},
+    [],
+)
+async def save_family_skill(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import skillbook
+
+    if ctx.is_system:
+        raise ToolRefused("Skills come from the family; suggest it to a caregiver instead.")
+    subject = ctx.subject(a.get("about"))
+    if ctx.speaker_is_elder and subject != ctx.elder_id:
+        raise ToolRefused("The elder can set how she likes things for herself only.")
+    by = ctx.speaker.get("id") or ""
+    if a.get("id"):
+        if ctx.speaker_is_elder:
+            raise ToolRefused("A caregiver approves suggested skills.")
+        action = "edit" if (a.get("text") or "").strip() else "approve"
+        out = await skillbook.decide(ctx.session, ctx.family_id, int(a["id"]), action=action, by=by, body=a.get("text"))
+        if out.get("problems"):
+            raise ToolRefused("Not saved: " + "; ".join(out["problems"]))
+        return out
+    out = await skillbook.save_family(ctx.session, ctx.family_id, subject, a.get("text") or "", source="caregiver", by=by)
+    if not out.get("saved"):
+        raise ToolRefused("Not saved as a skill: " + "; ".join(out.get("problems") or []) + ". Use the care record tools for this instead.")
+    return out
+
+
+@tool(
+    "forget_skill",
+    "Stop using something you learned about how a person likes things, when the family says it is wrong or no longer true.",
+    {"what": {"type": "string", "description": "Words from the skill, or leave out and give id"}, "id": {"type": "integer"}, "about": ABOUT},
+    [],
+)
+async def forget_skill(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import skillbook
+
+    if ctx.is_system:
+        raise ToolRefused("Only the family can remove a skill.")
+    subject = ctx.subject(a.get("about"))
+    if ctx.speaker_is_elder and subject != ctx.elder_id:
+        raise ToolRefused("The elder can change only her own.")
+    by = ctx.speaker.get("id") or ""
+    if a.get("id"):
+        s = await skillbook._family_row(ctx.session, ctx.family_id, int(a["id"]))
+        if not s or (ctx.speaker_is_elder and s.subject_id != ctx.elder_id):
+            raise ToolRefused("No such skill.")
+        return await skillbook.decide(ctx.session, ctx.family_id, s.id, action="remove", by=by)
+    return await skillbook.forget_matching(ctx.session, ctx.family_id, [subject], a.get("what") or "", by=by)

@@ -122,11 +122,21 @@ def describe(task: Task) -> str:
 
 
 async def _learned(session: AsyncSession, service: str) -> list[str]:
+    """What stopped earlier agents on this service (newest first)."""
     return list((await session.execute(select(SkillNote.note).where(SkillNote.service == service).order_by(SkillNote.id.desc()).limit(MAX_SKILL_NOTES))).scalars())
 
 
+async def _skills_and_notes(session: AsyncSession, service: str) -> tuple[list[str], list[int]]:
+    """Store skills that worked (best first), then problems earlier runs hit. Returns the lines and the skill ids used."""
+    from app.care import skillbook
+
+    skills = await skillbook.store_hints(session, service)
+    lines = [f"path that worked ({s.title}, {s.successes} of {s.uses} runs): {s.body}" for s in skills]
+    return lines + [n for n in await _learned(session, service) if not n.startswith("worked (")], [s.id for s in skills]
+
+
 async def _hints(session: AsyncSession, service: str) -> str:
-    return specialist_for(service).hints(service, await _learned(session, service))
+    return specialist_for(service).hints(service, (await _skills_and_notes(session, service))[0])
 
 
 def _goal(task: Task) -> str:
@@ -136,9 +146,11 @@ def _goal(task: Task) -> str:
 async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for: Callable[[Task], Awaitable[str | None]], extra: str = "") -> None:
     spec = specialist_for(task.service)
     goal = _goal(task) + (f"\n{extra}" if extra else "")
+    learned, skill_ids = await _skills_and_notes(session, task.service)
+    task.details = {**(task.details or {}), "skills_used": skill_ids}
     run = await agent.run(
         goal=goal,
-        hints=spec.hints(task.service, await _learned(session, task.service)),
+        hints=spec.hints(task.service, learned),
         schema=spec.schema(task),
         session_id=task.agent_session,
         profile_id=None if task.agent_session else await profile_for(task),
@@ -633,11 +645,17 @@ async def tick(
                             task.phase, task.status = "cancel", "queued"
                             task.deadline_at = clock.now() + TASK_LIFETIME
                             message = "It was placed just before the cancel; cancelling it on the service now."
-                        if status in ("awaiting_confirm", "done") and run.path:
-                            # Remember the route that worked; the next agent on this store starts with it.
-                            text_ = f"worked ({task.phase}, {run.steps} steps): {route(run.path)}"
-                            if text_ not in await _learned(session, task.service):
-                                session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
+                        from app.care import skillbook
+
+                        used = list((task.details or {}).get("skills_used") or [])
+                        if status in ("awaiting_confirm", "done") and task.phase != "cancel":
+                            # The path that worked becomes (or reinforces) a store skill the next agent starts with.
+                            await skillbook.record_store_success(
+                                session, task.service, task.phase, route(run.path or [], limit=10).split(" → ") if run.path else [],
+                                task_id=str(task.id), n_steps=run.steps, used=used,
+                            )
+                        elif status == "failed" and not out.get("blocked") and not out.get("needs_prescription"):
+                            await skillbook.record_store_use(session, used, ok=False)
                         if status == "failed" and out.get("problem"):
                             # The next agent on this service reads what stopped this one (once per distinct problem).
                             text_ = f"{task.phase} failed: {str(out['problem'])[:240]}"

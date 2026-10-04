@@ -180,3 +180,6 @@ class FamilyRoster(Base):
     elder: Mapped[dict] = mapped_column(JSONB, default=dict)
     members: Mapped[list] = mapped_column(JSONB, default=list)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+from app.care import skillbook as _skillbook  # noqa: E402,F401  (registers the skills table)

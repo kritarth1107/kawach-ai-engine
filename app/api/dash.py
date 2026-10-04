@@ -668,3 +668,48 @@ async def spending_view(family_id: str, elder_id: str, session: DB, month: str |
     if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
     return await features.spending(session, family_id, month)
+
+
+class SkillIn(BaseModel):
+    actor: Actor
+    text: str = Field(min_length=3, max_length=600)
+
+
+class SkillAction(BaseModel):
+    actor: Actor
+    action: str = Field(pattern="^(approve|edit|remove|restore)$")
+    text: str | None = Field(default=None, max_length=600)
+
+
+@router.get("/{family_id}/{elder_id}/skills")
+async def skills_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """How this person likes things (family skills), plus what the store agents learned (shared, read-only)."""
+    from app.care import skillbook
+
+    rows = await skillbook.family_skills(session, family_id, [elder_id], statuses=("proposed", "active", "stale", "blocked"))
+    return {"skills": [skillbook.view(s) for s in rows], "store": await skillbook.store_list(session)}
+
+
+@router.post("/{family_id}/{elder_id}/skills")
+async def skills_add(family_id: str, elder_id: str, body: SkillIn, session: DB) -> dict:
+    from app.care import skillbook
+
+    out = await skillbook.save_family(session, family_id, elder_id, body.text, source="caregiver", by=body.actor.id)
+    if not out.get("saved"):
+        raise HTTPException(status_code=422, detail="; ".join(out.get("problems") or ["not saved"]))
+    await session.commit()
+    return out
+
+
+@router.post("/{family_id}/{elder_id}/skills/{skill_id}")
+async def skills_decide(family_id: str, elder_id: str, skill_id: int, body: SkillAction, session: DB) -> dict:
+    from app.care import skillbook
+
+    s = await skillbook._family_row(session, family_id, skill_id)
+    if not s or s.subject_id != elder_id:
+        raise HTTPException(status_code=404, detail="skill not found")
+    out = await skillbook.decide(session, family_id, skill_id, action=body.action, by=body.actor.id, body=body.text)
+    if not out.get("ok"):
+        raise HTTPException(status_code=422, detail="; ".join(out.get("problems") or [out.get("error") or "not changed"]))
+    await session.commit()
+    return out

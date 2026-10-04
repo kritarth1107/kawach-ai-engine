@@ -165,6 +165,12 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     if noticed:
         names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
         parts.append(care_patterns.context_block(noticed, names))
+    from app.care import skillbook
+
+    to = req.elder if req.speaker["id"] == req.elder["id"] or req.speaker.get("role") == "system" else req.speaker
+    how = await skillbook.context_block(session, req.family_id, to["id"], (to.get("name") or "").split(" ")[0])
+    if how:
+        parts.append(how)
     if hits:
         parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
     if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":
