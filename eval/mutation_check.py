@@ -80,6 +80,10 @@ MUTATIONS = [
     # red flags
     Mutation("hinglish-chest-pain", "app/brain/guards.py", r'r"\b(chest|seen[ae]|chh?aa?ti|heart|breath\w*|saans|',
              r'r"\b(chest|breath\w*|saans|', ["tests/test_review_fixes.py"]),
+    # voice notes
+    Mutation("unsure-voice-changes-dose", "app/brain/tools.py",
+             "force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,", "force_confirm=False,", ["tests/test_voice.py"]),
+    Mutation("voice-note-not-flagged", "app/brain/loop.py", "        voice_block(req),\n", "", ["tests/test_voice.py"]),
     # backups
     Mutation("restore-over-data", "backup/backup.py",
              "        if not overwrite and has_data(name, target):", "        if False:", ["tests/test_backup.py"]),

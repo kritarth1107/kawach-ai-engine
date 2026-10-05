@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain import guards, policy
 from app.brain.host import ToolHost
 from app.care import store
-from app.care.domains import DOMAINS, FOOD_TIMING, fact_key, slug
+from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, fact_key, slug
 from app.core import clock
 from app.llm.router import ToolSpec
 
@@ -47,6 +47,8 @@ class TurnCtx:
     # Set only by the dashboard, after the caregiver confirmed in a dialog: an undo may then end or restart a medicine
     # at once. Never set from a model's tool arguments.
     confirmed: bool = False
+    # The message was a voice note the speech engine was not sure about: health changes from it wait for a confirmation.
+    voice_unsure: bool = False
 
     @property
     def elder_id(self) -> str:
@@ -177,6 +179,8 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         source_ref=ctx.message_ref,
         stated_by=ctx.speaker.get("id"),
         confidence=0.9 if ctx.speaker_is_elder else 1.0,
+        # a medicine, allergy or condition heard in an unclear voice note waits for a confirmation, whoever said it
+        force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,
     )
     await store.record_event(
         ctx.session,
@@ -193,7 +197,9 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
                                     text=a["sentence"], source_kind=ctx.source_kind, actor_id=ctx.speaker.get("id"))
     out: dict = {"result": w.result, "key": w.fact.key}
     if w.result == "pending":
-        out["note"] = "This changes a fact a caregiver or prescription set; it waits for a caregiver to confirm."
+        out["note"] = ("You were not sure of the voice note, so this waits for a confirmation: repeat back what you heard and ask."
+                       if ctx.voice_unsure and domain in HEALTH_DOMAINS else
+                       "This changes a fact a caregiver or prescription set; it waits for a caregiver to confirm.")
     if domain == "appointment" and w.result in ("created", "superseded"):
         from app.care import features
 
@@ -237,6 +243,7 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
         source_kind=ctx.source_kind,
         stated_by=ctx.speaker.get("id"),
         source_ref=ctx.message_ref,
+        force_confirm=ctx.voice_unsure and a["domain"] in HEALTH_DOMAINS,
     )
     if not w:
         return {"result": "not_found", "key": key}

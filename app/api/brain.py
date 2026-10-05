@@ -41,6 +41,9 @@ class TurnIn(BaseModel):
     message_ref: str | None = None
     images: list[Image] = Field(default_factory=list)
     channel: str = "whatsapp"
+    modality: str = Field(default="text", pattern="^(text|voice)$")
+    voice_confidence: float | None = Field(default=None, ge=0, le=1)
+    voice_language: str | None = Field(default=None, max_length=16)
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
 
@@ -58,6 +61,9 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         message_ref=body.message_ref,
         images=[i.model_dump() for i in body.images],
         channel=body.channel,
+        modality=body.modality,
+        voice_confidence=body.voice_confidence,
+        voice_language=body.voice_language,
     )
     try:
         result = await run_turn(session, host, req)
@@ -357,8 +363,6 @@ async def weekly_job(plan: bool = False) -> dict:
     check-in for the hour they have answered best (learned; 18:00 until there is history)."""
     if plan:
         return await _plan_checkins()
-    import uuid as _uuid
-
     from sqlalchemy import select as sql_select
 
     from app.brain.wake import system_turn

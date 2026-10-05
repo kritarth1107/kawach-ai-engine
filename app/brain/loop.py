@@ -41,6 +41,19 @@ class TurnRequest:
     message_ref: str | None = None
     images: list[dict] = field(default_factory=list)  # [{"mime", "data"}] base64
     channel: str = "whatsapp"
+    modality: str = "text"  # text | voice (text is then the transcript of a voice note)
+    voice_confidence: float | None = None  # 0..1 when the speech engine reported one
+    voice_language: str | None = None
+
+    @property
+    def voice(self) -> bool:
+        return self.modality == "voice"
+
+    @property
+    def voice_unsure(self) -> bool:
+        """A voice note the speech engine was not sure about (or that came out very short): check before acting on it."""
+        return self.voice and ((self.voice_confidence is not None and self.voice_confidence < VOICE_SURE)
+                               or len((self.text or "").split()) <= 1)
 
 
 @dataclass
@@ -148,6 +161,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
         f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
+        voice_block(req),
         digest.ledger(day_events),
         digest.loops(loops),
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
@@ -207,6 +221,28 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             )
     known = "\n".join(h.text for h in hits) + "\n" + "\n".join(e.summary for e in day_events)
     return "\n\n".join(parts), known
+
+
+VOICE_SURE = 0.6
+
+
+def voice_block(req: TurnRequest) -> str:
+    """How to answer a voice note: it is a transcript (may be wrong), and the reply is spoken back as a voice note."""
+    if not req.voice:
+        return ""
+    lines = [
+        "THIS MESSAGE WAS A VOICE NOTE. The text is a machine transcript and can have wrong words, especially names, "
+        "medicines and numbers. Your reply is sent as a voice note (read aloud) and as text, so write it to be heard: "
+        "short spoken sentences, no emoji, no lists, no links, no symbols; say times and doses simply ('subah aath baje', "
+        "'aadhi goli').",
+    ]
+    if req.voice_unsure:
+        lines.append(
+            "THE TRANSCRIPT IS UNSURE. If you cannot tell what they meant, kindly ask them to say it again. Before you save or "
+            "change any medicine, dose, allergy or time from it, repeat back what you heard and ask them to confirm. An "
+            "emergency is the exception: if it might be one, act on it as usual."
+        )
+    return "\n".join(lines)
 
 
 def writing_block(req: TurnRequest, profiles: dict[str, dict]) -> str:
@@ -381,7 +417,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
-        speaker_id=req.speaker["id"], message_ref=req.message_ref, meta={"channel": req.channel, "images": len(req.images)},
+        speaker_id=req.speaker["id"], message_ref=req.message_ref,
+        meta={"channel": req.channel, "images": len(req.images), **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {})},
     )
     if req.message_ref and inserted is None:
         prior = (
@@ -436,7 +473,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     dynamic, known_turn = await turn_context(session, req, data)
     data.history_full = True
     msgs = await history(session, req, data)
-    content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {req.text}"}]
+    said = f"(voice note, transcript) {req.text}" if req.voice else req.text
+    content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {said}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
     msgs.append({"role": "user", "content": content})
     turn_start = len(msgs) - 1
@@ -465,7 +503,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text,
         known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
-        situation=situation, playbook_version=pb.version if pb else 0, arm=arm,
+        situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
