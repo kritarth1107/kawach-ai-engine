@@ -1401,6 +1401,29 @@ async def forget_skill(ctx: TurnCtx, a: dict) -> dict:
 
 
 @tool(
+    "voice_replies",
+    "Whether you answer a person with voice notes: 'auto' (a voice note back when they send one; the default), 'always' "
+    "(every reply and reminder also as a voice note, for someone who finds reading hard), or 'never' (text only). Use for "
+    "'mujhe awaaz mein jawab do', 'sirf text bhejo', 'Maa ko bol ke batao', 'what is the voice setting?'. Leave out mode to "
+    "read the current setting. The text always goes too.",
+    {"mode": {"type": "string", "enum": ["auto", "always", "never"]}, "about": ABOUT},
+    [],
+)
+async def voice_replies(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system:
+        raise ToolRefused("Only the family sets how Saheli answers.")
+    subject = ctx.subject(a.get("about"))
+    if not ctx.is_caregiver:
+        if not ctx.speaker_is_elder or subject != ctx.elder_id:
+            raise ToolRefused("You can choose this for yourself only; a caregiver can set it for others.")
+    elif subject not in (ctx.elder_id, ctx.speaker.get("id")):
+        raise ToolRefused("A caregiver sets this for the person they care for, or for themselves.")
+    if not a.get("mode"):
+        return await ctx.host.call("get_voice_preference", {}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    return await ctx.host.call("set_voice_preference", {"mode": a["mode"]}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+
+
+@tool(
     "service_status",
     "Is the family logged in on a store or ride app (Uber, Ola, Rapido, Apollo, 1mg, PharmEasy, Swiggy, Zepto, Blinkit, Zomato)? "
     "Answers from what the order agents last saw; it does not open the app. Use for 'Uber login hai?' or before promising an order.",

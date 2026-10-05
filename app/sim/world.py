@@ -26,6 +26,7 @@ class World:
     rides: list[dict] = field(default_factory=list)
     records: list[dict] = field(default_factory=list)
     calls: list[dict] = field(default_factory=list)
+    voice_modes: dict[str, str] = field(default_factory=dict)  # person id -> auto | always | never
     # scripted service outcomes, consumed in order: "ok" | "otp" | "captcha" | "stall" | "surge" | "fail"
     service_script: list[str] = field(default_factory=list)
     # what the backend already held for the family before Saheli v2 (export_care_record)
@@ -75,6 +76,11 @@ class SimHost:
         if tool in ("log_symptom", "log_check_in", "log_dose", "log_appointment_notes", "save_memory"):
             w.symptoms.append({"tool": tool, **args, "day": day})
             return {"ok": True}
+        if tool == "get_voice_preference":
+            return {"mode": w.voice_modes.get(subject_id, "auto")}
+        if tool == "set_voice_preference":
+            w.voice_modes[subject_id] = args["mode"]
+            return {"ok": True, "mode": args["mode"]}
         if tool == "create_reminder":
             w.reminders.append(args)
             return {"ok": True, "reminderId": f"rem-{len(w.reminders)}"}

@@ -114,3 +114,36 @@ async def test_unsure_flag_does_not_touch_non_health_facts(db, at):
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=SON, members=[ELDER, SON], voice_unsure=True)
     out, err = await tools.run(c, "remember", {"domain": "dish", "name": "poha", "details": {}, "sentence": "Makes poha on Sundays"})
     assert not err and json.loads(out)["result"] == "created"
+
+
+# ── voice replies preference (WhatsApp tool; the dashboard sets the same backend value) ──
+
+VIEWER = {"id": "v-voice", "name": "Neel", "role": "family member"}
+
+
+def c(db, speaker, host):
+    return tools.TurnCtx(session=db, host=host, family_id=FAM, elder=ELDER, speaker=speaker, members=[ELDER, SON, VIEWER])
+
+
+async def test_voice_replies_set_and_read_by_the_right_people(db, at):
+    at("2026-10-02 10:00")
+    host = SimHost()
+    out, err = await tools.run(c(db, ELDER, host), "voice_replies", {"mode": "always"})  # she asks for voice herself
+    assert not err and host.world.voice_modes[ELDER["id"]] == "always"
+    out, err = await tools.run(c(db, ELDER, host), "voice_replies", {})
+    assert not err and json.loads(out)["mode"] == "always"
+    out, err = await tools.run(c(db, SON, host), "voice_replies", {"mode": "never", "about": SON["id"]})  # caregiver, for himself
+    assert not err and host.world.voice_modes[SON["id"]] == "never"
+    out, err = await tools.run(c(db, ELDER, host), "voice_replies", {"mode": "never", "about": SON["id"]})
+    assert err  # the elder sets only her own
+    out, err = await tools.run(c(db, VIEWER, host), "voice_replies", {"mode": "never"})
+    assert err and host.world.voice_modes[ELDER["id"]] == "always"  # a view-only member cannot change it
+    sys = tools.TurnCtx(session=db, host=host, family_id=FAM, elder=ELDER, speaker={"id": "saheli", "role": "system"}, members=[ELDER, SON])
+    out, err = await tools.run(sys, "voice_replies", {"mode": "never"})
+    assert err
+
+
+async def test_voice_preference_is_not_written_in_shadow_mode(db, at):
+    from app.brain.host import WRITE_TOOLS
+
+    assert "set_voice_preference" in WRITE_TOOLS and "get_voice_preference" not in WRITE_TOOLS
