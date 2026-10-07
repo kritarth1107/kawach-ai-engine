@@ -92,20 +92,23 @@ jobs:
           KAVACH_BACKEND_URL: "https://kavach-backend-303943038694.asia-south1.run.app"
           MEMORY_GCS_BUCKET: "${MEMORY_GCS_BUCKET:-kavach-memory-exports}"
           KAVACH_JOB_SECRET: "${HEALTH_SECRET:-}"
+          # /v2/admin: only the admin API's own identity, with its own secret (ENGINE_ADMIN_SECRET below)
+          ADMIN_API_SA: kavach-admin-api@kavach-care.iam.gserviceaccount.com
+          ENGINE_AUDIENCES: "https://kawach-ai-engine-303943038694.asia-south1.run.app,https://kawach-ai-engine-bcvowb5kfq-el.a.run.app"
           EOF
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
             --image="$IMAGE:${{ github.sha }}" \
             --region=${{ env.GCP_REGION }} \
             --platform=managed \
-            --allow-unauthenticated \
+            --no-allow-unauthenticated \
             --port=8000 \
             --memory=1Gi \
             --min-instances=1 \
             --max-instances=3 \
             --add-cloudsql-instances=${{ env.CLOUDSQL }} \
             --env-vars-file=/tmp/ai-engine-env.yaml \
-            --update-secrets=BROWSER_USE_API_KEY=backend-browser-use-api-key:latest \
+            --update-secrets=BROWSER_USE_API_KEY=backend-browser-use-api-key:latest,ENGINE_ADMIN_SECRET=engine-admin-secret:latest \
             --quiet
 
       - name: Grant backend service account invoker access
@@ -123,6 +126,11 @@ jobs:
             --member="serviceAccount:${BACKEND_SA}" \
             --role="roles/run.invoker" \
             --quiet
+          # the admin API reaches only /v2/admin (its own secret + identity check in app/api/admin.py)
+          gcloud run services add-iam-policy-binding ${{ env.SERVICE }} \
+            --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.GCP_REGION }} \
+            --member="serviceAccount:kavach-admin-api@kavach-care.iam.gserviceaccount.com" \
+            --role="roles/run.invoker" --quiet
 
       - name: Verify revision ready
         run: |

@@ -10,3 +10,6 @@ build/
 .coverage
 eval/tune_data/
 eval/compare_report.json
+
+# local run logs (may contain test phone numbers)
+r9_*.log
