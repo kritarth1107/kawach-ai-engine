@@ -110,9 +110,9 @@ async def test_follow_up_message_carries_buttons_in_their_language(db, at):
     host = SimHost()
     c = ctx(db, speaker={"id": "saheli-scheduler", "name": "Scheduler", "role": "system"}, host=host)
     c.profiles = {CG: {"script": "latin", "roman": "indic"}}
-    await tools.run(c, "send_message", {"to": CG, "text": "Asha, Mummy ab kaisi hain?", "buttons": {"kind": "outcome", "key": "alert:x:subj=elder-o"}})
+    await tools.run(c, "send_message", {"to": CG, "text": "आशा जी, मम्मी अब कैसी हैं? बताइए।", "buttons": {"kind": "outcome", "key": "alert:x:subj=elder-o"}})
     sent = host.world.sent[0]
-    assert [b["title"] for b in sent["buttons"]] == ["Sab theek", "Doctor dikhaya", "Hospital"]
+    assert [b["title"] for b in sent["buttons"]] == ["सब ठीक", "डॉक्टर को दिखाया", "अस्पताल"]  # Hinglish writer → Devanagari
     assert sent["buttons"][0]["id"] == "v2:oc:all_fine:alert:x:subj=elder-o"
 
 
@@ -128,3 +128,45 @@ def test_button_ids_fit_whatsapp_limits():
     for kind in ("outcome", "visit", "feedback"):
         for b in outcomes.buttons(kind, "pattern:dose:metformin:21:00:subj=" + "x" * 300, {"script": "devanagari"}):
             assert len(b["id"]) <= 256 and len(b["title"]) <= 20
+
+
+async def test_language_preference_saves_dialect_and_tells_the_backend(db, at):
+    at("2026-10-02 10:00")
+    host = SimHost()
+    out, err = await tools.run(ctx(db, host=host), "language_preference", {"dialect": "Marwari", "about": ELDER})
+    assert not err, out
+    facts = [f for f in await store.facts(db, FAM, ELDER) if f.domain == "language"]
+    assert facts and facts[0].value == {"dialect": "mwr", "language": "hi"} and "Marwari" in facts[0].text
+    assert host.world.speech[ELDER] == {"language": "hi", "dialect": "mwr", "script": "native"}
+    out, err = await tools.run(ctx(db, host=host), "language_preference", {"about": ELDER})
+    assert "Marwari" in out
+    # "write to me in English letters": Roman letters, dialect kept
+    out, err = await tools.run(ctx(db, host=host), "language_preference", {"script": "roman", "about": ELDER})
+    assert not err and host.world.speech[ELDER]["script"] == "roman" and host.world.speech[ELDER]["dialect"] == "mwr"
+    # remember(domain=language) goes the same way
+    out, err = await tools.run(ctx(db, host=host), "remember", {"domain": "language", "name": "Maithili", "details": {}, "sentence": "Speaks Maithili", "about": ELDER})
+    assert not err and host.world.speech[ELDER]["dialect"] == "mai"
+
+
+async def test_elder_sets_only_her_own_language(db, at):
+    at("2026-10-02 10:00")
+    _, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "ta", "about": CG})
+    assert err
+    out, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "Tamil"})
+    assert not err and '"ta"' in out
+    _, err = await tools.run(ctx(db), "language_preference", {"language": "Klingon", "about": ELDER})
+    assert err
+
+
+async def test_setup_progress_lists_what_is_missing(db, at):
+    at("2026-10-02 10:00")
+    out, err = await tools.run(ctx(db), "setup_progress", {"about": ELDER})
+    assert not err and '"complete": false' in out and '"naming"' in out
+    host = SimHost()
+    await tools.run(ctx(db, host=host), "language_preference", {"dialect": "Bhojpuri", "about": ELDER})
+    await tools.run(ctx(db), "remember", {"domain": "allergy", "name": "none", "details": {}, "sentence": "No known allergies", "about": ELDER})
+    out, _ = await tools.run(ctx(db), "setup_progress", {"about": ELDER})
+    import json as _j
+    data = _j.loads(out)
+    assert "language" in data["already_known"] and "allergy" in data["already_known"]
+    assert [m["item"] for m in data["missing"]][:3] == ["naming", "condition", "medicine"]

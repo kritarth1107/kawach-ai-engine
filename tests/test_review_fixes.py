@@ -157,7 +157,7 @@ async def test_rejected_reply_is_not_sent_when_rewrite_is_empty(db, at, brain):
     ])
     out = await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, ASHA],
                                                     text="Kaisa hai mera BP aajkal?", message_ref="r1"))
-    assert "150/95" not in out.reply and out.reply == "Ji, theek hai 🙏"
+    assert "150/95" not in out.reply and out.reply == "जी, ठीक है 🙏"  # Hinglish writer: the fallback is Hindi in Devanagari
 
 
 async def test_downgraded_alert_does_not_count_as_telling_the_family(db, at, brain):

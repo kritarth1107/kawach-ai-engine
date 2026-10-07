@@ -60,10 +60,17 @@ def relevant(text: str, known: str, tail: int = 1500) -> str:
     return ("\n".join(keep)[-6000:] + "\n" + known[-tail:]).strip()
 
 
+def old_script_policy(c: dict) -> bool:
+    """The sample was graded when Roman-letter writers got Roman-letter replies. Since 2026-10-08 every Indian language is
+    written in its own script, so those replies are neither false alarms nor misses of the language check: skip them."""
+    p = g.profile(c["writes"]) or {}
+    return p.get("script") == "latin" and p.get("roman") == "indic" and g.script_of(c["text"]) == "latin"
+
+
 def check(c: dict) -> dict[str, list[str]]:
     return {
         "ground": g.ungrounded(c["text"], known=c["known"]),
-        "lang": g.language_problems(c["text"], g.profile(c["writes"])),
+        "lang": [] if old_script_policy(c) else g.language_problems(c["text"], g.profile(c["writes"])),
         "repeat": g.repeats(c["text"], c["earlier"]),
         "leak": ["leaked reasoning"] if g.leaked_reasoning(c["text"]) else [],
     }

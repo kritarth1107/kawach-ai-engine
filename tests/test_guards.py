@@ -50,15 +50,52 @@ def test_questions_may_name_conditions():
 
 
 def test_language_profiles():
+    # Every Indian language in its own script, also when they type Roman letters.
     hinglish = g.profile(["Haan beta, dawai le li hai", "aaj thoda chakkar aa raha hai"])
     assert g.language_problems("I have noted that you took your medicine today.", hinglish)
-    assert not g.language_problems("Theek hai ji, maine dawai likh li hai.", hinglish)
+    assert g.language_problems("Theek hai ji, maine dawai likh li hai.", hinglish)
+    assert not g.language_problems("ठीक है जी, मैंने दवाई लिख ली है।", hinglish)
     hindi = g.profile(["मम्मी ने खाना खा लिया", "ठीक है, दवा दे दी"])
     assert g.language_problems("Savitri aunty is asking if she can have lemon water.", hindi)
     roman = g.profile(["Kamla here, aaj kya khana hai?", "theek hai beta"])
-    assert g.language_problems("राधे राधे कमला जी! गुनगुने पानी से आराम मिलेगा।", roman)
+    assert not g.language_problems("राधे राधे कमला जी! गुनगुने पानी से आराम मिलेगा।", roman)
     english = g.profile(["Thanks, I will be there by six.", "Please remind him about the walk"])
     assert not g.language_problems("Sure, I will remind him at the usual time.", english)
+    assert g.language_problems("ज़रूर, मैं उन्हें समय पर याद दिला दूँगी।", english)
+
+
+def test_saved_language_dialect_and_roman_request():
+    tamil = {"script": "latin", "roman": "indic", "saved": {"language": "ta"}}
+    assert g.target(tamil) == "tamil"
+    assert g.language_problems("दवाई का समय हो गया है, अभी ले लीजिए।", tamil)
+    assert not g.language_problems("மருந்து சாப்பிடும் நேரம் ஆச்சு, இப்போ எடுத்துக்கோங்க.", tamil)
+    asked_roman = {"script": "latin", "roman": "indic", "saved": {"language": "hi", "script": "roman"}}
+    assert g.target(asked_roman) == "latin"
+    assert g.language_problems("ठीक है जी, मैंने दवाई लिख ली है।", asked_roman)
+    assert not g.language_problems("Theek hai ji, maine dawai likh li hai.", asked_roman)
+    marwari = {"script": "devanagari", "roman": None, "saved": {"language": "hi", "dialect": "mwr"}}
+    assert "Marwari" in g.describe(marwari) and "राम राम सा" in g.describe(marwari)
+    assert g.canned_key(marwari) == "devanagari" and g.canned_key({"saved": {"language": "mr"}}) == "mr"
+    assert g.canned_key(hinglish := g.profile(["Haan beta, dawai le li hai", "kya hua"])) == "devanagari", hinglish
+
+
+def test_no_mixed_scripts():
+    hindi = g.profile(["मेरी दवा कब है", "ठीक है"])
+    assert g.language_problems("आपकी medicine का time हो गया है, please अभी ले लीजिए।", hindi)
+    assert not g.language_problems("आपका BP 130/80 है, OTP 4821 आया है, देखिए https://kavach.care/x", hindi)
+    # Medicines, brands and names stay as written: only everyday English words count.
+    assert not g.language_problems("माँ जी, Telma 40 और metformin खाने के बाद, फिर Volini gel रात को लगाइए। Riya ने बताया।", hindi)
+
+
+def test_urdu_script_and_language_merge():
+    from app.care import language
+
+    assert g.script_of("امی جان، دوائی لے لی؟") == "arabic"
+    assert language.merge({"language": "hi", "dialect": "mwr"}, {"language": "ta"}) == {"language": "ta"}
+    assert language.merge({"language": "hi", "dialect": "mwr", "script": "roman"}, {"script": "native"}) == {"language": "hi", "dialect": "mwr", "script": "native"}
+    assert language.merge({"language": "hi", "dialect": "bho"}, {"language": "marwari"}) == {"language": "hi", "dialect": "mwr"}
+    assert language.merge({"language": "hi", "dialect": "mwr"}, {"dialect": "none"}) == {"language": "hi"}
+    assert language.merge({"language": "hi", "dialect": "mwr"}, {"language": "hindi"}) == {"language": "hi", "dialect": "mwr"}
 
 
 def test_repeats_and_openers():
@@ -218,4 +255,4 @@ async def test_message_to_hindi_writer_must_be_in_hindi(db, at, brain):
     host = SimHost()
     out = await run_turn(db, host, _req("Asha se poochho nimbu paani pee sakta hoon kya"))
     assert len(host.world.sent) == 1 and "नींबू" in host.world.sent[0]["text"]
-    assert "Hindi/Marathi script" in [a for a in out.actions if a["tool"] == "send_message"][0]["refused"]
+    assert "Devanagari script" in [a for a in out.actions if a["tool"] == "send_message"][0]["refused"]

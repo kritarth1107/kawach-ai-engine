@@ -85,11 +85,11 @@ async def test_turn_trace_logged_and_becomes_an_anonymised_tuning_example(db, at
     await outcomes.set_consent(db, "fam-a2", ELDER["id"], granted=True, by=CG["id"])
     await db.commit()
     model([LLMReply(text="", tool_calls=[ToolCall(id="t1", name="remember", args={"text": "Kamla ji ko mandir jaana pasand hai"})], model="fake"),
-           LLMReply(text="Kamla ji, yaad rakh liya 🙏", tool_calls=[], model="fake")])
+           LLMReply(text="कमला जी, याद रख लिया 🙏", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("Main Kamla, aaj mandir gayi thi", "t-1"))
     row = (await db.execute(select(ReplyLog).where(ReplyLog.family_id == "fam-a2"))).scalars().one()
     roles = [s["role"] for s in row.trace]
-    assert roles[0] == "user" and "tool" in roles and row.trace[-1]["text"].startswith("Kamla ji")
+    assert roles[0] == "user" and "tool" in roles and row.trace[-1]["text"].startswith("कमला जी")
     ex = tuning.to_example(row.trace, situation=row.situation, names=["Kamla Sharma", "Ankit Sharma"], meds=[])
     flat = json.dumps(ex, ensure_ascii=False)
     assert "Kamla" not in flat

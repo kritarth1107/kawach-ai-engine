@@ -122,7 +122,7 @@ async def test_flood_gets_canned_reply_without_model(db, at, echo):
     await _flood(db, PERSON_BURST)
     req = TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER], text="Kya haal hai aapka beta", message_ref="x1")
     out = await run_turn(db, SimHost(), req)
-    assert echo.calls == 0 and out.model == "none" and "ruk rahi" in out.reply
+    assert echo.calls == 0 and out.model == "none" and "रुक रही" in out.reply
     out2 = await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER], text="hello?", message_ref="x2"))
     assert out2.reply == "🙏" and echo.calls == 0
 

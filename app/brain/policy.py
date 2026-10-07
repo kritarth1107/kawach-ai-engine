@@ -126,7 +126,7 @@ def reply_problems(reply: str, *, known_text: str, avoid_words: list[str], user_
         if w and _rx(rf"\b{re.escape(w)}\b", re.I).search(reply):
             problems.append(f"uses '{w}', which they asked not to be called")
     if hinglish_words(user_text) >= 2 and not re.search(r"[\u0900-\u097F]", reply) and len(reply.split()) >= 4 and hinglish_words(reply) == 0:
-        problems.append("they wrote in Hinglish (Roman letters) and the reply is in English; reply in Hinglish like they did")
+        problems.append("they wrote Hindi in Roman letters and the reply is in English; reply in Hindi, in Devanagari (Roman letters only if they asked for that)")
     for price in re.findall(r"₹\s?\d[\d,]*(?:\.\d+)?", reply):
         if price.replace(" ", "") not in known.replace(" ", ""):
             problems.append(f"states the price {price}, which no tool returned")

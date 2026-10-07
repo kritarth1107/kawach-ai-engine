@@ -43,5 +43,5 @@ def test_order_conflicts_use_allergen_families():
 
 def test_language_mismatch():
     assert policy.reply_problems("The ride has been cancelled. Have a safe trip!", known_text="", avoid_words=[], user_text="Cab cancel kar do, beta aa raha hai")
-    assert not policy.reply_problems("Theek hai, ride cancel kar di hai.", known_text="", avoid_words=[], user_text="Cab cancel kar do, beta aa raha hai")
+    assert not policy.reply_problems("ठीक है, राइड कैंसल कर दी है।", known_text="", avoid_words=[], user_text="Cab cancel kar do, beta aa raha hai")
     assert not policy.reply_problems("Done, cancelled the ride.", known_text="", avoid_words=[], user_text="Please cancel the cab")

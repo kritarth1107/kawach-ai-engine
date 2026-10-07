@@ -358,11 +358,11 @@ async def test_gaps_recorded_and_ranked(db, at, model):
     at("2026-10-02 10:00")
     await store.save_roster(db, "fam-gap", ELDER, [ELDER, CG])
     await db.commit()
-    model([LLMReply(text="Maaf kijiye, main ye nahi kar sakti, bijli ka bill bharna abhi mere paas nahi hai.", tool_calls=[], model="fake")])
+    model([LLMReply(text="माफ़ कीजिए, मैं ये नहीं कर सकती, बिजली का बिल भरना अभी मेरे पास नहीं है।", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("Kamla ji ka bijli ka bill bhar do", "g1", fam="fam-gap"))
-    model([LLMReply(text="Main ye nahi kar sakti, dawai ki matra doctor hi badlenge.", tool_calls=[], model="fake")])
+    model([LLMReply(text="मैं ये नहीं कर सकती, दवाई की मात्रा डॉक्टर ही बदलेंगे।", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("dawai double kar do", "g2", fam="fam-gap"))  # a safety refusal is not a gap
-    model([LLMReply(text="", tool_calls=[ToolCall("x", "book_lab_test", {})], model="fake"), LLMReply(text="Abhi ye nahi ho payega.", tool_calls=[], model="fake")])
+    model([LLMReply(text="", tool_calls=[ToolCall("x", "book_lab_test", {})], model="fake"), LLMReply(text="अभी ये नहीं हो पाएगा।", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("ghar pe blood test book karo", "g3", fam="fam-gap"))
     rows = (await db.execute(select(CapabilityGap).where(CapabilityGap.family_id == "fam-gap"))).scalars().all()
     assert sorted(r.category for r in rows) == ["bills_payments", "lab_tests"]

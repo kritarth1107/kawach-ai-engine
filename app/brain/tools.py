@@ -161,6 +161,13 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     domain = a["domain"]
     subject = ctx.subject(a.get("about"))
     details = dict(a.get("details") or {})
+    if domain == "language":
+        from app.care import language
+
+        current = next((f for f in await store.facts(ctx.session, ctx.family_id, subject) if f.domain == "language" and f.status == "active"), None)
+        speech = language.merge(current.value if current else {}, {**details, "language": details.get("language") or a["name"]})
+        if speech.get("language"):
+            return await _save_language(ctx, subject, speech)
     if domain == "medicine":
         details["name"] = details.get("name") or a["name"]
         times = details.get("times") or []
@@ -547,7 +554,8 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
         quiet = await timing.quiet_reason(ctx.session, ctx.family_id, to, ctx.situation)
         if quiet:
             problems.append(quiet)
-    problems += guards.language_problems(text, ctx.profiles.get(to), who="they")
+    # Wrong script blocks the message; a few English words in it are only advice (never worth not passing it on).
+    problems += [x for x in guards.language_problems(text, ctx.profiles.get(to), who="they") if not x.startswith("do not mix scripts")]
     now = clock.ist()
     problems += guards.ungrounded(text, known="\n".join(ctx.known), fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
     return problems
@@ -1421,6 +1429,87 @@ async def voice_replies(ctx: TurnCtx, a: dict) -> dict:
     if not a.get("mode"):
         return await ctx.host.call("get_voice_preference", {}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
     return await ctx.host.call("set_voice_preference", {"mode": a["mode"]}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+
+
+@tool(
+    "language_preference",
+    "The language, dialect and script Saheli uses with a person. Use when someone tells you how they or their parent "
+    "speak ('Maa Marwari bolti hain', 'Papa ko Maithili mein bolo', 'amma speaks Tamil', 'English letters mein likho', "
+    "'Hindi mein likho'), or when a person clearly writes in a dialect that is not saved yet. language: hi, en, bn, mr, "
+    "ta, te, gu, kn, ml, pa, or, as, ur, ne, kok (or the name). dialect: Marwari, Mewari, Shekhawati, Haryanvi, Bhojpuri, "
+    "Maithili, Magahi, Angika, Awadhi, Bundeli, Bagheli, Chhattisgarhi, Braj, Malvi, Nimadi, Garhwali, Kumaoni, Pahari, "
+    "Dogri, Sadri, Varhadi, Malvani, Ahirani, Tulu, Kodava, Sylheti, Sambalpuri, Kathiawadi, or 'none'. script: 'native' "
+    "(the language's own script, the default) or 'roman' (only if they ask for English/Roman letters). Leave everything "
+    "out to read the current setting. Voice notes follow it too.",
+    {"language": {"type": "string"}, "dialect": {"type": "string"}, "script": {"type": "string", "enum": ["native", "roman"]}, "about": ABOUT},
+    [],
+)
+async def language_preference(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import language
+
+    if ctx.is_system:
+        raise ToolRefused("Only the family sets how Saheli speaks.")
+    subject = ctx.subject(a.get("about"))
+    if not ctx.is_caregiver and (not ctx.speaker_is_elder or subject != ctx.elder_id):
+        raise ToolRefused("You can choose this for yourself only; a caregiver can set it for others.")
+    facts = await store.facts(ctx.session, ctx.family_id, subject)
+    current = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
+    now = language.normalise(current.value if current else {})
+    if not any(a.get(k) for k in ("language", "dialect", "script")):
+        return {**now, "label": language.label(now)}
+    new = language.merge(now, a)
+    if not new.get("language"):
+        raise ToolRefused("I did not recognise that language or dialect; ask them which one.")
+    return await _save_language(ctx, subject, new)
+
+
+async def _save_language(ctx: TurnCtx, subject: str, speech: dict) -> dict:
+    """Care record + the backend (voice notes and voice-note transcription use it)."""
+    from app.care import language
+
+    w = await store.write_fact(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, domain="language", key="language:preferred", value=speech,
+        text=language.sentence(speech), source_kind=ctx.source_kind, source_ref=ctx.message_ref, stated_by=ctx.speaker.get("id"),
+        confidence=0.9 if ctx.speaker_is_elder else 1.0,
+    )
+    synced = await ctx.host.call("set_voice_preference", {"language": speech.get("language"), "dialect": speech.get("dialect") or "",
+                                                          "script": speech.get("script") or "native"},
+                                 family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    return {"result": w.result, **speech, "label": language.label(speech), "voice": bool(synced and synced.get("ok", True))}
+
+
+SETUP_ITEMS = [
+    ("naming", "what the family calls them and how Saheli should address them (naming address_as)"),
+    ("language", "the language they are most comfortable in, and any local bhasha / dialect (language_preference)"),
+    ("condition", "long-term health conditions, or 'none' (remember condition)"),
+    ("allergy", "allergies to food or medicine, or 'none' (remember allergy, name 'none' when there are none)"),
+    ("medicine", "daily medicines with dose, times and before/after food, or 'none' (remember medicine)"),
+    ("routine", "their day: wake-up, meals and sleep times, usual activities (remember routine)"),
+    ("doctor", "their regular doctor and hospital (remember doctor; optional)"),
+    ("contact", "an emergency contact besides the caregiver (remember contact; optional)"),
+    ("preference", "what they enjoy talking about and topics to avoid (remember preference; optional)"),
+]
+
+
+@tool(
+    "setup_progress",
+    "What is still missing from the person's care record for a complete setup (the same things the dashboard's "
+    "onboarding asks). Use when a caregiver wants to set up or finish setting up Saheli on WhatsApp ('setup karna hai', "
+    "'let's start', 'what else do you need?'), or when the care record is mostly empty. Then ask the missing items one at "
+    "a time, in that order, saving each answer (remember, language_preference, voice_replies) before the next question.",
+    {"about": ABOUT},
+    [],
+)
+async def setup_progress(ctx: TurnCtx, a: dict) -> dict:
+    if not ctx.is_caregiver and not ctx.speaker_is_elder:
+        raise ToolRefused("Only the family can set this up.")
+    subject = ctx.subject(a.get("about"))
+    facts = [f for f in await store.facts(ctx.session, ctx.family_id, subject) if f.status == "active"]
+    have = {f.domain for f in facts}
+    missing = [{"item": d, "ask_about": what} for d, what in SETUP_ITEMS if d not in have]
+    done = [d for d, _ in SETUP_ITEMS if d in have]
+    return {"complete": not [m for m in missing if "optional" not in m["ask_about"]], "missing": missing, "already_known": done,
+            "how": "One question at a time, short and warm, in their language and script. Save each answer before asking the next."}
 
 
 @tool(

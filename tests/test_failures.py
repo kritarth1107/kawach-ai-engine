@@ -66,7 +66,7 @@ async def test_model_down_after_a_save_keeps_it_and_says_so(db, at, model):
         ModelUnavailable(503, "down"),
     ])
     out = await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a2"))
-    assert "note kar li" in out.reply  # Hinglish, like she writes
+    assert "नोट कर ली" in out.reply  # she writes Hinglish: Hindi, in Devanagari
     assert [f for f in await store.facts(db, FAM, ELDER["id"]) if f.key == "diet:low_salt"]
     # The same message again (a retry) is a duplicate: answered from the stored reply, nothing redone.
     again = await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a2"))
@@ -84,13 +84,13 @@ async def test_backend_host_error_reaches_the_model_not_the_person(db, at, model
             return await super().call(tool, args, **kw)
 
     model([
-        LLMReply(text="", tool_calls=[ToolCall("c1", "send_message", {"to": SON["id"], "text": "Ankit, Mummy aapko yaad kar rahi hain."})], model="fake"),
-        LLMReply(text="Abhi Ankit tak sandesh nahi pahuncha, thodi der mein phir koshish karti hoon.", tool_calls=[], model="fake"),
+        LLMReply(text="", tool_calls=[ToolCall("c1", "send_message", {"to": SON["id"], "text": "अंकित, मम्मी आपको याद कर रही हैं।"})], model="fake"),
+        LLMReply(text="अभी अंकित तक संदेश नहीं पहुँचा, थोड़ी देर में फिर कोशिश करती हूँ।", tool_calls=[], model="fake"),
     ])
     out = await run_turn(db, DownHost(), _req("Ankit ko bolo phone kare", "a3"))
     failed = [a for a in out.actions if a["tool"] == "send_message"][0]
     assert not failed["ok"] and "backend 502" in failed["error"]
-    assert "nahi pahuncha" in out.reply
+    assert "नहीं पहुँचा" in out.reply
 
 
 async def test_unknown_tool_and_bad_args_do_not_crash(db, at, model):

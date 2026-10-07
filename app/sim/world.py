@@ -77,10 +77,18 @@ class SimHost:
             w.symptoms.append({"tool": tool, **args, "day": day})
             return {"ok": True}
         if tool == "get_voice_preference":
-            return {"mode": w.voice_modes.get(subject_id, "auto")}
+            return {"mode": w.voice_modes.get(subject_id, "auto"), **getattr(w, "speech", {}).get(subject_id, {})}
         if tool == "set_voice_preference":
-            w.voice_modes[subject_id] = args["mode"]
-            return {"ok": True, "mode": args["mode"]}
+            out = {"ok": True}
+            if "mode" in args:
+                w.voice_modes[subject_id] = args["mode"]
+                out["mode"] = args["mode"]
+            if any(k in args for k in ("language", "dialect", "script")):
+                if not hasattr(w, "speech"):
+                    w.speech = {}
+                w.speech[subject_id] = {k: args[k] for k in ("language", "dialect", "script") if k in args}
+                out.update(w.speech[subject_id])
+            return out
         if tool == "create_reminder":
             w.reminders.append(args)
             return {"ok": True, "reminderId": f"rem-{len(w.reminders)}"}

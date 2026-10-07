@@ -55,10 +55,10 @@ def similar(a: str, b: str) -> float:
 SCRIPTS = {
     "devanagari": (0x0900, 0x097F), "bengali": (0x0980, 0x09FF), "gurmukhi": (0x0A00, 0x0A7F), "gujarati": (0x0A80, 0x0AFF),
     "odia": (0x0B00, 0x0B7F), "tamil": (0x0B80, 0x0BFF), "telugu": (0x0C00, 0x0C7F), "kannada": (0x0C80, 0x0CFF),
-    "malayalam": (0x0D00, 0x0D7F),
+    "malayalam": (0x0D00, 0x0D7F), "arabic": (0x0600, 0x06FF),
 }
 SCRIPT_LANG = {"devanagari": "Hindi/Marathi", "bengali": "Bengali", "gurmukhi": "Punjabi", "gujarati": "Gujarati", "odia": "Odia",
-               "tamil": "Tamil", "telugu": "Telugu", "kannada": "Kannada", "malayalam": "Malayalam"}
+               "tamil": "Tamil", "telugu": "Telugu", "kannada": "Kannada", "malayalam": "Malayalam", "arabic": "Urdu"}
 
 # Common words of Indian languages written in Roman letters (Hinglish, Banglish, Roman Marathi/Odia/Telugu/Tamil/Punjabi).
 ROMAN_INDIC = set("""
@@ -134,31 +134,123 @@ def profile(texts: list[str]) -> dict | None:
     return {"script": script, "roman": romans.most_common(1)[0][0] if script == "latin" and romans else None}
 
 
-def describe(p: dict | None) -> str:
+def target(p: dict | None) -> str | None:
+    """The script a reply to this person must be in.
+
+    Saheli writes every Indian language in its own script, also when the person types it in Roman letters ("Hinglish
+    gets Hindi in Devanagari"). Roman letters only when they asked for that (saved script "roman"); English for English.
+    Returns a script name, "indic" (an Indian language typed in Roman letters whose language is not saved: any Indian
+    script, Devanagari for Hindi), "latin" (English, or Roman letters on request), or None (not known yet)."""
     if not p:
-        return "not known yet"
-    if p["script"] != "latin":
-        return f"{SCRIPT_LANG[p['script']]} in its own script"
-    if p["roman"] == "indic":
-        return "an Indian language in Roman letters (e.g. Hinglish); reply the same way"
-    if p["roman"] == "english":
+        return None
+    from app.care import language
+
+    saved = p.get("saved") or {}
+    if saved.get("script") == "roman":
+        return "latin"
+    by_saved = language.script_for(saved)
+    if by_saved:
+        return by_saved
+    if p.get("script") and p["script"] != "latin":
+        return p["script"]
+    if p.get("script") == "latin":
+        return "indic" if p.get("roman") == "indic" else ("latin" if p.get("roman") == "english" else None)
+    return None
+
+
+def describe(p: dict | None) -> str:
+    """How to write to this person, for the prompt."""
+    if not p:
+        return "not known yet: answer in the language and script of their message (an Indian language in its own script)"
+    from app.care import language
+
+    saved = p.get("saved") or {}
+    t = target(p)
+    dialect = ""
+    if saved.get("dialect"):
+        hello = language.greeting(saved)
+        dialect = (f"; speaks {language.label(saved)}: talk to them in that dialect the way people at home speak it"
+                   + (f" (greeting like '{hello}')" if hello else ""))
+    if t == "latin":
+        if saved.get("script") == "roman":
+            return f"{language.label(saved)}: in Roman letters, as they asked{dialect}"
         return "English"
-    return "Roman letters"
+    if t == "indic":
+        return "types an Indian language in Roman letters; reply in that language in its own script (Hindi in Devanagari), not in Roman letters"
+    if t:
+        lang = language.label(saved) if saved.get("language") else SCRIPT_LANG.get(t, t)
+        return f"{lang}, written in {t.capitalize()} script{dialect}"
+    return "not known yet"
+
+
+# Everyday English words that have a word in every Indian language. Only these count as mixing scripts: names,
+# medicines and brands (Telma, metformin, Volini), links and codes may stay as written.
+COMMON_ENGLISH = ENGLISH | set("""
+good morning evening night afternoon today tomorrow yesterday time medicine medicines tablet tablets doctor take taken
+please sorry okay done sure day week month food water walk sleep remind reminder call family health feel feeling better
+well nice great happy sad tired pain check reading order delivery come coming going home house now later soon after
+before again some any all every much many more little first next last right wrong yes don't can't let's i'm it's
+""".split())
+
+
+def latin_words(text: str) -> list[str]:
+    """Everyday English words written in Roman letters (lower case: a capitalised word is usually a name or brand)."""
+    out = []
+    for w in re.findall(r"\S+", text or ""):
+        core = w.strip(".,!?;:()'\"")
+        if core and core[0].islower() and core.lower() in COMMON_ENGLISH:
+            out.append(core)
+    return out
 
 
 def language_problems(text: str, p: dict | None, who: str = "they") -> list[str]:
     if not p or len(words(text)) < 4:
         return []
+    t = target(p)
     got = script_of(text)
-    if p["script"] != "latin":
-        if got != p["script"]:
-            return [f"{who} write in {SCRIPT_LANG[p['script']]} script; write to them in that script, not in {'English' if got == 'latin' else got}"]
+    if not t or not got:
         return []
-    if got and got != "latin":
-        return [f"{who} write in Roman letters; write in Roman letters too, not in {got} script"]
-    if p["roman"] == "indic" and roman_kind(text) == "english":
-        return [f"{who} write in an Indian language in Roman letters (Hinglish or similar); reply in that, not in English"]
+    saved = p.get("saved") or {}
+    if t == "latin":
+        if got != "latin":
+            return [f"{who} asked for Roman letters; write in Roman letters, not in {got} script" if saved.get("script") == "roman"
+                    else f"{who} write in English; reply in English, not in {got} script"]
+        if saved.get("script") == "roman" and roman_kind(text) == "english" and saved.get("language") not in (None, "en"):
+            return [f"{who} speak an Indian language (in Roman letters); reply in that language, not in English"]
+        return []
+    if got == "latin":
+        if t == "indic":
+            return [f"{who} write an Indian language in Roman letters; reply in that language in its own script (Hindi in Devanagari, "
+                    "Marathi in Devanagari, Bengali in Bengali script…), never in Roman letters or English"]
+        return [f"write to {('them' if who == 'they' else who)} in {t.capitalize()} script ({SCRIPT_LANG.get(t, t)}), not in Roman letters or English"]
+    if t != "indic" and got != t:
+        return [f"write to {('them' if who == 'they' else who)} in {t.capitalize()} script ({SCRIPT_LANG.get(t, t)}), not in {got} script"]
+    mixed = latin_words(text)
+    if len(mixed) >= 3:
+        return [f"do not mix scripts: write the English words ({', '.join(mixed[:4])}) in {got.capitalize()} script too "
+                "(numbers stay 0-9; a medicine or brand name may stay as written)"]
     return []
+
+
+def canned_key(p: dict | None) -> str:
+    """Which fixed line to use (acknowledgements, buttons): a script name, 'mr' for Marathi, 'indic' for Roman letters on
+    request, or 'english'. Tables fall back to English when they lack a key."""
+    t = target(p)
+    saved = (p or {}).get("saved") or {}
+    if t == "latin":
+        return "indic" if saved.get("script") == "roman" and saved.get("language") not in (None, "en") else "english"
+    if t in ("devanagari", "indic"):
+        return "mr" if saved.get("language") == "mr" else "devanagari"
+    return t or "english"
+
+
+def canned(p: dict | None, table: dict):
+    k = canned_key(p)
+    if k in table:
+        return table[k]
+    if k == "mr" and "devanagari" in table:
+        return table["devanagari"]
+    return table["english"]
 
 
 # ── grounding ──────────────────────────────────────────────────────────────────

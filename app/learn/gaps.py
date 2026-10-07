@@ -20,15 +20,16 @@ from app.learn.models import CapabilityGap
 CANNOT = re.compile(
     r"\b(i can'?t|i cannot|i am not able|i'?m not able|i don'?t have (a way|access)|not something i can|i'?m unable|"
     r"main (ye|yeh|woh|wo)? ?nahi kar sakti|nahi kar paungi|mere paas (ye|yeh|aisi)? ?(suvidha|tarika)|mujhse (ye|yeh) nahi ho)\b|"
-    r"मैं (यह|ये)? ?नहीं कर सकती",
+    # Replies are written in each language's own script now: the common Devanagari ways of saying it too.
+    r"(मैं )?(यह|ये|वो|वह)? ?(मैं )?नहीं कर (सकती|पाऊँगी|पाऊंगी)|मेरे पास (यह|ये|ऐसी)? ?(सुविधा|तरीका)|मुझसे (यह|ये) नहीं हो",
     re.I,
 )
-SAFETY_REFUSALS = re.compile(r"\b(dose|dawai|medicine|doctor (hi|will)|double|extra|secret|ignore)\b", re.I)  # deliberate refusals, not gaps
+SAFETY_REFUSALS = re.compile(r"\b(dose|dawai|medicine|doctor (hi|will)|double|extra|secret|ignore)\b|दवा|दवाई|खुराक|मात्रा|डॉक्टर ही|डबल", re.I)  # deliberate refusals, not gaps
 CATEGORIES = {
-    "bills_payments": r"\b(bill|electricity|bijli|recharge|pay|payment|upi|gas cylinder|rent|emi)\b",
+    "bills_payments": r"\b(bill|electricity|bijli|recharge|pay|payment|upi|gas cylinder|rent|emi)\b|बिल|बिजली|रिचार्ज|पेमेंट|किराया",
     "calls": r"\b(call|phone kar|video call|ring)\b",
     "doctor_booking": r"\b(appointment|book (a )?doctor|consult|teleconsult|clinic slot)\b",
-    "lab_tests": r"\b(lab|blood test|sample|home collection|test book|report download)\b",
+    "lab_tests": r"\b(lab|blood test|sample|home collection|test book|report download)\b|ब्लड टेस्ट|जाँच|जांच|लैब",
     "home_services": r"\b(plumber|electrician|maid|cook|cleaning|repair|carpenter|nurse|attendant|physio)\b",
     "medicine_info": r"\b(side effect|interaction|substitute|generic|what is this medicine)\b",
     "entertainment": r"\b(song|bhajan|music|play|news|cricket|movie|tv|serial|story)\b",

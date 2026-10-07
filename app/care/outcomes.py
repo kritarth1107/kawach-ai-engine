@@ -126,8 +126,10 @@ BUTTON_SETS = {
 
 def buttons(kind: str, key: str, profile: dict | None) -> list[dict]:
     """WhatsApp reply buttons for a question Saheli asks; ids carry the meaning so a tap needs no model."""
-    p = profile or {}
-    col = 3 if p.get("script") == "devanagari" else (2 if p.get("roman") == "indic" else 1)
+    from app.brain import guards
+
+    k = guards.canned_key(profile)
+    col = 3 if k in ("devanagari", "mr") else (2 if k == "indic" else 1)
     tag = "fb" if kind == "feedback" else "oc"
     return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": row[col][:20]} for row in BUTTON_SETS[kind]]
 
@@ -176,9 +178,10 @@ async def handle_button(session: AsyncSession, *, family_id: str, elder_id: str,
         await close_followups(session, family_id, key)
     else:
         return None
-    p = profile or {}
-    lang = "devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")
-    return THANKS[lang].get(code, THANKS[lang]["up"])
+    from app.brain import guards
+
+    table = guards.canned(profile, THANKS)
+    return table.get(code, table["up"])
 
 
 async def close_followups(session: AsyncSession, family_id: str, key: str) -> None:

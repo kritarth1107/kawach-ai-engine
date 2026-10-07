@@ -115,12 +115,18 @@ async def medicine_times(data: TurnData) -> dict[str, set[int]]:
 
 
 async def writing_profiles(session: AsyncSession, family_id: str, people: list[dict], data: TurnData | None = None) -> dict[str, dict]:
-    """How each person writes, from their last messages to Saheli."""
+    """How each person writes (their last messages to Saheli) plus their saved language, dialect and script (care record)."""
+    from app.care import language
+
     out = {}
     for p in people:
         recent = (await data.turns(p["id"]))[-16:] if data else await store.recent_turns(session, family_id, p["id"], limit=16)
         turns = [t for t in recent if t.role == "user"][-8:]
-        prof = guards.profile([t.text for t in turns])
+        prof = guards.profile([t.text for t in turns]) or {}
+        facts = await data.facts(p["id"]) if data else await store.facts(session, family_id, p["id"])
+        saved = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
+        if saved:
+            prof = {"script": prof.get("script"), "roman": prof.get("roman"), "saved": language.normalise(saved.value)}
         if prof:
             out[p["id"]] = prof
     return out
@@ -330,9 +336,7 @@ async def flood_reply(session: AsyncSession, req: TurnRequest) -> str | None:
         return "none"
     if count > burst + 1:
         return "🙏"
-    p = guards.profile([req.text]) or {}
-    key = "devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")
-    return PAUSE_NOTE[key]
+    return guards.canned(guards.profile([req.text]), PAUSE_NOTE)
 
 
 async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]:
@@ -393,22 +397,31 @@ WRITE_TOOLS = {
 }
 PARTIAL = {
     "devanagari": "मैंने आपकी बात नोट कर ली है 🙏 अभी पूरा जवाब देने में दिक्कत आ रही है, कुछ मिनट बाद फिर लिखिए।",
+    "mr": "तुमचं म्हणणं नोंदवून ठेवलं आहे 🙏 आत्ता पूर्ण उत्तर द्यायला अडचण येत आहे, काही मिनिटांनी पुन्हा लिहा.",
+    "bengali": "আপনার কথা লিখে রেখেছি 🙏 এখন পুরো উত্তর দিতে একটু অসুবিধা হচ্ছে, কয়েক মিনিট পরে আবার লিখুন।",
+    "tamil": "நீங்கள் சொன்னதைக் குறித்துக்கொண்டேன் 🙏 இப்போது முழு பதில் தர சிரமமாக உள்ளது, சில நிமிடங்கள் கழித்து மீண்டும் எழுதுங்கள்.",
+    "telugu": "మీరు చెప్పింది రాసుకున్నాను 🙏 ఇప్పుడు పూర్తి సమాధానం ఇవ్వడంలో ఇబ్బంది ఉంది, కొన్ని నిమిషాల తర్వాత మళ్ళీ రాయండి.",
+    "kannada": "ನೀವು ಹೇಳಿದ್ದನ್ನು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ 🙏 ಈಗ ಪೂರ್ತಿ ಉತ್ತರ ಕೊಡಲು ತೊಂದರೆಯಾಗುತ್ತಿದೆ, ಕೆಲವು ನಿಮಿಷಗಳ ನಂತರ ಮತ್ತೆ ಬರೆಯಿರಿ.",
+    "malayalam": "നിങ്ങൾ പറഞ്ഞത് കുറിച്ചുവെച്ചു 🙏 ഇപ്പോൾ മുഴുവൻ മറുപടി നൽകാൻ ബുദ്ധിമുട്ടുണ്ട്, കുറച്ച് മിനിറ്റ് കഴിഞ്ഞ് വീണ്ടും എഴുതൂ.",
+    "gujarati": "તમારી વાત નોંધી લીધી છે 🙏 હમણાં પૂરો જવાબ આપવામાં તકલીફ થાય છે, થોડી મિનિટ પછી ફરી લખજો.",
+    "gurmukhi": "ਮੈਂ ਤੁਹਾਡੀ ਗੱਲ ਨੋਟ ਕਰ ਲਈ ਹੈ 🙏 ਹੁਣੇ ਪੂਰਾ ਜਵਾਬ ਦੇਣ ਵਿੱਚ ਦਿੱਕਤ ਆ ਰਹੀ ਹੈ, ਕੁਝ ਮਿੰਟ ਬਾਅਦ ਫਿਰ ਲਿਖੋ।",
+    "odia": "ଆପଣଙ୍କ କଥା ଲେଖି ରଖିଛି 🙏 ଏବେ ପୂରା ଉତ୍ତର ଦେବାରେ ଅସୁବିଧା ହେଉଛି, କିଛି ମିନିଟ ପରେ ପୁଣି ଲେଖନ୍ତୁ।",
     "indic": "Maine aapki baat note kar li hai 🙏 Abhi poora jawab dene mein dikkat aa rahi hai, kuch minute baad phir likhiye.",
     "english": "I've noted what you told me 🙏 I'm having trouble answering fully right now; please write again in a few minutes.",
 }
 
 
-ACK = {"devanagari": "जी, ठीक है 🙏", "indic": "Ji, theek hai 🙏", "english": "Okay, noted 🙏"}
+ACK = {"devanagari": "जी, ठीक है 🙏", "mr": "हो, ठीक आहे 🙏", "indic": "Ji, theek hai 🙏", "english": "Okay, noted 🙏",
+       "bengali": "ঠিক আছে 🙏", "tamil": "சரி 🙏", "telugu": "సరే 🙏", "kannada": "ಸರಿ 🙏", "malayalam": "ശരി 🙏",
+       "gujarati": "ઠીક છે 🙏", "gurmukhi": "ਠੀਕ ਹੈ 🙏", "odia": "ଠିକ ଅଛି 🙏"}
 
 
 def ack_reply(p: dict | None) -> str:
-    p = p or {}
-    return ACK["devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")]
+    return guards.canned(p, ACK)
 
 
 def partial_reply(p: dict | None) -> str:
-    p = p or {}
-    return PARTIAL["devanagari" if p.get("script") == "devanagari" else ("indic" if p.get("roman") == "indic" else "english")]
+    return guards.canned(p, PARTIAL)
 
 
 async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
@@ -485,6 +498,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         cur = guards.profile([req.text])
         if cur and req.speaker["id"] not in profiles:
             profiles[req.speaker["id"]] = cur
+        elif cur and profiles[req.speaker["id"]].get("script") is None:  # saved language, first message seen now
+            profiles[req.speaker["id"]] = {**cur, "saved": profiles[req.speaker["id"]].get("saved")}
     dynamic += "\n\n" + writing_block(req, profiles)
     # Learned style from other families (only this situation's lessons and examples; under the fixed rules).
     from app.learn import playbook as learned
