@@ -109,6 +109,28 @@ async def admin_spend(days: int = 30) -> dict:
     return await llm_spend(days=days)
 
 
+@router.get("/models")
+async def admin_models() -> dict:
+    """Which models each role uses (first = primary, rest = fallbacks), their estimated prices, and today's caps."""
+    from app.llm import router as llm_router
+    from app.llm import spend
+    from app.llm.provider import llm_provider_label
+    from app.rag.embeddings import embedding_provider_label
+
+    roles = sorted(set(llm_router.DEFAULT_ROUTES) | llm_router.configured_roles())
+    configured = llm_router.configured_roles()
+    out = {}
+    for role in roles:
+        out[role] = {
+            "configured": role in configured,
+            "routes": [{"provider": r.provider, "model": r.model, "location": r.location,
+                        "priceInr": [round(x, 2) for x in spend.price_inr(r.model)]} for r in llm_router.routes_for(role)],
+        }
+    return {"llm": llm_provider_label(), "embeddings": embedding_provider_label(), "roles": out,
+            "today": round(await spend.spent_today(), 2), "softCap": spend.soft_cap(), "hardCap": spend.hard_cap(),
+            "usdInr": spend.USD_INR}
+
+
 @router.get("/metrics")
 async def admin_metrics(session: DB, days: int = 7) -> dict:
     from app.api.brain import agent_metrics

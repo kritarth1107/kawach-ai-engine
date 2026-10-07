@@ -123,3 +123,16 @@ async def test_conversation_and_care_record(db, monkeypatch):
     assert rec["facts"][0]["key"] == "med:metformin"
     exp = await admin.admin_export("f1", "u1", db)
     assert exp["careRecord"][0]["text"] == "Metformin 500" and exp["conversation"][0]["text"] == "dawai le li"
+
+
+async def test_models_lists_roles_with_prices(monkeypatch):
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.1-pro-preview"]}')
+    from app.llm import spend
+
+    spend.reset()
+    out = await admin.admin_models()
+    brain = out["roles"]["brain"]
+    assert brain["configured"] is True and brain["routes"][0]["model"] == "gemini-3.5-flash"
+    assert brain["routes"][0]["location"] == "asia-south1" and brain["routes"][0]["priceInr"][1] > 0
+    assert out["roles"]["worker"]["configured"] is False  # default routes still listed
+    assert out["softCap"] > 0 and out["hardCap"] >= out["softCap"] and out["usdInr"] > 0
