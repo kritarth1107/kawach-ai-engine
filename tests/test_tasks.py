@@ -196,3 +196,93 @@ async def test_code_claimed_without_a_number_is_not_believed(db, at, sessions):
     await db.refresh(t)
     assert "do not try" in h.agent.runs[0]["goal"]
     assert t.status == "failed" and "no code was sent" in h.told[-1]
+
+
+FOUND = {"logged_in": False, "needs_otp": False, "blocked": False, "problem": "", "deliverable": True, "eta": "12 minutes",
+         "items": [{"name": "Aashirvaad Atta 5kg", "price": "₹245", "available": True}]}
+
+
+async def test_order_looks_first_then_logs_in_after_go_ahead(db, at, sessions, monkeypatch):
+    """Founder's order of steps: find the product, price and delivery to their place without logging in; only after
+    the person's go-ahead log in (code to their phone), build the cart, confirm, place."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-08 20:00")
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [FOUND], "prepare": [OTP, CART]}), "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    browse = h.agent.runs[0]
+    assert browse["phase"] == "browse" and "without logging in" in browse["goal"] and "9000012345" not in browse["goal"]
+    assert t.status == "awaiting_confirm" and t.input_needed == "go"
+    assert "₹245" in h.told[-1] and "Nothing is ordered" in h.told[-1] and "phone ending 2345" in h.told[-1]
+    assert "waiting for go" in await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
+    assert (await runtime.provide_input(db, t, kind="go", value="haan", by=ELDER, by_is_elder=True)).startswith("going ahead")
+    await db.commit()
+    await h.tick()
+    prep = h.agent.runs[1]
+    assert prep["phase"] == "prepare" and "enter the mobile number 9000012345" in prep["goal"] and "Aashirvaad Atta 5kg ₹245" in prep["goal"]
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "needs_input" and t.input_needed == "otp" and "phone ending 2345" in h.told[-1]
+    assert await runtime.provide_input(db, t, kind="otp", value="4821", by=ELDER, by_is_elder=True) == "code received; continuing"
+    await db.commit()
+    await h.tick()
+    code_run = h.agent.runs[-1]["goal"]
+    assert "4821" in code_run and "enter the mobile number" not in code_run  # enter the code given; never ask for a new one
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+
+
+async def test_look_up_says_plainly_when_it_does_not_deliver(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-08 20:00")
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [{**FOUND, "items": [], "deliverable": False, "location_set": "Raipur 492001"}]}), "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "failed" and "does not deliver" in h.told[-1] and len(h.agent.runs) == 1
+
+
+async def test_already_logged_in_goes_straight_to_the_cart(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-08 20:00")
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [{**FOUND, "logged_in": True}], "prepare": [CART]}), "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "queued" and t.phase == "prepare" and h.told == []  # nothing to ask: no code needed
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and len(h.told) == 1
+
+
+async def test_ride_shows_fares_before_login_then_logs_in(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-08 20:00")
+    guest = {**FARES, "logged_in": False}
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [guest], "prepare": [OTP, FARES]}), "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="rapido", kind="ride", goal="Auto to the station",
+                             details={"pickup": "Home", "drop": "Raipur Railway Station"})
+    await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert h.agent.runs[0]["phase"] == "browse" and "without logging in" in h.agent.runs[0]["goal"]
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and "Auto ₹142" in h.told[-1] and "Nothing is booked" in h.told[-1]
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.input_needed == "otp" and "enter the mobile number 9000012345" in h.agent.runs[1]["goal"]
+
+
+async def test_ride_site_that_needs_login_for_fares_asks_to_go_ahead(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-08 20:00")
+    wall = {"logged_in": False, "needs_otp": False, "blocked": False, "problem": "login needed to view fares", "login_required": True}
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [wall]}), "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="ola", kind="ride", goal="Cab to the station",
+                             details={"pickup": "Home", "drop": "Raipur Railway Station"})
+    await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and "only after a login" in h.told[-1]

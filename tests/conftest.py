@@ -1,5 +1,6 @@
 import os
 
+os.environ.setdefault("TASK_BROWSE_FIRST", "off")  # older task tests start at the cart; the browse tests turn it on
 os.environ.setdefault("MEMORY_EMBEDDINGS", "off")  # tests never call Vertex; memory tests inject a fake embedder
 from datetime import datetime, timezone
 

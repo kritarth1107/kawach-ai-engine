@@ -27,7 +27,7 @@ SKILLS: dict[str, dict] = {
         "label": "Swiggy Instamart",
         "kind": "grocery",
         "start_url": "https://www.swiggy.com/instamart",
-        "hints": "Quick-commerce groceries on swiggy.com/instamart. Set or confirm the delivery location first; availability depends on the store for that pincode. Search each item, check brand and pack size, use '+' to raise quantity. The cart shows item total, handling fee, delivery fee and To Pay. Pay on Delivery is offered for many orders below a value limit.",
+        "hints": "Quick-commerce groceries on swiggy.com/instamart. Set the delivery location first: click the location at the top, type the area and pick the first suggestion; availability depends on the store for that pincode. Then use the search bar at the top of the Instamart page (not Swiggy food search); results are cards with name, pack size and price. Check brand and pack size, use '+' to raise quantity. The cart shows item total, handling fee, delivery fee and To Pay. Pay on Delivery is offered for many orders below a value limit.",
     },
     "zepto": {
         "label": "Zepto",
@@ -39,7 +39,7 @@ SKILLS: dict[str, dict] = {
         "label": "Blinkit",
         "kind": "grocery",
         "start_url": "https://blinkit.com/",
-        "hints": "Quick-commerce groceries. Detect or set location first. Search, check pack size, 'ADD' then '+'. The cart opens as a side panel; 'Proceed' leads to address and payment. Cash on delivery appears as 'Cash' or 'Pay on delivery' when allowed. Login is phone + OTP.",
+        "hints": "Quick-commerce groceries. Set the location first: in the 'search delivery location' box type the area and pick the first suggestion (search results stay grey placeholders until a location is set; if they do, set the location again rather than reloading). Then search from the top bar; each product card shows the name, the pack size (e.g. 300 ml, 6 x 300 ml) and the price: report the name with its pack size. 'ADD' then '+'. The cart opens as a side panel; 'Proceed' leads to address and payment. Cash on delivery appears as 'Cash' or 'Pay on delivery' when allowed. Login is phone + OTP.",
     },
     "zomato": {
         "label": "Zomato",
@@ -75,13 +75,13 @@ SKILLS: dict[str, dict] = {
         "label": "Ola",
         "kind": "ride",
         "start_url": "https://book.olacabs.com/",
-        "hints": "Ride booking on book.olacabs.com. Set pickup and drop, choose category (Auto, Mini, Prime), payment Cash. 'Book' requests the ride. Cancel from the ride screen; report any cancellation fee before confirming.",
+        "hints": "Ride booking on book.olacabs.com. It asks for a login (phone + OTP) before it shows fares. Set pickup and drop, choose category (Auto, Mini, Prime), payment Cash. 'Book' requests the ride. Cancel from the ride screen; report any cancellation fee before confirming.",
     },
     "rapido": {
         "label": "Rapido",
         "kind": "ride",
         "start_url": "https://www.rapido.bike/",
-        "hints": "Bike taxi, auto and cab. The website may only offer app links; if booking is not possible on the web, stop and report web_booking_unavailable=true.",
+        "hints": "Bike taxi, auto and cab on rapido.bike. Enter pickup and drop to see fare ranges for Bike, Auto, Cab Economy and Cab Premium without a login; booking needs a login (phone + OTP). If booking is not possible on the web, stop and report web_booking_unavailable=true.",
     },
 }
 
@@ -110,7 +110,10 @@ def schema_for(kind: str, phase: str) -> dict:
         }
     else:
         extra = {
-            "items": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "qty": {"type": "integer"}, "price": {"type": "string"}, "available": {"type": "boolean"}}}},
+            "items": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "Product name with brand and pack size as the site shows it"},
+                "qty": {"type": "integer", "description": "Number of packs (strips, bottles, cans), not tablets"},
+                "price": {"type": "string"}, "available": {"type": "boolean"}}}},
             "alternatives": {"type": "array", "items": {"type": "string"}},
             "total": {"type": "string"},
             "fees": {"type": "string"},
@@ -124,5 +127,12 @@ def schema_for(kind: str, phase: str) -> dict:
             "cancelled": {"type": "boolean"},
             "cancel_fee": {"type": "string"},
             "status": {"type": "string"},
+        }
+    if phase == "browse":
+        # Looking before logging in: what is there, at what price, and whether it reaches the family.
+        extra |= {
+            "deliverable": {"type": "boolean"},
+            "location_set": {"type": "string", "description": "The delivery location the site shows after setting it"},
+            "login_required": {"type": "boolean", "description": "The site would not show this without a login"},
         }
     return {"type": "object", "properties": {**base, **extra}, "required": ["logged_in", "needs_otp", "blocked", "problem"]}

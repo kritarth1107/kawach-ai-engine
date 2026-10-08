@@ -760,11 +760,12 @@ async def _task(ctx: TurnCtx, task_id: str):
 
 @tool(
     "start_task",
-    "Start an order or a ride on one of the family's own accounts. It runs in the background: it builds the "
-    "cart (or finds ride fares) and comes back to you to confirm before anything is placed, and it may ask for a "
-    "login code. Cash on delivery only. Allergies and the never-order list are checked first. Tell the person "
-    "you are on it; you will get a task update when it needs them. For 'the usual' or 'same as last time', look "
-    "at past_orders first and use the exact item names and service from there.",
+    "Start an order or a ride on one of the family's own accounts. It runs in the background: an order first looks "
+    "the item up without logging in (price, stock, whether it delivers to their place) and comes back to you; after "
+    "their go-ahead it logs in (a login code may come to their phone), builds the cart and comes back to confirm "
+    "before anything is placed. Rides find fares and come back to choose. Cash on delivery only. Allergies and the "
+    "never-order list are checked first. Tell the person you are on it; you will get a task update when it needs "
+    "them. For 'the usual' or 'same as last time', look at past_orders first and use the exact item names and service from there.",
     {
         "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"]},
         "kind": {"type": "string", "enum": ["order", "ride"]},
@@ -810,12 +811,13 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "task_input",
-    "Give a running task what it is waiting for: the login code (otp), the person's confirm of the cart or "
-    "fare (confirm: yes/no), approval of a cancellation fee (fee: yes/no), which ride option to book (choice), or "
-    "which alternative to get for an item that is out of stock (swap: the alternative's name, or 'no' to drop it).",
+    "Give a running task what it is waiting for: their go-ahead to log in and build the cart after hearing the "
+    "price (go: yes/no), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
+    "of a cancellation fee (fee: yes/no), which ride option to book (choice), or which alternative to get for an "
+    "item that is out of stock (swap: the alternative's name, or 'no' to drop it).",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["otp", "confirm", "fee", "choice", "swap"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap"]},
         "value": {"type": "string"},
     },
     ["task_id", "kind", "value"],

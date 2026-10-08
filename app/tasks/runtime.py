@@ -1,4 +1,7 @@
-"""Task runtime: carries each order or ride through prepare → confirm → place → done, durably.
+"""Task runtime: carries each order or ride through (browse →) prepare → confirm → place → done, durably.
+
+A browser order first looks without logging in (browse): is it there, at what price, does it reach the family's
+place. Only after the person's go-ahead does it log in (a code may come to their phone) and build the cart.
 
 Every minute a tick advances running tasks: it polls the browser agent, reads its structured report,
 and moves the task on. Anything the family must know or decide (an OTP, the cart to confirm, the
@@ -42,8 +45,17 @@ rupees = guard.rupees
 IDLE_CLOSE = timedelta(minutes=5)  # a browser waiting on a person longer than this is stopped (login stays in the profile)
 
 
+def browse_first(task: Task) -> bool:
+    """Look before logging in: browser orders that have not looked yet (TASK_BROWSE_FIRST=off turns it off)."""
+    return (os.getenv("TASK_BROWSE_FIRST", "on") == "on" and task.kind in ("order", "ride") and task.phase == "prepare"
+            and not (task.details or {}).get("browsed"))
+
+
+YES_WORDS = ("yes", "confirm", "true", "haan", "ha", "han", "ok", "okay", "theek hai", "go", "go ahead", "kar do", "karo")
+
+
 def task_max_cost() -> float:
-    return float(os.getenv("TASK_MAX_COST_INR", "80"))
+    return float(os.getenv("TASK_MAX_COST_INR", "120"))  # a look-up, login, cart and placing (~80 steps) fit
 
 
 MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
@@ -104,7 +116,7 @@ def describe(task: Task) -> str:
     if task.input_needed:
         bits.append(f"waiting for {task.input_needed}")
     if r.get("items"):
-        bits.append("cart: " + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
+        bits.append(("found (not in a cart yet): " if task.phase == "browse" else "cart: ") + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
     if r.get("alternatives"):
         bits.append("alternatives: " + "; ".join(map(str, r["alternatives"][:5])))
     if r.get("options"):
@@ -154,11 +166,15 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     learned, skill_ids = await _skills_and_notes(session, task.service, task.phase)
     task.details = {**(task.details or {}), "skills_used": skill_ids}
     profile_id = None
+    got = None
     if not task.agent_session:
         got = await profile_for(task)
         # The host answers {profileId, loginPhone}; older callers (bench, tests) give just the profile id.
         profile_id = got.get("profileId") if isinstance(got, dict) else got
         await sandbox.bind_profile(session, task.family_id, task.service, profile_id)  # raises if it belongs to someone else
+    if task.phase == "prepare" and not extra:  # with a code to enter (extra), it must not ask for a new one
+        if got is None:
+            got = await profile_for(task)
         if isinstance(got, dict):
             phone = "".join(c for c in str(got.get("loginPhone") or "") if c.isdigit())[-10:]
             # Only the last 4 digits are kept on the task (for "the code went to the phone ending 1234").
@@ -169,6 +185,13 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
                 "There is no mobile number for this account: if the site asks you to log in, do not try. Stop and report "
                 "logged_in=false, needs_otp=false and problem='login needed'."
             )
+    if task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order":
+        seen = [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
+        if seen:
+            goal += "\nYou already found: " + "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in seen[:8]) + ". Use the same products."
+    if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
+        phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
+        task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
     run = await agent.run(
         goal=goal,
         hints=spec.hints(task.service, learned),
@@ -224,17 +247,27 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
     value = (value or "").strip()
     d = task.details or {}
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
-    if kind in ("confirm", "choice", "swap") and value.lower() in NO_WORDS and not placed:
+    if kind in ("confirm", "choice", "swap", "go") and value.lower() in NO_WORDS and not placed:
         task.status, task.cancel_requested = "cancelled", True
         note(task, f"declined by {by}")
         metrics.on_milestone(task, "cancelled")
         return "declined; nothing was placed"
     if task.input_needed and kind != task.input_needed:
         return f"the task is waiting for {task.input_needed}, not {kind}; ask for that"
+    if kind == "go":
+        if task.phase != "browse" or task.status != "awaiting_confirm":
+            return "nothing to go ahead with right now"
+        if value.lower() not in YES_WORDS:
+            return "say yes to log in and build the cart, or no to drop it"
+        task.phase, task.status, task.input_needed = "prepare", "queued", None
+        task.deadline_at = clock.now() + TASK_LIFETIME
+        note(task, f"go-ahead from {by}")
+        return ("going ahead: logging in and building the cart (NOT ordered; a login code may come to their phone; "
+                "you will get a task update)")
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
             return "nothing to confirm right now"
-        if value.lower() not in ("yes", "confirm", "true", "haan", "ha", "ok", "okay", "theek hai"):
+        if value.lower() not in YES_WORDS:
             return "say yes to place it, or no to drop it"
         fp = d.get("cart_fp")
         if not fp:
@@ -288,7 +321,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
         if not v.ok:
             return "cannot get that: " + "; ".join(v.block)
-        task.details = {**d, "items": new_items, "alternatives": None, "channel": None, "connector_card": None, "cart_fp": None}
+        task.details = {**d, "items": new_items, "alternatives": None, "channel": None, "connector_card": None, "cart_fp": None,
+                        "browsed": d.get("browsed") or task.phase == "browse"}
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"swapped to {pick['name']} by {by}")
@@ -353,6 +387,10 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     d = task.details or {}
     limits = Limits.from_dict(d.get("limits"))
     spec = specialist_for(task.service)
+    if task.phase == "browse":
+        if out.get("blocked"):
+            return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
+        return _browse_outcome(task, out)
     login = d.get("login")
     if out.get("needs_otp") and login == "none":
         # It had no number to log in with, so no code can have been sent (live 2026-10-08: "sent to phone", field empty).
@@ -431,6 +469,56 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             return "cancelled", "Cancelled on the service. Tell the person."
         return "failed", f"Could not cancel ({out.get('problem') or 'unknown'}); tell the caregiver to cancel from the app."
     return "failed", "Unexpected state."
+
+
+def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
+    """What the look-up found (no login yet): not delivered there, not found, or found → go-ahead to log in."""
+    d = task.details or {}
+    label = SKILLS[task.service]["label"]
+    place = (d.get("limits") or {}).get("place") or {}
+    where = place.get("nickname") or place.get("pincode") or "their place"
+    task.details = {**d, "browsed": True}
+    login = d.get("login")
+    code_to = f"the phone ending {login}" if login and login != "none" else "the family phone"
+    if out.get("deliverable") is False:
+        return "failed", (f"{label} does not deliver to {where} ({out.get('location_set') or out.get('problem') or 'not serviceable'}); "
+                          "nothing was ordered. Offer another service.")
+    if task.kind == "ride":
+        opts = [o for o in (out.get("options") or []) if o.get("type")]
+        if opts and not out.get("logged_in"):
+            task.input_needed = "go"
+            fares = "; ".join(f"{o.get('type')} {o.get('fare') or ''}".strip() for o in opts[:6])
+            return "awaiting_confirm", (f"Fares on {label} (before login, may change a little): {fares}. Nothing is booked. To book, {label} "
+                                        f"needs a login: a code will come to {code_to}. Ask which option they want and whether to go ahead "
+                                        "(task_input go); after the login the fresh fares come back to choose from.")
+        if opts or out.get("logged_in"):
+            task.phase = "prepare"  # logged in already: get the fares to choose from straight away
+            return "queued", ""
+    found = [i for i in (out.get("items") or []) if i.get("name") and i.get("available") is not False]
+    if task.kind == "ride" and not out.get("login_required"):
+        return "failed", f"No ride options came up on {label} ({out.get('problem') or 'unknown'}); nothing was booked. Offer another service."
+    if not found and out.get("login_required"):
+        # The site shows nothing useful without a login: the go-ahead is to log in and look.
+        task.input_needed = "go"
+        return "awaiting_confirm", (f"{label} shows prices only after a login; nothing is ordered. To look and order, a login code will "
+                                    f"come to {code_to}. Ask whether to go ahead (task_input go).")
+    if not found:
+        alts = guard.alternatives(out.get("alternatives"))[:4]
+        if alts and d.get("agent") != "pharmacy":
+            task.details = {**task.details, "alternatives": alts}
+            task.input_needed = "swap"
+            listed = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in alts)
+            return "needs_input", f"Not on {label} ({out.get('problem') or 'not found'}). It has: {listed}. Ask which one to get instead, or whether to drop it."
+        return "failed", f"Could not find it on {label} ({out.get('problem') or 'not found'}); nothing was ordered. Offer another service."
+    seen = "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in found[:6])
+    eta = f", about {out['eta']}" if out.get("eta") else ""
+    if out.get("logged_in"):
+        # Already logged in: no code needed, so build the cart straight away; the cart comes back for a confirm.
+        task.phase = "prepare"
+        return "queued", ""
+    task.input_needed = "go"
+    return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet. To order, {label} needs a "
+                                f"login: a code will come to {code_to}. Ask whether to go ahead (task_input go).")
 
 
 def _confirm_still_valid(task: Task) -> bool:
@@ -654,6 +742,9 @@ async def tick(
                         note(task, f"cost ceiling ₹{task_max_cost():.0f} reached")
                         metrics.on_milestone(task, "failed")
                     else:
+                        if browse_first(task):
+                            task.phase = "browse"
+                            note(task, "looking it up before any login")
                         extra = f"Enter this code where the login asks for it: {task.details.get('otp')}. Then continue with the task." if task.phase == "otp" else ""
                         if task.phase == "otp":
                             task.phase = "prepare"
@@ -671,7 +762,7 @@ async def tick(
                         await channels.record(session, task.service, "browser", run.status == "finished" and not (run.output or {}).get("blocked"), run.error)
                         out = run.output or {}
                         retries = int((task.details or {}).get("retries", 0))
-                        if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("prepare", "otp"):
+                        if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("browse", "prepare", "otp"):
                             # A crash or timeout of the browser run, not an answer from the store: try once more.
                             task.details = {**(task.details or {}), "retries": retries + 1}
                             task.status = "queued"

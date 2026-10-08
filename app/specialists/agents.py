@@ -59,6 +59,9 @@ class Specialist:
         label = SKILLS[task.service]["label"]
         if task.kind == "ride":
             what = f"from {d.get('pickup')} to {d.get('drop')}" + (f", vehicle {d['vehicle']}" if d.get("vehicle") else "")
+            if task.phase == "browse":
+                return (f"On {label}, without logging in and without booking: enter the pickup and drop {what} and report the ride options "
+                        f"with fares and pickup times. If the site needs a login before it shows fares, stop and report login_required=true.")
             if task.phase == "prepare":
                 return f"On {label}, find the ride options {what} with cash payment. Do NOT book. Report the options with fares, surge, and whether you are logged in."
             if task.phase == "place":
@@ -71,7 +74,18 @@ class Specialist:
         place = (d.get("limits") or {}).get("place") or {}
         where = (f" Deliver only to the saved address '{place.get('nickname')}' ({place.get('pincode')}); if it is not in the account, stop and report it."
                  if place.get("pincode") else (f" Deliver to the saved address near {d['area']}." if d.get("area") else " Deliver to the account's saved home address."))
+        if task.phase == "browse":
+            spot = (f"{place.get('full')} (pincode {place.get('pincode')})" if place.get("full") else
+                    f"pincode {place.get('pincode')}" if place.get("pincode") else d.get("area") or "the family's area")
+            return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker, then "
+                    f"search for: {items}. For each item report the best match (exact name and pack size), its price and whether it "
+                    f"is in stock. Report deliverable (does {label} deliver to this location) and the eta if shown. If an item is "
+                    f"missing, list up to 3 alternatives with prices. Do not add to the cart, do not open checkout, do not log in.")
         if task.phase == "prepare":
+            if place.get("full"):
+                # First order on a freshly logged-in account: the family's own address from Kavach may be added once.
+                where = (f" Deliver to the saved address '{place.get('nickname')}' ({place.get('pincode')}). If the account has no address "
+                         f"with that pincode, add this one and use it: {place.get('full')} (use the account holder's name and number if asked).")
             return (f"On {label}, put exactly these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
                     f"Cash/Pay on Delivery is offered. Do NOT place the order. Report items with prices, total with fees, cod_available, address_used, eta.")
         if task.phase == "place":

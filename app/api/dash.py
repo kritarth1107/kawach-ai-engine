@@ -220,7 +220,7 @@ async def _task(session: AsyncSession, family_id: str, task_id: uuid.UUID) -> Ta
 
 class TaskInputIn(BaseModel):
     actor: Actor
-    kind: str = Field(pattern="^(otp|confirm|fee|choice)$")
+    kind: str = Field(pattern="^(go|otp|confirm|fee|choice)$")
     value: str = Field(min_length=1, max_length=200)
 
 
