@@ -596,6 +596,17 @@ async def feedback_add(family_id: str, elder_id: str, body: FeedbackIn, session:
     return {"ok": True}
 
 
+@router.get("/{family_id}/{elder_id}/speech")
+async def speech_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """How this person speaks, from the care record (language, dialect, script); {} when not known. The backend reads it
+    when its own copy is empty, so reminders and voice notes follow what Saheli already knows."""
+    from app.care import language
+
+    facts = await store.facts(session, family_id, elder_id)
+    row = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
+    return language.normalise(row.value) if row else {}
+
+
 @router.get("/{family_id}/{elder_id}/consent")
 async def consent_view(family_id: str, elder_id: str, session: DB) -> dict:
     from app.care import outcomes

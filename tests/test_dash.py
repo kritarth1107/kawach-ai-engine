@@ -107,3 +107,11 @@ async def test_home_needs_refill_and_appointment_and_views(client, at):
     assert (await client.get(f"/v2/dash/{FAM}/{ELDER}/spending?month=2026-13")).status_code == 400
     card = (await client.get(f"/v2/dash/{FAM}/{ELDER}/emergency")).json()
     assert card["allergies"][0]["allergen"] == "milk"
+
+
+async def test_speech_view(client, at):
+    at("2026-10-02 09:00")
+    assert (await client.get(f"/v2/dash/{FAM}/{ELDER}/speech")).json() == {}
+    body = {"actor": ACTOR, "domain": "language", "name": "preferred", "details": {"language": "hi", "dialect": "mwr"}, "sentence": "Speaks Marwari"}
+    assert (await client.post(f"/v2/dash/{FAM}/{ELDER}/facts", json=body)).status_code == 200
+    assert (await client.get(f"/v2/dash/{FAM}/{ELDER}/speech")).json() == {"dialect": "mwr", "language": "hi"}
