@@ -122,3 +122,35 @@ async def test_task_update_reaches_elder_before_she_answers(db, at, monkeypatch)
         assert loop.detail["wakes"] == 1
     finally:
         router._providers.pop("fake", None)
+
+
+class PlainTextBrain:
+    """Scripted brain that answers a task update as a plain reply (no send_message), as Gemini did live."""
+
+    async def complete(self, route, *, messages, **kw):
+        text = messages[-1]["content"][0]["text"] if messages[-1]["role"] == "user" else ""
+        if "[Task update]" in text:
+            return LLMReply(text="Kamla ji, Blinkit par Diet Coke ₹50 mein mil rahi hai. Order karun?", tool_calls=[], model="fake")
+        return LLMReply(text="none", tool_calls=[], model="fake")
+
+
+async def test_task_update_written_as_plain_reply_still_reaches_the_asker(db, at, monkeypatch):
+    """Live 2026-10-08 21:41: the brain wrote the price and go-ahead question as its final reply, which on a system turn
+    goes to no one. The update is now delivered to the person who asked."""
+    router.register_provider("fake", PlainTextBrain())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+        at("2026-10-08 21:41")
+        await store.save_roster(db, FAM, ELDER, [ELDER, DAUGHTER])
+        await db.commit()
+        host = SimHost()
+        await wake.system_turn(sessions, host, FAM, "[Task update] [t-2] Blinkit order: Diet Coke, waiting for go.", "task:p1", deliver_to=ELDER["id"])
+        assert [m["text"] for m in host.world.sent] == ["Kamla ji, Blinkit par Diet Coke ₹50 mein mil rahi hai. Order karun?"]
+        assert (await store.recent_turns(db, FAM, ELDER["id"]))[-1].meta["fallback_delivery"] == "task:p1"
+        # a wake-up (no deliver_to) still sends nothing on its own
+        await wake.system_turn(sessions, host, FAM, "[Task update] [t-3] Blinkit order: Diet Coke, waiting for go.", "task:p2")
+        assert len(host.world.sent) == 1
+    finally:
+        router._providers.pop("fake", None)

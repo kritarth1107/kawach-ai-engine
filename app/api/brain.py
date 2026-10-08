@@ -184,7 +184,8 @@ async def tasks_job() -> dict:
 
     async def notify(family_id: str, requested_by: str, prompt: str) -> None:
         try:
-            await system_turn(SessionLocal, host_for(family_id), family_id, f"{prompt} (Requested by {requested_by}.)", f"task:{_uuid.uuid4().hex[:12]}")
+            await system_turn(SessionLocal, host_for(family_id), family_id, f"{prompt} (Requested by {requested_by}.)", f"task:{_uuid.uuid4().hex[:12]}",
+                              deliver_to=requested_by)
         except Exception:  # noqa: BLE001
             logger.exception("task notify failed family=%s", family_id)
 

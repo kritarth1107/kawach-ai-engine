@@ -103,18 +103,40 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     )
 
 
-async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str) -> None:
-    """Let the brain act on something that happened without a person writing (a due loop, a task update)."""
+async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None) -> None:
+    """Let the brain act on something that happened without a person writing (a due loop, a task update).
+
+    deliver_to: the person this update is for (who asked for the order or ride). If the brain wrote its message as the
+    final reply instead of sending it with send_message (that reply goes to no one), it is sent to them here, so an
+    update can never vanish (live 2026-10-08 21:41: the Blinkit price and go-ahead question reached no one)."""
     async with sessions() as session:
         roster = await store.roster(session, family_id)
     if not roster:
         logger.warning("system turn skipped, no roster family=%s", family_id)
         return
     async with sessions() as session:
-        await run_turn(
+        result = await run_turn(
             session, host,
             TurnRequest(family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt, message_ref=ref, channel="scheduler"),
         )
+    text = (result.reply or "").strip()
+    known = {m.get("id") for m in [roster.elder, *roster.members]}
+    sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
+    if not deliver_to or deliver_to not in known or sent or result.duplicate or not text or text.lower().strip(" .\"'") == "none":
+        return
+    if any(w in text for w in ("task_input", "task_id", "[Task", "send_message")):
+        logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
+        return
+    try:
+        res = await host.call("send_whatsapp", {"to": deliver_to, "text": text}, family_id=family_id.removeprefix("shadow:"),
+                              subject_id=roster.elder["id"], actor_id="saheli")
+        async with sessions() as session:
+            await store.add_turn(session, family_id=family_id, thread_id=deliver_to, role="assistant", text=text,
+                                 meta={"proactive": True, "delivered": res.get("delivered"), "fallback_delivery": ref})
+            await session.commit()
+        logger.warning("system turn reply delivered by fallback family=%s ref=%s", family_id, ref)
+    except Exception:  # noqa: BLE001
+        logger.exception("fallback delivery failed family=%s ref=%s", family_id, ref)
 
 
 async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolHost], *, limit: int = 50) -> dict:
