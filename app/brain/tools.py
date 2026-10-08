@@ -716,6 +716,32 @@ async def lab_trend(ctx: TurnCtx, a: dict) -> dict:
     )
 
 
+@tool(
+    "health_record",
+    "Act on a health record (a photo or PDF of a report or prescription) that Saheli read and is waiting for an answer "
+    "(today's events say 'health_record id …'). Nothing from it is saved until they choose. choice: add_medicines (save it, "
+    "remember it and add its new medicines to the reminders), keep_record (save and remember, no reminders), file_only (keep "
+    "only the file), delete, mine (the name on it is theirs after all), or fix (correct what was read, e.g. 'Shelcal is 500' or "
+    "'Hb is 9.8'; then read the corrected lines back and ask again). Use the id from the events.",
+    {
+        "id": {"type": "string"},
+        "choice": {"type": "string", "enum": ["add_medicines", "keep_record", "file_only", "delete", "mine", "fix"]},
+        "corrections": {"type": "array", "items": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "The medicine or test as it was read"},
+            "value": {"type": "string", "description": "The right value, strength or dose"},
+            "times": {"type": "array", "items": {"type": "string"}, "description": "Dose times HH:MM, for a medicine"},
+            "remove": {"type": "boolean", "description": "Drop this line (it was misread or is not on the paper)"},
+        }, "required": ["name"]}},
+    },
+    ["id", "choice"],
+)
+async def health_record(ctx: TurnCtx, a: dict) -> dict:
+    return await ctx.host.call(
+        "record_review", {"document_id": a["id"], "choice": a["choice"], "corrections": a.get("corrections") or []},
+        family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+    )
+
+
 # ── tasks: orders and rides, carried through by the task runtime ────────────────
 
 _agent = None

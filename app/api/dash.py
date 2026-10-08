@@ -158,6 +158,42 @@ class StopIn(BaseModel):
     reason: str = "removed by caregiver"
 
 
+class RecordRememberIn(BaseModel):
+    actor: Actor
+    document_id: str = Field(min_length=3, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    date: str | None = Field(default=None, max_length=10)
+    points: list[str] = Field(default_factory=list, max_length=8)
+
+
+@router.post("/{family_id}/{elder_id}/records/remember")
+async def record_remember(family_id: str, elder_id: str, body: RecordRememberIn, session: DB) -> dict:
+    """A health record the person chose to have Saheli remember (after reviewing what was read)."""
+    from app.care import records
+
+    out = await records.remember(session, family_id, elder_id, document_id=body.document_id, title=body.title, when=body.date,
+                                 points=body.points, actor_id=body.actor.id)
+    await session.commit()
+    return out
+
+
+class RecordForgetIn(BaseModel):
+    actor: Actor
+    document_id: str = Field(min_length=3, max_length=64)
+    memory_document_id: str | None = Field(default=None, max_length=64)
+
+
+@router.post("/{family_id}/{elder_id}/records/forget")
+async def record_forget(family_id: str, elder_id: str, body: RecordForgetIn, session: DB) -> dict:
+    """A deleted record (or someone else's): Saheli forgets everything she kept from it."""
+    from app.care import records
+
+    out = await records.forget(session, family_id, elder_id, document_id=body.document_id, memory_document_id=body.memory_document_id,
+                               actor_id=body.actor.id)
+    await session.commit()
+    return out
+
+
 @router.post("/{family_id}/{elder_id}/facts/stop")
 async def stop_fact(family_id: str, elder_id: str, body: StopIn, session: DB) -> dict:
     ctx = _ctx(session, family_id, elder_id, body.actor)

@@ -309,7 +309,19 @@ async def daily_job() -> dict:
             )
             opened += 1
         await session.commit()
-    return {"refills": opened}  # patterns and baselines are learned in the nightly dream (app/care/dream.py)
+    ended = 0
+    try:
+        from app.care import records
+
+        def host_for(fid: str):
+            return ShadowHost() if fid.startswith("shadow:") else LiveHost()
+
+        async with SessionLocal() as session:
+            ended = await records.end_finished_courses(session, host_for, clock.ist_day())
+            await session.commit()
+    except Exception:  # noqa: BLE001 — refills are already saved; a course check failing must not undo them
+        logger.exception("end finished courses failed")
+    return {"refills": opened, "courses_ended": ended}  # patterns and baselines are learned in the nightly dream (app/care/dream.py)
 
 
 async def _plan_checkins() -> dict:

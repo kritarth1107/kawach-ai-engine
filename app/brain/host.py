@@ -13,6 +13,7 @@ from app.agents.tool_client import execute_backend_tool
 
 # Backend tools that change something in the world or in the family's records.
 WRITE_TOOLS = {
+    "record_review",
     "connector_place",
     "set_voice_preference",
     "sync_medicine_schedule",

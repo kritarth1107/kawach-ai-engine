@@ -36,6 +36,7 @@ IMPORTANCE = {
     "outcome": 1.0, "alert_whatsapp": 1.0, "vital": 0.8, "symptom": 0.8, "dose_missed": 0.6, "dose_refused": 0.6,
     "fact_superseded": 0.7, "fact_stopped": 0.7, "pattern": 0.6, "mood": 0.5, "meal": 0.3, "dose_taken": 0.2, "sleep": 0.4,
     "social": 0.4, "routine": 0.3, "other": 0.3, "note": 0.5, "diary": 0.4, "fact": 0.8, "summary": 0.6,
+    "report": 0.8,  # a health record the family chose to have remembered: never fades
 }
 NEVER_FADE = 0.8  # memories at least this important do not fade with age
 
