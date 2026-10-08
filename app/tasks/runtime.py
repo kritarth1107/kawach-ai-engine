@@ -155,8 +155,20 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     task.details = {**(task.details or {}), "skills_used": skill_ids}
     profile_id = None
     if not task.agent_session:
-        profile_id = await profile_for(task)
+        got = await profile_for(task)
+        # The host answers {profileId, loginPhone}; older callers (bench, tests) give just the profile id.
+        profile_id = got.get("profileId") if isinstance(got, dict) else got
         await sandbox.bind_profile(session, task.family_id, task.service, profile_id)  # raises if it belongs to someone else
+        if isinstance(got, dict):
+            phone = "".join(c for c in str(got.get("loginPhone") or "") if c.isdigit())[-10:]
+            # Only the last 4 digits are kept on the task (for "the code went to the phone ending 1234").
+            task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
+            goal += "\n" + (
+                f"If the site asks you to log in: enter the mobile number {phone} (India, +91), ask for the code, then stop and report "
+                f"needs_otp=true and otp_sent_to='phone ending {phone[-4:]}'." if len(phone) == 10 else
+                "There is no mobile number for this account: if the site asks you to log in, do not try. Stop and report "
+                "logged_in=false, needs_otp=false and problem='login needed'."
+            )
     run = await agent.run(
         goal=goal,
         hints=spec.hints(task.service, learned),
@@ -341,9 +353,17 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     d = task.details or {}
     limits = Limits.from_dict(d.get("limits"))
     spec = specialist_for(task.service)
+    login = d.get("login")
+    if out.get("needs_otp") and login == "none":
+        # It had no number to log in with, so no code can have been sent (live 2026-10-08: "sent to phone", field empty).
+        out = {**out, "needs_otp": False, "problem": "login needed"}
     if out.get("needs_otp"):
         task.input_needed = "otp"
-        return "needs_input", f"The service sent a login code to {out.get('otp_sent_to') or 'the family phone'}; ask the person who has that phone for it."
+        to = f"the phone ending {login}" if login else (out.get("otp_sent_to") or "the family phone")
+        return "needs_input", f"The service sent a login code to {to}; ask the person who has that phone for it."
+    if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
+        return "failed", (f"{SKILLS[task.service]['label']} needs a login and there is no phone number to log in with, so nothing was "
+                          "ordered and no code was sent. Offer another service, or the family can order in the app.")
     if out.get("blocked"):
         return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
     if task.phase in ("prepare", "otp") and (out.get("placed") or out.get("booked") or out.get("order_id") or out.get("ride_id")):

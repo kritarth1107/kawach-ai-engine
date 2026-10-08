@@ -161,3 +161,38 @@ async def test_waiting_too_long_expires(db, at, sessions):
     await db.refresh(t)
     assert t.status == "failed" and "nothing was placed" in h.told[-1]
     assert t.deadline_at < now + timedelta(hours=1)
+
+
+class LoginHarness(Harness):
+    """The live host's answer: the profile and the number of the person who asked (or none)."""
+
+    def __init__(self, sessions, agent, phone):
+        super().__init__(sessions, agent)
+        self.phone = phone
+
+    async def profile_for(self, task):
+        return {"profileId": f"prof-{task.family_id}-{task.service}", "loginPhone": self.phone}
+
+
+async def test_agent_logs_in_with_the_askers_number(db, at, sessions):
+    at("2026-10-08 14:43")
+    h = LoginHarness(sessions, FakeAgent(script={"prepare": [OTP, CART]}), "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    goal = h.agent.runs[0]["goal"]
+    assert "enter the mobile number 9000012345" in goal and h.agent.runs[0]["profile"] == "prof-fam-t-instamart"
+    assert t.status == "needs_input" and "phone ending 2345" in h.told[-1]
+    assert t.details["login"] == "2345" and "9000012345" not in str(t.details)
+
+
+async def test_code_claimed_without_a_number_is_not_believed(db, at, sessions):
+    """Live 2026-10-08: Blinkit's login box was empty, yet the agent reported a code 'sent to phone' and the person
+    waited for a code that never came. Without a number to log in with, that report is a failure, said plainly."""
+    at("2026-10-08 14:43")
+    h = LoginHarness(sessions, FakeAgent(script={"prepare": [{**OTP, "otp_sent_to": "phone"}]}), None)
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert "do not try" in h.agent.runs[0]["goal"]
+    assert t.status == "failed" and "no code was sent" in h.told[-1]
