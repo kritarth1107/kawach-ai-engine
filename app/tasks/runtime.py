@@ -120,7 +120,7 @@ def describe(task: Task) -> str:
     if r.get("alternatives"):
         bits.append("alternatives: " + "; ".join(map(str, r["alternatives"][:5])))
     if r.get("options"):
-        bits.append("ride options: " + "; ".join(f"{o.get('type')} {o.get('fare')} (pickup in {o.get('eta', '?')})" for o in r["options"][:6]))
+        bits.append("ride options: " + "; ".join(f"{o.get('type')} {o.get('fare')}" + (f" (pickup in {o['eta']})" if o.get("eta") else "") for o in r["options"][:6]))
     if r.get("surge"):
         bits.append("SURGE pricing")
     if r.get("total"):
