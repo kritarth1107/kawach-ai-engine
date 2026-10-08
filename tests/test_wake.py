@@ -80,3 +80,45 @@ async def test_quiet_hours_defer_and_expiry(db, at, fake_brain):
     assert stats["expired"] == 1
     await db.refresh(loop)
     assert loop.status == "expired"
+
+
+class TaskBrain:
+    """Scripted brain: every system turn (task update or wake-up) tries to message the elder."""
+
+    async def complete(self, route, *, messages, **kw):
+        last = messages[-1]
+        if last["role"] == "user":
+            text = last["content"][0]["text"]
+            if "[Task update]" in text:
+                return LLMReply(text="", tool_calls=[ToolCall("t1", "send_message", {"to": ELDER["id"], "text": "Kamla ji, Blinkit ne login code bheja hai, bata dijiye."})], model="fake")
+            if "Scheduled wake-up" in text:
+                return LLMReply(text="", tool_calls=[ToolCall("w1", "send_message", {"to": ELDER["id"], "text": "Kamla ji, BP check kiya?"})], model="fake")
+        return LLMReply(text="none", tool_calls=[], model="fake")
+
+
+async def test_task_update_reaches_elder_before_she_answers(db, at, monkeypatch):
+    """Live 2026-10-08: 'Order diet coke' → 'I'll tell you when the cart is ready' → the login-code and timeout updates were
+    both blocked by the unanswered-message cooldown, so she never heard back. Task updates must go out; nudges still wait."""
+    router.register_provider("fake", TaskBrain())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+        now = at("2026-10-08 14:43")
+        await store.save_roster(db, FAM, ELDER, [ELDER, DAUGHTER])
+        await store.add_turn(db, family_id=FAM, thread_id=ELDER["id"], role="user", text="Order diet coke", speaker_id=ELDER["id"], message_ref="wamid.1")
+        await store.add_turn(db, family_id=FAM, thread_id=ELDER["id"], role="assistant", text="Ji, order laga rahi hoon. Cart taiyar hote hi bataungi.")
+        loop = await store.open_loop(db, family_id=FAM, subject_id=ELDER["id"], kind="question", title="Ask Kamla ji for her BP",
+                                     wake_at=now + timedelta(minutes=10), alert_rule="ask_again")
+        await db.commit()
+        host = SimHost()
+        at("2026-10-08 14:47")
+        await wake.system_turn(sessions, host, FAM, "[Task update] [t-1] Blinkit order: Diet Coke, waiting for otp. The service sent a login code to phone; ask the person who has that phone for it.", "task:abc123")
+        assert [m["text"] for m in host.world.sent] == ["Kamla ji, Blinkit ne login code bheja hai, bata dijiye."]
+        at("2026-10-08 14:54")
+        await wake.wake_due(sessions, lambda fid: host)
+        assert len(host.world.sent) == 1, "a nudge still waits for her answer"
+        await db.refresh(loop)
+        assert loop.detail["wakes"] == 1
+    finally:
+        router._providers.pop("fake", None)

@@ -545,10 +545,13 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
         problems.append(f"you already sent them this today and they have not answered yet: \"{dup[:120]}\". Do not send it again")
     last_out = next((t for t in reversed(recent) if t.role == "assistant"), None)
     answered = last_out is not None and any(t.role == "user" and t.at > last_out.at for t in recent)
-    if ctx.is_system and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
+    # An order/ride update answers something they asked for ("I'll tell you when the cart is ready"), so it is not
+    # a nudge: waiting for them to write first would leave the login code or the failure unsaid.
+    task_update = ctx.is_system and (ctx.message_ref or "").startswith("task:")
+    if ctx.is_system and not task_update and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
                         "(reply none now; alert_caregiver only if the loop's rule says so)")
-    if ctx.is_system:
+    if ctx.is_system and not task_update:
         from app.learn import timing
 
         quiet = await timing.quiet_reason(ctx.session, ctx.family_id, to, ctx.situation)
