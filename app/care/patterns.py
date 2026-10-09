@@ -374,19 +374,10 @@ def _as_list(v) -> list:
 
 
 def _weekdays(v) -> list[int] | None:
-    """Days a medicine is taken (0 = Monday), from however it was saved; None means every day."""
-    days_ = []
-    for x in _as_list(v):
-        if isinstance(x, int) and 0 <= x <= 6:
-            days_.append(x)
-        elif isinstance(x, str):
-            x = x.strip().lower()[:3]
-            names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-            if x in names:
-                days_.append(names.index(x))
-            elif x.isdigit() and 0 <= int(x) <= 6:
-                days_.append(int(x))
-    return days_ or None
+    """Days a medicine is taken (0 = Monday); None means every day."""
+    from app.care.doses import weekdays
+
+    return weekdays(v)
 
 
 async def record_new(session: AsyncSession, family_id: str, subject_id: str) -> list[Pattern]:

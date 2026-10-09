@@ -317,12 +317,19 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
 
     now = clock.ist()
     today = clock.ist_day()
+    from app.care import doses as dose_days
+
     meds = [f for f in await store.facts(session, family_id, elder_id, domains=["medicine"], statuses=("active",))]
-    schedule = sorted(
-        ({"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "dose": f.value.get("dose"), "time": t, "key": f.key}
-         for f in meds for t in (f.value.get("times") or [])),
-        key=lambda d: d["time"],
-    )
+
+    def doses_on(day: str) -> list[dict]:
+        """The day's doses: a weekly medicine only on its day (live 2026-10-09: weekly Vitamin D3 showed every day)."""
+        return sorted(
+            ({"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "dose": f.value.get("dose"), "time": t, "key": f.key}
+             for f in meds if dose_days.due_on(f.value, day) for t in (f.value.get("times") or [])),
+            key=lambda d: d["time"],
+        )
+
+    schedule = doses_on(today)
     since = clock.now() - timedelta(days=14)
     evs = await store.events(session, family_id, elder_id, since=since, limit=5000)
     by_day: dict[str, list] = {}
@@ -352,19 +359,28 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
                 status = "reminded" if reminded else "unmarked"
         doses.append({"id": f"{d['key']}@{d['time']}", "time": d["time"], "name": d["name"], "dose": d.get("dose"), "status": status})
 
-    # 14-day adherence
-    days, adherence = [], []
-    per_day = len(schedule)
+    # 14-day adherence: of the doses due that day, how many were taken (a dose of a medicine not due does not count)
+    def day_counts(day: str) -> tuple[int, int]:
+        due = doses_on(day)
+        taken_evs = [e for e in by_day.get(day, []) if e.kind in ("dose_taken", "dose_empty_strip")]
+        taken = 0
+        for name in {d["name"] for d in due}:
+            slots = sum(1 for d in due if d["name"] == name)
+            hits = sum(1 for e in taken_evs if _mentions(e.summary, name) or _mentions(str(e.payload.get("medicine", "")), name))
+            taken += min(slots, hits)
+        return taken, len(due)
+
+    days, adherence, week_taken, week_due = [], [], 0, 0
     for back in range(13, -1, -1):
         day = clock.ist_day(clock.now() - timedelta(days=back))
-        taken = sum(1 for e in by_day.get(day, []) if e.kind in ("dose_taken", "dose_empty_strip"))
+        taken, due = day_counts(day)
         days.append(day)
-        adherence.append(round(100 * min(taken, per_day) / per_day) if per_day else 0)
-    week_days = days[-7:]
-    week_taken = sum(min(per_day, sum(1 for e in by_day.get(d, []) if e.kind in ("dose_taken", "dose_empty_strip"))) for d in week_days)
+        adherence.append(round(100 * taken / due) if due else 0)
+        if back < 7:
+            week_taken, week_due = week_taken + taken, week_due + due
     streak = 0
-    for pct in reversed(adherence[:-1]):
-        if pct < 100 or not per_day:
+    for pct, day in zip(reversed(adherence[:-1]), reversed(days[:-1])):
+        if pct < 100 or not doses_on(day):
             break
         streak += 1
 
@@ -423,7 +439,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
     return {
         "now": now.isoformat(),
         "doses": doses,
-        "week": {"taken": week_taken, "scheduled": per_day * 7, "streakDays": streak, "adherence": adherence, "days": days},
+        "week": {"taken": week_taken, "scheduled": week_due, "streakDays": streak, "adherence": adherence, "days": days},
         "vitals": {k: vital(k) for k in ("bp", "sugar", "weight", "temperature", "spo2")},
         "needsYou": needs,
         "followUps": [loop_json(o) for o in loops if o.kind not in ("confirm_fact", "refill", "appointment")],

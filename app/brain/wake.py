@@ -75,6 +75,7 @@ KIND_PROMPTS = {
     "refill": (
         "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
         "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "
+        "If the CARE RECORD marks the medicine \"check it is still right\", first ask whether it is still being taken. "
         "If they already answered, act on it: start_task (order) after a yes, close_loop {id} after a no. Then reply none."
     ),
 }

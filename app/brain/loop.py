@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain import guards, policy, tools
 from app.brain.host import ToolHost
 from app.brain.persona import PERSONA, REPLY_FORMAT
-from app.care import digest, importer, store
+from app.care import digest, freshness, importer, store
 from app.care.domains import SLOTS
 from app.care.models import Turn
 from app.core import clock
@@ -136,7 +136,8 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
     """The cached block: household, care record, notes. Also returns text for the reply guard and avoid-words."""
     rows = await data.facts(req.elder["id"]) if data else await store.facts(session, req.family_id, req.elder["id"])
     note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
-    record = digest.care_record(req.elder.get("name", "care recipient"), rows)
+    stale = await freshness.stale_facts(session, req.family_id, req.elder["id"], rows)
+    record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale)
     block = "\n\n".join(
         p for p in (digest.household(req.elder, req.members, req.speaker["id"]), record, digest.notes_block(note_rows)) if p
     )
@@ -215,7 +216,8 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             own_today = await store.events(session, req.family_id, req.speaker["id"], day=clock.ist_day())
             parts.append(
                 f"YOUR OWN CARE (the speaker's self care; use about={req.speaker['id']} for anything about them):\n"
-                + digest.care_record(req.speaker.get("name") or "the speaker", own)
+                + digest.care_record(req.speaker.get("name") or "the speaker", own,
+                                     await freshness.stale_facts(session, req.family_id, req.speaker["id"], own))
                 + ("\n" + digest.ledger(own_today) if own_today else "")
             )
     if req.speaker["id"] != req.elder["id"]:
@@ -392,7 +394,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
 
 # Tools that change something; once one has run, a failed turn is kept rather than retried elsewhere.
 WRITE_TOOLS = {
-    "remember", "stop", "note", "confirm_change", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
+    "remember", "stop", "note", "confirm_change", "fact_still_true", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
     "close_loop", "send_message", "alert_caregiver", "start_task", "task_input", "cancel_task", "set_stock",
     "add_doctor_question", "assign_family_task", "health_record",
 }

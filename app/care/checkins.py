@@ -31,7 +31,8 @@ HEALTH_WINDOWS = ((time(10, 30), time(12, 30)), (time(16, 30), time(19, 30)))  #
 AFTER_CHAT = (timedelta(minutes=5), timedelta(minutes=45))  # "the conversation has ended": last message this long ago
 MIN_GAP = timedelta(hours=3)  # since Saheli last wrote to them on her own
 MAX_PER_DAY = 3
-EVERY = {"feelings": timedelta(days=3), "readings": timedelta(days=4), "weight": timedelta(days=20), "reports": timedelta(days=7)}
+EVERY = {"feelings": timedelta(days=3), "readings": timedelta(days=4), "weight": timedelta(days=20), "reports": timedelta(days=7),
+         "confirm": timedelta(days=30)}
 READING_FOR = {"bp": ("hypertension", "blood pressure", "bp", "high bp", "heart"), "sugar": ("diabetes", "sugar", "diabetic", "hba1c")}
 
 
@@ -140,7 +141,7 @@ async def plan(session: AsyncSession, host, family_id: str, subject: str, *, now
     # 2. A gentler health question, at most one a day, in a good window, not mid-conversation.
     if not in_health_window(now) or (last_msg and now - last_msg < AFTER_CHAT[1]) or (sent and now - max(sent) < MIN_GAP):
         return None
-    if any(clock.ist_day(at) == day for t, at in asked.items() if t in EVERY or t.startswith("reading:")):
+    if any(clock.ist_day(at) == day for t, at in asked.items() if t in EVERY or t.startswith(("reading:", "confirm:"))):
         return None
     due_topics: list[tuple[timedelta, int, str, str]] = []  # (how overdue, rank on a tie: feelings before weight, topic, prompt)
     weight = await _last_vital(session, family_id, subject, "weight")
@@ -178,6 +179,17 @@ async def plan(session: AsyncSession, host, family_id: str, subject: str, *, now
             due_topics.append((timedelta(days=365), rank, topic, text))
         elif now - asked.get(topic, datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY[topic]:
             due_topics.append((now - asked.get(topic, now - EVERY[topic]) - EVERY[topic], rank, topic, text))
+    # An old fact (a medicine nobody has mentioned in 3 months, last year's doctor): check it is still right.
+    from app.care import freshness
+
+    facts = await store.facts(session, family_id, subject)
+    old = await freshness.stalest(session, family_id, subject, facts, now=now)
+    if old and now - asked.get(f"confirm:{old.key}", datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY["confirm"]:
+        due_topics.append((timedelta(days=1), 2, f"confirm:{old.key}",
+                           f"[Check-in: still right?] The care record says about person {subject}: \"{old.text}\" [{old.key}], and "
+                           f"nobody has confirmed it for a long time. Ask them once, short and natural, whether it is still the "
+                           f"same. When they answer later: still right → fact_still_true {old.key}; changed → remember the new "
+                           f"details; stopped → stop. send_message, then reply none."))
     if not due_topics:
         return None
     due_topics.sort(key=lambda x: (x[0], -x[1]), reverse=True)  # the most overdue first; on a tie, feelings before weight

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brain.host import ToolHost
 from app.care import store
+from app.care.doses import from_backend_days
 from app.care.domains import fact_key, slug
 from app.care.models import CareEvent
 
@@ -90,7 +91,7 @@ async def import_family(session: AsyncSession, host: ToolHost, *, family_id: str
                 await put("routine", s["title"], {"what": s["title"], "time": t, "type": s.get("type")}, f"{s['title']} at {t}")
             continue
         key = s.get("sourceKey") or fact_key("medicine", s["title"])
-        m = meds.setdefault(key, {"name": s["title"], "dose": s.get("dosage"), "times": [], "instructions": s.get("instructions"), "days": s.get("daysOfWeek") or None})
+        m = meds.setdefault(key, {"name": s["title"], "dose": s.get("dosage"), "times": [], "instructions": s.get("instructions"), "days": from_backend_days(s.get("daysOfWeek"))})
         if to_hhmm(s.get("time")):
             m["times"].append(to_hhmm(s["time"]))
         if not s.get("sourceKey"):

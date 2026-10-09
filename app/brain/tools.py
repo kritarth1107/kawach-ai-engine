@@ -218,12 +218,15 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
 
 async def _sync_medicine(ctx: TurnCtx, subject: str, key: str, value: dict, *, active: bool) -> dict:
     """Reminders follow the care record: push this medicine's times (or switch them off)."""
+    from app.care import doses
+
     v = value or {}
     return await ctx.host.call(
         "sync_medicine_schedule",
         {
             "key": key, "name": v.get("name") or key.split(":", 1)[-1], "dose": v.get("dose"), "times": (v.get("times") or []) if active else [],
-            "food_timing": v.get("food_timing"), "days": v.get("days"), "instructions": v.get("instructions"), "active": active,
+            # the reminder service counts days from Sunday (0), the care record from Monday (0)
+            "food_timing": v.get("food_timing"), "days": doses.to_backend_days(v.get("days")) or None, "instructions": v.get("instructions"), "active": active,
         },
         family_id=ctx.family_id,
         subject_id=subject,
@@ -337,6 +340,25 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
 
 
 @tool(
+    "fact_still_true",
+    "The person confirmed that a saved fact is still right (for one marked 'check it is still right'): it is fresh again. "
+    "If it changed, use remember or stop instead.",
+    {"key": {"type": "string", "description": "The fact's key from the CARE RECORD, e.g. medicine:shelcal"}, "about": ABOUT},
+    ["key"],
+)
+async def fact_still_true(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import freshness
+
+    subject = ctx.subject(a.get("about"))
+    row = await store.active_fact(ctx.session, ctx.family_id, subject, a["key"])
+    if not row:
+        raise ToolRefused(f"No active fact {a['key']} for this person.")
+    await freshness.confirm(ctx.session, family_id=ctx.family_id, subject_id=subject, key=row.key, by=ctx.speaker.get("id"),
+                            summary=f"{row.text}: still right")
+    return {"confirmed": row.key}
+
+
+@tool(
     "log_dose",
     "Record what happened with a medicine dose: taken, skipped, refused, missed, or the strip is empty. Works for today or "
     "an earlier day (day), and for one dose of a medicine taken more than once a day (time). Logging the same dose again "
@@ -360,6 +382,12 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     if not day:
         raise ToolRefused("day must be today, yesterday or a date in the last 7 days.")
     today = day == clock.ist_day()
+    fact = await doses.medicine_fact(ctx.session, ctx.family_id, subject, name)
+    not_due = bool(fact and not doses.due_on(fact.value, day))
+    if not_due and a["outcome"] != "taken":
+        # live 2026-10-09: "I took nothing today" logged the weekly Vitamin D3 as skipped on a day it was not due
+        raise ToolRefused(f"{name} is taken only on {doses.day_label(fact.value.get('days'))}; it was not due on {day}, "
+                          "so there is nothing to mark. Log only the medicines due that day.")
     first = slug(name).split("_")[0]
     earlier = []
     if a["outcome"] == "taken" and first and today:
@@ -376,6 +404,9 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     out = {"logged": summary, "schedule": res}
+    if not_due:
+        out["not_due"] = (f"{name} is taken only on {doses.day_label(fact.value.get('days'))}, not on {day}. Ask gently whether "
+                          "it was taken early by mistake; if it was, tell the caregivers (alert_caregiver safety) instead of advising.")
     if earlier:
         out["possible_double_dose"] = (
             f"{name} was already logged as taken at {clock.ist(earlier[-1].at).strftime('%H:%M')}. Ask gently whether this is a second "

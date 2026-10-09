@@ -56,16 +56,66 @@ def resolve_day(day: str | None, now: datetime | None = None) -> str | None:
     return d.isoformat() if oldest <= d <= clock.ist(now).date() else None
 
 
+NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def weekdays(v) -> list[int] | None:
+    """Days a medicine is taken in the care record's numbering (0 = Monday … 6 = Sunday); None means every day."""
+    out: list[int] = []
+    for x in v if isinstance(v, list) else ([v] if v not in (None, "") else []):
+        if isinstance(x, bool):
+            continue
+        if isinstance(x, int) and 0 <= x <= 6:
+            out.append(x)
+        elif isinstance(x, str):
+            t = x.strip().lower()
+            if t[:3] in NAMES:
+                out.append(NAMES.index(t[:3]))
+            elif t.isdigit() and 0 <= int(t) <= 6:
+                out.append(int(t))
+    days = sorted(set(out))
+    return days if days and len(days) < 7 else None
+
+
+def due_on(value: dict, day) -> bool:
+    """Is this medicine taken on that date (a date or YYYY-MM-DD)? Weekly ones only on their days."""
+    if isinstance(day, str):
+        day = datetime.strptime(day, "%Y-%m-%d").date()
+    days = weekdays((value or {}).get("days"))
+    return days is None or day.weekday() in days
+
+
+def to_backend_days(days) -> list[int]:
+    """Care record (0 = Monday) → reminder service (0 = Sunday, as JavaScript counts)."""
+    return [(d + 1) % 7 for d in (weekdays(days) or [])]
+
+
+def from_backend_days(days) -> list[int] | None:
+    """Reminder service (0 = Sunday) → care record (0 = Monday)."""
+    out = [(int(d) + 6) % 7 for d in (days or []) if isinstance(d, int) and 0 <= d <= 6]
+    return sorted(set(out)) if out and len(set(out)) < 7 else None
+
+
+def day_label(days) -> str:
+    full = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return ", ".join(full[d] for d in (weekdays(days) or []))
+
+
+async def medicine_fact(session: AsyncSession, family_id: str, subject_id: str, medicine: str):
+    first = _first(medicine)
+    for f in await store.facts(session, family_id, subject_id, domains=["medicine"], statuses=("active",)):
+        if first and first == _first(str(f.value.get("name") or f.key.split(":", 1)[-1])):
+            return f
+    return None
+
+
 def _first(name: str) -> str:
     return slug(name).split("_")[0]
 
 
 async def medicine_times(session: AsyncSession, family_id: str, subject_id: str, medicine: str) -> list[str]:
-    first = _first(medicine)
-    for f in await store.facts(session, family_id, subject_id, domains=["medicine"], statuses=("active",)):
-        if first and first == _first(str(f.value.get("name") or f.key.split(":", 1)[-1])):
-            return sorted(t for t in (hhmm(x) for x in f.value.get("times") or []) if t)
-    return []
+    f = await medicine_fact(session, family_id, subject_id, medicine)
+    return sorted(t for t in (hhmm(x) for x in f.value.get("times") or []) if t) if f else []
 
 
 def _slot(times: list[str], given: str | None, at_time: str | None) -> str | None:

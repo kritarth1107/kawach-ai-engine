@@ -66,7 +66,9 @@ TITLES = {
 }
 
 
-def care_record(name: str, rows: list[CareFact]) -> str:
+def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = None) -> str:
+    """stale: {key: "over 4 months ago"} from app.care.freshness, marked so old facts are re-checked before acting."""
+    stale = stale or {}
     by_domain: dict[str, list[CareFact]] = defaultdict(list)
     for f in rows:
         by_domain[f.domain].append(f)
@@ -84,7 +86,8 @@ def care_record(name: str, rows: list[CareFact]) -> str:
                 lines.append(f"  - [{f.key}] PENDING, not in effect until a caregiver confirms: {f.text} ({tag})")
             else:
                 confirmed = "" if f.confirmed_by or f.source_kind != "elder_said" else ", unconfirmed"
-                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed})")
+                old = f"; last confirmed {stale[f.key]}, check it is still right before acting on it" if f.key in stale else ""
+                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed}{old})")
     missing = [TITLES[d] for d in ("allergy", "medicine", "diet") if d not in by_domain]
     if missing and rows:
         lines.append(f"Not on file: {', '.join(missing)}. Never guess these.")
