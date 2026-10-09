@@ -297,19 +297,23 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         # The host answers {profileId, loginPhone}; older callers (bench, tests) give just the profile id.
         profile_id = got.get("profileId") if isinstance(got, dict) else got
         await sandbox.bind_profile(session, task.family_id, task.service, profile_id)  # raises if it belongs to someone else
+    def login_line(got: object) -> str:
+        if not isinstance(got, dict):
+            return ""
+        phone = "".join(c for c in str(got.get("loginPhone") or "") if c.isdigit())[-10:]
+        # Only the last 4 digits are kept on the task (for "the code went to the phone ending 1234").
+        task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
+        return "\n" + (
+            f"If the site asks you to log in: enter the mobile number {phone} (India, +91), ask for the code, then stop and report "
+            f"needs_otp=true and otp_sent_to='phone ending {phone[-4:]}'." if len(phone) == 10 else
+            "There is no mobile number for this account: if the site asks you to log in, do not try. Stop and report "
+            "logged_in=false, needs_otp=false and problem='login needed'."
+        )
+
     if task.phase == "prepare" and not extra:  # with a code to enter (extra), it must not ask for a new one
         if got is None:
             got = await profile_for(task)
-        if isinstance(got, dict):
-            phone = "".join(c for c in str(got.get("loginPhone") or "") if c.isdigit())[-10:]
-            # Only the last 4 digits are kept on the task (for "the code went to the phone ending 1234").
-            task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
-            goal += "\n" + (
-                f"If the site asks you to log in: enter the mobile number {phone} (India, +91), ask for the code, then stop and report "
-                f"needs_otp=true and otp_sent_to='phone ending {phone[-4:]}'." if len(phone) == 10 else
-                "There is no mobile number for this account: if the site asks you to log in, do not try. Stop and report "
-                "logged_in=false, needs_otp=false and problem='login needed'."
-            )
+        goal += login_line(got)
     if task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order":
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
@@ -344,6 +348,11 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         got = got if got is not None else await profile_for(task)
         profile_id = got.get("profileId") if isinstance(got, dict) else got
         await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
+        if extra:
+            # The code was for a login page that is gone: typing it into a new one fails (live 2026-10-09 the agent typed
+            # the code as the phone number). Log in again; the store sends a new code and the person is told why.
+            goal = _goal(task) + login_line(got)
+            task.details = {**(task.details or {}), "code_lost": True, "otp_entered": False}
         run = await start(None, profile_id)
     # A browser now exists and bills: record it (and that the task is running on it) and commit before anything else,
     # so a failure later in this tick cannot roll back the only record of it (the sweeper stops what the ledger knows).
@@ -612,6 +621,10 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     if out.get("needs_otp"):
         task.input_needed = "otp"
         to = f"the phone ending {login}" if login else (out.get("otp_sent_to") or "the family phone")
+        if d.get("code_lost"):
+            task.details = {**(task.details or {}), "code_lost": False}
+            return "needs_input", (f"The store's login page closed before the code could be used, so it sent a new code to {to}. "
+                                   "Say sorry briefly and ask for the new code (the earlier one will not work).")
         return "needs_input", f"The service sent a login code to {to}; ask the person who has that phone for it."
     if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
         return "failed", (f"{SKILLS[task.service]['label']} needs a login and there is no phone number to log in with, so nothing was "
@@ -970,6 +983,8 @@ async def tick(
                         extra = f"Enter this code where the login asks for it: {task.details.get('otp')}. Then continue with the task." if task.phase == "otp" else ""
                         if task.phase == "otp":
                             task.phase = "prepare"
+                            # The code is handed to the agent once and not kept on the task.
+                            task.details = {**{k: v for k, v in (task.details or {}).items() if k != "otp"}, "otp_entered": True}
                         await _start_run(session, agent, task, profile_for, extra)
                         stats["started"] += 1
                 elif task.status == "running":
@@ -983,6 +998,8 @@ async def tick(
                         await sandbox.note_login(session, task.family_id, task.service, run.output or {})
                         await channels.record(session, task.service, "browser", run.status == "finished" and not (run.output or {}).get("blocked"), run.error)
                         out = run.output or {}
+                        if (task.details or {}).get("otp_entered") and out.get("problem"):
+                            out = {**out, "problem": re.sub(r"\b\d{4,8}\b", "••••", str(out["problem"]))}  # never store a login code
                         retries = int((task.details or {}).get("retries", 0))
                         if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("browse", "prepare", "otp"):
                             # A crash or timeout of the browser run, not an answer from the store: try once more.
@@ -1019,7 +1036,10 @@ async def tick(
                             await skillbook.record_store_use(session, used, ok=False)
                         if (task.details or {}).get("unauthorized_place"):
                             await skillbook.block_store_skills(session, used, "placed without a yes")
-                        note_ = skillbook.safe_note(str(out.get("problem") or "")) if status == "failed" else None
+                        d_ = task.details or {}
+                        note_ = (skillbook.safe_note(str(out.get("problem") or ""))
+                                 if status == "failed" and not d_.get("otp_entered") and not d_.get("code_lost") else None)
+                        task.details = {**d_, "otp_entered": False}
                         if note_:
                             # The next agent on this service reads what stopped this one (once per distinct problem).
                             text_ = f"{task.phase} failed: {note_}"

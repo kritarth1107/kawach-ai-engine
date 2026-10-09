@@ -459,3 +459,25 @@ def test_pick_among_packs_with_the_same_name():
     assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (160 ml) ₹20")["pack"] == "160 ml"
     assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (300 ml)")["price"] == "₹40"
     assert runtime._option({"name": "Coke Zero", "price": "₹39", "exact_match": False}).endswith("[similar, not exactly what was asked]")
+
+
+async def test_code_for_a_closed_login_page_asks_for_a_new_one_and_is_not_kept(db, at, sessions):
+    """Live 2026-10-09 16:08: the login page closed before the code came; the fresh browser typed the code as the phone
+    number. Now it logs in again, the person hears why a new code came, and no code is kept on the task."""
+    at("2026-10-09 16:03")
+    agent = ClosingAgent(script={"prepare": [OTP, OTP]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.input_needed == "otp"
+    agent.sessions_stopped.append(t.agent_session)
+    await runtime.provide_input(db, t, kind="otp", value="998877", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    goal = agent.runs[-1]["goal"]
+    assert "998877" not in goal and "enter the mobile number 9000012345" in goal and agent.runs[-1]["session"] is None
+    assert "998877" not in str(t.details)
+    await h.tick()
+    await db.refresh(t)
+    assert t.input_needed == "otp" and "closed before the code could be used" in h.told[-1] and "new code" in h.told[-1]
