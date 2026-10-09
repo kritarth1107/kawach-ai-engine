@@ -140,7 +140,9 @@ def _cooldown(status: int | None) -> float:
     if status in (403, 404):
         return 3600.0  # model not enabled for this project, or no quota at all
     if status == 429:
-        return 60.0
+        # Gemini on Vertex runs on shared capacity: a 429 passes in seconds. A 60 s trip sent every reply of the next
+        # minute to the slow Pro model (live 2026-10-09: 38-75 s replies).
+        return 20.0
     return 30.0
 
 
@@ -207,20 +209,32 @@ async def complete(
         candidates, effort = spend.cheapest(candidates), "low"
     live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway
     errors: list[str] = []
+
+    async def call(route: Route) -> LLMReply:
+        return await asyncio.wait_for(
+            _provider(route.provider).complete(
+                route,
+                system_stable=[scrub(b) for b in stable if b],
+                system_dynamic=scrub(system_dynamic),
+                messages=messages,
+                tools=tools or [],
+                max_tokens=max_tokens,
+                effort=effort,
+            ),
+            timeout=timeout_s,
+        )
+
     for route in live:
         try:
-            reply = await asyncio.wait_for(
-                _provider(route.provider).complete(
-                    route,
-                    system_stable=[scrub(b) for b in stable if b],
-                    system_dynamic=scrub(system_dynamic),
-                    messages=messages,
-                    tools=tools or [],
-                    max_tokens=max_tokens,
-                    effort=effort,
-                ),
-                timeout=timeout_s,
-            )
+            try:
+                reply = await call(route)
+            except ModelUnavailable as exc:
+                if exc.status != 429:
+                    raise
+                # Shared-capacity 429s usually clear within a second or two: one short retry on the same fast model
+                # beats falling through to a slower one.
+                await asyncio.sleep(RETRY_429_S)
+                reply = await call(route)
             inr = await spend.record(role, route.model, reply.usage or {})
             logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, route.key, reply.usage, inr)
             return reply
@@ -232,6 +246,9 @@ async def complete(
             errors.append(f"{route.key}: timeout")
         logger.warning("llm fallback role=%s from=%s reason=%s", role, route.key, errors[-1])
     raise AllModelsFailed("; ".join(errors))
+
+
+RETRY_429_S = 1.5
 
 
 def new_call_id() -> str:

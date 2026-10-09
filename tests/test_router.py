@@ -20,7 +20,8 @@ class Scripted:
 
 
 @pytest.fixture(autouse=True)
-def clean():
+def clean(monkeypatch):
+    monkeypatch.setattr(router, "RETRY_429_S", 0)
     router.reset_breakers()
     yield
     router.reset_breakers()
@@ -31,14 +32,23 @@ MSG = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
 async def test_falls_back_on_rate_limit_and_skips_tripped_model():
-    a, b = Scripted([ModelUnavailable(429, "quota")]), Scripted(["from b", "again b"])
+    a, b = Scripted([ModelUnavailable(429, "quota"), ModelUnavailable(429, "quota")]), Scripted(["from b", "again b"])
     router.register_provider("a", a)
     router.register_provider("b", b)
     r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
     assert r.text == "from b" and r.model == "m2"
     r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
     assert r.text == "again b"
-    assert a.calls == ["m1"]  # breaker open: not retried on the second call
+    assert a.calls == ["m1", "m1"]  # one short retry, then the breaker is open: not tried on the second call
+
+
+async def test_a_passing_rate_limit_is_retried_on_the_same_fast_model():
+    """Live 2026-10-09: one 429 on Flash sent replies to the slow Pro model (38-75 s). A short retry usually works."""
+    a, b = Scripted([ModelUnavailable(429, "quota"), "from a"]), Scripted(["from b"])
+    router.register_provider("a", a)
+    router.register_provider("b", b)
+    r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
+    assert r.text == "from a" and b.calls == [] and router.healthy(ROUTES[0])
 
 
 async def test_all_failed_raises():
