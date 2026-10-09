@@ -242,6 +242,10 @@ VOICE_SURE = 0.6
 
 def voice_block(req: TurnRequest) -> str:
     """How to answer a voice note: it is a transcript (may be wrong), and the reply is spoken back as a voice note."""
+    if req.channel == "call":
+        return ("THIS IS A LIVE PHONE CALL. What they said is a live transcript (it can have wrong words). Your reply is spoken "
+                "at once: one or two short spoken sentences, one question at a time, no lists, no symbols, numbers said as "
+                "words. Never say you will message them; you are talking now. If it might be an emergency, act as usual.")
     if not req.voice:
         return ""
     lines = [

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import logging
 import os
@@ -1003,6 +1005,73 @@ async def whats_pending(ctx: TurnCtx, a: dict) -> dict:
     return {"open": [{"title": r["title"], "who": "Saheli" if r["owner"] == work.SAHELI else names.get(r["owner"], r["owner"]),
                       "next": r["next_action"], "due": r["due_at"], "stuck": r["stuck"], "id": r["id"]} for r in rows],
             "count": len(rows)}
+
+
+async def _care_place(ctx: TurnCtx) -> dict:
+    """Where the care recipient lives (lat/lon/pincode/city) for lab collection and nearby doctors."""
+    try:
+        got = await ctx.host.call("delivery_place", {"words": ""}, family_id=ctx.family_id, subject_id=ctx.elder_id,
+                                  actor_id=ctx.speaker.get("id") or ctx.elder_id)
+        return got or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+async def _with_browser(fn):
+    """A short guest cloud browser for read-only look-ups (nothing logged in, nothing booked), always stopped after."""
+    agent = task_agent()
+    if not hasattr(agent, "open_session"):
+        raise ToolRefused("Live look-ups are not available right now; say so plainly.")
+    sid = await agent.open_session(None)
+    try:
+        cdp = await agent.cdp_url(sid)
+        if not cdp:
+            raise ToolRefused("Live look-ups are not available right now; say so plainly.")
+        return await asyncio.wait_for(fn(cdp), timeout=50)
+    finally:
+        try:
+            await agent.stop_session(sid)
+        except Exception:  # noqa: BLE001
+            logger.warning("guest browser stop failed")
+
+
+@tool(
+    "find_lab_test",
+    "Home blood tests: live prices, fasting needs, report times and the earliest home-collection slots from several labs "
+    "(Tata 1mg Labs, Healthians, Redcliffe, PharmEasy, Apollo) for the care recipient's address. Takes about 15 seconds; "
+    "say you are checking first. Nothing is booked. Read back the 2-3 best options (cheapest, earliest) in plain words.",
+    {"test": {"type": "string", "description": "The test or package as they said it: 'HbA1c', 'CBC', 'thyroid', 'full body checkup'"}},
+    ["test"],
+)
+async def find_lab_test(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import care_search
+
+    place = await _care_place(ctx)
+    rows = await _with_browser(lambda cdp: care_search.labs(cdp, a["test"], lat=place.get("lat"), lon=place.get("lng"),
+                                                            pincode=place.get("pincode")))
+    cheapest = sorted(((o, r["lab"]) for r in rows if r.get("available") for o in r["options"] if o.get("price")),
+                      key=lambda x: float(str(x[0]["price"]).strip("₹") or 0))
+    return {"labs": rows, "cheapest": [{"lab": lab, **o} for o, lab in cheapest[:3]], "address": place.get("nickname") or place.get("full"),
+            "next": "Booking needs the family's login on the chosen lab's site; ask which one they want and tell the caregiver."}
+
+
+@tool(
+    "find_doctor",
+    "Doctors near the care recipient for a specialty or a problem ('cardiologist', 'knee pain', 'sugar doctor'): fee, "
+    "experience, clinic, next free slot, clinic visit or video, from Practo and Apollo 24|7. Takes about 15 seconds. "
+    "Nothing is booked. Read back the 2-3 best options.",
+    {"need": {"type": "string"}, "city": {"type": "string", "description": "Only if they asked for another city"}},
+    ["need"],
+)
+async def find_doctor(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import care_search
+
+    place = await _care_place(ctx)
+    city = a.get("city") or care_search.city_of(place)
+    rows = await _with_browser(lambda cdp: care_search.doctors(cdp, a["need"], city=city, lat=place.get("lat"), lon=place.get("lng")))
+    return {"city": city, "sites": rows,
+            "next": "To book, the family picks a doctor and a slot; booking needs their login on that site. Offer to note the "
+                    "appointment once booked (remember appointment) so reminders and questions-for-the-doctor work."}
 
 
 @tool(

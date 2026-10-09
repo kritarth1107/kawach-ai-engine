@@ -79,6 +79,9 @@ def create_app() -> FastAPI:
     app.include_router(doctor_brief.router, prefix="/v1")
     app.include_router(brain.router)
     app.include_router(dash.router)
+    from app.api import calls
+
+    app.include_router(calls.router)
     app.include_router(admin.router)
     return app
 
