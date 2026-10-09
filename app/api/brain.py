@@ -108,9 +108,19 @@ async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get
 async def wake_job() -> dict:
     """Cloud Scheduler, every 5 minutes: run the open loops that are due."""
     from app.brain.wake import wake_due
+    from app.care import checkins
     from app.db.session import SessionLocal
 
-    return await wake_due(SessionLocal, lambda fid: ShadowHost() if fid.startswith("shadow:") else LiveHost())
+    def host_for(fid: str):
+        return ShadowHost() if fid.startswith("shadow:") else LiveHost()
+
+    out = await wake_due(SessionLocal, host_for)
+    try:
+        # Saheli's own check-ins (today's unmarked schedule after a chat, how they feel, readings, reports, weight)
+        out["checkins"] = await checkins.run(SessionLocal, host_for)
+    except Exception:  # noqa: BLE001 — loops above already ran
+        logger.exception("check-ins failed")
+    return out
 
 
 @router.post("/jobs/extract")

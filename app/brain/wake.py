@@ -22,7 +22,7 @@ from app.core import clock
 logger = logging.getLogger(__name__)
 
 SYSTEM = {"id": "saheli-scheduler", "name": "Scheduler", "role": "system"}
-QUIET_START, QUIET_END = 22, 7  # IST; only no-answer alerts run inside these hours
+QUIET_START, QUIET_END = 21, 8  # IST; only no-answer alerts run inside these hours (founder: nothing at night)
 MAX_WAKES = 3
 
 
@@ -33,7 +33,7 @@ def in_quiet_hours(at=None) -> bool:
 
 def next_morning(at=None):
     local = clock.ist(at)
-    morning = local.replace(hour=7, minute=30, second=0, microsecond=0)
+    morning = local.replace(hour=8, minute=30, second=0, microsecond=0)
     if local.hour >= QUIET_START:
         morning += timedelta(days=1)
     return morning

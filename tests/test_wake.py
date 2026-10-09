@@ -71,11 +71,11 @@ async def test_quiet_hours_defer_and_expiry(db, at, fake_brain):
     stats = await wake.wake_due(sessions, lambda fid: SimHost())
     assert stats["deferred"] == 1
     await db.refresh(loop)
-    assert clock.ist(loop.wake_at).strftime("%d %H:%M") == "03 07:30"
+    assert clock.ist(loop.wake_at).strftime("%d %H:%M") == "03 08:30"  # nothing at night (21:00-08:00)
     loop.detail = {"wakes": wake.MAX_WAKES}
     loop.wake_at = now
     await db.commit()
-    at("2026-10-03 08:00")
+    at("2026-10-03 08:40")
     stats = await wake.wake_due(sessions, lambda fid: SimHost())
     assert stats["expired"] == 1
     await db.refresh(loop)

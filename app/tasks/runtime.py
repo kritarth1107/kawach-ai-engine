@@ -1065,6 +1065,10 @@ async def tick(
                     task.status, expired = "failed", True
                     note(task, "timed out waiting")
                     message = "Nobody answered in time, so the task was stopped; nothing was placed." if task.phase != "cancel" else "Cancel was not finished; tell the caregiver."
+                    from app.brain.wake import in_quiet_hours
+
+                    if task.phase != "cancel" and in_quiet_hours():
+                        message = None  # live 2026-10-08 22:21: "nobody answered, stopped" woke her at night; nothing was placed
                     if compare_group(task) and was_browse:
                         # One "nobody answered" for the whole comparison, not one per store.
                         group = await siblings(session, task)
