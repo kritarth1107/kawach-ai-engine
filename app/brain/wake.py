@@ -55,6 +55,12 @@ KIND_PROMPTS = {
         "attaching buttons {{\"kind\": \"{set}\", \"key\": \"{key}\"}}. If the conversation already shows how it turned out, "
         "log_outcome instead of asking. Then close_loop {id} and reply none."
     ),
+    "delivery": (
+        "[Scheduled follow-up] {title}. Ask person {owner} one short question in their language with send_message: did it come, "
+        "and was everything right? When they answer: arrived and fine → close_loop {id}; not arrived → look at task_status, "
+        "tell them plainly what you know and offer to tell the caregiver (send_message), keep the loop open; wrong or missing "
+        "items → say you are noting it, tell the caregiver, close_loop {id}. Reply none."
+    ),
     "checkin": (
         "[Caregiver check-in] It is the weekly check-in on person {owner} themselves. Send them one short, warm message with "
         "send_message asking how they are doing this week (sleep, stress, their own health). One question only. If PATTERNS "

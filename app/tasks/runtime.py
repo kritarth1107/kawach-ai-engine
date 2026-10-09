@@ -458,6 +458,34 @@ def _chosen(task: Task, pick: dict | None) -> list[dict]:
 APPROVAL_WAIT = timedelta(minutes=90)
 
 
+def _eta_wait(task: Task) -> timedelta:
+    """When to ask whether it arrived: the store's ETA plus a margin, else a sensible default per kind."""
+    eta = str((task.result or {}).get("eta") or "").lower()
+    m = re.search(r"(\d+)\s*(?:-|to)?\s*(\d+)?\s*(min|mins|minute|minutes|hr|hrs|hour|hours)", eta)
+    if m:
+        n = int(m.group(2) or m.group(1))
+        unit = timedelta(hours=1) if m.group(3).startswith("h") else timedelta(minutes=1)
+        return n * unit + (timedelta(minutes=10) if task.kind == "ride" else timedelta(minutes=20))
+    if task.kind == "ride":
+        return timedelta(minutes=20)
+    if specialist_for(task.service).name == "pharmacy" or re.search(r"(mon|tue|wed|thu|fri|sat|sun|tomorrow|\d{1,2} \w{3})", eta):
+        return timedelta(hours=26)
+    return timedelta(minutes=60)
+
+
+async def delivery_followup(session: AsyncSession, task: Task) -> None:
+    """After an order or ride is placed: one follow-up to check it arrived (the task is not finished until it has)."""
+    label = SKILLS[task.service]["label"]
+    what = "the cab came" if task.kind == "ride" else "the order arrived"
+    await store.open_loop(
+        session, family_id=task.family_id, subject_id=task.subject_id, kind="delivery",
+        title=f"Check {what}: {label} {task.goal}"[:200], owner_id=task.requested_by,
+        wake_at=clock.now() + _eta_wait(task), alert_rule="dashboard", dedupe_key=f"delivery:{task.id}",
+        detail={"next_action": f"confirm {what}", "task_id": str(task.id), "max_wakes": 1,
+                "order_id": (task.result or {}).get("order_id") or (task.result or {}).get("ride_id")},
+    )
+
+
 async def _approval_gate(session: AsyncSession, task: Task, amount: float | None, by: str, choice: dict | None = None) -> str | None:
     """None when this may be placed now; otherwise the task waits for an approver (the family's boundaries)."""
     from app.care import boundaries
@@ -1332,6 +1360,8 @@ async def tick(
                         session, family_id=task.family_id, subject_id=task.subject_id, kind=f"task_{task.status}",
                         summary=f"{SKILLS[task.service]['label']}: {own}", payload={"task_id": str(task.id), "result": task.result},
                     )
+                if task.status == "done" and ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
+                    await delivery_followup(session, task)
                 await session.commit()
             except Exception as exc:  # noqa: BLE001 — one task's failure must not stop the others
                 logger.exception("task tick failed task=%s", task_id)

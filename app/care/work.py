@@ -33,7 +33,7 @@ INPUT_ACTION = {
     "swap": "pick an alternative for an item out of stock",
     "approve": "approve or decline (outside the family's limits)",
 }
-LOOP_KIND = {"family_task": "family_task", "appointment": "appointment", "refill": "refill", "question": "question",
+LOOP_KIND = {"delivery": "delivery", "family_task": "family_task", "appointment": "appointment", "refill": "refill", "question": "question",
              "followup": "follow_up", "checkin": "check_in", "confirm_fact": "confirm", "memory_check": "confirm",
              "confirm_skill": "confirm", "task": "follow_up", "watch": "watch"}
 
@@ -81,6 +81,7 @@ def from_loop(l: OpenLoop) -> dict:
         "check_in": "answer the weekly check-in",
         "confirm": "confirm or correct what Saheli saved",
         "watch": "Saheli keeps an eye on it",
+        "delivery": "confirm it arrived",
     }.get(kind, "Saheli checks back")
     saheli_acts = kind in ("follow_up", "watch")
     state = "done" if l.status == "done" else ("cancelled" if l.status in ("cancelled", "expired") else ("working" if saheli_acts else "waiting"))

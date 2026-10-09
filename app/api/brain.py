@@ -268,9 +268,23 @@ async def browser_sweep_job() -> dict:
     """Cloud Scheduler, every 10 min: stop cloud browsers older than 20 min that no live task uses (cost safety)."""
     from app.brain.tools import task_agent
     from app.db.session import SessionLocal
-    from app.tasks import sandbox
+    from app.tasks import credits, sandbox
 
-    return await sandbox.sweep(SessionLocal, task_agent())
+    out = await sandbox.sweep(SessionLocal, task_agent())
+    try:
+        out["credits"] = await credits.check(SessionLocal, task_agent(), LiveHost())
+    except Exception:  # noqa: BLE001 — the sweep's own work is done
+        logger.exception("credit check failed")
+    return out
+
+
+@router.get("/agents/credits")
+async def agent_credits() -> dict:
+    """USD left on the browser service and the alert threshold (admin console)."""
+    from app.brain.tools import task_agent
+    from app.tasks import credits
+
+    return {"usd": await credits.balance(task_agent()), "warnAt": credits.warn_at()}
 
 
 @router.get("/agents/metrics")
