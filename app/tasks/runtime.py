@@ -254,7 +254,8 @@ def describe(task: Task) -> str:
     if task.input_needed:
         bits.append(f"waiting for {task.input_needed}")
     if r.get("items"):
-        bits.append(("found (not in a cart yet): " if task.phase == "browse" else "cart: ") + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
+        in_cart = task.phase != "browse" and bool(d.get("cart_fp") or r.get("total"))
+        bits.append(("cart: " if in_cart else "found (not in a cart yet): ") + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
     if r.get("alternatives"):
         bits.append("alternatives: " + "; ".join(map(str, r["alternatives"][:5])))
     if r.get("options"):
@@ -997,7 +998,7 @@ async def release_sessions(sessions: async_sessionmaker, agent: BrowserAgent, li
 MAX_TICK_ERRORS = 3
 
 
-async def _count_tick_error(session: AsyncSession, task_id) -> tuple[Task, str] | None:
+async def _count_tick_error(session: AsyncSession, task_id, final: str | None = None) -> tuple[Task, str] | None:
     """A task whose tick keeps crashing (a report the code cannot read) is stopped after a few tries and the
     family is told, instead of being stuck 'running' and blocking that service for good."""
     try:
@@ -1007,12 +1008,14 @@ async def _count_tick_error(session: AsyncSession, task_id) -> tuple[Task, str] 
         n = int((task.details or {}).get("tick_errors", 0)) + 1
         task.details = {**(task.details or {}), "tick_errors": n}
         message = None
+        if final and task.phase not in ("place", "cancel"):
+            n = MAX_TICK_ERRORS
         if n >= MAX_TICK_ERRORS:
             task.status = "failed"
             sandbox.audit(task, phase=task.phase, status="failed", steps=0, path=[], cost=0, error=f"stopped after {n} errors in Kavach")
             message = ("Something went wrong while placing it. It is not clear whether it went through: do not order again; "
                        "tell the caregiver to check the app.") if task.phase in ("place", "cancel") else (
-                "Something went wrong while working on it, so it was stopped; nothing was placed.")
+                final or "Something went wrong while working on it, so it was stopped; nothing was placed.")
             note(task, f"stopped after {n} errors")
             metrics.on_milestone(task, "failed")
             await store.record_event(
@@ -1239,10 +1242,17 @@ async def tick(
                         summary=f"{SKILLS[task.service]['label']}: {own}", payload={"task_id": str(task.id), "result": task.result},
                     )
                 await session.commit()
-            except Exception:  # noqa: BLE001 — one task's failure must not stop the others
+            except Exception as exc:  # noqa: BLE001 — one task's failure must not stop the others
                 logger.exception("task tick failed task=%s", task_id)
                 await session.rollback()
-                got = await _count_tick_error(session, task_id)
+                if " 402" in str(exc) and "credit" in str(exc).lower():
+                    # The browser service account is out of credit: retrying cannot help (live 2026-10-09).
+                    logger.error("BROWSER SERVICE OUT OF CREDIT: top up Browser Use (task=%s)", task_id)
+                    got = await _count_tick_error(session, task_id, final="Ordering online is paused for a short while on "
+                                                  "our side, so nothing was placed. Tell them kindly; they can try again later or "
+                                                  "order in the app.")
+                else:
+                    got = await _count_tick_error(session, task_id)
                 if not got:
                     return None
                 task, message = got
