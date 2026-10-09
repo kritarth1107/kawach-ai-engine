@@ -98,7 +98,9 @@ def _label(item: dict) -> str:
 
 def _option(item: dict) -> str:
     similar = "" if item.get("exact_match") is not False else " [similar, not exactly what was asked]"
-    return f"{_label(item)} {item.get('price') or ''}".strip() + similar
+    where = f" from {item['restaurant']}" + (f" ({item['eta']})" if item.get("eta") else "") if item.get("restaurant") else ""
+    rx = " [prescription needed]" if item.get("rx_required") else ""
+    return f"{_label(item)} {item.get('price') or ''}".strip() + where + rx + similar
 
 
 def _compare_summary(group: list[Task]) -> str:
