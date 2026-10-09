@@ -28,7 +28,7 @@ from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
-from app.tasks import sandbox
+from app.tasks import fastpath, sandbox
 from app.tasks.models import SkillNote, Task
 from app.tasks.skills import SKILLS
 
@@ -337,7 +337,8 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             schema=spec.schema(task),
             session_id=session_id,
             profile_id=profile,
-            start_url=None if session_id else SKILLS[task.service]["start_url"],
+            # a browser opened for a fast look-up has no store tab of its own: the agent starts on the store's page
+            start_url=None if session_id and not (task.details or {}).get("fast_session") else SKILLS[task.service]["start_url"],
             max_steps=spec.steps.get(task.phase, 40),
             metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
             llm=spec.model,
@@ -786,6 +787,42 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
     return None
 
 
+def fastpath_on() -> bool:
+    return os.getenv("TASK_FASTPATH", "on") == "on"
+
+
+async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for) -> dict | None:
+    """The look-up through the store's own web request in the task's cloud browser (seconds, not minutes). The browser
+    stays open for the login and cart runs. None (and a note) when it cannot run, so the browser agent looks instead."""
+    place = ((task.details or {}).get("limits") or {}).get("place") or {}
+    lat, lng = place.get("lat"), place.get("lng")
+    if lat is None or lng is None or not hasattr(agent, "open_session"):
+        return None
+    try:
+        got = await profile_for(task)
+        profile_id = got.get("profileId") if isinstance(got, dict) else got
+        await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
+        if not task.agent_session:
+            sid = await agent.open_session(profile_id)
+            task.agent_session = sid
+            await sandbox.started(session, session_id=sid, task_id=str(task.id), family_id=task.family_id, service=task.service,
+                                  profile_id=profile_id)
+            await session.commit()  # the browser bills: record it before anything else can fail
+        cdp = await agent.cdp_url(task.agent_session)
+        if not cdp:
+            raise fastpath.FastPathError("no CDP address for the browser")
+        query = " ".join(str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])[:1])
+        items = await fastpath.blinkit_search(cdp, query, float(lat), float(lng))
+    except Exception as exc:  # noqa: BLE001 — a changed site or a slow browser: the agent looks instead
+        note(task, f"fast look-up did not work ({str(exc)[:120]}); the browser agent looks instead")
+        logger.warning("fast look-up failed task=%s: %s", task.id, exc)
+        return None
+    task.phase = "browse"
+    task.details = {**(task.details or {}), "fast_session": True}
+    note(task, f"fast look-up on {SKILLS[task.service]['label']}: {len(items)} matching products")
+    return {"items": items, "deliverable": True, "logged_in": False, "problem": "" if items else "not found"}
+
+
 def _confirm_still_valid(task: Task) -> bool:
     """The confirm still matches what is in the cart (or the fares shown) and its token is genuine."""
     d = task.details or {}
@@ -1000,6 +1037,11 @@ async def tick(
                                 if task.phase == "place":
                                     task.phase = "prepare"  # the browser builds its own cart; the family confirms it again
                                 note(task, "connector failed, falling back to the browser")
+                    if (report is None and task.phase == "prepare" and browse_first(task) and task.service in fastpath.FAST_SERVICES
+                            and fastpath_on()):
+                        report = await _fast_lookup(session, agent, task, profile_for)
+                        if report is not None:
+                            was_browse = True
                     if report is not None and report.get("requeue"):
                         note(task, "connector card expired; building it again")
                     elif report is not None:

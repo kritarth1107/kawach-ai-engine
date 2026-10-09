@@ -543,3 +543,71 @@ async def test_linked_store_looks_up_and_orders_through_its_connector_without_a_
     await tick()
     await db.refresh(im)
     assert im.status == "done" and im.result["order_id"] == "IM-1" and [r["service"] for r in agent.runs] == ["blinkit"]
+
+
+class FastAgent(FakeAgent):
+    async def open_session(self, profile_id):
+        self.opened = profile_id
+        return "fs-1"
+
+    async def cdp_url(self, session_id):
+        return "https://fs-1.cdp.test"
+
+
+async def test_blinkit_looks_up_through_its_own_web_request_in_seconds_then_the_agent_logs_in_there(db, at, sessions, monkeypatch):
+    """Founder 2026-10-09 'make it fast': the agent's Blinkit look-up took 3 minutes; the fixed search runs Blinkit's own
+    request in the task's cloud browser. The same browser then serves the login and cart."""
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    asked = {}
+
+    async def fake_search(cdp, query, lat, lon):
+        asked.update(cdp=cdp, query=query, lat=lat, lon=lon)
+        return [{"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "pack": "330 ml", "price": "₹209", "available": True, "exact_match": True}]
+
+    monkeypatch.setattr(fastpath, "blinkit_search", fake_search)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 17:30")
+    agent = FastAgent(script={"prepare": [OTP]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "Sunita Park, Raipur", "lat": 21.238, "lng": 81.6858}
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place=place))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert agent.runs == [] and asked == {"cdp": "https://fs-1.cdp.test", "query": "Diet Coke", "lat": 21.238, "lon": 81.6858}
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and t.agent_session == "fs-1"
+    assert "Coca-Cola Diet Coke Soft Drink No Caffeine (330 ml) ₹209" in h.told[-1]
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    run = agent.runs[-1]
+    assert run["phase"] == "prepare" and run["session"] == "fs-1" and "enter the mobile number 9000012345" in run["goal"]
+
+
+async def test_fast_look_up_that_breaks_falls_back_to_the_agent(db, at, sessions, monkeypatch):
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    async def broken(*a, **k):
+        raise fastpath.FastPathError("blinkit search answered 403")
+
+    monkeypatch.setattr(fastpath, "blinkit_search", broken)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 17:30")
+    agent = FastAgent(script={"browse": [FOUND]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.2, "lng": 81.6}))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert [r["phase"] for r in agent.runs] == ["browse"] and any("fast look-up did not work" in x["note"] for x in t.history)
+
+
+def test_fast_search_exact_match_counts_the_pack():
+    from app.tasks.fastpath import _words
+    asked = _words("Amul Taaza milk 500 ml")
+    assert asked == {"amul", "taaza", "milk", "500"}
+    assert asked <= (_words("Amul Taaza Toned Milk 500 ml") | _words("500"))

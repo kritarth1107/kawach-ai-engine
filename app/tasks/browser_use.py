@@ -172,3 +172,12 @@ class BrowserUseCloud:
     async def stop_session(self, session_id: str) -> None:
         """Stop the cloud browser (it keeps running, and billing, after a task finishes)."""
         await self._req("PATCH", f"/sessions/{session_id}", {"action": "stop"})
+
+    async def open_session(self, profile_id: str | None) -> str:
+        """A kept-alive cloud browser on the family's profile, for fixed fast steps and the agent runs after them."""
+        sess = await self._req("POST", "/sessions", {"proxyCountryCode": "in", "keepAlive": True, "persistMemory": True,
+                                                     **({"profileId": profile_id} if profile_id else {})})
+        return sess["id"]
+
+    async def cdp_url(self, session_id: str) -> str | None:
+        return (await self._req("GET", f"/browsers/{session_id}")).get("cdpUrl")
