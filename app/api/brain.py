@@ -91,9 +91,20 @@ class EventIn(BaseModel):
 @router.post("/events")
 async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
     """Things that happened outside a conversation (a reminder sent, a dose marked on the dashboard)."""
+    from app.care import doses
+
     ids = []
+    # A dose marked on the dashboard or with the Done button replaces any earlier answer about that dose (any recent day).
+    medicine = body.payload.get("medicine") if body.kind in doses.KINDS else None
+    day = doses.resolve_day(body.payload.get("dateKey")) if medicine else None
     # Shadow memory mirrors the live ledger, so the shadow brain sees the same day.
     for fid in (body.family_id, "shadow:" + body.family_id):
+        if medicine and day:
+            ids.append(await doses.record(
+                session, family_id=fid, subject_id=body.subject_id, kind=body.kind, medicine=str(medicine), summary=body.summary,
+                day=day, time=body.payload.get("time"), ref=body.ref, payload=body.payload,
+            ))
+            continue
         ids.append(
             await store.record_event(
                 session, family_id=fid, subject_id=body.subject_id, kind=body.kind, summary=body.summary,

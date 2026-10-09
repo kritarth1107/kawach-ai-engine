@@ -114,7 +114,8 @@ async def test_task_update_reaches_elder_before_she_answers(db, at, monkeypatch)
         host = SimHost()
         at("2026-10-08 14:47")
         await wake.system_turn(sessions, host, FAM, "[Task update] [t-1] Blinkit order: Diet Coke, waiting for otp. The service sent a login code to phone; ask the person who has that phone for it.", "task:abc123")
-        assert [m["text"] for m in host.world.sent] == ["Kamla ji, Blinkit ne login code bheja hai, bata dijiye."]
+        # mid-conversation (Saheli wrote 4 minutes ago): straight to the point, no name opener
+        assert [m["text"] for m in host.world.sent] == ["Blinkit ne login code bheja hai, bata dijiye."]
         at("2026-10-08 14:54")
         await wake.wake_due(sessions, lambda fid: host)
         assert len(host.world.sent) == 1, "a nudge still waits for her answer"

@@ -338,31 +338,41 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "log_dose",
-    "Record what happened with a medicine dose: taken, skipped, refused, missed, or the strip is empty.",
+    "Record what happened with a medicine dose: taken, skipped, refused, missed, or the strip is empty. Works for today or "
+    "an earlier day (day), and for one dose of a medicine taken more than once a day (time). Logging the same dose again "
+    "replaces the earlier answer (a correction).",
     {
         "medicine": {"type": "string", "description": "Medicine name or key"},
         "outcome": {"type": "string", "enum": ["taken", "skipped", "refused", "missed", "empty_strip"]},
+        "day": {"type": "string", "description": "today (default), yesterday, or YYYY-MM-DD within the last 7 days"},
+        "time": {"type": "string", "description": "The dose time (HH:MM) when the medicine is taken more than once a day"},
         "note": {"type": "string"},
         "about": ABOUT,
     },
     ["medicine", "outcome"],
 )
 async def log_dose(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import doses
+
     subject = ctx.subject(a.get("about"))
-    name = a["medicine"].split(":", 1)[-1]
+    name = a["medicine"].split(":", 1)[-1].replace("_", " ")
+    day = doses.resolve_day(a.get("day"))
+    if not day:
+        raise ToolRefused("day must be today, yesterday or a date in the last 7 days.")
+    today = day == clock.ist_day()
     first = slug(name).split("_")[0]
     earlier = []
-    if a["outcome"] == "taken" and first:
+    if a["outcome"] == "taken" and first and today:
         recent = await store.events(ctx.session, ctx.family_id, subject, since=clock.now() - timedelta(hours=3), kinds=["dose_taken"])
         earlier = [e for e in recent if first in (e.summary or "").lower() or first in json.dumps(e.payload or {}).lower()]
-    summary = f"{name}: {a['outcome']}" + (f" ({a['note']})" if a.get("note") else "")
-    await store.record_event(
-        ctx.session, family_id=ctx.family_id, subject_id=subject, kind=f"dose_{a['outcome']}",
-        summary=summary, payload={"medicine": name}, actor_id=ctx.speaker.get("id"), ref=ctx.message_ref and f"{ctx.message_ref}:{slug(name)}",
+    summary = f"{name}: {a['outcome']}" + ("" if today else f" (for {day})") + (f" ({a['note']})" if a.get("note") else "")
+    await doses.record(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind=f"dose_{a['outcome']}", medicine=name, summary=summary,
+        day=day, time=a.get("time"), actor_id=ctx.speaker.get("id"), ref=ctx.message_ref and f"{ctx.message_ref}:{slug(name)}:{day}",
     )
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
-        tool_name, {"title": name, "note": a.get("note") or a["outcome"]},
+        tool_name, {"title": name, "dateKey": day, "note": a.get("note") or a["outcome"], **({"time": a["time"]} if a.get("time") else {})},
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     out = {"logged": summary, "schedule": res}
@@ -586,6 +596,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     problems = await send_problems(ctx, a["to"], a["text"])
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
+    greeted, mid = guards.opening_state(await store.recent_turns(ctx.session, ctx.family_id, a["to"], limit=12), clock.now(), day_of=clock.ist_day)
+    a = {**a, "text": guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)}
     payload = {"to": a["to"], "text": a["text"]}
     if (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
         from app.care import outcomes

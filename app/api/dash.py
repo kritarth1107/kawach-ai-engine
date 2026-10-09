@@ -418,7 +418,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
             select(Turn).where(Turn.family_id == family_id, Turn.thread_id == elder_id, Turn.role == "user").order_by(Turn.id.desc()).limit(1)
         )
     ).scalar_one_or_none()
-    hidden = {"import_done", "memory_extract", "note_rewritten", "probe", "dashboard_edit"}
+    hidden = {"import_done", "memory_extract", "note_rewritten", "probe", "dashboard_edit", "dose_corrected"}
     timeline = [{"id": e.id, "at": e.at.isoformat(), "kind": e.kind, "text": e.summary} for e in reversed(todays) if e.kind not in hidden][:20]
     return {
         "now": now.isoformat(),

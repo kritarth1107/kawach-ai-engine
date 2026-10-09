@@ -265,3 +265,33 @@ async def test_message_to_hindi_writer_must_be_in_hindi(db, at, brain):
     out = await run_turn(db, host, _req("Asha se poochho nimbu paani pee sakta hoon kya"))
     assert len(host.world.sent) == 1 and "नींबू" in host.world.sent[0]["text"]
     assert "Devanagari script" in [a for a in out.actions if a["tool"] == "send_message"][0]["refused"]
+
+
+def test_no_greeting_or_name_opener_in_a_running_conversation():
+    """Live 2026-10-09 19:14: "राम राम सा वसुंधरा जी, घबराओ मत सा…" a minute after her last message (founder: no one greets
+    again in an active conversation)."""
+    live = "राम राम सा वसुंधरा जी, घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
+    assert g.tidy_opening(live, greeted_today=True, mid_conversation=True) == "घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
+    assert g.tidy_opening("वसुंधरा जी, आज कोई दवाई लिखी कोनी है।", greeted_today=True, mid_conversation=True) == "आज कोई दवाई लिखी कोनी है।"
+    assert g.tidy_opening("Namaste Asha ji! Maa took her BP tablet.", greeted_today=True, mid_conversation=True) == "Maa took her BP tablet."
+    # hours later the same day: no second greeting, but calling her by name is fine
+    assert g.tidy_opening("राम राम सा! वसुंधरा जी, दवाई ले ली?", greeted_today=True, mid_conversation=False) == "वसुंधरा जी, दवाई ले ली?"
+    # the first message of the day keeps its greeting; "हाँ जी," is not a name; a bare greeting is left alone
+    assert g.tidy_opening("राम राम सा वसुंधरा जी! दवाई ले ली?", greeted_today=False, mid_conversation=False).startswith("राम राम सा")
+    assert g.tidy_opening("हाँ जी, लिख लिया।", greeted_today=True, mid_conversation=True) == "हाँ जी, लिख लिया।"
+    assert g.tidy_opening("राम राम सा", greeted_today=True, mid_conversation=True) == "राम राम सा"
+    # "Hindi" is not "hi"
+    assert g.tidy_opening("Hindi mein bolun?", greeted_today=True, mid_conversation=True) == "Hindi mein bolun?"
+
+
+def test_opening_state_reads_the_thread():
+    from datetime import datetime, timedelta, timezone
+    from types import SimpleNamespace as T
+
+    from app.core import clock
+
+    now = datetime(2026, 10, 9, 13, 44, tzinfo=timezone.utc)
+    turns = [T(role="assistant", at=now - timedelta(minutes=1), text="जीवड़ो उदास क्यूँ है?"), T(role="user", at=now, text="Jee ghabran lagrya se")]
+    assert g.opening_state(turns, now, day_of=clock.ist_day) == (True, True)
+    assert g.opening_state([T(role="assistant", at=now - timedelta(hours=5), text="ok")], now, day_of=clock.ist_day) == (True, False)
+    assert g.opening_state([T(role="assistant", at=now - timedelta(days=1), text="ok")], now, day_of=clock.ist_day) == (False, False)

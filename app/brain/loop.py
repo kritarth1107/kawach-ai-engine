@@ -588,6 +588,9 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     if guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
+    if final and final != "none" and not is_system:
+        greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
+        final = guards.tidy_opening(final, greeted_today=greeted, mid_conversation=mid)
 
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,

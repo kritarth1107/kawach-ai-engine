@@ -127,6 +127,11 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
         logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
         return
+    from app.brain import guards
+
+    async with sessions() as session:
+        greeted, mid = guards.opening_state(await store.recent_turns(session, family_id, deliver_to, limit=12), clock.now(), day_of=clock.ist_day)
+    text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
     try:
         # The backend only accepts a family member as the actor (as TurnCtx.actor_id does on system turns): "saheli" was
         # refused, the request hung and the update never went out (live 2026-10-09 15:05, Maa's Blinkit price).

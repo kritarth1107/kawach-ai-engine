@@ -125,6 +125,7 @@ def notes_block(rows: list[MemoryNote], *, max_chars: int = 6000) -> str:
 
 
 def ledger(day_events: list[CareEvent]) -> str:
+    day_events = [e for e in day_events if e.kind != "dose_corrected"]  # an answer they corrected did not happen
     if not day_events:
         return "TODAY SO FAR: nothing logged yet (no reminders sent, no doses marked)."
     lines = ["TODAY SO FAR (IST, from the ledger; this is what actually happened):"]

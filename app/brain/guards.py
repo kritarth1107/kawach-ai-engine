@@ -404,6 +404,37 @@ def repeats(text: str, earlier: list[str]) -> list[str]:
     return problems
 
 
+_GREETING = (r"(?:राम[\s-]*राम|जय\s*श्री\s*(?:कृष्ण|राम)|जय\s*जोहार|जय\s*जिनेंद्र|नमस्ते|नमस्कार|प्रणाम|पायलागूं|खम्मा\s*घणी|"
+             r"सत\s*श्री\s*अकाल|ram[\s-]*ram|namaste|namaskar|pranam|hello|hi|hey|good\s+(?:morning|afternoon|evening))")
+_HONORIFIC = r"(?:\s*(?:सा|जी|ji|sa|साहब))?"
+GREETING_OPENER = re.compile(rf"^\s*{_GREETING}{_HONORIFIC}(?=[\s,!।.]|$)[\s,!।.]*", re.I)
+NAME_OPENER = re.compile(r"^\s*([^\s,!।.?]+)\s*(?:जी|ji|सा)\s*[,!।]\s*", re.I)
+NOT_A_NAME = {"हाँ", "हां", "हा", "ठीक", "अच्छा", "बिल्कुल", "नहीं", "ना", "जी", "han", "haan", "ok", "theek", "accha"}
+
+
+def opening_state(turns: list, now, *, day_of) -> tuple[bool, bool]:
+    """(Saheli already wrote to them today, she wrote to them in the last 2 hours) from their thread's turns."""
+    mine = [t.at for t in turns if t.role == "assistant" and (t.text or "").strip() not in ("", "none")]
+    return any(day_of(at) == day_of(now) for at in mine), any((now - at).total_seconds() < 2 * 3600 for at in mine)
+
+
+def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool) -> str:
+    """No second greeting in a day, and no greeting or name opener in a running conversation (founder 2026-10-09: "no one
+    greets again in an active conversation; make it crisp and direct"). Live: "राम राम सा वसुंधरा जी, घबराओ मत सा…" one
+    minute after her last message."""
+    out = text
+    if greeted_today or mid_conversation:
+        out = GREETING_OPENER.sub("", out, count=1)
+    if mid_conversation:
+        m = NAME_OPENER.match(out)
+        if m and m.group(1).lower() not in NOT_A_NAME:
+            out = out[m.end():]
+    out = out.strip()
+    if len(words(out)) < 2:  # the greeting was the whole message
+        return text
+    return out[0].upper() + out[1:] if out[0].isascii() else out
+
+
 def duplicate_message(text: str, sent: list[tuple[str, bool]]) -> str | None:
     """sent: [(earlier message to this person, they answered since)], newest last. The earlier one this repeats, if any."""
     for old, answered in reversed(sent):

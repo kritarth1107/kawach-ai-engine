@@ -38,8 +38,8 @@ async def test_stock_counts_down_and_flags_refill(db, at):
     rows = await call(c, "medicine_stock", {})
     assert rows["medicines"][0]["stock"] is None and rows["unknown"] == ["Amlodipine"]
     await call(c, "set_stock", {"medicine": "amlodipine", "count": 14})
-    at("2026-10-02 09:00")
-    for _ in range(4):
+    for when in ("2026-10-01 08:10", "2026-10-01 20:10", "2026-10-02 08:10", "2026-10-02 20:10"):  # four doses (the same dose said twice is one)
+        at(when)
         await call(ctx(db, ELDER, "elder"), "log_dose", {"medicine": "Amlodipine", "outcome": "taken"})
     row = (await features.stock(db, FAM, ELDER))[0]
     assert row["stock"] == 10 and row["daysLeft"] == 5 and row["low"]
