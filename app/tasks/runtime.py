@@ -1048,7 +1048,8 @@ async def tick(
                         task.result = {**(task.result or {}), **{k: v for k, v in report.items() if v not in (None, "", [])}}
                         status, message = _outcome(task, report)
                         task.status = status
-                        note(task, f"{task.phase} → {status} (connector): {message}")
+                        via = "fast look-up" if (task.details or {}).get("fast_session") and task.phase == "browse" else "connector"
+                        note(task, f"{task.phase} → {status} ({via}): {message}")
                         if status == "done" and task.cancel_requested:
                             task.phase, task.status = "cancel", "queued"
                             task.deadline_at = clock.now() + TASK_LIFETIME
