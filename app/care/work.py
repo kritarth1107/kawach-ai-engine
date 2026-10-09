@@ -77,12 +77,12 @@ def from_loop(l: OpenLoop) -> dict:
         "appointment": "go to the appointment" if l.wake_at and l.wake_at <= clock.now() else "be reminded before the appointment",
         "refill": "decide whether to reorder",
         "question": "answer Saheli's question",
-        "follow_up": "Saheli checks back",
+        "follow_up": "checks back",
         "check_in": "answer the weekly check-in",
         "confirm": "confirm or correct what Saheli saved",
-        "watch": "Saheli keeps an eye on it",
+        "watch": "keeps an eye on it",
         "delivery": "confirm it arrived",
-    }.get(kind, "Saheli checks back")
+    }.get(kind, "checks back")
     saheli_acts = kind in ("follow_up", "watch")
     state = "done" if l.status == "done" else ("cancelled" if l.status in ("cancelled", "expired") else ("working" if saheli_acts else "waiting"))
     return {
