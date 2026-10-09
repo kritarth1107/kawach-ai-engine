@@ -1,4 +1,4 @@
-from app.learn import tuning
+from app.learn import tuning_readiness as tuning
 
 
 async def test_readiness_names_what_is_missing(db):

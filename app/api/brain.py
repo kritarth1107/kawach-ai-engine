@@ -339,9 +339,9 @@ async def learn_corrections(session: Annotated[AsyncSession, Depends(get_db)], d
 @router.get("/learn/tuning-readiness")
 async def learn_tuning_readiness(session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
     """Is there enough good, consented, anonymised data to fine-tune a fast model yet, and what is missing."""
-    from app.learn import tuning
+    from app.learn import tuning_readiness
 
-    return await tuning.readiness(session)
+    return await tuning_readiness.readiness(session)
 
 
 @router.get("/learn/flywheel")
