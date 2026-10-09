@@ -34,7 +34,7 @@ class FakeAgent:
     _polls: dict[str, int] = field(default_factory=dict)
     _out: dict[str, dict] = field(default_factory=dict)
 
-    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None) -> AgentRun:
+    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None, flash=False) -> AgentRun:
         tid = f"t{next(self._ids)}"
         phase = metadata.get("phase", "prepare")
         # "browse:zepto" scripts one store; "browse" every store
@@ -42,7 +42,7 @@ class FakeAgent:
         out = queue.pop(0) if len(queue) > 1 else queue[0]
         self._out[tid] = out
         self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm,
-                          "agent": metadata.get("agent"), "service": metadata.get("service")})
+                          "agent": metadata.get("agent"), "service": metadata.get("service"), "flash": flash})
         return AgentRun(task_id=tid, session_id=session_id or f"s-{tid}", status="created")
 
     async def poll(self, task_id: str) -> AgentRun:

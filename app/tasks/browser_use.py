@@ -62,7 +62,7 @@ class AgentRun:
 
 class BrowserAgent(Protocol):
     async def run(self, *, goal: str, hints: str, schema: dict, session_id: str | None, profile_id: str | None,
-                  start_url: str | None, max_steps: int, metadata: dict, llm: str | None = None) -> AgentRun: ...
+                  start_url: str | None, max_steps: int, metadata: dict, llm: str | None = None, flash: bool = False) -> AgentRun: ...
 
     async def poll(self, task_id: str) -> AgentRun: ...
 
@@ -100,7 +100,7 @@ class BrowserUseCloud:
             raise RuntimeError(f"browser-use {method} {path.split('/')[1]} {r.status_code}: {r.text[:200]}")
         return r.json() if r.content else {}
 
-    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None) -> AgentRun:
+    async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None, flash=False) -> AgentRun:
         body: dict = {
             "task": goal,
             "llm": llm or self.llm,
@@ -110,6 +110,8 @@ class BrowserUseCloud:
             "metadata": {k: str(v)[:100] for k, v in list(metadata.items())[:10]},
             "vision": True,
         }
+        if flash:
+            body["flashMode"] = True  # fewer reasoning steps per action: faster on simple, well-known pages
         if start_url:
             body["startUrl"] = start_url
         domains = allowed_domains(metadata.get("service"), start_url)

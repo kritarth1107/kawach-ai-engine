@@ -181,6 +181,11 @@ async def _announce_overdue(sessions: async_sessionmaker) -> list[tuple[Task, st
 YES_WORDS = ("yes", "confirm", "true", "haan", "ha", "han", "ok", "okay", "theek hai", "go", "go ahead", "kar do", "karo")
 
 
+def flash_phases() -> set[str]:
+    """Phases run in Browser Use flash mode (TASK_FLASH_PHASES, e.g. 'browse,place'); off until tested per store."""
+    return {p.strip() for p in os.getenv("TASK_FLASH_PHASES", "").split(",") if p.strip()}
+
+
 def task_max_cost() -> float:
     return float(os.getenv("TASK_MAX_COST_INR", "120"))  # a look-up, login, cart and placing (~80 steps) fit
 
@@ -336,6 +341,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             max_steps=spec.steps.get(task.phase, 40),
             metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
             llm=spec.model,
+            flash=task.phase in flash_phases(),
         )
 
     try:
