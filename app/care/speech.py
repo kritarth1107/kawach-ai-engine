@@ -8,6 +8,7 @@ must survive and the length stays close, else the text is spoken as it is.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -55,23 +56,48 @@ def _json(raw: str) -> dict:
         return {}
 
 
+async def _ask(route, text: str, language: str) -> tuple[str, str]:
+    reply = await router.complete(
+        "speech", system_stable=PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": f"Listener speaks: {language}.\nMessage:\n{text}"}]}],
+        max_tokens=1500, effort="low", timeout_s=TIMEOUT_S, essential=False, routes=[route],
+    )
+    return reply.text, reply.model
+
+
+def _good(text: str, raw: str) -> dict | None:
+    out = _json(raw)
+    script = str(out.get("script") or "").strip()
+    if not script or not same_points(text, script):
+        return None
+    return {"script": script, "mood": out.get("mood") if out.get("mood") in MOODS else ""}
+
+
 async def prepare(text: str, language: str) -> dict:
-    """{"script", "mood", "prepared"}; on any doubt the text itself (prepared false, mood "")."""
+    """{"script", "mood", "prepared"}; on any doubt or after TIMEOUT_S the text itself (prepared false, mood "").
+
+    Every model on the speech route is asked at once and the first good answer wins: a single call's latency varied from
+    2 to 8 s live, and a voice note waits for this."""
     fallback = {"script": text, "mood": "", "prepared": False}
     if not text.strip() or len(text) > 1500:
         return fallback
+    pending = {asyncio.ensure_future(_ask(r, text, language)) for r in router.routes_for("speech")}
+    deadline = asyncio.get_running_loop().time() + TIMEOUT_S
     try:
-        reply = await router.complete(
-            "speech", system_stable=PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": f"Listener speaks: {language}.\nMessage:\n{text}"}]}],
-            max_tokens=1500, effort="low", timeout_s=TIMEOUT_S, essential=False,
-        )
-    except Exception as exc:  # noqa: BLE001 — the voice note still goes out with the text as written
-        logger.warning("speech prepare failed: %s", exc)
+        while pending:
+            done, pending = await asyncio.wait(pending, timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
+                                               return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                break
+            for task in done:
+                if task.exception():
+                    logger.warning("speech prepare failed on one model: %s", task.exception())
+                    continue
+                raw, model = task.result()
+                good = _good(text, raw)
+                if good:
+                    return {**good, "prepared": True, "model": model}
+                logger.info("speech prepare rejected from %s (facts or length changed)", model)
         return fallback
-    out = _json(reply.text)
-    script = str(out.get("script") or "").strip()
-    if not script or not same_points(text, script):
-        logger.info("speech prepare rejected (facts or length changed)")
-        return fallback
-    mood = out.get("mood") if out.get("mood") in MOODS else ""
-    return {"script": script, "mood": mood, "prepared": True, "model": reply.model}
+    finally:
+        for task in pending:
+            task.cancel()
