@@ -323,6 +323,14 @@ async def learn_weekly_job() -> dict:
     return await lessons.weekly(SessionLocal)
 
 
+@router.get("/learn/flywheel")
+async def learn_flywheel(session: Annotated[AsyncSession, Depends(get_db)], days: int = 14) -> dict:
+    """Completion, time, reopen rate and cost per task; adherence; reply and check-in answer rates; approvals; delegation."""
+    from app.learn import flywheel
+
+    return await flywheel.compute(session, days=max(1, min(days, 90)))
+
+
 @router.get("/learn/overview")
 async def learn_overview(weeks: int = 8) -> dict:
     from app.db.session import SessionLocal
