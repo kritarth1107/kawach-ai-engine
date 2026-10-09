@@ -88,7 +88,9 @@ async def run_candidate(route: str, args, judge) -> dict:
     from app.llm import router, spend
     from app.sim.world import SimHost
 
-    os.environ["MODEL_ROUTES"] = json.dumps({"brain": [route]})
+    # the other roles as in production (BENCH_BASE_ROUTES), only the brain changes
+    base = json.loads(os.getenv("BENCH_BASE_ROUTES") or "{}")
+    os.environ["MODEL_ROUTES"] = json.dumps({**base, "brain": [route], "brain_hard": [route]})
     router.reset_breakers()
     cost = {"inr": 0.0}
     original = spend.record
@@ -119,7 +121,7 @@ async def run_candidate(route: str, args, judge) -> dict:
 
     bs.say = say
     try:
-        names = [n for n in bs.SCENARIOS if n not in args.skip]
+        names = [n for n in bs.SCENARIOS if n not in args.skip and (not args.only or n in args.only)]
         for name in names + ["founder_cases"]:
             if cost["inr"] > args.max_inr_each:
                 scen.append({"name": name, "passed": False, "failures": ["skipped: candidate budget reached"]})
@@ -185,13 +187,15 @@ async def main() -> int:
     ap.add_argument("--yes", action="store_true")
     ap.add_argument("--no-judge", action="store_true")
     ap.add_argument("--skip", default="", help="comma-separated scenario names to skip")
+    ap.add_argument("--only", default="", help="comma-separated scenario names to run (founder cases always run)")
     args = ap.parse_args()
     args.skip = {s for s in args.skip.split(",") if s}
+    args.only = {s for s in args.only.split(",") if s}
     project = os.getenv("GCP_PROJECT_ID", "")
     if not project or project == "kavach-care":
         print("Refusing: set GCP_PROJECT_ID to a separate project (never kavach-care).")
         return 2
-    if "5433" not in os.getenv("DATABASE_URL", "") and "kawach_sim" not in os.getenv("DATABASE_URL", ""):
+    if "5433" not in os.getenv("DATABASE_URL", "") and "kawach_sim" not in os.getenv("DATABASE_URL", "") and "kawach_bench" not in os.getenv("DATABASE_URL", ""):
         print("Refusing: DATABASE_URL must be the simulator database.")
         return 2
     models = [m for m in args.models.split(",") if m]
@@ -203,7 +207,12 @@ async def main() -> int:
     from sqlalchemy import text
 
     import brain_scenarios as bs
-    from app.care import models as _m  # noqa: F401
+    import importlib
+
+    for mod in ("app.care.baselines", "app.care.memory_index", "app.care.models", "app.care.skillbook", "app.care.versions",
+                "app.learn.models", "app.llm.spend", "app.models.entities", "app.specialists.channels", "app.tasks.models",
+                "app.tasks.sandbox"):
+        importlib.import_module(mod)  # every table, so create_all makes them all in the simulator database
     from app.db.session import Base, SessionLocal, engine
     from app.llm import spend
     from app.models import entities  # noqa: F401

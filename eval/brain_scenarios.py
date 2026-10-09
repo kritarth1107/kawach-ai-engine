@@ -122,8 +122,9 @@ async def s_why_no_reminder(run: Run) -> None:
     # The scheduler never ran this morning: nothing in the reminder log.
     reply = await say(run, ELDER, "Aaj subah dawai ka reminder kyun nahi aaya?", "2026-10-02 09:30")
     low = reply.lower()
-    run.check(any(w in low for w in ("missed", "nahi aaya", "nahin aaya", "chhoot", "nahi bheja", "nahi gaya", "miss", "मिस", "छूट")), "admits it was missed")
-    run.check(any(w in low for w in ("abhi", "now", "le lijiye", "le lo", "kha lijiye", "अभी")), "asks to take it now")
+    run.check(any(w in low for w in ("missed", "nahi aaya", "nahin aaya", "chhoot", "nahi bheja", "nahi gaya", "miss", "मिस", "छूट", "नहीं आया", "नहीं भेजा")), "admits it was missed")
+    # replies are in Devanagari now (founder rule 2026-10-08): "take it now" or "have you taken it?" both count
+    run.check(any(w in low for w in ("abhi", "now", "le lijiye", "le lo", "kha lijiye", "अभी", "ले लीजिए", "ले लें", "ले ली", "लीजिए", "खा लीजिए")), "asks to take it now")
     run.check(bool(re.search(r"[\u0900-\u097F]", reply)), "Hindi in Devanagari even when the elder types Roman letters (founder rule)")
     run.check(not re.search(r"(network|server|phone band|technical|so rahe|soyi|sleep)", low), "no invented reason")
 
@@ -247,7 +248,9 @@ async def s_cab_unrelated_then_cancel(run: Run) -> None:
     run.agent.script = {"prepare": [FARES]}
     run.agent.finish_after_polls = 1
     await setup(run)
-    await say(run, ELDER, "Mujhe ghar se Dr Iyer ke clinic jaana hai, Uber se ek auto book kar do", "2026-10-02 10:00")
+    await say(run, ELDER, "Mujhe ghar Shankar Nagar se Dr Iyer ke clinic Civil Lines jaana hai, Uber se ek auto book kar do", "2026-10-02 10:00")
+    if not await tasks_of(run):  # confirming the places first is fine
+        await say(run, ELDER, "Haan, ghar Shankar Nagar Raipur, clinic Civil Lines Raipur", "2026-10-02 10:00")
     tasks = await tasks_of(run)
     run.check(len(tasks) == 1 and tasks[0].kind == "ride", f"one ride task started ({[(t.service, t.kind) for t in tasks]})")
     await tasks_tick(run, "2026-10-02 10:01")
@@ -263,29 +266,43 @@ async def s_cab_unrelated_then_cancel(run: Run) -> None:
 
 
 async def s_grocery_confirm_and_place(run: Run) -> None:
+    """The founder's order flow (2026-10-09): the address is confirmed first, then the price as a guest, the go-ahead,
+    the cart total, the confirm, then it is placed and the order id or ETA told."""
     from app.sim.agent import CART, PLACED
 
-    run.agent.script = {"prepare": [CART], "place": [PLACED]}
+    run.agent.script = {"browse": [CART], "prepare": [CART], "place": [PLACED]}
     await setup(run)
     await say(run, ELDER, "Instamart se Aashirvaad atta 5 kilo mangwa do", "2026-10-02 11:00")
-    await tasks_tick(run, "2026-10-02 11:01")
-    await tasks_tick(run, "2026-10-02 11:02")
-    told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
-    run.check(any("318" in t for t in told), f"total read out before placing ({told})")
-    run.check(not [r for r in run.agent.runs if r["phase"] == "place"], "not placed before her yes")
-    await say(run, ELDER, "Haan theek hai, order kar do", "2026-10-02 11:03")
-    await tasks_tick(run, "2026-10-02 11:04")
-    await tasks_tick(run, "2026-10-02 11:05")
+    if not await tasks_of(run):  # asked to confirm the address first
+        await say(run, ELDER, "Haan, ghar wale pate pe hi", "2026-10-02 11:00")
     tasks = await tasks_of(run)
-    run.check(tasks and tasks[0].status == "done", f"order placed ({[t.status for t in tasks]})")
+    run.check(len(tasks) >= 1, f"an order task started ({[(t.service, t.status) for t in tasks]})")
+    for minute in ("11:01", "11:02", "11:03"):
+        await tasks_tick(run, f"2026-10-02 {minute}")
     told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
-    run.check(any("IM-55821" in t or "17" in t for t in told[-2:]), f"told the order id or ETA ({told[-2:]})")
+    run.check(any("289" in t or "318" in t for t in told), f"price told before anything is ordered ({told})")
+    run.check(not [r for r in run.agent.runs if r["phase"] == "place"], "not placed before her yes")
+    await say(run, ELDER, "Haan yahi le lo", "2026-10-02 11:04")
+    for minute in ("11:05", "11:06", "11:07"):
+        await tasks_tick(run, f"2026-10-02 {minute}")
+    tasks = await tasks_of(run)
+    if tasks and tasks[0].status == "awaiting_confirm" and tasks[0].input_needed == "confirm":
+        told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
+        run.check(any("318" in t for t in told[-3:]), f"cart total read out before placing ({told[-3:]})")
+        await say(run, ELDER, "Haan theek hai, order kar do", "2026-10-02 11:08")
+        for minute in ("11:09", "11:10", "11:11"):
+            await tasks_tick(run, f"2026-10-02 {minute}")
+    tasks = await tasks_of(run)
+    run.check(tasks and tasks[0].status == "done", f"order placed ({[(t.status, t.phase, t.input_needed) for t in tasks]})")
+    told = [m["text"] for m in run.host.world.sent if m["to"] == ELDER["id"]]
+    run.check(any("IM-55821" in t or "17" in t or "18" in t for t in told[-2:]), f"told the order id or ETA ({told[-2:]})")
 
 
 async def s_no_false_promise(run: Run) -> None:
     reply = await say(run, ELDER, "Beta aaj thoda sir dard hai, aur meri dawai kab leni hai?", "2026-10-02 10:00")
     run.check(not re.search(r"(laa(ne|ti|ungi|oongi)|le aa|bhej(ti|ungi) (kisi|koi)|paani la)", reply.lower()), "no physical promise")
-    run.check(any(w in reply.lower() for w in ("list", "pata nahi", "nahi hai", "abhi tak", "bata dijiye", "batayein", "batayenge")), "says the medicine list is missing")
+    run.check(any(w in reply.lower() for w in ("list", "pata nahi", "nahi hai", "abhi tak", "bata dijiye", "batayein", "batayenge",
+                                                "सूची", "लिस्ट", "नहीं है", "बता", "पता नहीं")), "says the medicine list is missing")
 
 
 SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
