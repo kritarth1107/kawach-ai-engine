@@ -56,7 +56,9 @@ async def _proactive_today(session: AsyncSession, family_id: str, person: str) -
     rows = (await session.execute(
         select(Turn.at, Turn.meta).where(Turn.family_id == family_id, Turn.thread_id == person, Turn.role == "assistant", Turn.at >= start)
     )).all()
-    return [at for at, meta in rows if (meta or {}).get("proactive")]
+    # Order and ride updates answer something they asked for: they are not nudges and do not use up the day's check-ins.
+    return [at for at, meta in rows if (meta or {}).get("proactive")
+            and not str((meta or {}).get("ref") or (meta or {}).get("fallback_delivery") or "").startswith("task:")]
 
 
 async def _asked(session: AsyncSession, family_id: str, subject: str) -> dict[str, datetime]:
@@ -138,14 +140,14 @@ async def plan(session: AsyncSession, host, family_id: str, subject: str, *, now
     # 2. A gentler health question, at most one a day, in a good window, not mid-conversation.
     if not in_health_window(now) or (last_msg and now - last_msg < AFTER_CHAT[1]) or (sent and now - max(sent) < MIN_GAP):
         return None
-    if any(clock.ist_day(at) == day for t, at in asked.items() if t in EVERY):
+    if any(clock.ist_day(at) == day for t, at in asked.items() if t in EVERY or t.startswith("reading:")):
         return None
-    due_topics: list[tuple[timedelta, str, str]] = []
+    due_topics: list[tuple[timedelta, int, str, str]] = []  # (how overdue, rank on a tie: feelings before weight, topic, prompt)
     weight = await _last_vital(session, family_id, subject, "weight")
     if now - (weight.at if weight else datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY["weight"] and \
             now - asked.get("weight", datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY["weight"]:
         last = f"Their last weight on record is {weight.summary} from {clock.ist(weight.at).strftime('%d %b')}." if weight else "No weight is on record yet."
-        due_topics.append((now - asked.get("weight", now - EVERY["weight"]) - EVERY["weight"], "weight",
+        due_topics.append((now - asked.get("weight", now - EVERY["weight"]) - EVERY["weight"], 3, "weight",
                            f"[Check-in: weight] {last} Ask person {subject} once, lightly, whether they could check their weight "
                            f"today or tomorrow and tell you (no pressure; skip it if they have no scale). log_vital weight when "
                            f"they answer. send_message, then reply none."))
@@ -154,26 +156,42 @@ async def plan(session: AsyncSession, host, family_id: str, subject: str, *, now
         if (reading is None or now - reading.at >= EVERY["readings"]) and now - asked.get(f"reading:{kind}", datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY["readings"]:
             name = {"bp": "blood pressure", "sugar": "sugar"}[kind]
             last = f" Their last {name} on record: {reading.summary} ({clock.ist(reading.at).strftime('%d %b')})." if reading else ""
-            due_topics.append((now - asked.get(f"reading:{kind}", now - EVERY["readings"]) - EVERY["readings"], f"reading:{kind}",
+            due_topics.append((now - asked.get(f"reading:{kind}", now - EVERY["readings"]) - EVERY["readings"], 1, f"reading:{kind}",
                                f"[Check-in: {name}] Person {subject} has a condition where {name} matters.{last} Ask once, short, "
                                f"whether they checked their {name} today and what it was; if they have no machine, do not push. "
                                f"log_vital {kind} when they answer, and follow your red-flag rules. send_message, then reply none."))
-    for topic, text in (
-        ("feelings", f"[Check-in: how they are] Ask person {subject} one short, warm question in their language and script about how "
-                     f"they are feeling today: any pain, trouble, sleep or worry. Fit it to what you know of them (their conditions, "
-                     f"the last things they told you, how they felt last time) and do not repeat a question from the last days. If "
-                     f"they mention a problem later, log it (log_event symptom) and follow your red-flag rules. send_message, then reply none."),
-        ("reports", f"[Check-in: reports] Ask person {subject} once, short, whether they had any doctor visit, test or new report "
-                    f"this week. If yes, ask them to send a photo of it here (you read it and show what you found before anything "
-                    f"is saved). send_message, then reply none."),
+    # A problem they told Saheli about (dizziness, pain) since the last time she asked how they are: ask about it first.
+    told = await _symptoms_since(session, family_id, subject, asked.get("feelings"), now)
+    said = "; ".join(clock.ist(e.at).strftime("%d %b %H:%M") + " " + e.summary for e in told[-3:])
+    about = f" Since you last asked, they told you: {said}. Ask how that is now, first." if told else ""
+    for topic, rank, text in (
+        ("feelings", 0, f"[Check-in: how they are] Ask person {subject} one short, warm question in their language and script about how "
+                        f"they are feeling today: any pain, trouble, sleep or worry.{about} Fit it to what you know of them (their "
+                        f"conditions, the last things they told you, how they felt last time) and do not repeat a question from the last "
+                        f"days. If they mention a problem later, log it (log_event symptom) and follow your red-flag rules. send_message, "
+                        f"then reply none."),
+        ("reports", 2, f"[Check-in: reports] Ask person {subject} once, short, whether they had any doctor visit, test or new report "
+                       f"this week. If yes, ask them to send a photo of it here (you read it and show what you found before anything "
+                       f"is saved). send_message, then reply none."),
     ):
-        if now - asked.get(topic, datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY[topic]:
-            due_topics.append((now - asked.get(topic, now - EVERY[topic]) - EVERY[topic], topic, text))
+        if told and topic == "feelings":
+            due_topics.append((timedelta(days=365), rank, topic, text))
+        elif now - asked.get(topic, datetime.min.replace(tzinfo=now.tzinfo)) >= EVERY[topic]:
+            due_topics.append((now - asked.get(topic, now - EVERY[topic]) - EVERY[topic], rank, topic, text))
     if not due_topics:
         return None
-    due_topics.sort(key=lambda x: x[0], reverse=True)  # the most overdue first
-    _, topic, prompt = due_topics[0]
+    due_topics.sort(key=lambda x: (x[0], -x[1]), reverse=True)  # the most overdue first; on a tie, feelings before weight
+    _, _, topic, prompt = due_topics[0]
     return topic, prompt
+
+
+async def _symptoms_since(session: AsyncSession, family_id: str, subject: str, since: datetime | None, now: datetime) -> list[CareEvent]:
+    """Problems they reported in the last two days that Saheli has not asked about since."""
+    start = max(since or now - timedelta(days=2), now - timedelta(days=2))
+    return list((await session.execute(
+        select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == subject, CareEvent.kind == "symptom",
+                                CareEvent.at > start).order_by(CareEvent.at)
+    )).scalars())
 
 
 STYLE = (" Do not start with the same greeting as your last message to them; vary your words. If the conversation shows they are "

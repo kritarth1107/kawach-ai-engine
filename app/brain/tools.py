@@ -597,7 +597,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     )
     turn_id = await store.add_turn(
         ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
-        meta={"proactive": True, "delivered": res.get("delivered")},
+        meta={"proactive": True, "delivered": res.get("delivered"), **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {})},
     )
     try:
         from app.learn import scoring, situations

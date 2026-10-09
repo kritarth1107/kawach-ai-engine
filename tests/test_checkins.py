@@ -87,6 +87,40 @@ async def test_health_questions_rotate_and_weight_waits_20_days(db, at):
     assert await checkins.plan(db, Host([]), FAM, MAA["id"], now=at("2026-10-10 14:00")) is None
 
 
+async def test_first_health_question_is_how_they_feel_not_weight(db, at):
+    now = at("2026-10-09 11:00")
+    await store.save_roster(db, FAM, MAA, [MAA])
+    got = await checkins.plan(db, Host([]), FAM, MAA["id"], now=now)
+    assert got and got[0] == "feelings"
+
+
+async def test_a_reported_problem_is_followed_up_first(db, at):
+    """Live 2026-10-09 19:17: Maa said she felt uneasy and dizzy. The next check-in asks about that before anything else."""
+    now = at("2026-10-10 11:00")
+    await store.save_roster(db, FAM, MAA, [MAA])
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="x", payload={"topic": "feelings"})
+    (await store.events(db, FAM, MAA["id"], kinds=["checkin"]))[-1].at = now - timedelta(days=1)
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="symptom", summary="चक्कर आ रहे हैं (dizziness)")
+    (await store.events(db, FAM, MAA["id"], kinds=["symptom"]))[-1].at = now - timedelta(hours=16)
+    await db.commit()
+    got = await checkins.plan(db, Host([]), FAM, MAA["id"], now=now)
+    assert got and got[0] == "feelings" and "dizziness" in got[1] and "Ask how that is now" in got[1]
+
+
+async def test_order_updates_do_not_use_up_the_days_check_ins(db, at):
+    now = at("2026-10-09 17:00")
+    await store.save_roster(db, FAM, MAA, [MAA])
+    for i in range(3):
+        await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="assistant", text=f"order update {i}",
+                             meta={"proactive": True, "ref": f"task:t{i}"})
+    await db.commit()
+    assert await checkins.plan(db, Host([]), FAM, MAA["id"], now=now) is not None
+    for i in range(3):
+        await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="assistant", text=f"nudge {i}", meta={"proactive": True})
+    await db.commit()
+    assert await checkins.plan(db, Host([]), FAM, MAA["id"], now=now) is None, "three own messages today: enough"
+
+
 async def test_self_care_person_gets_the_same_check_ins(db, at):
     now = at("2026-10-09 17:00")
     await store.save_roster(db, FAM, SELF, [SELF])  # caring for herself: the subject is herself
