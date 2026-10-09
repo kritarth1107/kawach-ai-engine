@@ -412,6 +412,14 @@ NAME_OPENER = re.compile(r"^\s*([^\s,!।.?]+)\s*(?:जी|ji|सा)\s*[,!।]\
 NOT_A_NAME = {"हाँ", "हां", "हा", "ठीक", "अच्छा", "बिल्कुल", "नहीं", "ना", "जी", "han", "haan", "ok", "theek", "accha"}
 
 
+def whatsapp_format(text: str) -> str:
+    """Markdown the model writes → WhatsApp's own: **bold** → *bold*, no '#' headings (live: '**PharmEasy Labs**' showed
+    stray asterisks)."""
+    out = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text or "")
+    out = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", out)
+    return re.sub(r"__(.+?)__", r"_\1_", out)
+
+
 def opening_state(turns: list, now, *, day_of) -> tuple[bool, bool]:
     """(Saheli already wrote to them today, she wrote to them in the last 2 hours) from their thread's turns."""
     mine = [t.at for t in turns if t.role == "assistant" and (t.text or "").strip() not in ("", "none")]

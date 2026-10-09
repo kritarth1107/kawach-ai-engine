@@ -295,3 +295,9 @@ def test_opening_state_reads_the_thread():
     assert g.opening_state(turns, now, day_of=clock.ist_day) == (True, True)
     assert g.opening_state([T(role="assistant", at=now - timedelta(hours=5), text="ok")], now, day_of=clock.ist_day) == (True, False)
     assert g.opening_state([T(role="assistant", at=now - timedelta(days=1), text="ok")], now, day_of=clock.ist_day) == (False, False)
+
+
+def test_markdown_becomes_whatsapp_formatting():
+    assert g.whatsapp_format("1. **PharmEasy Labs**: ₹449") == "1. *PharmEasy Labs*: ₹449"
+    assert g.whatsapp_format("## Options\nok") == "Options\nok"
+    assert g.whatsapp_format("*already* fine") == "*already* fine"
