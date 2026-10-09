@@ -830,7 +830,7 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
     return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
 
 
-ADDRESS_OK_FOR = timedelta(minutes=30)
+ADDRESS_OK_FOR = timedelta(minutes=10)  # one order's back-and-forth; a later order asks again (live 2026-10-09: 28 min later it skipped)
 
 
 async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
