@@ -655,3 +655,43 @@ async def test_logged_in_blinkit_builds_the_cart_through_its_own_request(db, at,
     assert agent.runs == [], "no browser agent at all: look-up and cart both through the store's requests"
     assert built["products"][0]["store_id"] == "746124"
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹218" and "₹218" in h.told[-1]
+
+
+async def test_not_logged_in_the_agent_only_logs_in_then_the_cart_is_built_fast(db, at, sessions, monkeypatch):
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None):
+        return {"deliverable": True, "eta": None, "items": [{"name": "Diet Coke", "pack": "330 ml", "price": "₹209", "available": True, "store_id": "746124"}]}
+
+    calls = {"n": 0}
+
+    async def fake_cart(cdp, products, lat=None, lon=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise fastpath.FastPathError("not logged in")
+        return {"items": [{"name": "Diet Coke", "qty": 1, "price": "₹209", "available": True}], "total": "₹218", "cod_available": True, "logged_in": True}
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "blinkit_cart", fake_cart)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 18:10")
+    logged = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": ""}
+    agent = FastAgent(script={"prepare": [OTP, logged]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69}))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert agent.runs, [x["note"] for x in t.history]
+    goal = agent.runs[0]["goal"]
+    assert "only log in" in goal and "enter the mobile number 9000012345" in goal and "Put exactly these in the cart" not in goal
+    assert t.input_needed == "otp"
+    await runtime.provide_input(db, t, kind="otp", value="4821", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick(); await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹218" and calls["n"] == 2

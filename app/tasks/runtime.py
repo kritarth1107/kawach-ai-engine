@@ -289,6 +289,11 @@ async def _hints(session: AsyncSession, service: str, phase: str = "prepare") ->
 
 
 def _goal(task: Task) -> str:
+    if task.phase == "prepare" and (task.details or {}).get("login_only"):
+        # The cart is built through the store's own request once logged in: the agent only has to log in.
+        label = SKILLS[task.service]["label"]
+        return (f"On {label}, only log in to the account; do not search, add to the cart or open checkout. When the site shows "
+                f"you are logged in, stop and report logged_in=true.")
     return specialist_for(task.service).goal(task)
 
 
@@ -321,7 +326,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         if got is None:
             got = await profile_for(task)
         goal += login_line(got)
-    if task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order":
+    if task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only"):
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
         if seen:
@@ -637,6 +642,10 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             return "needs_input", (f"The store's login page closed before the code could be used, so it sent a new code to {to}. "
                                    "Say sorry briefly and ask for the new code (the earlier one will not work).")
         return "needs_input", f"The service sent a login code to {to}; ask the person who has that phone for it."
+    if task.phase in ("prepare", "otp") and d.get("login_only") and out.get("logged_in") and not out.get("blocked"):
+        # Logged in: back to the fast cart (once more), then the cart comes back for a confirm.
+        task.details = {**d, "login_only": False, "login_done": True, "fast_cart_tried": False}
+        return "queued", ""
     if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
         return "failed", (f"{SKILLS[task.service]['label']} needs a login and there is no phone number to log in with, so nothing was "
                           "ordered and no code was sent. Offer another service, or the family can order in the app.")
@@ -851,7 +860,11 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         cart = await fastpath.blinkit_cart(cdp, [{**c, "qty": c.get("qty") or next(iter(qty.values()), 1)} for c in chosen],
                                            lat=place.get("lat"), lon=place.get("lng"))
     except Exception as exc:  # noqa: BLE001 — not logged in yet, or the site changed: the agent does it
-        note(task, f"fast cart not possible ({str(exc)[:100]}); the browser agent builds it")
+        if "not logged in" in str(exc) and not (task.details or {}).get("login_done"):
+            task.details = {**(task.details or {}), "login_only": True}
+            note(task, "not logged in yet: the browser agent logs in, then the cart is built fast")
+        else:
+            note(task, f"fast cart not possible ({str(exc)[:100]}); the browser agent builds it")
         return None
     note(task, f"fast cart on {SKILLS[task.service]['label']}: total {cart.get('total')}")
     return cart
