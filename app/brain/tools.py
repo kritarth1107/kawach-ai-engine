@@ -540,16 +540,23 @@ async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
         "title": {"type": "string"},
         "check_back_in_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
         "if_no_answer": {"type": "string", "enum": ["ask_again", "alert_caregiver", "dashboard"]},
+        "owner": {"type": "string", "description": "Member id of who must act next (default: the person it is about on a "
+                                                   "scheduled turn, else the speaker)"},
+        "next_action": {"type": "string", "description": "What has to happen next, in a few words"},
         "about": ABOUT,
     },
     ["kind", "title"],
 )
 async def open_loop_tool(ctx: TurnCtx, a: dict) -> dict:
     wake = clock.now() + timedelta(minutes=a["check_back_in_minutes"]) if a.get("check_back_in_minutes") else None
+    subject = ctx.subject(a.get("about"))
+    ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
+    # Every open job has an owner who acts next (live: check-in questions were owned by the scheduler, so nobody was)
+    owner = a.get("owner") if a.get("owner") in ids else (subject if ctx.is_system else ctx.speaker.get("id"))
     loop = await store.open_loop(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), kind=a["kind"], title=a["title"],
-        owner_id=ctx.speaker.get("id"), wake_at=wake, alert_rule=a.get("if_no_answer"),
-        dedupe_key=f"{a['kind']}:{slug(a['title'])[:80]}",
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind=a["kind"], title=a["title"],
+        owner_id=owner, wake_at=wake, alert_rule=a.get("if_no_answer"),
+        dedupe_key=f"{a['kind']}:{slug(a['title'])[:80]}", detail={"next_action": a["next_action"][:160]} if a.get("next_action") else None,
     )
     return {"loop_id": str(loop.id), "wake_at": clock.ist(wake).strftime("%H:%M") if wake else None}
 
@@ -975,6 +982,27 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
         ctx.session, task, kind=a["kind"], value=a["value"], by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
     )
     return {"result": outcome, "task": runtime.describe(task)}
+
+
+@tool(
+    "whats_pending",
+    "Everything open for the family in one list: orders, rides, approvals, reminders, family chores, questions; for each, "
+    "who must act next and what, and anything stuck. Use for 'kya baaki hai?', 'what's pending?', 'what do I need to do?'. "
+    "mine=true lists only what the speaker must do.",
+    {"mine": {"type": "boolean"}},
+    [],
+)
+async def whats_pending(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import work
+
+    rows = await work.items(ctx.session, ctx.family_id)
+    me = ctx.speaker.get("id")
+    if a.get("mine"):
+        rows = [r for r in rows if r["owner"] == me]
+    names = {m.get("id"): m.get("name") for m in [ctx.elder, *ctx.members]}
+    return {"open": [{"title": r["title"], "who": "Saheli" if r["owner"] == work.SAHELI else names.get(r["owner"], r["owner"]),
+                      "next": r["next_action"], "due": r["due_at"], "stuck": r["stuck"], "id": r["id"]} for r in rows],
+            "count": len(rows)}
 
 
 @tool(

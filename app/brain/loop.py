@@ -174,6 +174,12 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
     ]
+    if req.speaker["id"] != req.elder["id"]:
+        # A caregiver asking "what's pending?" gets who acts next on every job (the elder's turns stay short).
+        from app.care import work
+
+        names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
+        parts.append(work.brief(await work.items(session, req.family_id), names, max_lines=6))
     from app.care import baselines as care_baselines
     from app.care import patterns as care_patterns
 

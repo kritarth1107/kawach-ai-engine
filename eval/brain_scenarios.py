@@ -124,7 +124,7 @@ async def s_why_no_reminder(run: Run) -> None:
     low = reply.lower()
     run.check(any(w in low for w in ("missed", "nahi aaya", "nahin aaya", "chhoot", "nahi bheja", "nahi gaya", "miss", "मिस", "छूट")), "admits it was missed")
     run.check(any(w in low for w in ("abhi", "now", "le lijiye", "le lo", "kha lijiye", "अभी")), "asks to take it now")
-    run.check(not re.search(r"[\u0900-\u097F]", reply), "replies in Roman script like the elder")
+    run.check(bool(re.search(r"[\u0900-\u097F]", reply)), "Hindi in Devanagari even when the elder types Roman letters (founder rule)")
     run.check(not re.search(r"(network|server|phone band|technical|so rahe|soyi|sleep)", low), "no invented reason")
 
 

@@ -418,6 +418,11 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
     ]
     from app.care import features
 
+    from app.care import work as care_work
+
+    for r in await care_work.items(session, family_id):
+        if r.get("stuck") and r["source"] == "loop":
+            needs.append({"id": r["id"], "kind": "stuck", "title": r["title"], "meta": f"Stuck ({r['stuck']}): {r['next_action']}"})
     for r in await features.stock(session, family_id, elder_id):
         if r["low"]:
             needs.append({"id": f"refill:{r['key']}", "kind": "refill", "key": r["key"], "title": f"{r['name']}: {r['daysLeft']} days left",
@@ -741,6 +746,19 @@ async def spending_view(family_id: str, elder_id: str, session: DB, month: str |
     if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
     return await features.spending(session, family_id, month)
+
+
+@router.get("/{family_id}/{elder_id}/work")
+async def work_view(family_id: str, elder_id: str, session: DB, all: bool = False) -> dict:
+    """Every job the family handed over: state, who acts next, next action, deadline, and anything stuck."""
+    from app.care import work
+
+    rows = await work.items(session, family_id, open_only=not all, days=14)
+    roster = await store.roster(session, family_id)
+    names = {m.get("id"): m.get("name") for m in ([roster.elder, *roster.members] if roster else [])}
+    for r in rows:
+        r["ownerName"] = "Saheli" if r["owner"] == work.SAHELI else names.get(r["owner"] or "", r["owner"])
+    return {"items": rows, "stuck": sum(1 for r in rows if r.get("stuck")), "open": sum(1 for r in rows if r["state"] in ("working", "waiting"))}
 
 
 class BoundariesIn(BaseModel):
