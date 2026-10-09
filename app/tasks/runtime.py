@@ -800,13 +800,36 @@ def fastpath_on() -> bool:
     return os.getenv("TASK_FASTPATH", "on") == "on"
 
 
-async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for) -> dict | None:
+async def _ride_ends(host, task: Task) -> tuple[dict, dict] | None:
+    d = task.details or {}
+    if host is None or not d.get("pickup") or not d.get("drop"):
+        return None
+    ends = []
+    for words in (d["pickup"], d["drop"]):
+        got = await host.call("ride_place", {"words": words}, family_id=task.family_id.removeprefix("shadow:"),
+                              subject_id=task.subject_id, actor_id=task.requested_by)
+        if not got or got.get("lat") is None or got.get("lng") is None:
+            return None
+        ends.append({"lat": got["lat"], "lng": got["lng"], "label": got.get("label") or words})
+    return ends[0], ends[1]
+
+
+async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for, host=None) -> dict | None:
     """The look-up through the store's own web request in the task's cloud browser (seconds, not minutes). The browser
     stays open for the login and cart runs. None (and a note) when it cannot run, so the browser agent looks instead."""
     place = ((task.details or {}).get("limits") or {}).get("place") or {}
     lat, lng, pincode = place.get("lat"), place.get("lng"), place.get("pincode")
-    if (lat is None or lng is None) and not pincode or not hasattr(agent, "open_session"):
+    ride = fastpath.SITES[task.service].kind == "ride"
+    if not hasattr(agent, "open_session") or (not ride and (lat is None or lng is None) and not pincode):
         return None
+    ends = None
+    if ride:
+        try:
+            ends = await _ride_ends(host, task)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ride places failed task=%s: %s", task.id, exc)
+        if not ends:
+            return None
     try:
         got = await profile_for(task)
         profile_id = got.get("profileId") if isinstance(got, dict) else got
@@ -820,6 +843,12 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
         cdp = await agent.cdp_url(task.agent_session)
         if not cdp:
             raise fastpath.FastPathError("no CDP address for the browser")
+        if ride:
+            got = await fastpath.fares(task.service, cdp, pickup=ends[0], drop=ends[1])
+            task.phase = "browse"
+            task.details = {**(task.details or {}), "fast_session": True}
+            note(task, f"fast fares on {SKILLS[task.service]['label']}: {len(got['options'])} options")
+            return {"options": got["options"], "logged_in": False, "login_required": got["login_required"], "problem": ""}
         query = " ".join(str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])[:1])
         found = await fastpath.search(task.service, cdp, query, lat=lat, lon=lng, pincode=pincode)
     except Exception as exc:  # noqa: BLE001 — a changed site or a slow browser: the agent looks instead
@@ -1086,7 +1115,7 @@ async def tick(
                                 note(task, "connector failed, falling back to the browser")
                     if (report is None and task.phase == "prepare" and browse_first(task) and task.service in fastpath.FAST_SERVICES
                             and fastpath_on()):
-                        report = await _fast_lookup(session, agent, task, profile_for)
+                        report = await _fast_lookup(session, agent, task, profile_for, host_for(task.family_id) if host_for else None)
                         if report is not None:
                             was_browse = True
                     elif (report is None and task.phase == "prepare" and task.kind == "order" and task.service in fastpath.CART_SITES

@@ -695,3 +695,35 @@ async def test_not_logged_in_the_agent_only_logs_in_then_the_cart_is_built_fast(
     await h.tick(); await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹218" and calls["n"] == 2
+
+
+async def test_rapido_fares_come_through_its_own_request_with_places_resolved(db, at, sessions, monkeypatch):
+    from app.tasks import fastpath
+
+    class Host:
+        async def call(self, tool, args, **kw):
+            assert tool == "ride_place"
+            return {"lat": 21.24, "lng": 81.69, "label": args["words"]}
+
+    async def fake_fares(service, cdp, pickup, drop):
+        assert pickup["label"] == "Home" and drop["label"] == "Raipur Railway Station"
+        return {"login_required": False, "options": [{"type": "Auto", "fare": "₹135 - ₹164", "eta": None}]}
+
+    monkeypatch.setattr(fastpath, "fares", fake_fares)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 18:30")
+    agent = FastAgent(script={})
+    told = []
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="rapido", kind="ride", goal="Auto to station",
+                             details={"pickup": "Home", "drop": "Raipur Railway Station"})
+    await db.commit()
+
+    async def notify(f, r, p):
+        told.append(p)
+
+    async def prof(t):
+        return {"profileId": "p", "loginPhone": "9000012345"}
+
+    await runtime.tick(sessions, agent, profile_for=prof, notify=notify, host_for=lambda f: Host())
+    await db.refresh(t)
+    assert agent.runs == [] and t.status == "awaiting_confirm" and t.input_needed == "go" and "Auto ₹135 - ₹164" in told[-1]

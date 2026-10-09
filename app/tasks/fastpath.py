@@ -110,6 +110,7 @@ class Site:
 # ride: {status, login_required?, options: [{type, fare, eta}]}
 SITES: dict[str, Site] = {
     "blinkit": Site("https://blinkit.com/"),
+    "rapido": Site("https://m.rapido.bike/", kind="ride", settle_s=1.5),
 }
 FAST_SERVICES = set(SITES)
 JS_DIR = Path(__file__).parent / "fastjs"
@@ -158,6 +159,24 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
             "rx_required": p.get("rx_required"), "restaurant": p.get("restaurant"), "eta": p.get("eta"), "store_id": p.get("id"),
         }.items() if v is not None})
     return {"deliverable": True, "eta": out.get("eta"), "items": items[:6]}
+
+
+async def fares(service: str, cdp_url: str, *, pickup: dict, drop: dict) -> dict:
+    """Ride options with fares for pickup → drop ({lat, lng, label}), through the service's own request. Raises
+    FastPathError when the answer is not usable (the agent looks instead)."""
+    site = SITES[service]
+    js = _snippet(service, {"plat": pickup["lat"], "plon": pickup["lng"], "dlat": drop["lat"], "dlon": drop["lng"],
+                            "pickup": pickup.get("label") or "", "drop": drop.get("label") or ""})
+    out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, timeout_s=40)
+    if isinstance(out, dict) and out.get("status") == 0:  # the app was still starting: once more
+        out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s + 3, timeout_s=40)
+    if not isinstance(out, dict) or out.get("status") != 200:
+        raise FastPathError(f"{service} fares answered {out.get('status') if isinstance(out, dict) else out!r}"[:160])
+    options = [{"type": o.get("type"), "fare": _rupees(o.get("fare")), "eta": o.get("eta")}
+               for o in out.get("options") or [] if o.get("type") and o.get("fare")]
+    if not options and not out.get("login_required"):
+        raise FastPathError(f"{service} returned no fares")
+    return {"login_required": bool(out.get("login_required")) and not options, "options": options}
 
 
 async def blinkit_search(cdp_url: str, query: str, lat: float, lon: float) -> list[dict]:
