@@ -115,6 +115,19 @@ async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get
     return {"recorded": ids[0] is not None}
 
 
+class SpeechIn(BaseModel):
+    text: str = Field(max_length=3000)
+    language: str = Field(default="Hindi", max_length=80)
+
+
+@router.post("/voice/prepare")
+async def voice_prepare(body: SpeechIn) -> dict:
+    """The backend's TTS asks how Saheli would say a message in a voice note (spoken script + mood)."""
+    from app.care import speech
+
+    return await speech.prepare(body.text, body.language)
+
+
 @router.post("/jobs/wake")
 async def wake_job() -> dict:
     """Cloud Scheduler, every 5 minutes: run the open loops that are due."""
