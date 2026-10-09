@@ -336,6 +336,14 @@ async def learn_corrections(session: Annotated[AsyncSession, Depends(get_db)], d
     return {"cases": rows, "count": len(rows)}
 
 
+@router.get("/learn/tuning-readiness")
+async def learn_tuning_readiness(session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
+    """Is there enough good, consented, anonymised data to fine-tune a fast model yet, and what is missing."""
+    from app.learn import tuning
+
+    return await tuning.readiness(session)
+
+
 @router.get("/learn/flywheel")
 async def learn_flywheel(session: Annotated[AsyncSession, Depends(get_db)], days: int = 14) -> dict:
     """Completion, time, reopen rate and cost per task; adherence; reply and check-in answer rates; approvals; delegation."""

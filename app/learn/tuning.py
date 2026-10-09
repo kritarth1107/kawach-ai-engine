@@ -1,124 +1,57 @@
-"""Fine-tuning data for Saheli's brain (Gemini on Vertex AI), with her tool calls kept so tuning teaches style
-without breaking how she uses tools.
+"""When is fine-tuning worth it? A readiness report over the anonymised, consented corpus (nothing is trained here).
 
-Each example is one turn as Saheli handled it: what the person said, every tool call with its (trimmed) result,
-and the final reply. Only high-scoring turns that passed the grader, from families that agreed to share, all
-anonymised. Format: Vertex/Gemini "contents" with functionCall / functionResponse parts; the tool declarations are
-attached so the model learns to call the same tools. (Check the current Vertex dataset spec before uploading:
-see eval/tune.py and the Tuning Engineer's plan.)
+Tuning a fast model on Saheli's best real replies (dialects, elder tone) is the way to get top-model quality at a fast
+model's cost, but only with enough good examples across situations and languages. Until then it would overfit a few
+conversations. GET /v2/learn/tuning-readiness shows how far we are; eval/export_tuning.py + eval/train.sh tune run it
+(paid, founder OK, separate project).
 """
 
 from __future__ import annotations
 
-import json
-import random
-from dataclasses import dataclass
+from collections import Counter
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.learn.anonymise import anonymise, leaks, looks_like_junk
-from app.learn.models import ReplyLog
+from app.care.models import FamilyRoster
 
-SYSTEM = ("You are Saheli, a warm WhatsApp care companion for elderly people in India and their families. Reply in the "
-          "person's own language and script, briefly and kindly, and use your tools to remember, log, remind and alert.")
-
-
-@dataclass
-class Split:
-    train: list[dict]
-    validation: list[dict]
-    holdout: list[dict]
+MIN_SFT = 2000          # good replies in total
+MIN_PER_SITUATION = 100  # in each of the main situations
+MIN_PAIRS = 300          # best-vs-worst pairs for preference tuning
+MAIN_SITUATIONS = ("dose", "chit_chat", "order", "health", "caregiver_update")
+GOOD = 0.5
 
 
-def _anon_obj(x, names, meds):
-    if isinstance(x, str):
-        return anonymise(x, names=names, medicines=meds)
-    if isinstance(x, list):
-        return [_anon_obj(v, names, meds) for v in x]
-    if isinstance(x, dict):
-        return {k: _anon_obj(v, names, meds) for k, v in x.items()}
-    return x
+async def readiness(session: AsyncSession) -> dict:
+    from app.care import outcomes
+    from app.learn import corrections
+    from app.learn.models import LearningExample
 
-
-def to_example(trace: list[dict], *, situation: str, names: list[str], meds: list[str]) -> dict | None:
-    """One Vertex SFT example from a turn trace, anonymised; None if anything identifying survives."""
-    contents: list[dict] = []
-    if any(looks_like_junk(s.get("text") or "") for s in trace):
-        return None
-    for step in trace:
-        if step["role"] == "user":
-            contents.append({"role": "user", "parts": [{"text": anonymise(step["text"], names=names, medicines=meds)}]})
-        elif step["role"] == "model" and step.get("calls"):
-            parts = [{"functionCall": {"name": c["name"], "args": _anon_obj(c.get("args") or {}, names, meds)}} for c in step["calls"]]
-            contents.append({"role": "model", "parts": parts})
-        elif step["role"] == "tool":
-            parts = []
-            for r in step.get("results") or []:
-                content = r.get("content") or ""
-                try:
-                    body = json.loads(content)
-                except (json.JSONDecodeError, TypeError):
-                    body = {"result": content}
-                parts.append({"functionResponse": {"name": r.get("name"), "response": _anon_obj(body if isinstance(body, dict) else {"result": body}, names, meds)}})
-            if parts:
-                contents.append({"role": "user", "parts": parts})
-        elif step["role"] == "model" and step.get("text"):
-            contents.append({"role": "model", "parts": [{"text": anonymise(step["text"], names=names, medicines=meds)}]})
-    if not contents or contents[-1]["role"] != "model" or "text" not in contents[-1]["parts"][0]:
-        return None
-    flat = json.dumps(contents, ensure_ascii=False)
-    if leaks(flat, names=names, medicines=meds):
-        return None
-    return {"systemInstruction": {"role": "system", "parts": [{"text": f"{SYSTEM} Situation: {situation}."}]}, "contents": contents}
-
-
-def tool_declarations() -> list[dict]:
-    from app.brain import tools
-
-    return [{"functionDeclarations": [{"name": s.name, "description": s.description[:1000], "parameters": s.schema} for s in tools.specs()]}]
-
-
-async def build(session: AsyncSession, *, min_score: float = 0.4, limit: int = 20000, seed: int = 7, with_tools: bool = True) -> tuple[Split, dict]:
-    """Collect, anonymise and split. Holdout is by family (never trained on), validation by turn."""
-    from app.care import outcomes, store
-    from app.learn.scoring import _identity_words
-
-    rows = list((await session.execute(
-        select(ReplyLog).where(ReplyLog.trace.is_not(None), ReplyLog.score >= min_score, ReplyLog.judge_pass.is_not(False),
-                               ~ReplyLog.family_id.startswith("shadow:")).order_by(ReplyLog.id.desc()).limit(limit)
-    )).scalars())
-    consent: dict[str, bool] = {}
-    words: dict[str, tuple] = {}
-    by_family: dict[str, list[dict]] = {}
-    stats = {"rows": len(rows), "no_consent": 0, "dropped_leak": 0, "examples": 0}
-    decl = tool_declarations() if with_tools else None
-    for r in rows:
-        if r.family_id not in consent:
-            roster = await store.roster(session, r.family_id)
-            elder = (roster.elder or {}).get("id") if roster else None
-            consent[r.family_id] = bool(elder and (await outcomes.consent(session, r.family_id, elder))["granted"])
-        if not consent[r.family_id]:
-            stats["no_consent"] += 1
-            continue
-        if r.family_id not in words:
-            words[r.family_id] = await _identity_words(session, r.family_id)
-        names, meds = words[r.family_id]
-        ex = to_example(r.trace, situation=r.situation, names=names, meds=meds)
-        if not ex:
-            stats["dropped_leak"] += 1
-            continue
-        if decl:
-            ex["tools"] = decl
-        by_family.setdefault(r.family_id, []).append(ex)
-        stats["examples"] += 1
-    fams = sorted(by_family)
-    rnd = random.Random(seed)
-    rnd.shuffle(fams)
-    n_hold = max(1, len(fams) // 5) if len(fams) >= 5 else 0
-    hold = [e for f in fams[:n_hold] for e in by_family[f]]
-    rest = [e for f in fams[n_hold:] for e in by_family[f]]
-    rnd.shuffle(rest)
-    n_val = max(1, len(rest) // 10) if len(rest) >= 20 else 0
-    stats.update({"families": len(fams), "holdout_families": n_hold})
-    return Split(train=rest[n_val:], validation=rest[:n_val], holdout=hold), stats
+    rows = list((await session.execute(select(LearningExample))).scalars())
+    good = [r for r in rows if r.score >= GOOD and (r.context or "").strip()]
+    by_sit = Counter(r.situation for r in good)
+    by_lang = Counter(r.lang for r in good)
+    groups = Counter((r.situation, r.lang) for r in rows if r.score <= -0.2)
+    pairs = sum(min(groups[k], Counter((r.situation, r.lang) for r in good)[k]) for k in groups)
+    fams = [r for r in (await session.execute(select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars()]
+    consented = 0
+    for f in fams:
+        elder = (f.elder or {}).get("id")
+        if elder and (await outcomes.consent(session, f.family_id, elder)).get("granted"):
+            consented += 1
+    corr = await corrections.cases(session, days=180, limit=2000)
+    missing = []
+    if consented == 0:
+        missing.append("no family has agreed to share anonymised replies for learning (dashboard → Wellbeing → "Help make Saheli better" checkbox)")
+    if len(good) < MIN_SFT:
+        missing.append(f"{MIN_SFT - len(good)} more good replies (have {len(good)})")
+    thin = [s for s in MAIN_SITUATIONS if by_sit[s] < MIN_PER_SITUATION]
+    if thin:
+        missing.append("more examples in: " + ", ".join(f"{s} ({by_sit[s]}/{MIN_PER_SITUATION})" for s in thin))
+    if pairs < MIN_PAIRS:
+        missing.append(f"{MIN_PAIRS - pairs} more best-vs-worst pairs (have {pairs})")
+    return {"ready": not missing, "missing": missing, "goodReplies": len(good), "corpus": len(rows), "pairs": pairs,
+            "bySituation": dict(by_sit), "byLanguage": dict(by_lang), "families": len(fams), "consented": consented,
+            "correctionCases": len(corr),
+            "plan": "when ready: eval/export_tuning.py → eval/train.sh tune (Vertex supervised tuning of a Flash model in the "
+                    "training project) → eval/compare_models.py on the holdout → 10% trial → live only if it wins"}
