@@ -795,8 +795,8 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
     """The look-up through the store's own web request in the task's cloud browser (seconds, not minutes). The browser
     stays open for the login and cart runs. None (and a note) when it cannot run, so the browser agent looks instead."""
     place = ((task.details or {}).get("limits") or {}).get("place") or {}
-    lat, lng = place.get("lat"), place.get("lng")
-    if lat is None or lng is None or not hasattr(agent, "open_session"):
+    lat, lng, pincode = place.get("lat"), place.get("lng"), place.get("pincode")
+    if (lat is None or lng is None) and not pincode or not hasattr(agent, "open_session"):
         return None
     try:
         got = await profile_for(task)
@@ -812,15 +812,49 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
         if not cdp:
             raise fastpath.FastPathError("no CDP address for the browser")
         query = " ".join(str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])[:1])
-        items = await fastpath.blinkit_search(cdp, query, float(lat), float(lng))
+        found = await fastpath.search(task.service, cdp, query, lat=lat, lon=lng, pincode=pincode)
     except Exception as exc:  # noqa: BLE001 — a changed site or a slow browser: the agent looks instead
         note(task, f"fast look-up did not work ({str(exc)[:120]}); the browser agent looks instead")
         logger.warning("fast look-up failed task=%s: %s", task.id, exc)
         return None
     task.phase = "browse"
     task.details = {**(task.details or {}), "fast_session": True}
-    note(task, f"fast look-up on {SKILLS[task.service]['label']}: {len(items)} matching products")
-    return {"items": items, "deliverable": True, "logged_in": False, "problem": "" if items else "not found"}
+    items = found["items"]
+    note(task, f"fast look-up on {SKILLS[task.service]['label']}: " + (f"{len(items)} matching products" if found["deliverable"] else "does not deliver there"))
+    return {"items": items, "deliverable": found["deliverable"], "eta": found.get("eta"), "logged_in": False,
+            "problem": "" if items else ("not serviceable" if not found["deliverable"] else "not found")}
+
+
+async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for) -> dict | None:
+    """Build the cart through the store's own request when the family's profile is already logged in (seconds instead of
+    minutes). Tried once per task; None (not logged in, an item gone, a changed site) lets the browser agent log in and
+    build it as before."""
+    d = task.details or {}
+    chosen = [i for i in (d.get("chosen") or []) if i.get("store_id")]
+    if not chosen or not hasattr(agent, "open_session"):
+        return None
+    task.details = {**d, "fast_cart_tried": True}
+    place = (d.get("limits") or {}).get("place") or {}
+    try:
+        if not task.agent_session:
+            got = await profile_for(task)
+            profile_id = got.get("profileId") if isinstance(got, dict) else got
+            await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
+            task.agent_session = await agent.open_session(profile_id)
+            await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
+                                  service=task.service, profile_id=profile_id)
+            await session.commit()
+        cdp = await agent.cdp_url(task.agent_session)
+        if not cdp:
+            raise fastpath.FastPathError("no CDP address for the browser")
+        qty = {str(i.get("name")): i.get("qty") for i in d.get("items") or []}
+        cart = await fastpath.blinkit_cart(cdp, [{**c, "qty": c.get("qty") or next(iter(qty.values()), 1)} for c in chosen],
+                                           lat=place.get("lat"), lon=place.get("lng"))
+    except Exception as exc:  # noqa: BLE001 — not logged in yet, or the site changed: the agent does it
+        note(task, f"fast cart not possible ({str(exc)[:100]}); the browser agent builds it")
+        return None
+    note(task, f"fast cart on {SKILLS[task.service]['label']}: total {cart.get('total')}")
+    return cart
 
 
 def _confirm_still_valid(task: Task) -> bool:
@@ -1042,6 +1076,9 @@ async def tick(
                         report = await _fast_lookup(session, agent, task, profile_for)
                         if report is not None:
                             was_browse = True
+                    elif (report is None and task.phase == "prepare" and task.kind == "order" and task.service in fastpath.CART_SITES
+                            and fastpath_on() and not (task.details or {}).get("fast_cart_tried")):
+                        report = await _fast_cart(session, agent, task, profile_for)
                     if report is not None and report.get("requeue"):
                         note(task, "connector card expired; building it again")
                     elif report is not None:

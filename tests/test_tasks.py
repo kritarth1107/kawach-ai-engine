@@ -562,11 +562,12 @@ async def test_blinkit_looks_up_through_its_own_web_request_in_seconds_then_the_
 
     asked = {}
 
-    async def fake_search(cdp, query, lat, lon):
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None):
         asked.update(cdp=cdp, query=query, lat=lat, lon=lon)
-        return [{"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "pack": "330 ml", "price": "₹209", "available": True, "exact_match": True}]
+        return {"deliverable": True, "eta": None, "items": [
+            {"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "pack": "330 ml", "price": "₹209", "available": True, "exact_match": True}]}
 
-    monkeypatch.setattr(fastpath, "blinkit_search", fake_search)
+    monkeypatch.setattr(fastpath, "search", fake_search)
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-09 17:30")
     agent = FastAgent(script={"prepare": [OTP]})
@@ -593,7 +594,7 @@ async def test_fast_look_up_that_breaks_falls_back_to_the_agent(db, at, sessions
     async def broken(*a, **k):
         raise fastpath.FastPathError("blinkit search answered 403")
 
-    monkeypatch.setattr(fastpath, "blinkit_search", broken)
+    monkeypatch.setattr(fastpath, "search", broken)
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-09 17:30")
     agent = FastAgent(script={"browse": [FOUND]})
@@ -611,3 +612,46 @@ def test_fast_search_exact_match_counts_the_pack():
     asked = _words("Amul Taaza milk 500 ml")
     assert asked == {"amul", "taaza", "milk", "500"}
     assert asked <= (_words("Amul Taaza Toned Milk 500 ml") | _words("500"))
+
+
+def test_fast_snippets_fill_placeholders_safely_and_results_are_cleaned():
+    from app.tasks import fastpath
+    js = fastpath._snippet("blinkit", {"q": 'diet "coke" 50%', "lat": 21.2, "lon": 81.6})
+    assert 'encodeURIComponent("diet \\"coke\\" 50%")' in js and "%(q)s" not in js
+    assert fastpath._rupees(40) == "₹40" and fastpath._rupees("24.86") == "₹24.86" and fastpath._rupees("₹209") == "₹209"
+
+
+async def test_logged_in_blinkit_builds_the_cart_through_its_own_request(db, at, sessions, monkeypatch):
+    """Founder 2026-10-09 trial: with the family's Blinkit profile already logged in, the cart is built through Blinkit's
+    own cart request (11 s live) instead of the agent (3 min); not logged in → the agent logs in as before."""
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None):
+        return {"deliverable": True, "eta": None, "items": [
+            {"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "pack": "330 ml", "price": "₹209", "available": True, "exact_match": True, "store_id": "746124"}]}
+
+    built = {}
+
+    async def fake_cart(cdp, products, lat=None, lon=None):
+        built["products"] = products
+        return {"items": [{"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "qty": 1, "price": "₹209", "available": True}],
+                "total": "₹218", "fees": "₹9", "cod_available": True, "logged_in": True, "address_used": "Home: 504, Sunita Park, Raipur 492001"}
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "blinkit_cart", fake_cart)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 18:00")
+    agent = FastAgent(script={})
+    h = LoginHarness(sessions, agent, "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert agent.runs == [], "no browser agent at all: look-up and cart both through the store's requests"
+    assert built["products"][0]["store_id"] == "746124"
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹218" and "₹218" in h.told[-1]
