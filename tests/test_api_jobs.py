@@ -133,9 +133,12 @@ async def test_tasks_job_advances_orders(api, at, db, monkeypatch):
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER["id"], requested_by=ELDER["id"], service="zepto", kind="order",
                              goal="Atta", details={"items": [{"name": "Aashirvaad Atta 5kg", "qty": 1}]})
     await db.commit()
+    from app.api import brain as brain_api
+
+    monkeypatch.setattr(brain_api, "TASKS_FAST_EVERY", 0)
+    # One call keeps looking while the order moves: the run starts and its result is read in the same minute.
     s1 = (await api.post("/v2/jobs/tasks")).json()
-    s2 = (await api.post("/v2/jobs/tasks")).json()
-    assert s1["started"] == 1 and s2["finished"] == 1
+    assert s1["started"] == 1 and s1["finished"] == 1
     await db.refresh(t)
     assert t.status == "awaiting_confirm"
 

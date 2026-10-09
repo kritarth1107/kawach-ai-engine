@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Annotated
@@ -191,7 +192,29 @@ async def tasks_job() -> dict:
         except Exception:  # noqa: BLE001
             logger.exception("task notify failed family=%s", family_id)
 
-    return await tick(SessionLocal, task_agent(), profile_for=profile_for, notify=notify, host_for=host_for)
+    import time
+
+    from sqlalchemy import func, select
+
+    from app.tasks.models import Task
+
+    async def moving() -> bool:
+        async with SessionLocal() as s:
+            return bool(await s.scalar(select(func.count()).select_from(Task).where(Task.status.in_(("queued", "running")))))
+
+    # Cloud Scheduler calls once a minute. While an order is moving, look again every few seconds, so each step (code
+    # asked, cart ready, placed) reaches the person within seconds instead of up to a minute later (live 2026-10-09: the
+    # order was placed at 16:33:35 and Saheli said so only after the next minute's tick).
+    started, agent = time.monotonic(), task_agent()
+    stats = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for)
+    while time.monotonic() - started < TASKS_FAST_WINDOW and await moving():
+        await asyncio.sleep(TASKS_FAST_EVERY)
+        more = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for)
+        stats = {k: stats.get(k, 0) + more.get(k, 0) for k in {*stats, *more}}
+    return stats
+
+
+TASKS_FAST_EVERY, TASKS_FAST_WINDOW = 8, 46  # seconds
 
 
 @router.post("/jobs/browser-sweep")
