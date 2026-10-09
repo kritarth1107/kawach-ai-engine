@@ -12,6 +12,7 @@ honoured at every step, including after placing (a cancel run on the service).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -169,8 +170,9 @@ async def _announce_overdue(sessions: async_sessionmaker) -> list[tuple[Task, st
             if any((s.details or {}).get("compare_announced") for s in group):
                 continue
             first = min(datetime.fromisoformat(s.details["compare_seen"]) for s in group if (s.details or {}).get("compare_seen"))
-            if clock.now() - first < COMPARE_WAIT:
-                continue
+            pending = any(s.status in ("queued", "running") for s in group)
+            if pending and clock.now() - first < COMPARE_WAIT:
+                continue  # (stores answering at the same time may each have seen the others still looking)
             locked = (await session.execute(select(Task).where(Task.id == t.id).with_for_update(skip_locked=True))).scalar_one_or_none()
             if not locked:
                 continue
@@ -501,7 +503,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         what = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in chosen)
         how = ("building the cart on the linked account (no login code; NOT ordered; you will get a task update)"
                if (task.details or {}).get("channel") == "connector" else
-               "logging in and building the cart (NOT ordered; a login code may come to their phone; you will get a task update)")
+               "building the cart (NOT ordered). Say only that you are getting the cart ready; do not promise a login code: if one "
+               "is needed you will get a task update to ask for it")
         return f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: {how}"
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
@@ -1045,12 +1048,12 @@ async def tick(
                 )
             ).scalars()
         )
-    for task_id in ids:
+    async def process(task_id):
         message, summary = None, False
         async with sessions() as session:
             task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update(skip_locked=True))).scalar_one_or_none()
             if not task:
-                continue
+                return None
             was_browse, expired = task.phase == "browse", False
             try:
                 if task.deadline_at < clock.now() and task.status != "running":
@@ -1090,7 +1093,7 @@ async def tick(
                             select(Task).where(Task.id == task_id).with_for_update().execution_options(populate_existing=True)
                         )).scalar_one()
                         if task.status != "queued" or task.cancel_requested or (task.details or {}).get("place_started") != marker:
-                            continue
+                            return None
                     report = None
                     if task.phase in ("prepare", "place") and (task.details or {}).get("channel") != "browser":
                         host = host_for(task.family_id) if host_for else None
@@ -1177,7 +1180,7 @@ async def tick(
                             task.status = "queued"
                             note(task, f"run failed ({run.error or 'no report'}); retrying once")
                             await session.commit()
-                            continue
+                            return None
                         if run.status != "finished" and not out:
                             out = {"blocked": False, "problem": run.error or run.status}
                             if task.phase == "place":
@@ -1239,10 +1242,30 @@ async def tick(
                 await session.rollback()
                 got = await _count_tick_error(session, task_id)
                 if not got:
-                    continue
+                    return None
                 task, message = got
-        if message:
+        return (task, message, summary) if message else None
+
+    async def notify_one(r) -> None:
+        if r:
+            task, message, summary = r
             await notify(task.family_id, task.requested_by, f"[Task update] {message}" if summary else f"[Task update] {describe(task)}. {message}")
+
+    # Look-ups (several stores of one comparison) run at the same time: each is a network wait of seconds.
+    async with sessions() as session:
+        rows = list((await session.execute(select(Task).where(Task.id.in_(ids), Task.status == "queued", Task.phase == "prepare"))).scalars()) if ids else []
+        together = {t.id for t in rows if browse_first(t)}
+    gate = asyncio.Semaphore(max(1, int(os.getenv("TASK_PARALLEL", "6"))))  # tests share one connection: 1
+
+    async def guarded(task_id):
+        async with gate:
+            return await process(task_id)
+
+    for r in await asyncio.gather(*(guarded(i) for i in ids if i in together)):
+        await notify_one(r)
+    for task_id in ids:
+        if task_id not in together:
+            await notify_one(await process(task_id))
     try:
         for t, text in await _announce_overdue(sessions):
             await notify(t.family_id, t.requested_by, f"[Task update] {text}")

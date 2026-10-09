@@ -598,6 +598,14 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     if data.history_full:  # fewer turns than a full history cannot need folding yet
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
+    if not getattr(host, "shadow", False) and any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions):
+        # Move the order now instead of at the next minute's scheduler run (live 2026-10-09: 47 s wait before the look-ups).
+        try:
+            from app.api.brain import kick_tasks
+
+            kick_tasks()
+        except Exception:  # noqa: BLE001 — the scheduler still runs every minute
+            logger.exception("kick tasks failed")
     return TurnResult(
         reply=final,
         actions=ctx.actions,

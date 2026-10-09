@@ -163,6 +163,18 @@ async def consolidate_job() -> dict:
     return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired}
 
 
+_kicked: asyncio.Task | None = None
+
+
+def kick_tasks() -> None:
+    """Advance orders right away in the background (a turn just started one or gave it an answer). One at a time: a run
+    already going keeps looking every few seconds and picks the new work up."""
+    global _kicked
+    if _kicked is not None and not _kicked.done():
+        return
+    _kicked = asyncio.get_running_loop().create_task(tasks_job())
+
+
 @router.post("/jobs/tasks")
 async def tasks_job() -> dict:
     """Cloud Scheduler, every minute: advance running orders and rides."""

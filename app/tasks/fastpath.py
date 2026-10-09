@@ -107,7 +107,9 @@ async def cdp_evaluate(cdp_url: str, url: str, expression: str, *, settle_s: flo
     return await asyncio.wait_for(run(), timeout=timeout_s)
 
 
-GENERIC = {"the", "and", "for", "with", "pack", "of", "ml", "ltr", "kg", "gm", "pcs", "soft", "drink"}
+# Words a store's product name often leaves out ("Parle G Glucose" for "Parle-G biscuit"): not needed for an exact match
+GENERIC = {"the", "and", "for", "with", "pack", "of", "ml", "ltr", "kg", "gm", "pcs", "soft", "drink", "biscuit", "biscuits",
+           "cookie", "cookies", "tablet", "tablets", "strip", "capsule", "capsules", "packet", "pouch", "bottle", "can", "cans"}
 
 
 def _words(text: str) -> set[str]:
@@ -166,6 +168,10 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
     site = SITES[service]
     js = _snippet(service, {"q": query, "lat": lat, "lon": lon, "pincode": pincode})
     out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=45)
+    if isinstance(out, dict) and out.get("status") == 0:
+        # the page was not really there yet (a bot-check reload with old cookies in the profile): once more
+        await asyncio.sleep(2.0)
+        out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s + 3, ready=site.ready, timeout_s=45)
     if not isinstance(out, dict) or out.get("status") != 200:
         raise FastPathError(f"{service} search answered {out.get('status') if isinstance(out, dict) else out!r}"[:160])
     if out.get("serviceable") is False:

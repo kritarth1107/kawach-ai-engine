@@ -2,6 +2,7 @@ import os
 
 os.environ.setdefault("TASK_BROWSE_FIRST", "off")  # older task tests start at the cart; the browse tests turn it on
 os.environ.setdefault("MEMORY_EMBEDDINGS", "off")  # tests never call Vertex; memory tests inject a fake embedder
+os.environ.setdefault("TASK_PARALLEL", "1")  # all test sessions share one connection: no parallel steps
 from datetime import datetime, timezone
 
 import pytest
