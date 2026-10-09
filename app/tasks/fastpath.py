@@ -111,7 +111,8 @@ GENERIC = {"the", "and", "for", "with", "pack", "of", "ml", "ltr", "kg", "gm", "
 
 
 def _words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if (len(w) > 2 or w.isdigit()) and w not in GENERIC}
+    # "650mg" counts as 650 (numbers and letters split)
+    return {w for w in re.findall(r"[a-z]+|\d+", str(text or "").lower()) if (len(w) > 2 or w.isdigit()) and w not in GENERIC}
 
 
 @dataclass(frozen=True)
@@ -134,6 +135,10 @@ SITES: dict[str, Site] = {
     "swiggy": Site("https://www.swiggy.com/", settle_s=1.0, ready="!!window.___INITIAL_STATE__"),
     "zepto": Site("https://www.zepto.com/", settle_s=1.0, ready="document.cookie.includes('XSRF-TOKEN=') && document.readyState !== 'loading'"),
     "zomato": Site("https://www.zomato.com/", settle_s=3.0),
+    # pharmacies search by pincode
+    "apollo": Site("https://www.apollopharmacy.in/", settle_s=1.5),
+    "1mg": Site("https://www.1mg.com/", settle_s=1.0),
+    "pharmeasy": Site("https://pharmeasy.in/", settle_s=1.5),
 }
 FAST_SERVICES = set(SITES)
 JS_DIR = Path(__file__).parent / "fastjs"

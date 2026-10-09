@@ -727,3 +727,9 @@ async def test_rapido_fares_come_through_its_own_request_with_places_resolved(db
     await runtime.tick(sessions, agent, profile_for=prof, notify=notify, host_for=lambda f: Host())
     await db.refresh(t)
     assert agent.runs == [] and t.status == "awaiting_confirm" and t.input_needed == "go" and "Auto ₹135 - ₹164" in told[-1]
+
+
+def test_medicine_strength_written_with_its_unit_still_matches():
+    from app.tasks.fastpath import _words
+    assert _words("Dolo 650") <= _words("Dolo 650Mg Strip Of 15 Tablets")
+    assert not _words("Telma 40") <= _words("Telma 80 Tablet")

@@ -772,7 +772,7 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
 
 
 def _words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(w) > 2 or w.isdigit()}
+    return {w for w in re.findall(r"[a-z]+|\d+", str(text or "").lower()) if len(w) > 2 or w.isdigit()}
 
 
 async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
