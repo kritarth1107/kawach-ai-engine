@@ -73,7 +73,7 @@ DEFAULT_ROUTES: dict[str, list[str]] = {
     "learn": ["gemini:gemini-3.1-pro-preview", "gemini:gemini-3.8-flash"],
     "vision": ["gemini:gemini-3.8-flash", "claude:claude-sonnet-5-5"],
     # voice-note script: two fast models asked at once (app.care.speech), the first good answer wins
-    "speech": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flash"],
+    "speech": ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.5-flash@global", "gemini:gemini-3.8-flash"],
 }
 
 

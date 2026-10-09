@@ -18,7 +18,7 @@ from app.llm import router
 logger = logging.getLogger(__name__)
 
 MOODS = ("concerned", "reassuring", "cheerful", "gentle", "neutral")
-TIMEOUT_S = 4.5
+TIMEOUT_S = 6.0
 
 PROMPT = """You turn Saheli's WhatsApp message into what she would SAY in a voice note to this person. Saheli is a warm, caring young Indian woman.
 - Same meaning and every fact: medicine names, people's names, times and numbers exactly as written (keep digits as digits).
