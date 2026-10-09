@@ -130,7 +130,9 @@ def _compare_summary(group: list[Task]) -> str:
         return head + "It is not available on any of them. Tell the person plainly and offer another name, or the family can order in the app."
     return head + (
         "Tell the person the options as a short numbered list: exact matches first (cheapest first), then the similar ones marked "
-        "as not exactly what they asked; each with product, pack size, price, store and delivery time. Ask which one they want. "
+        "as not exactly what they asked, from every store above that has any (do not leave a store out); in one short line, say "
+        "which stores do not deliver there or had nothing. Each option with product, pack size, price, store and delivery time. "
+        "Ask which one they want. "
         "When they pick, call task_input on that option's task: kind go with value = the product with its pack and price exactly "
         "as listed above (e.g. 'Diet Coke Can (300 ml) ₹40'); for a 'has instead' item: kind swap. The other stores are dropped "
         f"by themselves. A store marked linked account needs no login code; for the others a login code then comes to "
