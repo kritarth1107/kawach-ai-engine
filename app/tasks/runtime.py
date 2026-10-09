@@ -90,6 +90,17 @@ def _found(task: Task) -> list[dict]:
     return [i for i in ((task.result or {}).get("items") or []) if i.get("name") and i.get("available") is not False]
 
 
+def _label(item: dict) -> str:
+    """'Diet Coke Can (300 ml)': the name with its pack when the store gave it separately."""
+    name, pack = str(item.get("name") or ""), str(item.get("pack") or "").strip()
+    return f"{name} ({pack})" if pack and pack.lower() not in name.lower() else name
+
+
+def _option(item: dict) -> str:
+    similar = "" if item.get("exact_match") is not False else " [similar, not exactly what was asked]"
+    return f"{_label(item)} {item.get('price') or ''}".strip() + similar
+
+
 def _compare_summary(group: list[Task]) -> str:
     """One update with what every store of the comparison found, for the brain to read out as numbered options."""
     lines, open_ = [], []
@@ -100,7 +111,7 @@ def _compare_summary(group: list[Task]) -> str:
         elif t.status == "awaiting_confirm" and t.input_needed == "go":
             found = _found(t)
             eta = f"; delivers in about {r['eta']}" if r.get("eta") else ""
-            what = "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in found[:4]) if found else "shows prices only after a login"
+            what = "; ".join(_option(i) for i in found[:4]) if found else "shows prices only after a login"
             lines.append(f"- {label} [task {t.id}]: {what}{eta}")
             open_.append(t)
         elif t.status == "needs_input" and t.input_needed == "swap":
@@ -114,10 +125,11 @@ def _compare_summary(group: list[Task]) -> str:
     if not open_:
         return head + "It is not available on any of them. Tell the person plainly and offer another name, or the family can order in the app."
     return head + (
-        "Tell the person the options as a short numbered list, cheapest first: product with pack size, price, store and delivery "
-        "time. Ask which one they want. When they pick, call task_input on that option's task: kind go with value = the product "
-        "name as listed (for a 'has instead' item: kind swap). The other stores are dropped by themselves, and a login code then "
-        f"comes to {_code_to(open_[0])}. If they want none, task_input go no on any one of them.")
+        "Tell the person the options as a short numbered list: exact matches first (cheapest first), then the similar ones marked "
+        "as not exactly what they asked; each with product, pack size, price, store and delivery time. Ask which one they want. "
+        "When they pick, call task_input on that option's task: kind go with value = the product with its pack and price exactly "
+        "as listed above (e.g. 'Diet Coke Can (300 ml) ₹40'); for a 'has instead' item: kind swap. The other stores are dropped "
+        f"by themselves, and a login code then comes to {_code_to(open_[0])}. If they want none, task_input go no on any one of them.")
 
 
 async def _compare_update(session: AsyncSession, task: Task, own: str) -> tuple[str | None, bool]:
@@ -302,7 +314,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
         if seen:
-            goal += ("\nThe person chose these exact products: " + "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in seen[:8])
+            goal += ("\nThe person chose these exact products: " + "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in seen[:8])
                      + ". Put exactly these in the cart (same pack size), nothing else.")
     if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
         phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
@@ -374,9 +386,20 @@ def _match_product(found: list[dict], value: str) -> dict | str | None:
     v = norm(value)
     if len(v) < 3:
         return None
+    # Two packs can share a name (live 2026-10-09: "Pepsi Zero Sugar Soft Drink" at ₹20 and ₹40, and Saheli asked
+    # "₹20 or ₹40?" again and again). The name with its pack and price as listed is unique.
+    full = [i for i in found if norm(_label(i)) == v or norm(f"{_label(i)} {i.get('price') or ''}") == v
+            or norm(f"{i.get('name')} {i.get('price') or ''}") == v]
+    if len(full) == 1:
+        return full[0]
     exact = [i for i in found if norm(i.get("name")) == v]
     if len(exact) == 1:
         return exact[0]
+    price = re.search(r"(?:₹|rs\.?\s*)\s*(\d+)", str(value), re.I)
+    if exact and price:
+        by_price = [i for i in exact if re.sub(r"\D", "", str(i.get("price") or "")) == price.group(1)]
+        if len(by_price) == 1:
+            return by_price[0]
     part = [i for i in found if v in norm(i.get("name")) or norm(i.get("name")) in v]
     if len(part) == 1:
         return part[0]
@@ -433,7 +456,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         if value.lower() not in YES_WORDS:
             found = _found(task)
             pick = _match_product(found, value)
-            listed = "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in found)
+            listed = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in found)
             if pick == "ambiguous":
                 return f"that could be more than one product; ask which exactly: {listed}"
             if not pick:
@@ -443,14 +466,14 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.details = {**d, "chosen": chosen} if chosen else d
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"go-ahead from {by}" + (f" for {pick['name']}" if pick else ""))
+        note(task, f"go-ahead from {by}" + (f" for {_label(pick)}" if pick else ""))
         dropped = ""
         if compare_group(task):
             group = await siblings(session, task)
             _drop_others(group, task, f"{by} picked {SKILLS[task.service]['label']}")
             if len(group) > 1:
                 dropped = "; the other stores are dropped"
-        what = "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in chosen)
+        what = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in chosen)
         return (f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: logging in and building "
                 "the cart (NOT ordered; a login code may come to their phone; you will get a task update)")
     if kind == "confirm":
@@ -701,7 +724,7 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             listed = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in alts)
             return "needs_input", f"Not on {label} ({out.get('problem') or 'not found'}). It has: {listed}. Ask which one to get instead, or whether to drop it."
         return "failed", f"Could not find it on {label} ({out.get('problem') or 'not found'}); nothing was ordered. Offer another service."
-    seen = "; ".join(f"{i['name']} {i.get('price') or ''}".strip() for i in found[:6])
+    seen = "; ".join(_option(i) for i in found[:6])
     eta = f", about {out['eta']}" if out.get("eta") else ""
     if out.get("logged_in") and not compare_group(task):  # in a comparison the person picks the store first
         # Already logged in: no code needed, so build the cart straight away; the cart comes back for a confirm.

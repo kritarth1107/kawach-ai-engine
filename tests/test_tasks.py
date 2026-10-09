@@ -448,3 +448,14 @@ async def test_go_ahead_after_the_look_up_browser_closed_starts_a_fresh_one(db, 
     await db.refresh(t)
     assert t.status == "running" and agent.runs[-1]["phase"] == "prepare" and agent.runs[-1]["session"] is None
     assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and "fresh one" in t.history[-2]["note"]
+
+
+def test_pick_among_packs_with_the_same_name():
+    """Live 2026-10-09 15:59: two 'Pepsi Zero Sugar Soft Drink' packs (₹20, ₹40); 'the ₹20 one' was asked again and again."""
+    found = [{"name": "Pepsi Zero Sugar Soft Drink", "price": "₹40", "pack": "300 ml"},
+             {"name": "Pepsi Zero Sugar Soft Drink", "price": "₹20", "pack": "160 ml"}]
+    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink") == "ambiguous"
+    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink ₹20")["price"] == "₹20"
+    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (160 ml) ₹20")["pack"] == "160 ml"
+    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (300 ml)")["price"] == "₹40"
+    assert runtime._option({"name": "Coke Zero", "price": "₹39", "exact_match": False}).endswith("[similar, not exactly what was asked]")

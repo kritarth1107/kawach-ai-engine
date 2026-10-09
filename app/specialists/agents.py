@@ -80,7 +80,9 @@ class Specialist:
             return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker, then "
                     f"search for: {items}. For each item report up to 3 matching products, best match first (for example a single "
                     f"can and a pack of 6): the exact name, the pack size exactly as the product card shows it (e.g. '6 x 300 ml'), "
-                    f"the price of that pack, whether it is in stock, and for_item (which item asked for it matches). Report "
+                    f"the price of that pack, whether it is in stock, for_item (which item asked for it matches) and exact_match (false for a "
+                    f"different brand or flavour, e.g. Coke Zero or Pepsi when Diet Coke was asked; list those only if the exact product "
+                    f"is not there). Report "
                     f"deliverable (does {label} deliver to this location) and the eta if shown. If an item is missing, list up to 3 "
                     f"alternatives with prices. Do not add to the cart, do not open checkout, do not log in.")
         if task.phase == "prepare":
