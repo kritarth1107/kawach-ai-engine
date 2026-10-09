@@ -846,8 +846,13 @@ def sim_budget() -> float:
 
 
 async def main(argv: list[str]) -> int:
-    from app.care import models  # noqa: F401
-    from app.models import entities  # noqa: F401
+    import importlib
+
+    # every table, so create_all makes them all in a fresh simulator database (memory_vectors was missing)
+    for mod in ("app.care.baselines", "app.care.memory_index", "app.care.models", "app.care.skillbook", "app.care.versions",
+                "app.learn.models", "app.llm.spend", "app.models.entities", "app.specialists.channels", "app.tasks.models",
+                "app.tasks.sandbox"):
+        importlib.import_module(mod)
     from app.tasks import models as task_models  # noqa: F401
     from app.care import baselines  # noqa: F401  (every table the brain reads must exist)
     from app.learn import models as learn_models  # noqa: F401
