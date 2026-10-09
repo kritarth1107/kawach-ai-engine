@@ -278,6 +278,26 @@ async def browser_sweep_job() -> dict:
     return out
 
 
+@router.get("/agents/care-search")
+async def agent_care_search(kind: str = "labs", q: str = "HbA1c", lat: float = 21.2403169, lon: float = 81.6935512,
+                            pincode: str = "492001", city: str = "Raipur") -> dict:
+    """Ops check of the lab / doctor look-ups from Cloud Run (guest browser, nothing booked)."""
+    import time as _time
+
+    from app.brain.tools import task_agent
+    from app.tasks import care_search
+
+    agent, started = task_agent(), _time.monotonic()
+    sid = await agent.open_session(None)
+    try:
+        cdp = await agent.cdp_url(sid)
+        rows = await (care_search.labs(cdp, q, lat=lat, lon=lon, pincode=pincode) if kind == "labs"
+                      else care_search.doctors(cdp, q, city=city, lat=lat, lon=lon))
+    finally:
+        await agent.stop_session(sid)
+    return {"seconds": round(_time.monotonic() - started, 1), "rows": rows}
+
+
 @router.get("/agents/credits")
 async def agent_credits() -> dict:
     """USD left on the browser service and the alert threshold (admin console)."""

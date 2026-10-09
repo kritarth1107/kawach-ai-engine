@@ -109,6 +109,7 @@ async def _one(site_key: str, site: CareSite, cdp_url: str, values: dict, extra_
         logger.warning("care search %s failed: %s", site_key, exc)
         return {"site": site.label, "ok": False, "error": str(exc)[:120]}
     if not isinstance(out, dict) or out.get("status") != 200:
+        logger.warning("care search %s answered %s", site_key, (out.get("status"), out.get("error")) if isinstance(out, dict) else repr(out)[:80])
         return {"site": site.label, "ok": False, "error": f"answered {out.get('status') if isinstance(out, dict) else out!r}"[:120]}
     return {"site": site.label, "ok": True, **out}
 
