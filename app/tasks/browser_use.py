@@ -6,8 +6,9 @@ a task pauses for an OTP and then carries on.
 
 Cost and safety (docs.browser-use.com, API v2):
 - each run may only visit the store's own domains (allowedDomains), so a stray link cannot lead it off-site
-- a finished run does NOT stop its cloud browser; the runtime stops sessions when a task ends or waits on a
-  person (stop_session), and the family's saved profile keeps the login for the next run
+- each task's browser is created on its own with keepAlive (a browser auto-created by a task closes when that run
+  ends, losing an OTP screen); the runtime stops it when the task ends or waits long on a person (stop_session),
+  and the family's saved profile keeps the login for the next run
 - one HTTP client is reused per event loop (no client per call)
 - step URLs come back with each run, so a run that worked can teach the next one its route
 """
@@ -114,10 +115,14 @@ class BrowserUseCloud:
         domains = allowed_domains(metadata.get("service"), start_url)
         if domains:
             body["allowedDomains"] = domains
-        if session_id:
-            body["sessionId"] = session_id
-        else:
-            body["sessionSettings"] = {"proxyCountryCode": "in", **({"profileId": profile_id} if profile_id else {})}
+        if not session_id:
+            # An auto-created session (sessionSettings on the task) closes as soon as the task finishes, so the login
+            # page waiting for the code was gone when the code came (live 2026-10-09: Instamart asked for a second code).
+            # A session created on its own stays alive for the follow-up runs; release_sessions stops it when done.
+            sess = await self._req("POST", "/sessions", {"proxyCountryCode": "in", "keepAlive": True, "persistMemory": True,
+                                                         **({"profileId": profile_id} if profile_id else {})})
+            session_id = sess["id"]
+        body["sessionId"] = session_id
         try:
             out = await self._req("POST", "/tasks", body)
         except RuntimeError as exc:

@@ -127,7 +127,11 @@ async def test_cloud_client_sends_domains_and_stops_sessions(monkeypatch):
     bu._loop = asyncio.get_running_loop()
     run = await bu.run(goal="g", hints="h", schema={}, session_id=None, profile_id="p", start_url="https://www.zepto.com/", max_steps=5,
                        metadata={"service": "zepto"})
-    assert run.task_id == "t1" and seen[0][2]["allowedDomains"] == ["zepto.com", "*.zepto.com", "*.zeptonow.com"]
+    # live 2026-10-09: a task's auto-created browser closed after each run, losing the code screen; the session is
+    # now created first with keepAlive, then the task runs in it
+    assert seen[0][1] == "/api/v2/sessions" and seen[0][2]["keepAlive"] is True and seen[0][2]["profileId"] == "p"
+    assert seen[1][1] == "/api/v2/tasks" and seen[1][2]["sessionId"] == "t1" and "sessionSettings" not in seen[1][2]
+    assert run.task_id == "t1" and seen[1][2]["allowedDomains"] == ["zepto.com", "*.zepto.com", "*.zeptonow.com"]
     await bu.stop_session("s1")
     assert seen[-1][:2] == ("PATCH", "/api/v2/sessions/s1") and seen[-1][2] == {"action": "stop"}
     await bu.close()
@@ -139,6 +143,8 @@ async def test_cloud_client_retries_without_domains_if_rejected():
     def handler(req: httpx.Request) -> httpx.Response:
         body = json.loads(req.content or b"{}")
         calls.append(body)
+        if "task" not in body:
+            return httpx.Response(200, json={"id": "s2"})
         if "allowedDomains" in body:
             return httpx.Response(422, json={"detail": "allowedDomains not allowed for this plan"})
         return httpx.Response(200, json={"id": "t2", "sessionId": "s2"})
@@ -148,5 +154,5 @@ async def test_cloud_client_retries_without_domains_if_rejected():
     bu = browser_use.BrowserUseCloud(api_key="k")
     bu._client, bu._loop = httpx.AsyncClient(base_url=browser_use.API, transport=httpx.MockTransport(handler)), asyncio.get_running_loop()
     run = await bu.run(goal="g", hints="h", schema={}, session_id=None, profile_id=None, start_url=None, max_steps=5, metadata={"service": "uber"})
-    assert run.task_id == "t2" and len(calls) == 2 and "allowedDomains" not in calls[1]
+    assert run.task_id == "t2" and len(calls) == 3 and "allowedDomains" not in calls[2]
     await bu.close()
