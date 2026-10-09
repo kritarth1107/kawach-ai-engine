@@ -28,3 +28,17 @@ async def test_switching_language_drops_the_old_dialect(db, at):
     assert (await set_(dialect="Chhattisgarhi"))["dialect"] == "hne"
     row = await store.active_fact(db, FAM, MAA, "language:preferred")
     assert row.value == {"language": "hi", "dialect": "hne", "script": "native"} or row.value.get("dialect") == "hne"
+
+
+async def test_a_switch_applies_to_this_turns_checks(db, at):
+    from app.brain import guards
+
+    at("2026-10-10 00:40")
+    elder = {"id": MAA, "name": "Vasundara", "role": "elder"}
+    await store.save_roster(db, FAM, elder, [elder])
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=elder, speaker=elder, members=[elder],
+                      profiles={MAA: {"script": "latin", "saved": {"language": "gu"}, "now": "latin"}})
+    assert guards.target(c.profiles[MAA]) == "gujarati"
+    out, err = await tools.run(c, "language_preference", {"dialect": "Chhattisgarhi"})
+    assert not err, out
+    assert guards.target(c.profiles[MAA]) == "devanagari" and guards.dialect_of(c.profiles[MAA]) == "hne"

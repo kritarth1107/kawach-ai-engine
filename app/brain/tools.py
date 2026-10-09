@@ -1777,6 +1777,13 @@ async def _save_language(ctx: TurnCtx, subject: str, speech: dict) -> dict:
     synced = await ctx.host.call("set_voice_preference", {"language": speech.get("language"), "dialect": speech.get("dialect") or "",
                                                           "script": speech.get("script") or "native"},
                                  family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    # this turn's checks use the new setting at once (live: "Chhattisgarhi me baat karo" was saved, then the reply was
+    # pushed back into the old Gujarati script)
+    if ctx.profiles is not None:
+        prof = dict(ctx.profiles.get(subject) or {})
+        prof["saved"] = speech
+        prof.pop("now", None)
+        ctx.profiles[subject] = prof
     return {"result": w.result, **speech, "label": language.label(speech), "voice": bool(synced and synced.get("ok", True))}
 
 
