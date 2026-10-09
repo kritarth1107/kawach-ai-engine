@@ -42,7 +42,7 @@ async def readiness(session: AsyncSession) -> dict:
     corr = await corrections.cases(session, days=180, limit=2000)
     missing = []
     if consented == 0:
-        missing.append("no family has agreed to share anonymised replies for learning (dashboard → Wellbeing → "Help make Saheli better" checkbox)")
+        missing.append("no family has agreed to share anonymised replies for learning (dashboard → Wellbeing → the Help make Saheli better checkbox)")
     if len(good) < MIN_SFT:
         missing.append(f"{MIN_SFT - len(good)} more good replies (have {len(good)})")
     thin = [s for s in MAIN_SITUATIONS if by_sit[s] < MIN_PER_SITUATION]
