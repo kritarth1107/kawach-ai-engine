@@ -401,6 +401,10 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.status, task.cancel_requested = "cancelled", True
         note(task, f"declined by {by}")
         metrics.on_milestone(task, "cancelled")
+        # In the day's ledger, so the brain sees the earlier price was dropped (it re-offered one live, 2026-10-09).
+        await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_cancelled",
+                                 summary=f"{SKILLS[task.service]['label']}: dropped, nothing was ordered (that price is no longer valid)",
+                                 payload={"task_id": str(task.id)}, actor_id=by)
         if compare_group(task) and task.phase == "browse":
             _drop_others(await siblings(session, task), task, f"declined by {by}")
             return "declined on every store; nothing was ordered"

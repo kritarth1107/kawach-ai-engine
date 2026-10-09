@@ -380,7 +380,8 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
 
     ordering_ok = any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions) or bool(
         await data.tasks() if data else await task_runtime.live_tasks(session, req.family_id))
-    problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok)
+    prices_ok = ordering_ok or any(a["tool"] in ("past_orders", "spending") and a.get("ok") for a in ctx.actions)
+    problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok, prices_ok=prices_ok)
     seen, out = set(), []
     for p in problems:
         if p not in seen:

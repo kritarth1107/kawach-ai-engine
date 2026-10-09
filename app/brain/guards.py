@@ -427,6 +427,14 @@ ORDER_CLAIM = re.compile(
     re.I,
 )
 APPOINTMENT_BOOK = re.compile(r"\b(book|set|fix|schedule)\b.{0,25}\b(appointment|slot)\b|\bappointment (book|set|fix)\b", re.I)
+# A store price said as fact. Live 2026-10-09 15:43: with no look-up running, Saheli re-offered a cancelled Blinkit
+# price from earlier in the day ("Blinkit par ₹209… aage badhun?") instead of starting a new look-up.
+STORE_PRICE = re.compile(r"(₹|\brs\.?|rupees?|रुपय|रुपए)\s*\d", re.I)
+STORE_NAME = re.compile(
+    r"\b(1mg|apollo|pharmeasy|swiggy|zepto|instamart|blinkit|zomato|amazon|uber|ola|rapido)\b|"
+    r"ब्लिंक|इंस्टामार्ट|इन्स्टामार्ट|स्विगी|ज़ेप्टो|जेप्टो|ज़ोमैटो|जोमैटो|अपोलो|फार्मईज़ी|फार्मेसी|रैपिडो|उबर|ओला",
+    re.I,
+)
 
 
 OFFER = re.compile(
@@ -437,16 +445,21 @@ SUBJECT_TITLES = r"(?:\s+(?:ji|didi|di|bhaiya|bhai|garu|babu|aunty|uncle|sir|mad
 OTHER_DOES = r"\s+(?:ne\b|told\b|sent\b|said\b|says\b|messaged\b|texted\b|called\b|informed\b|wrote\b|asked\b|has\s+(?:told|sent)|will\b|is\b|was\b)"
 
 
-def false_claims(text: str, *, others: dict[str, str], messaged: set[str], ordering_ok: bool) -> list[str]:
+def false_claims(text: str, *, others: dict[str, str], messaged: set[str], ordering_ok: bool, prices_ok: bool | None = None) -> list[str]:
     """others: {first name lower: person id} for household members other than the speaker.
     messaged: ids Saheli sent to in this turn or the last few hours. ordering_ok: a task started now or is running.
+    prices_ok: a store price may be quoted (a task is running, or past orders / spending were looked up now).
     A sentence that says a message went (or will go) to someone is Saheli's claim unless that person is the one
     doing it ("Priya ne bheja", "Kamala told me"). Questions and offers ("Kya main Asha ko bata doon?") are not claims."""
     problems: list[str] = []
+    prices_ok = ordering_ok if prices_ok is None else prices_ok
     for s in sentences(text):
         low = s.lower()
         if APPOINTMENT_BOOK.search(s) and not re.search(r"\bremind|\byaad", low):
             problems.append("offers to book a doctor's appointment, which you cannot do: offer to save it and remind them instead")
+        if not prices_ok and STORE_PRICE.search(s) and STORE_NAME.search(s):
+            problems.append("quotes a store price, but no order look-up is running (prices from an earlier look-up are stale): call "
+                            "start_task now (no store named: leave service out and give category) and tell them you are checking")
         if OFFER.search(s):
             continue
         if MSG_VERB.search(s):

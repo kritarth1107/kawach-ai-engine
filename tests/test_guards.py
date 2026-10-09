@@ -110,6 +110,15 @@ def test_repeats_and_openers():
     assert not g.duplicate_message("Hi Kiran, newspaper please.", [("Hi Kiran, Amma asked you to bring the newspaper.", True)])
 
 
+def test_stale_store_price_without_a_running_look_up():
+    """Live 2026-10-09 15:43: the earlier Blinkit look-up was cancelled, yet Saheli re-offered its price."""
+    said = "ब्लिंकिट पर ₹209 में डाइट कोक मिलगी है सा, 11 मिनट में आ जासी। मैं आगे बढ़ूँ के सा?"
+    assert any("stale" in p for p in g.false_claims(said, others={}, messaged=set(), ordering_ok=False))
+    assert not g.false_claims(said, others={}, messaged=set(), ordering_ok=True)
+    assert not g.false_claims("Last time Blinkit charged ₹40.", others={}, messaged=set(), ordering_ok=False, prices_ok=True)
+    assert not g.false_claims("The doctor's fee was ₹500.", others={}, messaged=set(), ordering_ok=False)
+
+
 def test_false_claims():
     assert g.false_claims("Mu Asha nku ebe hi WhatsApp re message kari pachari deuchi.", others={"asha": "a1"}, messaged=set(), ordering_ok=False)
     assert not g.false_claims("Maine Asha ko message bhej diya hai.", others={"asha": "a1"}, messaged={"a1"}, ordering_ok=False)
