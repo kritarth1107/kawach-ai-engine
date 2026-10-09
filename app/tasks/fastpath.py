@@ -27,7 +27,7 @@ class FastPathError(RuntimeError):
 
 
 async def cdp_evaluate(cdp_url: str, url: str, expression: str, *, settle_s: float = 3.0, timeout_s: float = 30.0,
-                       copy_headers: str | None = None):
+                       copy_headers: str | None = None, ready: str | None = None):
     """Open url in a new tab of the cloud browser, run expression (awaited), return its value, close the tab.
 
     copy_headers: a URL pattern. The headers the site's own page sent on its last matching request (app version, device
@@ -78,7 +78,23 @@ async def cdp_evaluate(cdp_url: str, url: str, expression: str, *, settle_s: flo
                     if not keep:
                         raise FastPathError("the page made no request to copy headers from")
                     expr = expr.replace("%(page_headers)s", json.dumps(json.dumps(keep)))
-                out = await send("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, session=sid)
+                if ready:  # e.g. a bot check that reloads the page: wait until the real page is there
+                    for _ in range(40):
+                        try:
+                            r = await send("Runtime.evaluate", {"expression": f"!!({ready})", "returnByValue": True}, session=sid)
+                            if (r.get("result") or {}).get("value") is True:
+                                break
+                        except FastPathError:
+                            pass
+                        await asyncio.sleep(0.5)
+                for attempt in range(3):
+                    try:
+                        out = await send("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, session=sid)
+                        break
+                    except FastPathError as exc:
+                        if "navigated" not in str(exc) or attempt == 2:
+                            raise
+                        await asyncio.sleep(2.0)  # the page reloaded itself (bot check): run again on the new page
                 if out.get("exceptionDetails"):
                     raise FastPathError(str(out["exceptionDetails"].get("text") or "script error")[:200])
                 return (out.get("result") or {}).get("value")
@@ -103,6 +119,7 @@ class Site:
     start_url: str  # the page whose origin the snippet runs on (cookies, same-site requests)
     kind: str = "shop"  # shop | ride
     settle_s: float = 3.0  # wait after opening the page before the snippet runs
+    ready: str | None = None  # JS condition that is true once the real page is there (after a bot-check reload)
 
 
 # One entry per store with a working snippet in app/tasks/fastjs/<service>.js. A snippet returns
@@ -111,6 +128,12 @@ class Site:
 SITES: dict[str, Site] = {
     "blinkit": Site("https://blinkit.com/"),
     "rapido": Site("https://m.rapido.bike/", kind="ride", settle_s=1.5),
+    # AWS WAF answers a new browser with a challenge page that reloads into the real one
+    # (ready = the real page's own state is there; readyState 'complete' waits for analytics, ~10 s more)
+    "instamart": Site("https://www.swiggy.com/instamart", settle_s=1.0, ready="!!window.___INITIAL_STATE___"),
+    "swiggy": Site("https://www.swiggy.com/", settle_s=1.0, ready="!!window.___INITIAL_STATE__"),
+    "zepto": Site("https://www.zepto.com/", settle_s=1.0, ready="document.cookie.includes('XSRF-TOKEN=') && document.readyState !== 'loading'"),
+    "zomato": Site("https://www.zomato.com/", settle_s=3.0),
 }
 FAST_SERVICES = set(SITES)
 JS_DIR = Path(__file__).parent / "fastjs"
@@ -137,7 +160,7 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
     js = _snippet(service, {"q": query, "lat": lat, "lon": lon, "pincode": pincode})
-    out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s)
+    out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=45)
     if not isinstance(out, dict) or out.get("status") != 200:
         raise FastPathError(f"{service} search answered {out.get('status') if isinstance(out, dict) else out!r}"[:160])
     if out.get("serviceable") is False:
