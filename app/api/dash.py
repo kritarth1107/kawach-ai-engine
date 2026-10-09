@@ -256,7 +256,7 @@ async def _task(session: AsyncSession, family_id: str, task_id: uuid.UUID) -> Ta
 
 class TaskInputIn(BaseModel):
     actor: Actor
-    kind: str = Field(pattern="^(go|otp|confirm|fee|choice)$")
+    kind: str = Field(pattern="^(go|otp|confirm|fee|choice|approve)$")
     value: str = Field(min_length=1, max_length=200)
 
 
@@ -265,6 +265,14 @@ async def task_input(family_id: str, elder_id: str, task_id: uuid.UUID, body: Ta
     t = await _task(session, family_id, task_id)
     result = await runtime.provide_input(session, t, kind=body.kind, value=body.value, by=body.actor.id, by_is_elder=False)
     await session.commit()
+    if t.status == "queued":
+        # approved or confirmed from the dashboard: move it now, not at the next minute's scheduler run
+        try:
+            from app.api.brain import kick_tasks
+
+            kick_tasks()
+        except Exception:  # noqa: BLE001
+            pass
     return {"result": result, "task": task_json(t)}
 
 

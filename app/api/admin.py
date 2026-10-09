@@ -145,6 +145,33 @@ async def admin_learn(weeks: int = 8) -> dict:
     return await learn_overview(weeks=weeks)
 
 
+@router.get("/flywheel")
+async def admin_flywheel(session: DB, days: int = 14) -> dict:
+    """The flywheel page: task completion/time/reopen/cost, conversations, check-ins, per family, plus learning signals
+    (correction cases this week, rule proposals waiting, fine-tuning readiness) and the browser credit."""
+    from app.api.brain import agent_credits
+    from app.learn import corrections, flywheel, tuning_readiness
+
+    out = await flywheel.compute(session, days=max(1, min(days, 90)))
+    cases = await corrections.cases(session, days=7, limit=500)
+    kinds: dict[str, int] = {}
+    for c in cases:
+        kinds[c["kind"]] = kinds.get(c["kind"], 0) + 1
+    ready = await tuning_readiness.readiness(session)
+    try:
+        credit = await agent_credits()
+    except Exception:  # noqa: BLE001
+        credit = {"usd": None, "warnAt": None}
+    from sqlalchemy import func, select
+
+    from app.learn.models import RuleProposal
+
+    waiting = (await session.execute(select(func.count()).select_from(RuleProposal).where(RuleProposal.status == "proposed"))).scalar_one()
+    return {**out, "learning": {"correctionsThisWeek": kinds, "ruleProposalsWaiting": waiting,
+                                "tuning": {k: ready[k] for k in ("ready", "goodReplies", "consented", "families", "missing")}},
+            "credit": credit}
+
+
 class By(BaseModel):
     by: str = Field(min_length=1, max_length=64)
 
