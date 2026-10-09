@@ -24,7 +24,10 @@ async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> 
     steps = [("scored", lambda: scoring.score_pending(sessions)), ("corpus", lambda: scoring.build_corpus(sessions))]
     if with_models:
         steps.append(("graded", lambda: grader.grade_sample(sessions)))
-    steps += [("canary", lambda: lessons.evaluate(sessions)), ("drift", lambda: review.drift(sessions)), ("pruned", lambda: scoring.prune(sessions))]
+    from app.learn import corrections
+
+    steps += [("canary", lambda: lessons.evaluate(sessions)), ("drift", lambda: review.drift(sessions)), ("pruned", lambda: scoring.prune(sessions)),
+              ("corrections", lambda: corrections.nightly(sessions))]
     for name, fn in steps:
         try:
             out[name] = await fn()

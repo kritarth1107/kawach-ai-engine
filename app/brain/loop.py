@@ -567,6 +567,13 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
                 break
             guarded = True
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
+            try:
+                from app.learn import corrections
+
+                await corrections.note_guard(session, family_id=req.family_id, thread_id=req.speaker["id"], draft=text_now,
+                                             problems=problems, user_text=req.text)
+            except Exception:  # noqa: BLE001 — learning never blocks a reply
+                logger.exception("guard note failed")
             msgs.append({"role": "user", "content": [{"type": "text", "text": (
                 "(Check before sending, the person has not seen this yet: " + "; ".join(problems) + ". If you said you would do "
                 "something, do it now with the tool; otherwise drop the claim. Then write only the corrected message to the person.)"

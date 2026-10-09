@@ -323,6 +323,19 @@ async def learn_weekly_job() -> dict:
     return await lessons.weekly(SessionLocal)
 
 
+@router.get("/learn/corrections")
+async def learn_corrections(session: Annotated[AsyncSession, Depends(get_db)], days: int = 30, format: str = "json"):
+    """Every correction (chat, dashboard edit of a saved fact, reply-guard rewrite, thumbs down), anonymised; jsonl = eval fixtures."""
+    from fastapi.responses import PlainTextResponse
+
+    from app.learn import corrections
+
+    rows = await corrections.cases(session, days=max(1, min(days, 180)))
+    if format == "jsonl":
+        return PlainTextResponse("\n".join(corrections.as_fixture(c) for c in rows) + ("\n" if rows else ""), media_type="application/x-ndjson")
+    return {"cases": rows, "count": len(rows)}
+
+
 @router.get("/learn/flywheel")
 async def learn_flywheel(session: Annotated[AsyncSession, Depends(get_db)], days: int = 14) -> dict:
     """Completion, time, reopen rate and cost per task; adherence; reply and check-in answer rates; approvals; delegation."""

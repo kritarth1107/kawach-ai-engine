@@ -129,7 +129,7 @@ async def _run(session: AsyncSession, ctx: tools.TurnCtx, name: str, args: dict)
         raise HTTPException(status_code=400, detail=json.loads(out).get("refused") or json.loads(out).get("detail") or "failed")
     await store.record_event(
         session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="dashboard_edit", summary=f"{name}: {args.get('sentence') or args.get('name') or ''}",
-        actor_id=ctx.actor_id,
+        actor_id=ctx.actor_id, payload={"key": json.loads(out).get("key")} if isinstance(json.loads(out), dict) else {},
     )
     await session.commit()
     return json.loads(out)

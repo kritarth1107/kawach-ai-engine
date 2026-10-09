@@ -131,12 +131,17 @@ async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
         fails = list((await s.execute(
             select(ReplyLog).where(ReplyLog.judge_pass.is_(False), ReplyLog.at >= clock.now() - timedelta(days=7)).order_by(ReplyLog.id.desc()).limit(60)
         )).scalars())
-    if len(fails) < 5:
-        return []
+    from app.learn import corrections
     from app.learn.anonymise import anonymise
 
-    items = "\n".join(f"{i + 1}. [{r.situation}] They: {anonymise(r.user_text)[:200]} | Saheli: {anonymise(r.text)[:300]} | grader: {r.judge_note}"
-                      for i, r in enumerate(fails))
+    async with sessions() as s:
+        fixed = corrections.for_proposals(await corrections.cases(s, days=7, limit=40))
+    lines = [f"[{r.situation}] They: {anonymise(r.user_text)[:200]} | Saheli: {anonymise(r.text)[:300]} | grader: {r.judge_note}" for r in fails]
+    lines += fixed  # people's own corrections count most when there are few families
+    if len(lines) < 3:
+        return []
+    items = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
+    fails = lines
     try:
         out = await router.complete("learn", system_stable=PROPOSE, messages=[{"role": "user", "content": [{"type": "text", "text": items}]}],
                                     max_tokens=1500, effort="low", essential=False)
