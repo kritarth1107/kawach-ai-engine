@@ -743,6 +743,49 @@ async def spending_view(family_id: str, elder_id: str, session: DB, month: str |
     return await features.spending(session, family_id, month)
 
 
+class BoundariesIn(BaseModel):
+    actor: Actor
+    changes: dict
+
+
+@router.get("/{family_id}/{elder_id}/boundaries")
+async def boundaries_view(family_id: str, elder_id: str, session: DB) -> dict:
+    """The family's limits for orders and rides, who approves, this month's spend, and orders waiting for approval."""
+    from app.care import boundaries
+    from app.tasks.models import Task
+
+    policy = await boundaries.get(session, family_id)
+    roster = await store.roster(session, family_id)
+    names = {m.get("id"): m.get("name") for m in ([roster.elder, *roster.members] if roster else [])}
+    waiting = list((await session.execute(select(Task).where(Task.family_id == family_id, Task.status == "awaiting_confirm",
+                                                             Task.input_needed == "approve"))).scalars())
+    return {
+        "policy": policy, "plain": boundaries.describe(policy, names),
+        "approvers": [{"id": a, "name": names.get(a, a)} for a in boundaries.approvers(policy, roster) if a != boundaries.ANYONE],
+        "members": [{"id": m.get("id"), "name": m.get("name"), "role": m.get("role")} for m in (roster.members if roster else [])],
+        "monthSpent": await boundaries.month_spent(session, family_id),
+        "categories": list(boundaries.CATEGORIES),
+        "waiting": [{"taskId": str(t.id), "title": task_json(t).get("title") or t.goal, **((t.details or {}).get("approval_needed") or {})} for t in waiting],
+    }
+
+
+@router.put("/{family_id}/{elder_id}/boundaries")
+async def boundaries_save(family_id: str, elder_id: str, body: BoundariesIn, session: DB) -> dict:
+    """Change the limits from the dashboard (only an approver; the backend checks the signed-in caregiver)."""
+    from app.care import boundaries
+
+    policy = await boundaries.get(session, family_id)
+    roster = await store.roster(session, family_id)
+    if not boundaries.can_manage(policy, roster, body.actor.id):
+        raise HTTPException(status_code=403, detail="Only the family's approver can change the limits")
+    ids = {m.get("id") for m in ([roster.elder, *roster.members] if roster else [])}
+    if any(a not in ids for a in body.changes.get("approvers") or []) or elder_id in (body.changes.get("approvers") or []):
+        raise HTTPException(status_code=400, detail="Approvers must be family members other than the care recipient")
+    new = await boundaries.save(session, family_id, body.changes, by=body.actor.id, source_kind="dashboard")
+    await session.commit()
+    return {"policy": new}
+
+
 class SkillIn(BaseModel):
     actor: Actor
     text: str = Field(min_length=3, max_length=600)

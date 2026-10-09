@@ -120,8 +120,8 @@ async def test_elder_over_limit_needs_caregiver(db, at, sessions):
     await h.tick(); await h.tick()
     await db.refresh(t)
     msg = await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
-    assert "caregiver must confirm" in msg and t.status == "awaiting_confirm"
-    assert (await runtime.provide_input(db, t, kind="confirm", value="yes", by=SON, by_is_elder=False)).startswith("confirmed; placing it now")
+    assert "needs approval first" in msg and t.status == "awaiting_confirm" and t.input_needed == "approve"
+    assert "approved. confirmed; placing it now" in await runtime.provide_input(db, t, kind="confirm", value="yes", by=SON, by_is_elder=False)
 
 
 async def test_no_cod_or_blocked_fails_without_placing(db, at, sessions):

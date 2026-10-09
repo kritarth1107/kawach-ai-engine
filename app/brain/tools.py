@@ -957,11 +957,12 @@ async def _delivery_place(ctx: TurnCtx, a: dict) -> dict:
     "Give a running task what it is waiting for: their go-ahead to log in and build the cart after hearing the "
     "price (go: yes/no, or the name of the product they picked from the options; on a comparison, use the task of the "
     "store they picked), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
-    "of a cancellation fee (fee: yes/no), which ride option to book (choice), or which alternative to get for an "
-    "item that is out of stock (swap: the alternative's name, or 'no' to drop it).",
+    "of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an "
+    "item that is out of stock (swap: the alternative's name, or 'no' to drop it), or the family approver's answer to an "
+    "approval request (approve: yes/no; only an approver's answer counts).",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve"]},
         "value": {"type": "string"},
     },
     ["task_id", "kind", "value"],
@@ -974,6 +975,58 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
         ctx.session, task, kind=a["kind"], value=a["value"], by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
     )
     return {"result": outcome, "task": runtime.describe(task)}
+
+
+@tool(
+    "boundaries",
+    "The family's limits for orders and rides: what needs approval (amounts, categories, who may order or book) and who "
+    "approves. Use for 'what are the limits?', before promising an order will go through, and before changing them.",
+    {},
+    [],
+)
+async def boundaries_read(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import boundaries
+
+    policy = await boundaries.get(ctx.session, ctx.family_id)
+    roster = await store.roster(ctx.session, ctx.family_id)
+    names = {m.get("id"): m.get("name") for m in [ctx.elder, *ctx.members]}
+    return {"policy": policy, "plain": boundaries.describe(policy, names),
+            "approvers": [names.get(x, x) for x in boundaries.approvers(policy, roster)],
+            "can_change": boundaries.can_manage(policy, roster, ctx.speaker.get("id") or "")}
+
+
+@tool(
+    "set_boundaries",
+    "Change the family's limits (only an approver can; never the care recipient). Give only what changes: "
+    "elder_order_limit / elder_ride_limit (₹; the care recipient's own orders or rides above this need approval), "
+    "anyone_over (₹; anything above needs approval; 0 turns it off), monthly_cap (₹; 0 off), approval_categories "
+    "(subset of grocery, food, pharmacy, ride), approvers (member ids), members ({id: {can_order, can_ride}}). Repeat back "
+    "the new limits in one line after.",
+    {
+        "elder_order_limit": {"type": "integer", "minimum": 0}, "elder_ride_limit": {"type": "integer", "minimum": 0},
+        "anyone_over": {"type": "integer", "minimum": 0}, "monthly_cap": {"type": "integer", "minimum": 0},
+        "approval_categories": {"type": "array", "items": {"type": "string", "enum": ["grocery", "food", "pharmacy", "ride"]}},
+        "approvers": {"type": "array", "items": {"type": "string"}},
+        "members": {"type": "object"},
+    },
+    [],
+)
+async def set_boundaries(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import boundaries
+
+    policy = await boundaries.get(ctx.session, ctx.family_id)
+    roster = await store.roster(ctx.session, ctx.family_id)
+    me = ctx.speaker.get("id") or ""
+    if ctx.speaker_is_elder or not boundaries.can_manage(policy, roster, me):
+        raise ToolRefused("Only the family's approver can change the limits. Say so kindly.")
+    ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
+    if any(x not in ids for x in a.get("approvers") or []) or any(x not in ids for x in (a.get("members") or {})):
+        raise ToolRefused("Use member ids from HOUSEHOLD.")
+    if a.get("approvers") and ctx.elder_id in a["approvers"]:
+        raise ToolRefused("The care recipient cannot be the approver of their own orders.")
+    new = await boundaries.save(ctx.session, ctx.family_id, a, by=me)
+    names = {m.get("id"): m.get("name") for m in [ctx.elder, *ctx.members]}
+    return {"saved": boundaries.describe(new, names)}
 
 
 @tool(

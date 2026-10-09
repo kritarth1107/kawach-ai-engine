@@ -455,6 +455,81 @@ def _chosen(task: Task, pick: dict | None) -> list[dict]:
     return [pick if pick in g else g[0] for g in groups if g]
 
 
+APPROVAL_WAIT = timedelta(minutes=90)
+
+
+async def _approval_gate(session: AsyncSession, task: Task, amount: float | None, by: str, choice: dict | None = None) -> str | None:
+    """None when this may be placed now; otherwise the task waits for an approver (the family's boundaries)."""
+    from app.care import boundaries
+
+    d = task.details or {}
+    policy = await boundaries.get(session, task.family_id)
+    roster = await store.roster(session, task.family_id)
+    allowed = boundaries.approvers(policy, roster)
+    why = await boundaries.reasons(session, family_id=task.family_id, service=task.service, kind=task.kind, amount=amount,
+                                   requested_by=task.requested_by, elder_id=task.subject_id, policy=policy)
+    # what the cart check found that needs a caregiver (the old fixed-budget line is now the family's own limit, above)
+    why += [r for r in d.get("approval") or [] if "limit" not in r and r not in why]
+    if not why or boundaries.may_approve(allowed, by, task.subject_id):
+        return None
+    names = {m.get("id"): (m.get("name") or "").split(" ")[0] for m in (roster.members if roster else [])}
+    task.details = {**d, "approval_needed": {"reasons": why, "approvers": allowed, "asked_by": by, "amount": amount, "choice": choice,
+                                             "asked_at": clock.now().isoformat(), "notified": []}}
+    task.input_needed = "approve"
+    task.deadline_at = clock.now() + APPROVAL_WAIT
+    note(task, "waiting for approval: " + "; ".join(why))
+    who = ", ".join(names.get(a) or a for a in allowed) or "the caregiver"
+    return (f"needs approval first: {'; '.join(why)}. The request goes to {who} now; nothing is placed until they say yes. "
+            "Tell the person that in one short line.")
+
+
+def _start_placing(task: Task, by: str) -> str:
+    d = task.details or {}
+    fp = d.get("cart_fp")
+    task.details = {**d, "confirmed_by": by, "confirmed_total": (task.result or {}).get("total"), "confirmed_fp": fp,
+                    "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
+    task.phase, task.status, task.input_needed = "place", "queued", None
+    task.deadline_at = clock.now() + TASK_LIFETIME
+    note(task, f"confirmed by {by}")
+    return "confirmed; placing it now (NOT placed yet; you will get a task update when it is placed)"
+
+
+def _start_booking(task: Task, by: str, choice: str, fare) -> str:
+    d = task.details or {}
+    fp = _ride_fp(d.get("cart_fp"), choice)
+    task.details = {**d, "choice": choice, "confirmed_by": by, "confirmed_total": fare, "confirmed_fp": fp,
+                    "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
+    task.phase, task.status, task.input_needed = "place", "queued", None
+    task.deadline_at = clock.now() + TASK_LIFETIME
+    note(task, f"choice {choice} by {by}")
+    return f"booking {choice} now (NOT booked yet; you will get a task update)"
+
+
+async def ask_approvers(sessions: async_sessionmaker, notify) -> int:
+    """Send each waiting approval request to the family's approvers (once each)."""
+    async with sessions() as session:
+        rows = list((await session.execute(select(Task).where(Task.status == "awaiting_confirm", Task.input_needed == "approve"))).scalars())
+        out = []
+        for t in rows:
+            ap = (t.details or {}).get("approval_needed") or {}
+            todo = [a for a in ap.get("approvers") or [] if a != "*" and a not in (ap.get("notified") or [])]
+            if not todo:
+                continue
+            t.details = {**t.details, "approval_needed": {**ap, "notified": list(ap.get("notified") or []) + todo}}
+            amount = f" ₹{ap['amount']:.0f}" if isinstance(ap.get("amount"), (int, float)) else ""
+            what = (ap.get("choice") or {}).get("choice") if t.kind == "ride" else (t.result or {}).get("total")
+            for a in todo:
+                out.append((t.family_id, a, (
+                    f"[Approval needed] [{t.id}] Person {t.requested_by} asked for: {describe(t)}{amount}"
+                    f"{f' ({what})' if what else ''}. It needs approval because: {'; '.join(ap.get('reasons') or [])}. Ask person {a} "
+                    f"with send_message, short, in their language: approve or decline? When they answer, call task_input with "
+                    f"task_id {t.id}, kind approve, value yes or no. Then reply none.")))
+        await session.commit()
+    for family_id, person, text in out:
+        await notify(family_id, person, text)
+    return len(out)
+
+
 async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str, by: str, by_is_elder: bool) -> str:
     """The person answered: an OTP, a confirm, a fee approval, a ride choice or a swap. Returns what happens next.
 
@@ -462,12 +537,16 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
     stray "yes" or a ride name can never place something nobody was shown."""
     if task.status not in ("needs_input", "awaiting_confirm"):
         return f"not waiting for input (status {task.status})"
+    from app.care.boundaries import may_approve
+
     value = (value or "").strip()
     d = task.details or {}
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
-    if kind in ("confirm", "choice", "swap", "go") and value.lower() in NO_WORDS and not placed:
+    if kind in ("confirm", "choice", "swap", "go", "approve") and value.lower() in NO_WORDS and not placed:
+        if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id):
+            return "only the family's approver can decline this"
         task.status, task.cancel_requested = "cancelled", True
-        note(task, f"declined by {by}")
+        note(task, f"declined by {by}" + (" (approver)" if kind == "approve" else ""))
         metrics.on_milestone(task, "cancelled")
         # In the day's ledger, so the brain sees the earlier price was dropped (it re-offered one live, 2026-10-09).
         await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_cancelled",
@@ -476,8 +555,15 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         if compare_group(task) and task.phase == "browse":
             _drop_others(await siblings(session, task), task, f"declined by {by}")
             return "declined on every store; nothing was ordered"
+        if kind == "approve":
+            return f"declined; nothing was placed. Tell person {task.requested_by} kindly with send_message, in one line."
         return "declined; nothing was placed"
+    may = may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id)
+    if task.input_needed == "approve" and kind == "confirm" and may:
+        kind = "approve"  # the approver saying "yes, confirm" is the approval
     if task.input_needed and kind != task.input_needed:
+        if task.input_needed == "approve":
+            return "this is waiting for the family approver's answer (already asked); nothing is placed until they say yes"
         return f"the task is waiting for {task.input_needed}, not {kind}; ask for that"
     if kind == "go":
         if task.phase != "browse" or task.status != "awaiting_confirm":
@@ -517,19 +603,11 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         fp = d.get("cart_fp")
         if not fp:
             return "there is no cart to confirm yet; wait for the task update"
-        # Who confirms matters: an elder may not confirm past the budget, whoever asked for the order.
-        limit = d.get("order_limit") or Limits.from_dict(d.get("limits")).budget
-        total = rupees((task.result or {}).get("total"))
-        if by_is_elder and total and total > limit:
-            return f"total ₹{total:.0f} is above the ₹{limit} limit: a caregiver must confirm (ask with alert_caregiver reason approval)"
-        if d.get("approval") and by_is_elder:
-            return f"{'; '.join(d['approval'])} (ask with alert_caregiver reason approval)"
-        task.details = {**d, "confirmed_by": by, "confirmed_total": (task.result or {}).get("total"), "confirmed_fp": fp,
-                        "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
-        task.phase, task.status = "place", "queued"
-        task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"confirmed by {by}")
-        return "confirmed; placing it now (NOT placed yet; you will get a task update when it is placed)"
+        # The family's boundaries decide whether this may go ahead now or waits for an approver (checked in code).
+        gate = await _approval_gate(session, task, rupees((task.result or {}).get("total")), by)
+        if gate:
+            return gate
+        return _start_placing(task, by)
     if kind == "otp":
         if not re.fullmatch(r"\d{4,8}", value):
             return "that is not a code; ask for the digits only"
@@ -583,20 +661,29 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
             return "that could be more than one option; ask which exactly: " + "; ".join(f"{o.get('type')} {o.get('fare', '')}".strip() for o in options)
         if not opt:
             return "that is not one of the options; read them again: " + "; ".join(f"{o.get('type')} {o.get('fare', '')}".strip() for o in options)
-        limits = Limits.from_dict(d.get("limits"))
-        fare = rupees(opt.get("fare"))
-        if by_is_elder and fare and fare > limits.budget:
-            return f"the {opt.get('type')} fare ₹{fare:.0f} is above the ₹{limits.budget} limit: a caregiver must choose it (ask with alert_caregiver reason approval)"
-        if d.get("approval") and by_is_elder:
-            return f"{'; '.join(d['approval'])} (ask with alert_caregiver reason approval)"
         choice = f"{opt.get('type')} {opt.get('fare') or ''}".strip()
-        fp = _ride_fp(d.get("cart_fp"), choice)
-        task.details = {**d, "choice": choice, "confirmed_by": by, "confirmed_total": opt.get("fare"), "confirmed_fp": fp,
-                        "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
-        task.phase, task.status = "place", "queued"
-        task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"choice {choice} by {by}")
-        return f"booking {choice} now (NOT booked yet; you will get a task update)"
+        gate = await _approval_gate(session, task, rupees(opt.get("fare")), by, choice={"choice": choice, "fare": opt.get("fare")})
+        if gate:
+            return gate
+        return _start_booking(task, by, choice, opt.get("fare"))
+    if kind == "approve":
+        ap = d.get("approval_needed") or {}
+        if not ap:
+            return "nothing is waiting for approval"
+        if not may_approve(ap.get("approvers") or [], by, task.subject_id):
+            return "only the family's approver can approve this; it was sent to them"
+        if value.lower() not in YES_WORDS:
+            return "say yes to approve or no to decline"
+        task.details = {**d, "approval_needed": None, "approved_by": by, "approved_at": clock.now().isoformat()}
+        note(task, f"approved by {by}")
+        if task.kind == "ride":
+            c = ap.get("choice") or {}
+            out = _start_booking(task, by, c.get("choice") or "", c.get("fare"))
+        else:
+            if not (task.details or {}).get("cart_fp"):
+                return "the cart is gone; nothing was placed. Ask them to order again"
+            out = _start_placing(task, by)
+        return f"approved. {out}. Tell person {task.requested_by} in one line with send_message that it was approved."
     return f"unknown input {kind}"
 
 
@@ -1287,4 +1374,8 @@ async def tick(
             await notify(t.family_id, t.requested_by, f"[Task update] {text}")
     except Exception:  # noqa: BLE001
         logger.exception("compare announce failed")
+    try:
+        stats["approvals_asked"] = await ask_approvers(sessions, notify)
+    except Exception:  # noqa: BLE001
+        logger.exception("approval requests failed")
     return stats

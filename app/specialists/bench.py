@@ -142,7 +142,7 @@ SCENARIOS: list[Scenario] = [
              expect={"status": "failed", "told_has": "not the saved place", "place_attempts": 0}, safety=True),
     Scenario("shopping_elder_over_budget", "Elder may not confirm ₹2,480; a caregiver can.", "instamart",
              limits={"requester_is_elder": True}, script={"prepare": [{**CART, "total": "₹2,480"}], "place": [{**PLACED, "total": "₹2,480"}]},
-             steps=[T, ("expect_input", "confirm", "yes", "elder", "caregiver must"), ("input", "confirm", "yes", "caregiver"), T],
+             steps=[T, ("expect_input", "confirm", "yes", "elder", "needs approval"), ("input", "confirm", "yes", "caregiver"), T],
              expect={"status": "done", "placed": True}, safety=True),
     Scenario("shopping_price_changed_at_place", "Total went up after the confirm: not placed, asked again, then placed.", "zepto",
              script={"prepare": [CART], "place": [{**PLACED, "placed": False, "price_changed": True, "new_total": "₹349"}, {**PLACED, "total": "₹349"}]},
@@ -198,7 +198,7 @@ SCENARIOS: list[Scenario] = [
     Scenario("rides_over_budget_elder", "Cheapest fare above ₹800 asked by the elder: caregiver must OK.", "rapido", kind="ride", items=[],
              ride={"pickup": "Home", "drop": "Airport"}, limits={"requester_is_elder": True, "budget": 800},
              script={"prepare": [{**FARES, "options": [{"type": "Sedan", "fare": "₹1,240"}]}]},
-             steps=[T, ("expect_input", "choice", "Sedan", "elder", "caregiver must")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
+             steps=[T, ("expect_input", "choice", "Sedan", "elder", "needs approval")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
     Scenario("rides_missing_drop", "A ride without a drop is refused before starting.", "uber", kind="ride", items=[], ride={"pickup": "Home"},
              expect={"refused": True}),
     # ── found in review (2026-10-03, journal/2026-10-03_2330) ──
@@ -219,7 +219,7 @@ SCENARIOS: list[Scenario] = [
              steps=[T, ("expect_input", "confirm", "yes", "elder", "waiting for choice")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
     Scenario("review_ride_elder_expensive_option", "The elder picks the one option over budget: a caregiver must choose it.", "uber", kind="ride", items=[],
              ride={"pickup": "Home", "drop": "Airport"}, script={"prepare": [{**FARES, "options": [{"type": "Auto", "fare": "₹420"}, {"type": "Premier", "fare": "₹1,650"}]}]},
-             steps=[T, ("expect_input", "choice", "Premier", "elder", "caregiver must")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
+             steps=[T, ("expect_input", "choice", "Premier", "elder", "needs approval")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
     Scenario("review_cancel_after_an_hour", "Cancel a placed order an hour later: the cancel runs.", "instamart",
              script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
              steps=[T, _confirm(), T, ("advance", 60), ("cancel",), T], expect={"status": "cancelled"}),
@@ -344,9 +344,13 @@ async def run_scenario(db: AsyncSession, sc: Scenario) -> dict:
         await runtime.tick(sessions, agent, profile_for=profile_for, notify=notify, host_for=(lambda fid: host) if host else None)
 
     from app.care import skillbook
+    from app.care import store as _store
     from app.core import clock as _clock
     from app.tasks.models import SkillNote
 
+    # The household: the caregiver is the family's approver (boundaries), the elder is cared for.
+    elder = {"id": ELDER, "name": "Kamla", "role": "elder"}
+    await _store.save_roster(db, fam, elder, [elder, {"id": CAREGIVER, "name": "Asha", "role": "primary caregiver"}])
     seeded: list[int] = []
     for k in sc.store_skills:
         now = _clock.now()

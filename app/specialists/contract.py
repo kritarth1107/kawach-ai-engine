@@ -16,7 +16,7 @@ CONTRACT_VERSION = 1
 
 # Statuses an agent report can lead to (the task row keeps the same names).
 STATUSES = ("queued", "running", "needs_input", "awaiting_confirm", "done", "failed", "cancelled")
-INPUTS = ("otp", "confirm", "fee", "choice", "swap")
+INPUTS = ("otp", "confirm", "fee", "choice", "swap", "approve")
 
 DEFAULT_BUDGET = {"order": 1500, "ride": 800}  # ₹; above this an elder's request needs a caregiver's OK
 MAX_QTY = {"shopping": 6, "pharmacy": 3}  # per line, unless the person asked for more
@@ -47,6 +47,9 @@ class Limits:
 
 async def build_limits(session: AsyncSession, *, family_id: str, subject_id: str, kind: str, agent: str,
                        requester_is_elder: bool, place: dict | None = None) -> Limits:
+    from app.care import boundaries
+
+    policy = await boundaries.get(session, family_id)
     rows = await store.facts(session, family_id, subject_id, domains=["allergy", "no_order", "diet", "medicine"], statuses=("active",))
     allergies = [r.value.get("allergen") or r.key.split(":", 1)[1] for r in rows if r.domain == "allergy"]
     never = [r.value.get("item") or r.key.split(":", 1)[1].replace("_", " ") for r in rows if r.domain == "no_order"]
@@ -54,6 +57,7 @@ async def build_limits(session: AsyncSession, *, family_id: str, subject_id: str
     rx = [f"{r.value.get('name') or r.key.split(':', 1)[1]} {r.value.get('dose') or ''}".strip()
           for r in rows if r.domain == "medicine" and r.value.get("prescription")]
     return Limits(
-        allergies=allergies, never_order=never, diet_rules=diet, budget=DEFAULT_BUDGET.get(kind, 1500),
+        allergies=allergies, never_order=never, diet_rules=diet,
+        budget=policy["elder_ride_limit"] if kind == "ride" else policy["elder_order_limit"],
         requester_is_elder=requester_is_elder, max_qty=MAX_QTY.get(agent, 6), place=place or {}, rx_on_file=rx,
     )
