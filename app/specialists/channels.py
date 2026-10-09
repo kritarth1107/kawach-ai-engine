@@ -88,12 +88,26 @@ async def pick_channel(session: AsyncSession, host, task: Task) -> tuple[str, st
     return "connector", "linked store"
 
 
-async def connector_prepare(host, task: Task) -> dict:
+async def connector_search(host, task: Task) -> dict:
+    """The look-up through the linked store: options with prices, no browser and no login code."""
     item = (task.details or {}).get("items")[0]
+    out = await host.call(
+        "connector_search",
+        {"store": task.service, "item": item.get("name"), "restaurant": item.get("restaurant"),
+         "placeId": ((task.details or {}).get("limits") or {}).get("place", {}).get("addressId")},
+        family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by,
+    )
+    return out or {}
+
+
+async def connector_prepare(host, task: Task) -> dict:
+    d = task.details or {}
+    item = d.get("items")[0]
+    picked = next((c.get("ref") for c in (d.get("chosen") or []) if c.get("ref")), None)  # the product picked from the options
     out = await host.call(
         "connector_prepare",
         {"store": task.service, "item": item.get("name"), "qty": int(item.get("qty") or 1), "restaurant": item.get("restaurant"),
-         "placeId": ((task.details or {}).get("limits") or {}).get("place", {}).get("addressId")},
+         "placeId": (d.get("limits") or {}).get("place", {}).get("addressId"), **({"pick": picked} if picked else {})},
         family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by,
     )
     return out or {}

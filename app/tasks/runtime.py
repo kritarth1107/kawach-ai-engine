@@ -112,7 +112,8 @@ def _compare_summary(group: list[Task]) -> str:
             found = _found(t)
             eta = f"; delivers in about {r['eta']}" if r.get("eta") else ""
             what = "; ".join(_option(i) for i in found[:4]) if found else "shows prices only after a login"
-            lines.append(f"- {label} [task {t.id}]: {what}{eta}")
+            linked = " (linked account: no login code)" if d.get("channel") == "connector" else ""
+            lines.append(f"- {label} [task {t.id}]{linked}: {what}{eta}")
             open_.append(t)
         elif t.status == "needs_input" and t.input_needed == "swap":
             alts = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in (d.get("alternatives") or []))
@@ -129,7 +130,8 @@ def _compare_summary(group: list[Task]) -> str:
         "as not exactly what they asked; each with product, pack size, price, store and delivery time. Ask which one they want. "
         "When they pick, call task_input on that option's task: kind go with value = the product with its pack and price exactly "
         "as listed above (e.g. 'Diet Coke Can (300 ml) ₹40'); for a 'has instead' item: kind swap. The other stores are dropped "
-        f"by themselves, and a login code then comes to {_code_to(open_[0])}. If they want none, task_input go no on any one of them.")
+        f"by themselves. A store marked linked account needs no login code; for the others a login code then comes to "
+        f"{_code_to(open_[0])}. If they want none, task_input go no on any one of them.")
 
 
 async def _compare_update(session: AsyncSession, task: Task, own: str) -> tuple[str | None, bool]:
@@ -483,8 +485,10 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
             if len(group) > 1:
                 dropped = "; the other stores are dropped"
         what = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in chosen)
-        return (f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: logging in and building "
-                "the cart (NOT ordered; a login code may come to their phone; you will get a task update)")
+        how = ("building the cart on the linked account (no login code; NOT ordered; you will get a task update)"
+               if (task.details or {}).get("channel") == "connector" else
+               "logging in and building the cart (NOT ordered; a login code may come to their phone; you will get a task update)")
+        return f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: {how}"
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
             return "nothing to confirm right now"
@@ -749,6 +753,33 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                                 f"login: a code will come to {code_to}. Ask whether to go ahead (task_input go).{pick}")
 
 
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", str(text or "").lower()) if len(w) > 2 or w.isdigit()}
+
+
+async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
+    """Browse through the linked store's connector. Returns a look-up report, or None to look in the browser instead."""
+    metrics.on_connector_call(task)
+    try:
+        r = await channels.connector_search(host, task)
+    except Exception as exc:  # noqa: BLE001 — a broken connector falls back to the browser
+        await channels.record(session, task.service, "connector", False, str(exc)[:200])
+        return None
+    if r.get("ok") or r.get("kind") == "unserviceable":
+        await channels.record(session, task.service, "connector", True)
+        task.phase = "browse"
+        if not r.get("ok"):
+            return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
+        asked = _words(((task.details or {}).get("items") or [{}])[0].get("name"))
+        items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
+                  # the connector does not say; a product missing a word that was asked for (Coke Zero for Diet Coke) is only similar
+                  "exact_match": asked <= _words(i.get("name")) if asked else None}
+                 for i in (r.get("items") or []) if i.get("name")]
+        return {"items": items, "deliverable": True, "logged_in": True, "problem": "" if items else "not found"}
+    await channels.record(session, task.service, "connector", False, r.get("detail"))
+    return None
+
+
 def _confirm_still_valid(task: Task) -> bool:
     """The confirm still matches what is in the cart (or the fares shown) and its token is genuine."""
     d = task.details or {}
@@ -946,7 +977,16 @@ async def tick(
                             channel, why = await channels.pick_channel(session, host, task)
                             metrics.on_channel(task, channel, why)
                             task.details = {**(task.details or {}), "channel": channel}
-                        if (task.details or {}).get("channel") == "connector":
+                        if (task.details or {}).get("channel") == "connector" and task.phase == "prepare" and browse_first(task):
+                            # A linked store looks it up through its connector: seconds, no browser, no login code.
+                            report = await _connector_lookup(session, host, task)
+                            if report is None:
+                                metrics.on_channel(task, "browser", "connector look-up failed; falling back")
+                                task.details = {**(task.details or {}), "channel": "browser"}
+                                note(task, "connector look-up failed, looking it up in the browser")
+                            else:
+                                was_browse = True
+                        elif (task.details or {}).get("channel") == "connector":
                             report = await _connector_step(session, host, task)
                             if report is None:
                                 metrics.on_channel(task, "browser", "connector failed; falling back")

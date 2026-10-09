@@ -481,3 +481,65 @@ async def test_code_for_a_closed_login_page_asks_for_a_new_one_and_is_not_kept(d
     await h.tick()
     await db.refresh(t)
     assert t.input_needed == "otp" and "closed before the code could be used" in h.told[-1] and "new code" in h.told[-1]
+
+
+class LinkedHost:
+    """The backend for a family that linked Instamart (connector) but not Blinkit."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def call(self, tool, args, *, family_id, subject_id, actor_id):
+        self.calls.append((tool, args))
+        if tool == "connector_status":
+            ok = args["store"] == "instamart"
+            return {"connected": ok, "enabled": ok}
+        if tool == "connector_search":
+            return {"ok": True, "items": [{"name": "Coca-Cola Diet Coke Can 300 ml", "price": "₹40", "ref": {"store": "instamart", "name": "Coca-Cola Diet Coke Can 300 ml", "spinId": "S1"}},
+                                          {"name": "Coca-Cola Zero Sugar 300 ml", "price": "₹40", "ref": {"store": "instamart", "name": "Coca-Cola Zero Sugar 300 ml", "spinId": "S2"}}]}
+        if tool == "connector_prepare":
+            return {"ok": True, "items": [{"name": args["pick"]["name"], "qty": 1, "price": "₹40"}], "total": "₹49", "fees": "₹9",
+                    "cod_available": True, "address_used": "Home", "card": {"cardId": "c1", "totalPaise": 4900}}
+        if tool == "connector_place":
+            return {"status": "placed", "orderId": "IM-1", "total": "₹49"}
+        return {}
+
+
+async def test_linked_store_looks_up_and_orders_through_its_connector_without_a_code(db, at, sessions):
+    """Founder 2026-10-09 'make it fast': Instamart is linked for Maa's family, so its look-up, cart and order go through
+    the connector (seconds, no browser, no login code); Blinkit still uses the browser."""
+    at("2026-10-09 17:00")
+    host = LinkedHost()
+    agent = FakeAgent(script={"browse:blinkit": [COKE_BLINKIT]})
+    told = []
+    for s in ("blinkit", "instamart"):
+        await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service=s, kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}], "compare": "g9"})
+    await db.commit()
+
+    async def notify(f, r, p):
+        told.append(p)
+
+    async def tick():
+        return await runtime.tick(sessions, agent, profile_for=lambda t: _profile(t), notify=notify, host_for=lambda f: host)
+
+    async def _profile(t):
+        return {"profileId": f"prof-{t.service}", "loginPhone": "9000012345"}
+
+    await tick(); await tick()
+    assert [r["service"] for r in agent.runs] == ["blinkit"], "Instamart was looked up through its connector, not a browser"
+    assert len(told) == 1 and "Swiggy Instamart [task" in told[0] and "(linked account: no login code)" in told[0]
+    assert "Coca-Cola Zero Sugar 300 ml ₹40 [similar" in told[0] and "Coca-Cola Diet Coke Can 300 ml ₹40" in told[0]
+    im = next(t for t in await runtime.live_tasks(db, FAM) if t.service == "instamart")
+    said = await runtime.provide_input(db, im, kind="go", value="Coca-Cola Diet Coke Can 300 ml ₹40", by=ELDER, by_is_elder=True)
+    assert "linked account (no login code" in said
+    await db.commit()
+    await tick()
+    await db.refresh(im)
+    assert im.status == "awaiting_confirm" and im.input_needed == "confirm" and im.result["total"] == "₹49"
+    assert ("connector_prepare", ) == tuple(c[0] for c in host.calls if c[0] == "connector_prepare")[:1]
+    assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "S1"
+    await runtime.provide_input(db, im, kind="confirm", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await tick()
+    await db.refresh(im)
+    assert im.status == "done" and im.result["order_id"] == "IM-1" and [r["service"] for r in agent.runs] == ["blinkit"]
