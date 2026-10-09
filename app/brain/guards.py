@@ -149,6 +149,9 @@ def target(p: dict | None) -> str | None:
     if saved.get("script") == "roman":
         return "latin"
     by_saved = language.script_for(saved)
+    now = p.get("now")
+    if by_saved and now and now != "latin" and now != by_saved:
+        return now  # they just wrote in another Indian script (Gujarati to a Marwari setting): answer in what they wrote
     if by_saved:
         return by_saved
     if p.get("script") and p["script"] != "latin":
@@ -177,6 +180,9 @@ def describe(p: dict | None) -> str:
         return "English"
     if t == "indic":
         return "types an Indian language in Roman letters; reply in that language in its own script (Hindi in Devanagari), not in Roman letters"
+    if t and saved.get("language") and t != language.script_for(saved):
+        return (f"{SCRIPT_LANG.get(t, t)}, written in {t.capitalize()} script: they just wrote in it, so answer in it (their saved "
+                f"setting is {language.label(saved)}; if they want to switch for good, save it with language_preference)")
     if t:
         lang = language.label(saved) if saved.get("language") else SCRIPT_LANG.get(t, t)
         return f"{lang}, written in {t.capitalize()} script{dialect}"
@@ -230,6 +236,58 @@ def language_problems(text: str, p: dict | None, who: str = "they") -> list[str]
         return [f"do not mix scripts: write the English words ({', '.join(mixed[:4])}) in {got.capitalize()} script too "
                 "(numbers stay 0-9; a medicine or brand name may stay as written)"]
     return []
+
+
+RAJASTHANI = {"mwr", "mtr", "dhd", "swv", "hoj", "wbr"}  # dialects whose honorific is सा
+_SA = re.compile(r"(?<=\S)[ \t]+(?:सा|સા)(?=[ \t]*[।?!,.]|[ \t]*$)", re.M)
+_SWITCH = re.compile(
+    r"(marwa[rd]i|rajasthani|gujar?a?ti|chh?att?[ie]?sgarhi|chhattisgarhi|bhojpuri|maithili|haryanvi|awadhi|bundeli|tamil|telugu|"
+    r"kannada|malayalam|bengali|bangla|marathi|punjabi|odia|oriya|hindi|english|urdu|मारवाड़ी|गुजराती|छत्तीसगढ़ी|भोजपुरी|"
+    r"मैथिली|हिंदी|हिन्दी|अंग्रेजी|मराठी|बंगाली)\s*(?:me|mein|mai|ma|में|मा|મા|મેં)?\s*(?:baat|bol|likh|reply|बात|बोल|लिख|વાત)"
+    r"|\b(?:talk|speak|reply|write)\s+(?:to me\s+|with me\s+)?in\s+[a-z]+|back to\s+[a-z]+", re.I)
+
+
+def dialect_of(p: dict | None) -> str | None:
+    """The dialect a reply is written in: the saved one, unless they just wrote in another script."""
+    saved = (p or {}).get("saved") or {}
+    if not saved.get("dialect"):
+        return None
+    from app.care import language
+
+    t = target(p)
+    return saved["dialect"] if t == language.script_for(saved) else None
+
+
+def dialect_problems(text: str, p: dict | None) -> list[str]:
+    """सा is the Rajasthani honorific: never in another language or dialect, and at most once a message even in Marwari
+    (live 2026-10-09: it ran into Gujarati and Chhattisgarhi replies and closed every sentence in Marwari)."""
+    hits = len(_SA.findall(text or ""))
+    if not hits:
+        return []
+    if dialect_of(p) in RAJASTHANI:
+        return ["use सा at most once in a message, not after every sentence"] if hits > 1 else []
+    return ["'सा' is Marwari/Rajasthani; this person is not spoken to in Marwari now: write without it, in their language's own words"]
+
+
+def dialect_tidy(text: str, p: dict | None) -> str:
+    """Last line of defence for the same rule: drop सा outside Rajasthani dialects, keep only the first one in them."""
+    if not text or not _SA.search(text):
+        return text
+    if dialect_of(p) in RAJASTHANI:
+        seen = [False]
+
+        def keep_first(m: re.Match) -> str:
+            if seen[0]:
+                return ""
+            seen[0] = True
+            return m.group(0)
+
+        return _SA.sub(keep_first, text)
+    return _SA.sub("", text)
+
+
+def asks_language_switch(text: str) -> bool:
+    return bool(_SWITCH.search(text or ""))
 
 
 def canned_key(p: dict | None) -> str:

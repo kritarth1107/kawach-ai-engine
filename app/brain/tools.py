@@ -637,7 +637,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
     greeted, mid = guards.opening_state(await store.recent_turns(ctx.session, ctx.family_id, a["to"], limit=12), clock.now(), day_of=clock.ist_day)
-    a = {**a, "text": guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid))}
+    a = {**a, "text": guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)),
+                                          ctx.profiles.get(a["to"]))}
     payload = {"to": a["to"], "text": a["text"]}
     if (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
         from app.care import outcomes
@@ -1770,6 +1771,8 @@ async def _save_language(ctx: TurnCtx, subject: str, speech: dict) -> dict:
         ctx.session, family_id=ctx.family_id, subject_id=subject, domain="language", key="language:preferred", value=speech,
         text=language.sentence(speech), source_kind=ctx.source_kind, source_ref=ctx.message_ref, stated_by=ctx.speaker.get("id"),
         confidence=0.9 if ctx.speaker_is_elder else 1.0,
+        # the whole setting, not merged into the old one (live 2026-10-09: "Talk to me in Gujarati" kept dialect Marwari)
+        replace=True,
     )
     synced = await ctx.host.call("set_voice_preference", {"language": speech.get("language"), "dialect": speech.get("dialect") or "",
                                                           "script": speech.get("script") or "native"},

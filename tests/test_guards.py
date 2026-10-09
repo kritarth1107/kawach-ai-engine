@@ -301,3 +301,32 @@ def test_markdown_becomes_whatsapp_formatting():
     assert g.whatsapp_format("1. **PharmEasy Labs**: ₹449") == "1. *PharmEasy Labs*: ₹449"
     assert g.whatsapp_format("## Options\nok") == "Options\nok"
     assert g.whatsapp_format("*already* fine") == "*already* fine"
+
+
+def test_marwari_sa_stays_in_marwari_and_only_once():
+    """Live 2026-10-09: 'सा' ran into Gujarati ('સા?') and Chhattisgarhi replies, and closed every Marwari sentence."""
+    mwr = {"script": "devanagari", "saved": {"language": "hi", "dialect": "mwr"}, "now": "devanagari"}
+    hne = {"script": "devanagari", "saved": {"language": "hi", "dialect": "hne"}, "now": "devanagari"}
+    cg = "कालि सुबेरे आठ बजे तुंहला बीपी के एक गोली खाना हे सा। आराम से सुत जाव सा।"
+    assert g.dialect_problems(cg, hne) and g.dialect_tidy(cg, hne) == "कालि सुबेरे आठ बजे तुंहला बीपी के एक गोली खाना हे। आराम से सुत जाव।"
+    many = "कोई बात कोनी सा। नीद कोनी आ रही तो चिंता मत करो सा। आराम सू लेटे रहो सा।"
+    assert g.dialect_problems(many, mwr) == ["use सा at most once in a message, not after every sentence"]
+    assert g.dialect_tidy(many, mwr) == "कोई बात कोनी सा। नीद कोनी आ रही तो चिंता मत करो। आराम सू लेटे रहो।"
+    assert g.dialect_problems("घणी चोखी बात है सा।", mwr) == []
+    gu = {"script": "gujarati", "saved": {"language": "gu"}, "now": "gujarati"}
+    assert g.dialect_tidy("અત્યારે કેવું લાગે છે સા?", gu) == "અત્યારે કેવું લાગે છે?"
+
+
+def test_latest_script_wins_over_the_saved_language():
+    """Live: Maa wrote in Gujarati script to a Chhattisgarhi setting and got a Devanagari reply."""
+    p = {"script": "devanagari", "saved": {"language": "hi", "dialect": "hne"}, "now": "gujarati"}
+    assert g.target(p) == "gujarati" and g.dialect_of(p) is None
+    assert "they just wrote in it" in g.describe(p)
+    assert g.target({**p, "now": "latin"}) == "devanagari", "Roman letters still get the saved language in its own script"
+
+
+def test_language_switch_requests_are_noticed():
+    for t in ("Talk to me in gujurati", "Back to marwari", "Marwari me baat karo abse", "Kya tum mujhse chhattisgarhi me baat kr sakti ho?",
+              "गुजराती में बात करो"):
+        assert g.asks_language_switch(t), t
+    assert not g.asks_language_switch("Mujhe aaj chakkar aa raha hai")

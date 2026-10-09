@@ -127,6 +127,8 @@ async def writing_profiles(session: AsyncSession, family_id: str, people: list[d
         saved = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
         if saved:
             prof = {"script": prof.get("script"), "roman": prof.get("roman"), "saved": language.normalise(saved.value)}
+        if prof and turns:
+            prof["now"] = guards.script_of(turns[-1].text)  # the script of their latest message wins over the saved one
         if prof:
             out[p["id"]] = prof
     return out
@@ -374,6 +376,9 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
     )
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
+    problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
+    if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
+        problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
     earlier = [t.text for t in recent
                if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
@@ -609,7 +614,8 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
-        final = guards.whatsapp_format(guards.tidy_opening(final, greeted_today=greeted, mid_conversation=mid))
+        final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(final, greeted_today=greeted, mid_conversation=mid)),
+                                    ctx.profiles.get(req.speaker["id"]))
 
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
