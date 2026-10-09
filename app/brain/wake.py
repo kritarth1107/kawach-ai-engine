@@ -124,12 +124,14 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
     if not deliver_to or deliver_to not in known or sent or result.duplicate or not text or text.lower().strip(" .\"'") == "none":
         return
-    if any(w in text for w in ("task_input", "task_id", "[Task", "send_message")):
+    if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
         logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
         return
     try:
+        # The backend only accepts a family member as the actor (as TurnCtx.actor_id does on system turns): "saheli" was
+        # refused, the request hung and the update never went out (live 2026-10-09 15:05, Maa's Blinkit price).
         res = await host.call("send_whatsapp", {"to": deliver_to, "text": text}, family_id=family_id.removeprefix("shadow:"),
-                              subject_id=roster.elder["id"], actor_id="saheli")
+                              subject_id=roster.elder["id"], actor_id=roster.elder["id"])
         async with sessions() as session:
             await store.add_turn(session, family_id=family_id, thread_id=deliver_to, role="assistant", text=text,
                                  meta={"proactive": True, "delivered": res.get("delivered"), "fallback_delivery": ref})

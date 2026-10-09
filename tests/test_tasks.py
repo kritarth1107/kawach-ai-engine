@@ -286,3 +286,132 @@ async def test_ride_site_that_needs_login_for_fares_asks_to_go_ahead(db, at, ses
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and t.input_needed == "go" and "only after a login" in h.told[-1]
+
+
+async def _compare(db, item="Diet Coke") -> list[Task]:
+    out = []
+    for s in runtime.COMPARE_STORES["grocery"]:
+        out.append(await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service=s, kind="order", goal=f"{item} for Amma",
+                                        details={"items": [{"name": item, "qty": 1}], "compare": "g1"}))
+    await db.commit()
+    return out
+
+
+COKE_BLINKIT = {**FOUND, "eta": "11 mins", "items": [
+    {"name": "Diet Coke Can (300 ml)", "price": "₹40", "available": True, "for_item": "Diet Coke"},
+    {"name": "Diet Coke (6 x 300 ml)", "price": "₹220", "available": True, "for_item": "Diet Coke"}]}
+COKE_INSTAMART = {**FOUND, "eta": "15 mins", "items": [{"name": "Coca-Cola Diet Coke Can 300 ml", "price": "₹42", "available": True, "for_item": "Diet Coke"}]}
+NO_ZEPTO = {**FOUND, "items": [], "deliverable": False, "location_set": "Raipur 492001"}
+
+
+async def test_no_store_named_looks_on_every_store_and_offers_all_options(db, at, sessions, monkeypatch):
+    """Founder 2026-10-09: 'how is it choosing Blinkit? it should go for other options like Instamart and Zepto, and give
+    the available options as we had earlier'. One look-up per store at once, one update with every option."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "off")  # a comparison looks first even when single orders do not
+    at("2026-10-09 15:03")
+    h = LoginHarness(sessions, FakeAgent(script={"browse:blinkit": [COKE_BLINKIT], "browse:instamart": [COKE_INSTAMART], "browse:zepto": [NO_ZEPTO],
+                                                 "prepare": [OTP, CART]}, finish_after_polls=1), "9000012345")
+    b, i, z = await _compare(db)
+    await h.tick()  # all three look at once, none logs in
+    assert sorted(r["service"] for r in h.agent.runs) == ["blinkit", "instamart", "zepto"]
+    assert all(r["phase"] == "browse" and "9000012345" not in r["goal"] and "up to 3 matching products" in r["goal"] for r in h.agent.runs)
+    await h.tick()
+    assert len(h.told) == 1, "one update for the whole comparison, not one per store"
+    msg = h.told[0]
+    assert msg.startswith("[Task update] Looked on Blinkit, Swiggy Instamart, Zepto without logging in")
+    assert "Diet Coke Can (300 ml) ₹40" in msg and "Diet Coke (6 x 300 ml) ₹220" in msg and "₹42" in msg
+    assert "Zepto: Zepto does not deliver" in msg and f"[task {b.id}]" in msg and f"[task {i.id}]" in msg and f"[task {z.id}]" not in msg
+    assert "numbered list" in msg and "phone ending 2345" in msg
+    for t in (b, i, z):
+        await db.refresh(t)
+    assert (b.status, b.input_needed, i.status, z.status) == ("awaiting_confirm", "go", "awaiting_confirm", "failed")
+    # she picks the single can on Blinkit: that is the go-ahead, and Instamart is dropped
+    said = await runtime.provide_input(db, b, kind="go", value="Diet Coke Can (300 ml)", by=ELDER, by_is_elder=True)
+    assert said.startswith("going ahead on Blinkit with Diet Coke Can (300 ml) ₹40; the other stores are dropped")
+    await db.commit()
+    await db.refresh(i)
+    assert i.status == "cancelled"
+    await h.tick()
+    prep = h.agent.runs[-1]
+    assert prep["service"] == "blinkit" and prep["phase"] == "prepare" and "enter the mobile number 9000012345" in prep["goal"]
+    assert "Diet Coke Can (300 ml) ₹40" in prep["goal"] and "6 x 300" not in prep["goal"]
+
+
+async def test_comparison_waits_a_little_for_a_slow_store_then_sends_what_it_has(db, at, sessions, monkeypatch):
+    at("2026-10-09 15:03")
+    agent = FakeAgent(script={"browse:blinkit": [COKE_BLINKIT], "browse:instamart": [COKE_INSTAMART], "browse:zepto": [NO_ZEPTO]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    b, i, z = await _compare(db)
+    await h.tick()
+    agent.finish_after_polls = 99  # Instamart and Zepto keep loading
+    agent._polls[[r["task"] for r in agent.runs if r["service"] == "blinkit"][0]] = 98
+    await h.tick()
+    assert h.told == [], "the first answer waits for the others"
+    at("2026-10-09 15:08")
+    await h.tick()
+    assert len(h.told) == 1 and "₹40" in h.told[0] and "Instamart: still looking" in h.told[0]
+    # Instamart answers later: told on its own as another option
+    agent.finish_after_polls = 1
+    await h.tick()
+    late = [m for m in h.told[1:] if "Instamart" in m]
+    assert late and "Another store answered after the options were sent" in late[0] and "₹42" in late[0]
+    assert not any("Zepto" in m for m in h.told[1:]), "a late 'does not deliver' is not worth a message"
+
+
+async def test_comparison_declined_drops_every_store_and_expires_once(db, at, sessions):
+    at("2026-10-09 15:03")
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [COKE_INSTAMART]}), "9000012345")
+    b, i, z = await _compare(db)
+    await h.tick(); await h.tick()
+    for t in (b, i, z):
+        await db.refresh(t)
+    assert await runtime.provide_input(db, i, kind="go", value="nahi", by=ELDER, by_is_elder=True) == "declined on every store; nothing was ordered"
+    await db.commit()
+    for t in (b, z):
+        await db.refresh(t)
+    assert b.status == z.status == "cancelled"
+    # a fresh comparison nobody answers: one "nobody picked" message, not three
+    b2, i2, z2 = await _compare(db, item="Atta")
+    for t in (b2, i2, z2):
+        t.details = {**t.details, "compare": "g2"}
+    await db.commit()
+    await h.tick(); await h.tick()
+    n = len(h.told)
+    at("2026-10-09 16:00")
+    await h.tick()
+    assert len(h.told) == n + 1 and "Nobody picked one of the options" in h.told[-1]
+
+
+async def test_go_ahead_with_several_products_found_uses_the_best_match_or_the_named_one(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 15:03")
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [COKE_BLINKIT], "prepare": [OTP]}), "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]})
+    await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert "ask which one" in h.told[-1]
+    assert "more than one product" in await runtime.provide_input(db, t, kind="go", value="diet coke", by=ELDER, by_is_elder=True)
+    said = await runtime.provide_input(db, t, kind="go", value="6 x 300 ml pack", by=ELDER, by_is_elder=True)
+    assert "Diet Coke (6 x 300 ml) ₹220" in said
+    await db.commit()
+    await h.tick()
+    assert "Diet Coke (6 x 300 ml) ₹220" in h.agent.runs[-1]["goal"] and "Can (300 ml)" not in h.agent.runs[-1]["goal"]
+
+
+async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
+    from app.brain import tools
+    from app.sim.world import SimHost
+
+    at("2026-10-09 15:03")
+    e = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=e, speaker=e, members=[e])
+    with pytest.raises(tools.ToolRefused):
+        await tools.start_task(ctx, {"kind": "ride", "goal": "Cab to the clinic"})
+    old = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Atta",
+                               details={"items": [{"name": "Atta", "qty": 1}]})
+    out = await tools.start_task(ctx, {"kind": "order", "category": "grocery", "goal": "Diet Coke for Vasundara ji", "items": [{"name": "Diet Coke"}]})
+    assert out["looking_on"] == ["Swiggy Instamart", "Zepto"] and len(out["task_ids"]) == 2 and str(old.id) in out["already_running"][0]
+    group = [t for t in await runtime.live_tasks(db, FAM) if runtime.compare_group(t)]
+    assert len({runtime.compare_group(t) for t in group}) == 1 and {t.service for t in group} == {"instamart", "zepto"}

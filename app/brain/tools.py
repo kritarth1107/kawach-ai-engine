@@ -791,9 +791,14 @@ async def _task(ctx: TurnCtx, task_id: str):
     "their go-ahead it logs in (a login code may come to their phone), builds the cart and comes back to confirm "
     "before anything is placed. Rides find fares and come back to choose. Cash on delivery only. Allergies and the "
     "never-order list are checked first. Tell the person you are on it; you will get a task update when it needs "
-    "them. For 'the usual' or 'same as last time', look at past_orders first and use the exact item names and service from there.",
+    "them. For 'the usual' or 'same as last time', look at past_orders first and use the exact item names and service from there. "
+    "If they did not name a store for an order, leave service out and give category: it looks on every usual store for that "
+    "(groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, PharmEasy; food: Swiggy, Zomato) at once, and one task "
+    "update brings all the options to offer them.",
     {
-        "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"]},
+        "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"],
+                    "description": "Only when they named a store (or for 'the usual'); rides always need one"},
+        "category": {"type": "string", "enum": ["grocery", "medicine", "food"], "description": "For an order with no store named: compare the usual stores"},
         "kind": {"type": "string", "enum": ["order", "ride"]},
         "goal": {"type": "string", "description": "One line, e.g. 'Atta and toor dal for Amma' or 'Cab to Dr Iyer's clinic'"},
         "items": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "qty": {"type": "integer"}}, "required": ["name"]},
@@ -803,42 +808,78 @@ async def _task(ctx: TurnCtx, task_id: str):
         "vehicle": {"type": "string", "description": "auto, mini, sedan, bike, or omit for cheapest car"},
         "area": {"type": "string", "description": "Delivery area or pincode if known"},
     },
-    ["service", "kind", "goal"],
+    ["kind", "goal"],
 )
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import runtime
+
+    if not a.get("service"):
+        stores = runtime.COMPARE_STORES.get(a.get("category") or "") if a["kind"] == "order" else None
+        if not stores:
+            raise ToolRefused("Say which store (service). Rides always need one; for an order with no store named, give category.")
+        return await _start_compare(ctx, a, stores)
+    for t in await runtime.live_tasks(ctx.session, ctx.family_id):
+        if t.service == a["service"] and t.kind == a["kind"]:
+            return {"already_running": runtime.describe(t)}
+    task = await _create_task(ctx, a, a["service"])
+    return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
+
+
+async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...]) -> dict:
+    """The same order looked up on several stores at once (no login); one task update brings every option."""
+    from app.tasks import runtime
+
+    from app.tasks.skills import SKILLS
+
+    busy = {t.service: t for t in await runtime.live_tasks(ctx.session, ctx.family_id) if t.kind == "order"}
+    free = [s for s in stores if s not in busy]
+    if not free:
+        raise ToolRefused("Every store for this already has an order running: " + "; ".join(runtime.describe(busy[s]) for s in stores))
+    gid, place = uuid.uuid4().hex[:10], await _delivery_place(ctx, a)
+    started = [await _create_task(ctx, a, s, extra={"compare": gid}, place=place) for s in free]
+    out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started],
+                 "next": "One task update brings the options from every store (usually in 2 to 4 minutes); nothing is ordered before they pick."}
+    if len(free) < len(stores):
+        out["already_running"] = [runtime.describe(busy[s]) for s in stores if s in busy]
+    return out
+
+
+async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None = None, place: dict | None = None):
     from app.specialists.agents import specialist_for
     from app.specialists.contract import build_limits
     from app.tasks import runtime
 
-    for t in await runtime.live_tasks(ctx.session, ctx.family_id):
-        if t.service == a["service"] and t.kind == a["kind"]:
-            return {"already_running": runtime.describe(t)}
-    place: dict = {}
-    if a["kind"] == "order":
-        try:
-            got = await ctx.host.call("delivery_place", {"words": a.get("area") or ""}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id)
-            place = got if got.get("addressId") else {}
-        except Exception:  # noqa: BLE001 — no saved place: the agent uses the account's home address
-            place = {}
+    if place is None:
+        place = await _delivery_place(ctx, a)
     limits = await build_limits(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], agent=specialist_for(a["service"]).name,
+        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], agent=specialist_for(service).name,
         requester_is_elder=ctx.speaker_is_elder, place=place,
     )
     try:
-        task = await runtime.create(
+        return await runtime.create(
             ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
-            service=a["service"], kind=a["kind"], goal=a["goal"],
-            details={k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)}, limits=limits,
+            service=service, kind=a["kind"], goal=a["goal"],
+            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)}, **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
-    return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
+
+
+async def _delivery_place(ctx: TurnCtx, a: dict) -> dict:
+    if a["kind"] != "order":
+        return {}
+    try:
+        got = await ctx.host.call("delivery_place", {"words": a.get("area") or ""}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id)
+        return got if got.get("addressId") else {}
+    except Exception:  # noqa: BLE001 — no saved place: the agent uses the account's home address
+        return {}
 
 
 @tool(
     "task_input",
     "Give a running task what it is waiting for: their go-ahead to log in and build the cart after hearing the "
-    "price (go: yes/no), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
+    "price (go: yes/no, or the name of the product they picked from the options; on a comparison, use the task of the "
+    "store they picked), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
     "of a cancellation fee (fee: yes/no), which ride option to book (choice), or which alternative to get for an "
     "item that is out of stock (swap: the alternative's name, or 'no' to drop it).",
     {

@@ -130,6 +130,8 @@ def schema_for(kind: str, phase: str) -> dict:
         }
     if phase == "browse":
         # Looking before logging in: what is there, at what price, and whether it reaches the family.
+        if "items" in extra:
+            extra["items"]["items"]["properties"]["for_item"] = {"type": "string", "description": "The item asked for that this product matches"}
         extra |= {
             "deliverable": {"type": "boolean"},
             "location_set": {"type": "string", "description": "The delivery location the site shows after setting it"},

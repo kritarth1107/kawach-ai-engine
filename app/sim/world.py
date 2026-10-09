@@ -44,7 +44,7 @@ class SimHost:
 
     async def call(self, tool: str, args: dict, *, family_id: str, subject_id: str, actor_id: str) -> dict:
         w = self.world
-        w.calls.append({"tool": tool, "args": args, "at": clock.now().isoformat()})
+        w.calls.append({"tool": tool, "args": args, "at": clock.now().isoformat(), "actor": actor_id})
         day = clock.ist_day()
         if tool == "sync_medicine_schedule":
             key = args["key"]

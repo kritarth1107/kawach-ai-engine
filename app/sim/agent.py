@@ -37,10 +37,12 @@ class FakeAgent:
     async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None) -> AgentRun:
         tid = f"t{next(self._ids)}"
         phase = metadata.get("phase", "prepare")
-        queue = self.script.get(phase) or [CART]
+        # "browse:zepto" scripts one store; "browse" every store
+        queue = self.script.get(f"{phase}:{metadata.get('service')}") or self.script.get(phase) or [CART]
         out = queue.pop(0) if len(queue) > 1 else queue[0]
         self._out[tid] = out
-        self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm, "agent": metadata.get("agent")})
+        self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm,
+                          "agent": metadata.get("agent"), "service": metadata.get("service")})
         return AgentRun(task_id=tid, session_id=session_id or f"s-{tid}", status="created")
 
     async def poll(self, task_id: str) -> AgentRun:

@@ -78,9 +78,11 @@ class Specialist:
             spot = (f"{place.get('full')} (pincode {place.get('pincode')})" if place.get("full") else
                     f"pincode {place.get('pincode')}" if place.get("pincode") else d.get("area") or "the family's area")
             return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker, then "
-                    f"search for: {items}. For each item report the best match (exact name and pack size), its price and whether it "
-                    f"is in stock. Report deliverable (does {label} deliver to this location) and the eta if shown. If an item is "
-                    f"missing, list up to 3 alternatives with prices. Do not add to the cart, do not open checkout, do not log in.")
+                    f"search for: {items}. For each item report up to 3 matching products, best match first (for example a single "
+                    f"can and a pack of 6): the exact name, the pack size exactly as the product card shows it (e.g. '6 x 300 ml'), "
+                    f"the price of that pack, whether it is in stock, and for_item (which item asked for it matches). Report "
+                    f"deliverable (does {label} deliver to this location) and the eta if shown. If an item is missing, list up to 3 "
+                    f"alternatives with prices. Do not add to the cart, do not open checkout, do not log in.")
         if task.phase == "prepare":
             if place.get("full"):
                 # First order on a freshly logged-in account: the family's own address from Kavach may be added once.

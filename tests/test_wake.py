@@ -149,6 +149,8 @@ async def test_task_update_written_as_plain_reply_still_reaches_the_asker(db, at
         await wake.system_turn(sessions, host, FAM, "[Task update] [t-2] Blinkit order: Diet Coke, waiting for go.", "task:p1", deliver_to=ELDER["id"])
         assert [m["text"] for m in host.world.sent] == ["Kamla ji, Blinkit par Diet Coke ₹50 mein mil rahi hai. Order karun?"]
         assert (await store.recent_turns(db, FAM, ELDER["id"]))[-1].meta["fallback_delivery"] == "task:p1"
+        # live 2026-10-09: the backend refuses an actor who is not in the family ("saheli"), so nothing went out
+        assert [c["actor"] for c in host.world.calls if c["tool"] == "send_whatsapp"] == [ELDER["id"]]
         # a wake-up (no deliver_to) still sends nothing on its own
         await wake.system_turn(sessions, host, FAM, "[Task update] [t-3] Blinkit order: Diet Coke, waiting for go.", "task:p2")
         assert len(host.world.sent) == 1
