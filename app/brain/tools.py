@@ -794,7 +794,8 @@ async def _task(ctx: TurnCtx, task_id: str):
     "them. For 'the usual' or 'same as last time', look at past_orders first and use the exact item names and service from there. "
     "If they did not name a store for an order, leave service out and give category: it looks on every usual store for that "
     "(groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, PharmEasy; food: Swiggy, Zomato) at once, and one task "
-    "update brings all the options to offer them.",
+    "update brings all the options to offer them. The first call for an order only returns the delivery address to confirm: "
+    "ask them, and call start_task again after they say yes (with area if they named another saved place).",
     {
         "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"],
                     "description": "Only when they named a store (or for 'the usual'); rides always need one"},
@@ -813,6 +814,10 @@ async def _task(ctx: TurnCtx, task_id: str):
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
+    if a["kind"] == "order" and not ctx.is_system:
+        ask = await _confirm_address_first(ctx, a)
+        if ask:
+            return ask
     if not a.get("service"):
         stores = runtime.COMPARE_STORES.get(a.get("category") or "") if a["kind"] == "order" else None
         if not stores:
@@ -823,6 +828,35 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
             return {"already_running": runtime.describe(t)}
     task = await _create_task(ctx, a, a["service"])
     return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
+
+
+ADDRESS_OK_FOR = timedelta(minutes=30)
+
+
+async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
+    """The delivery address is confirmed before any search, as the order flow did before Brain v2 (founder 2026-10-09:
+    "it used to confirm address before going ahead, then search and give options, then OTP, then place order").
+    The first start_task of an order records the ask and returns the address; a call in a later turn by the same person
+    (their answer) goes ahead."""
+    speaker = ctx.speaker.get("id") or ctx.elder_id
+    since = clock.now() - ADDRESS_OK_FOR
+    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=since, kinds=["order_address_asked"])
+             if (e.payload or {}).get("speaker") == speaker]
+    if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
+        return None
+    if asked:  # asked in this same turn already: they have not answered yet
+        return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
+    place = await _delivery_place(ctx, a)
+    where = (f"{place.get('nickname') or 'Home'}: {place.get('full')}" if place.get("full") else
+             f"pincode {place.get('pincode')}" if place.get("pincode") else
+             f"near {a['area']}" if a.get("area") else "the address saved in the store account")
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_address_asked",
+                             summary=f"Asked to confirm the delivery address for: {a['goal']}", actor_id=speaker,
+                             payload={"speaker": speaker, "ref": ctx.message_ref, "where": where})
+    return {"status": "not started yet", "confirm_address": where,
+            "next": "Nothing is searched yet. In one short line, ask them to confirm this delivery address (say the place name "
+                    "and the area, not the full line). When they say yes, call start_task again with the same order; if they "
+                    "name another saved place, pass it as area."}
 
 
 async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...]) -> dict:

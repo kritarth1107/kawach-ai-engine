@@ -307,17 +307,32 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
         phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
         task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
-    run = await agent.run(
-        goal=goal,
-        hints=spec.hints(task.service, learned),
-        schema=spec.schema(task),
-        session_id=task.agent_session,
-        profile_id=profile_id,
-        start_url=None if task.agent_session else SKILLS[task.service]["start_url"],
-        max_steps=spec.steps.get(task.phase, 40),
-        metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
-        llm=spec.model,
-    )
+    async def start(session_id: str | None, profile: str | None) -> AgentRun:
+        return await agent.run(
+            goal=goal,
+            hints=spec.hints(task.service, learned),
+            schema=spec.schema(task),
+            session_id=session_id,
+            profile_id=profile,
+            start_url=None if session_id else SKILLS[task.service]["start_url"],
+            max_steps=spec.steps.get(task.phase, 40),
+            metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
+            llm=spec.model,
+        )
+
+    try:
+        run = await start(task.agent_session, profile_id)
+    except RuntimeError as exc:
+        # The browser of the last step already closed (live 2026-10-09: the look-up's browser was gone when the go-ahead
+        # came, and the login step failed three times). Start a fresh one on the family's profile, which keeps the login.
+        if not task.agent_session or "session is stopped" not in str(exc).lower():
+            raise
+        note(task, "the earlier browser had closed; starting a fresh one")
+        task.agent_session = None
+        got = got if got is not None else await profile_for(task)
+        profile_id = got.get("profileId") if isinstance(got, dict) else got
+        await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
+        run = await start(None, profile_id)
     # A browser now exists and bills: record it (and that the task is running on it) and commit before anything else,
     # so a failure later in this tick cannot roll back the only record of it (the sweeper stops what the ledger knows).
     task.agent_session, task.agent_task = run.session_id, run.task_id

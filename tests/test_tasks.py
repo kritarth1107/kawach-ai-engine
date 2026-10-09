@@ -411,7 +411,40 @@ async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
         await tools.start_task(ctx, {"kind": "ride", "goal": "Cab to the clinic"})
     old = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Atta",
                                details={"items": [{"name": "Atta", "qty": 1}]})
-    out = await tools.start_task(ctx, {"kind": "order", "category": "grocery", "goal": "Diet Coke for Vasundara ji", "items": [{"name": "Diet Coke"}]})
+    ask = {"kind": "order", "category": "grocery", "goal": "Diet Coke for Vasundara ji", "items": [{"name": "Diet Coke"}]}
+    ctx.message_ref = "wamid.1"
+    first = await tools.start_task(ctx, ask)
+    assert "confirm_address" in first and first["status"] == "not started yet", "the address is confirmed before any search"
+    assert (await tools.start_task(ctx, ask))["status"].startswith("waiting"), "not in the same turn"
+    assert len([t for t in await runtime.live_tasks(db, FAM) if runtime.compare_group(t)]) == 0
+    ctx.message_ref = "wamid.2"  # her "haan" in the next message
+    out = await tools.start_task(ctx, ask)
     assert out["looking_on"] == ["Swiggy Instamart", "Zepto"] and len(out["task_ids"]) == 2 and str(old.id) in out["already_running"][0]
     group = [t for t in await runtime.live_tasks(db, FAM) if runtime.compare_group(t)]
     assert len({runtime.compare_group(t) for t in group}) == 1 and {t.service for t in group} == {"instamart", "zepto"}
+
+
+class ClosingAgent(FakeAgent):
+    """Browser Use refuses a step on a browser that already stopped."""
+
+    async def run(self, *, session_id, **kw):
+        if session_id and session_id in self.sessions_stopped:
+            raise RuntimeError('browser-use POST tasks 400: {"detail":"Browser session is stopped. Please start a new session and try again."}')
+        return await super().run(session_id=session_id, **kw)
+
+
+async def test_go_ahead_after_the_look_up_browser_closed_starts_a_fresh_one(db, at, sessions, monkeypatch):
+    """Live 2026-10-09 15:48: Maa said ok, the login step tried the look-up's closed browser and failed every minute."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-09 15:45")
+    agent = ClosingAgent(script={"browse": [FOUND], "prepare": [OTP]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    agent.sessions_stopped.append(t.agent_session)  # Browser Use closed it on its own
+    await runtime.provide_input(db, t, kind="go", value="ok", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "running" and agent.runs[-1]["phase"] == "prepare" and agent.runs[-1]["session"] is None
+    assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and "fresh one" in t.history[-2]["note"]
