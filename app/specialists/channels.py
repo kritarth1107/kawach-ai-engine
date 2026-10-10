@@ -19,6 +19,9 @@ from app.db.session import Base
 from app.tasks.models import Task
 
 CONNECTOR_SERVICES = {"swiggy", "instamart", "zepto"}
+# Grocery stores take several items in one cart (order lab 2026-10-10: "biscuits and munchies"); food stays one dish.
+MULTI_ITEM = {"instamart", "zepto"}
+MAX_ITEMS = 6
 DEGRADE_AFTER = 3
 DEGRADED_FOR = timedelta(minutes=30)
 
@@ -70,8 +73,11 @@ async def pick_channel(session: AsyncSession, host, task: Task) -> tuple[str, st
     d = task.details or {}
     if task.kind != "order" or task.service not in CONNECTOR_SERVICES:
         return "browser", "no connector for this service"
-    if len(d.get("items") or []) != 1:
-        return "browser", "connector orders one item at a time"
+    n = len(d.get("items") or [])
+    if n == 0 or (n > 1 and task.service not in MULTI_ITEM):
+        return "browser", "connector orders one item at a time here"
+    if n > MAX_ITEMS:
+        return "browser", f"more than {MAX_ITEMS} items"
     if not await healthy(session, task.service, "connector"):
         return "browser", "connector degraded after repeated failures"
     if host is None:
@@ -88,9 +94,9 @@ async def pick_channel(session: AsyncSession, host, task: Task) -> tuple[str, st
     return "connector", "linked store"
 
 
-async def connector_search(host, task: Task) -> dict:
-    """The look-up through the linked store: options with prices, no browser and no login code."""
-    item = (task.details or {}).get("items")[0]
+async def connector_search(host, task: Task, item: dict | None = None) -> dict:
+    """The look-up through the linked store for one asked item: options with prices, no browser and no login code."""
+    item = item or (task.details or {}).get("items")[0]
     out = await host.call(
         "connector_search",
         {"store": task.service, "item": item.get("name"), "restaurant": item.get("restaurant"),
@@ -100,14 +106,24 @@ async def connector_search(host, task: Task) -> dict:
     return out or {}
 
 
+def _qty_for(items: list[dict], chosen: dict) -> int:
+    asked = str(chosen.get("for_item") or "").lower()
+    hit = next((i for i in items if str(i.get("name") or "").lower() == asked), None) or (items[0] if len(items) == 1 else None)
+    return int((hit or {}).get("qty") or 1)
+
+
 async def connector_prepare(host, task: Task) -> dict:
     d = task.details or {}
-    item = d.get("items")[0]
-    picked = next((c.get("ref") for c in (d.get("chosen") or []) if c.get("ref")), None)  # the product picked from the options
+    items = d.get("items") or [{}]
+    item = items[0]
+    picks = [c for c in (d.get("chosen") or []) if c.get("ref")]  # the products picked from the options, one per item
+    first = picks[0] if picks else None
+    more = [{"pick": c["ref"], "qty": _qty_for(items, c)} for c in picks[1:]]
     out = await host.call(
         "connector_prepare",
-        {"store": task.service, "item": item.get("name"), "qty": int(item.get("qty") or 1), "restaurant": item.get("restaurant"),
-         "placeId": (d.get("limits") or {}).get("place", {}).get("addressId"), **({"pick": picked} if picked else {})},
+        {"store": task.service, "item": item.get("name"), "qty": _qty_for(items, first) if first else int(item.get("qty") or 1),
+         "restaurant": item.get("restaurant"), "placeId": (d.get("limits") or {}).get("place", {}).get("addressId"),
+         **({"pick": first["ref"]} if first else {}), **({"more": more} if more else {})},
         family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by,
     )
     return out or {}

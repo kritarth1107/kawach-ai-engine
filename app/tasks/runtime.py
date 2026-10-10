@@ -440,8 +440,22 @@ def _match_product(found: list[dict], value: str) -> dict | str | None:
     return "ambiguous" if len(part) > 1 or len(exact) > 1 else None
 
 
-def _chosen(task: Task, pick: dict | None) -> list[dict]:
+def _groups(task: Task, found: list[dict]) -> list[tuple[str, list[dict]]]:
+    """(asked item, its products): one group per asked item when the look-up tagged them (for_item), else one group."""
+    asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])]
+    if not any(i.get("for_item") for i in found):
+        return [(asked[0] if len(asked) == 1 else "", found)] if found else []
+    keyed: dict[str, list[dict]] = {}
+    for i in found:
+        keyed.setdefault(str(i.get("for_item") or ""), []).append(i)
+    return list(keyed.items())
+
+
+def _chosen(task: Task, pick: dict | list | None) -> list[dict]:
     """One product per requested item for the cart: the one picked, else the best match the look-up listed first."""
+    if isinstance(pick, list):
+        picks = pick
+        return [next((p for p in picks if p in g), None) or best_exact(asked, g) or g[0] for asked, g in _groups(task, _found(task))]
     found = _found(task)
     asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])]
     if not any(i.get("for_item") for i in found):
@@ -599,18 +613,29 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         pick = None
         if value.lower() not in YES_WORDS:
             found = _found(task)
-            pick = _match_product(found, value)
-            listed = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in found)
-            if pick == "ambiguous":
-                return f"that could be more than one product; ask which exactly: {listed}"
-            if not pick:
-                return (f"say yes to log in and build the cart, name one of the products found ({listed}), or no to drop it"
-                        if found else "say yes to log in and build the cart, or no to drop it")
+            groups = _groups(task, found)
+            if len(groups) > 1:
+                # One name per item, "a | b" (several items in one cart): each must be one of that item's products.
+                picks = []
+                for part in [p.strip() for p in re.split(r"\s*\|\s*|\n", value) if p.strip()]:
+                    hit = next((m for _, g in groups if isinstance(m := _match_product(g, part), dict)), None)
+                    if not hit:
+                        return f"'{part}' is not one of the products found; ask again, one name per item separated by ' | '"
+                    picks.append(hit)
+                pick = picks
+            else:
+                pick = _match_product(found, value)
+                listed = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in found)
+                if pick == "ambiguous":
+                    return f"that could be more than one product; ask which exactly: {listed}"
+                if not pick:
+                    return (f"say yes to log in and build the cart, name one of the products found ({listed}), or no to drop it"
+                            if found else "say yes to log in and build the cart, or no to drop it")
         chosen = _chosen(task, pick)
         task.details = {**d, "chosen": chosen} if chosen else d
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"go-ahead from {by}" + (f" for {_label(pick)}" if pick else ""))
+        note(task, f"go-ahead from {by}" + (f" for {'; '.join(_label(p) for p in pick)}" if isinstance(pick, list) else f" for {_label(pick)}" if pick else ""))
         dropped = ""
         if compare_group(task):
             group = await siblings(session, task)
@@ -885,12 +910,18 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     if out.get("logged_in") and not compare_group(task):  # in a comparison the person picks the store first
         # Already logged in: no code needed. Build the cart straight away only for the one product that is clearly what
         # they asked for; otherwise they pick (lab 2026-10-10: "Parle-G 475 g" got the first hit, "1 kg x 2" ₹250).
-        one = best_exact(((d.get("items") or [{}])[0].get("name") or "") if len(d.get("items") or []) == 1 else "", found)
-        if one:
-            task.details = {**task.details, "chosen": [one]}
+        groups = _groups(task, found)
+        picks = [best_exact(asked, g) for asked, g in groups]
+        if groups and all(picks):
+            task.details = {**task.details, "chosen": picks}
             task.phase = "prepare"
             return "queued", ""
         task.input_needed = "go"
+        if len(groups) > 1:
+            listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:5]) + "." for asked, g in groups)
+            return "awaiting_confirm", (f"Found on {label}: {listed} Delivers to {where}{eta}. Nothing is ordered yet and no login code is "
+                                        "needed. Ask which one they want for each item and pass the names, separated by ' | ', as the "
+                                        "value of task_input go.")
         return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet and no login code is "
                                     "needed. Ask which one they want and pass its name as the value of task_input go.")
     task.input_needed = "go"
@@ -935,24 +966,31 @@ def best_exact(asked: str, found: list[dict]) -> dict | None:
 async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
     """Browse through the linked store's connector. Returns a look-up report, or None to look in the browser instead."""
     metrics.on_connector_call(task)
+    asked_items = (task.details or {}).get("items") or [{}]
     try:
-        r = await channels.connector_search(host, task)
+        # One look-up per asked item, together (several items go in one cart).
+        results = await asyncio.gather(*(channels.connector_search(host, task, it) for it in asked_items))
     except Exception as exc:  # noqa: BLE001 — a broken connector falls back to the browser
         await channels.record(session, task.service, "connector", False, str(exc)[:200])
         return None
-    if r.get("ok") or r.get("kind") == "unserviceable":
-        await channels.record(session, task.service, "connector", True)
-        task.phase = "browse"
-        if not r.get("ok"):
-            return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
-        asked = ((task.details or {}).get("items") or [{}])[0].get("name") or ""
-        items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
-                  # the connector does not say; a product missing a word that was asked for (Coke Zero for Diet Coke) is only similar
-                  "exact_match": asked_match(asked, i.get("name"))}
-                 for i in (r.get("items") or []) if i.get("name")]
-        return {"items": items, "deliverable": True, "logged_in": True, "problem": "" if items else "not found"}
-    await channels.record(session, task.service, "connector", False, r.get("detail"))
-    return None
+    bad = next((r for r in results if not r.get("ok") and r.get("kind") != "unserviceable"), None)
+    if bad is not None:
+        await channels.record(session, task.service, "connector", False, bad.get("detail"))
+        return None
+    await channels.record(session, task.service, "connector", True)
+    task.phase = "browse"
+    if any(not r.get("ok") for r in results):
+        r = next(r for r in results if not r.get("ok"))
+        return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
+    many = len(asked_items) > 1
+    items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
+              **({"for_item": it.get("name")} if many else {}),
+              # the connector does not say; a product missing a word that was asked for (Coke Zero for Diet Coke) is only similar
+              "exact_match": asked_match(it.get("name") or "", i.get("name"))}
+             for it, r in zip(asked_items, results) for i in (r.get("items") or []) if i.get("name")]
+    missing = [it.get("name") for it, r in zip(asked_items, results) if not [i for i in (r.get("items") or []) if i.get("name")]]
+    return {"items": items, "deliverable": True, "logged_in": True,
+            "problem": "" if items and not missing else f"not found: {', '.join(str(m) for m in missing)}" if items else "not found"}
 
 
 def fastpath_on() -> bool:

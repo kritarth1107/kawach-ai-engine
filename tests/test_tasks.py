@@ -612,6 +612,86 @@ def test_single_pack_ask_prefers_the_single_pack_over_a_multipack():
     assert runtime.best_exact("anything", [{"name": box}])["name"] == box
 
 
+class SnackHost(LinkedHost):
+    """Instamart linked; biscuits and munchies looked up separately, both go in one cart."""
+
+    async def call(self, tool, args, *, family_id, subject_id, actor_id):
+        if tool == "connector_search":
+            self.calls.append((tool, args))
+            if "biscuit" in args["item"].lower():
+                names = ["Parle-G Gold Biscuits — 475 g", "Britannia Good Day Cashew Biscuits — 200 g"]
+            else:
+                names = ["Kurkure Masala Munch — 90 g", "Lay's India's Magic Masala Chips — 50 g"]
+            return {"ok": True, "items": [{"name": n, "price": "₹40", "ref": {"store": "instamart", "name": n, "spinId": n[:6]}} for n in names]}
+        if tool == "connector_prepare":
+            self.calls.append((tool, args))
+            lines = [{"name": args["pick"]["name"], "qty": args["qty"]}] + [{"name": m["pick"]["name"], "qty": m["qty"]} for m in args.get("more", [])]
+            return {"ok": True, "items": lines, "total": "₹150", "fees": "₹30", "cod_available": True, "address_used": "Home",
+                    "card": {"cardId": "c2", "totalPaise": 15000}}
+        return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
+
+
+async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monkeypatch):
+    """Order lab 2026-10-10: "add biscuits and munchies" — two items, one Instamart cart, each picked from its own look-up."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 15:30")
+    host = SnackHost()
+    told = []
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order",
+                             goal="biscuits and munchies", details={"items": [{"name": "biscuits", "qty": 1}, {"name": "munchies", "qty": 2}]})
+    await db.commit()
+
+    async def notify(f, r, p):
+        told.append(p)
+
+    async def no_profile(t):
+        return None
+
+    async def tick():
+        await runtime.tick(sessions, FakeAgent(), profile_for=no_profile, notify=notify, host_for=lambda f: host)
+
+    await tick()
+    await db.refresh(t)
+    assert [c[1]["item"] for c in host.calls if c[0] == "connector_search"] == ["biscuits", "munchies"]
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and "For biscuits:" in told[-1] and "For munchies:" in told[-1]
+    said = await runtime.provide_input(db, t, kind="go", value="Parle-G Gold Biscuits — 475 g | Kurkure Masala Munch — 90 g",
+                                       by=ELDER, by_is_elder=True)
+    assert "linked account" in said
+    await db.commit()
+    await tick()
+    await db.refresh(t)
+    prep = next(c[1] for c in host.calls if c[0] == "connector_prepare")
+    assert prep["pick"]["name"].startswith("Parle-G") and prep["qty"] == 1
+    assert prep["more"] == [{"pick": {"store": "instamart", "name": "Kurkure Masala Munch — 90 g", "spinId": "Kurkur"}, "qty": 2}]
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+
+
+async def test_a_go_naming_a_product_not_found_is_asked_again(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 15:30")
+    host = SnackHost()
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order",
+                             goal="biscuits and munchies", details={"items": [{"name": "biscuits", "qty": 1}, {"name": "munchies", "qty": 1}]})
+    await db.commit()
+
+    async def no_profile(t):
+        return None
+
+    async def notify(f, r, p):
+        return None
+
+    await runtime.tick(sessions, FakeAgent(), profile_for=no_profile, notify=notify, host_for=lambda f: host)
+    await db.refresh(t)
+    said = await runtime.provide_input(db, t, kind="go", value="Parle-G Gold Biscuits — 475 g | Haldiram bhujia", by=ELDER, by_is_elder=True)
+    assert "not one of the products found" in said and t.phase == "browse"
+
+
+def test_food_orders_stay_one_dish_on_the_connector():
+    from app.specialists import channels
+
+    assert "instamart" in channels.MULTI_ITEM and "swiggy" not in channels.MULTI_ITEM
+
+
 class FastAgent(FakeAgent):
     async def open_session(self, profile_id):
         self.opened = profile_id
