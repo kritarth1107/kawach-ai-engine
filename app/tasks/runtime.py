@@ -396,6 +396,13 @@ async def _hints(session: AsyncSession, service: str, phase: str = "prepare") ->
 
 
 def _goal(task: Task) -> str:
+    place = ((task.details or {}).get("limits") or {}).get("place") or {}
+    if task.phase == "prepare" and (task.details or {}).get("address_fix_pending"):
+        label = SKILLS[task.service]["label"]
+        return (f"On {label}, open the cart and go to checkout. The delivery address is wrong: change it to the account's saved "
+                f"address that reads like '{place.get('full')}' (pincode {place.get('pincode')}); choose it by this address line, never "
+                "by a label such as 'Home'. Do not change the items and do not place the order. Report the items with their prices, "
+                "the total to pay, cod_available, address_used (exactly as the checkout shows it) and eta.")
     if task.phase == "prepare" and (task.details or {}).get("total_only"):
         label = SKILLS[task.service]["label"]
         return (f"On {label}, open the cart and go to checkout up to the payment step. Change nothing in the cart and do not place "
@@ -439,7 +446,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             got = await profile_for(task)
         goal += login_line(got)
     if (task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only")
-            and not (task.details or {}).get("total_only")):
+            and not (task.details or {}).get("total_only") and not (task.details or {}).get("address_fix_pending")):
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
         if seen and SKILLS[task.service].get("kind") == "food":
@@ -1084,6 +1091,31 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             return "cancelled", "Cancelled on the service. Tell the person."
         return "failed", f"Could not cancel ({out.get('problem') or 'unknown'}); tell the caregiver to cancel from the app."
     return "failed", "Unexpected state."
+
+
+async def _check_address(task: Task, out: dict, status: str, message: str | None) -> tuple[str, str | None]:
+    """A browser cart about to be confirmed: the checkout's address must be the family's saved place (an AI check). Another
+    address → the agent switches it once; still another → stopped, nothing ordered."""
+    d = task.details or {}
+    place = (d.get("limits") or {}).get("place") or {}
+    if d.get("address_fix_pending"):
+        task.details = d = {**d, "address_fix_pending": False}
+    if not (task.phase == "prepare" and status == "awaiting_confirm" and task.kind == "order" and out.get("address_used") and place.get("full")):
+        return status, message
+    from app.tasks import matcher
+
+    same = await matcher.same_place(str(place["full"]), str(place.get("pincode") or ""), str(out["address_used"]))
+    if same is not False:
+        return status, message
+    task.input_needed = None
+    if not d.get("address_fix"):
+        task.details = {**d, "address_fix": 1, "address_fix_pending": True, "cart_fp": None, "confirm_token": None}
+        note(task, f"the cart is on another address ('{str(out['address_used'])[:80]}'); switching it to {place.get('nickname')}")
+        return "queued", None
+    label = SKILLS[task.service]["label"]
+    return "failed", (f"Stopped before the confirm: {label} keeps using another delivery address ('{out['address_used']}') instead of "
+                      f"{place.get('nickname')} ({place['full']}); nothing was ordered. Tell them plainly and tell the caregiver to check "
+                      "the saved addresses in the app.")
 
 
 def _practice_message(task: Task, out: dict) -> str:
@@ -2093,6 +2125,7 @@ async def tick(
                             await _ai_pick(task, task.result, session)
                             out = task.result
                         status, message = _outcome(task, out)
+                        status, message = await _check_address(task, out, status, message)
                         task.status = status
                         note(task, f"{task.phase} → {status}: {message}")
                         if status == "failed":

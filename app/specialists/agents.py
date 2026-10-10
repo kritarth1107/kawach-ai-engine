@@ -75,7 +75,12 @@ class Specialist:
             return task.goal
         items = "; ".join(f"{i.get('qty', 1)} x {i.get('name')}" for i in d.get("items") or []) or task.goal
         place = (d.get("limits") or {}).get("place") or {}
-        where = (f" Deliver only to the saved address '{place.get('nickname')}' ({place.get('pincode')}); if it is not in the account, stop and report it."
+        # By the address line, not the label: the account may have several "Home"s (live run 2026-10-11: the agent took the
+        # account's old "Home" in Purena instead of "Kavach Home", C504 Sunita Park).
+        where = ((f" Deliver only to the account's saved address that reads like: '{place.get('full')}' (pincode {place.get('pincode')}). "
+                  "Several saved addresses can have similar labels such as 'Home': choose by this address line, never by the label; "
+                  "if none matches, stop and report it.") if place.get("full") else
+                 f" Deliver only to the saved address '{place.get('nickname')}' ({place.get('pincode')}); if it is not in the account, stop and report it."
                  if place.get("pincode") else (f" Deliver to the saved address near {d['area']}." if d.get("area") else " Deliver to the account's saved home address."))
         if task.phase == "browse":
             spot = (f"{place.get('full')} (pincode {place.get('pincode')})" if place.get("full") else
@@ -91,8 +96,9 @@ class Specialist:
         if task.phase == "prepare":
             if place.get("full"):
                 # First order on a freshly logged-in account: the family's own address from Kavach may be added once.
-                where = (f" Deliver to the saved address '{place.get('nickname')}' ({place.get('pincode')}). If the account has no address "
-                         f"with that pincode, add this one and use it: {place.get('full')} (use the account holder's name and number if asked).")
+                where = (f" Deliver to the account's saved address that reads like: '{place.get('full')}' (pincode {place.get('pincode')}); "
+                         "choose it by this address line, never by a label such as 'Home' (the account may have several). If the account has "
+                         "no such address, add this one and use it (use the account holder's name and number if asked).")
             return (f"On {label}, put exactly these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
                     f"Cash/Pay on Delivery is offered. Do NOT place the order. Report items with prices, total with fees, cod_available, address_used, eta.")
         if task.phase == "place" and practice.on(task):

@@ -83,3 +83,27 @@ async def choose(items: list[dict], listings: list[list[dict]], *, medicine: boo
         closest = p.get("closest") - 1 if ok(p.get("closest")) and not exact else None
         out[n] = {"exact": exact, "closest": closest, "why": str(p.get("why") or "")[:160]}
     return out
+
+
+PLACE_PROMPT = """Two delivery addresses in India. SAVED is the family's chosen place; SHOWN is what the store's checkout shows.
+Are they the same place (the same house or flat in the same building, area and city)? Different spellings, a missing
+pincode, a label like "Home" or a name before the address do not matter; another house, flat, block, building or area
+does. JSON only: {"same": true | false, "why": "<a few words>"}"""
+
+
+async def same_place(saved_full: str, pincode: str, shown: str) -> bool | None:
+    """Is the store's checkout address the family's saved place? None when the model could not answer (the cart check's own
+    pincode rule still applies). Live run 2026-10-11: the agent picked the account's old "Home" in Purena for Sunita Park."""
+    if not saved_full or not shown:
+        return None
+    try:
+        reply = await router.complete("classify", system_stable=PLACE_PROMPT, effort="low", max_tokens=300, timeout_s=20,
+                                      messages=[{"role": "user", "content": [{"type": "text", "text":
+                                                 f"SAVED: {saved_full} (pincode {pincode or 'unknown'})\nSHOWN: {shown}"}]}])
+        from app.care.extract import parse_json
+
+        data = parse_json(reply.text)
+    except Exception as exc:  # noqa: BLE001 — the pincode check still stands
+        logger.warning("same_place failed: %s", exc)
+        return None
+    return data.get("same") if isinstance(data.get("same"), bool) else None
