@@ -157,3 +157,41 @@ async def test_task_update_written_as_plain_reply_still_reaches_the_asker(db, at
         assert len(host.world.sent) == 1
     finally:
         router._providers.pop("fake", None)
+
+
+class SilentFirstBrain:
+    """Answers a task update with 'none' the first time (as live 2026-10-10 20:29), with the message when asked again."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def complete(self, route, *, messages, **kw):
+        text = messages[-1]["content"][0]["text"] if messages[-1]["role"] == "user" else ""
+        if "[Task update]" in text:
+            self.calls += 1
+            if "sent NOTHING" in text:
+                return LLMReply(text="Kamla ji, cart ₹175 ready hai. Order karun?", tool_calls=[], model="fake")
+        return LLMReply(text="none", tool_calls=[], model="fake")
+
+
+async def test_an_update_needing_an_answer_that_sent_nothing_is_asked_again_but_a_done_notice_is_not(db, at, monkeypatch):
+    brain = SilentFirstBrain()
+    router.register_provider("fake", brain)
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+        at("2026-10-10 20:29")
+        await store.save_roster(db, FAM, ELDER, [ELDER, DAUGHTER])
+        await db.commit()
+        host = SimHost()
+        await wake.system_turn(sessions, host, FAM, "[Task update] [t-9] Instamart order: khakhra, waiting for confirm, total ₹175.", "task:a1",
+                               deliver_to=ELDER["id"])
+        assert [m["text"] for m in host.world.sent] == ["Kamla ji, cart ₹175 ready hai. Order karun?"] and brain.calls == 2
+        # live 20:45: the 'placed' notice she had already told Maa in her reply went out again; a done notice is not re-asked
+        at("2026-10-10 20:45")
+        await wake.system_turn(sessions, host, FAM, "[Task update] [t-9] Instamart order: khakhra, status done/place, id 1. Placed.", "task:a2",
+                               deliver_to=ELDER["id"])
+        assert len(host.world.sent) == 1 and brain.calls == 3
+    finally:
+        router._providers.pop("fake", None)

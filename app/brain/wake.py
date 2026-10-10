@@ -132,8 +132,14 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     text = (result.reply or "").strip()
     known = {m.get("id") for m in [roster.elder, *roster.members]}
     sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
+    async with sessions() as session:
+        recent = await store.recent_turns(session, family_id, deliver_to, limit=6) if deliver_to else []
+    just_told = any(t.role == "assistant" and (t.text or "").strip().lower() != "none" and t.at and clock.now() - t.at < timedelta(seconds=120)
+                    for t in recent)
+    needs_answer = "waiting for " in prompt or prompt.startswith(("[Login code needed]", "[Order needs you]"))
     if (deliver_to and deliver_to in known and not sent and not result.duplicate and prompt.startswith(MUST_REACH)
-            and (not text or text.lower().strip(" .\"'") == "none")):
+            and needs_answer and not just_told and (not text or text.lower().strip(" .\"'") == "none")):
+        # (Live 2026-10-10 20:45: a "placed" update she had already told Maa in her reply was sent a second time.)
         # Live 2026-10-10 20:29: an order's cart update came, the brain answered "none" and sent nothing; Maa heard nothing.
         # Once more, firmly; its message is then delivered below even if it writes it as the reply.
         logger.error("task update sent nothing; asking again family=%s ref=%s", family_id, ref)

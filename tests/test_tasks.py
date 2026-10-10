@@ -1387,3 +1387,31 @@ def test_two_items_do_not_get_the_same_product():
     t.service, t.kind, t.phase = "instamart", "order", "browse"
     status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
     assert sorted(c["store_id"] for c in t.details["chosen"]) == ["M", "T"]
+
+
+MURUKU = [{"name": "Modern Kitchens Butter Muruku", "pack": "150 g", "price": "₹35", "store_id": "B", "available": True, "exact_match": False}]
+
+
+def test_another_variant_is_never_put_in_silently():
+    """Founder 2026-10-10: 'asked peri peri muruku, you got butter muruku; take care next time'."""
+    assert runtime.auto_pick("peri peri muruku", MURUKU) is None
+    peri = [{"name": "Haldiram Peri Peri Murukku", "pack": "150 g", "price": "₹40", "store_id": "P", "available": True, "exact_match": False}] + MURUKU
+    assert runtime.asked_match("peri peri muruku", "Haldiram Peri Peri Murukku 150 g")
+    milk = [{"name": "Amul Taaza Toned Milk", "pack": "500 ml", "price": "₹30", "store_id": "M", "available": True, "exact_match": False}]
+    assert runtime.auto_pick("doodh", milk)["store_id"] == "M", "the store's match for other words (doodh → milk) still goes in"
+    t = Task(details={"items": [{"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
+    status, _ = runtime._browse_outcome(t, {"items": [dict(i) for i in peri], "deliverable": True, "logged_in": True})
+    assert t.details["chosen"][0]["store_id"] == "P", "Murukku spelt differently is still peri peri muruku"
+
+
+def test_an_item_that_is_only_another_variant_stays_out_and_the_confirm_says_so():
+    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
+    found = [{"name": "NOICE Methi Khakhra", "price": "₹69", "store_id": "T", "exact_match": True, "for_item": "methi khakhra", "available": True},
+             {**MURUKU[0], "for_item": "peri peri muruku"}]
+    status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
+    assert status == "queued" and [c["store_id"] for c in t.details["chosen"]] == ["T"] and t.details["missing_items"] == ["peri peri muruku"]
+    ask = runtime._confirm_ask(t, {"total": "₹120"})
+    assert "NOT in the cart: peri peri muruku" in ask and "never call another kind the same thing" in ask
+    t2 = Task(details={"items": [{"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
+    status, msg = runtime._browse_outcome(t2, {"items": [dict(MURUKU[0])], "deliverable": True, "logged_in": True})
+    assert status == "failed" and "looking on the other stores" in msg

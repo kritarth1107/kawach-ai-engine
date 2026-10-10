@@ -1180,7 +1180,8 @@ def _confirm_ask(task: Task, out: dict) -> str:
     return (f"The cart is ready on {SKILLS[task.service]['label']}. Ask ONE short question: the items (name, pack, quantity), the "
             f"total {out.get('total') or 'shown'} with fees, to {where}{eta}, cash on delivery, shall I order? Nothing else to ask."
             + (f" Say these are the closest match to what they asked: {'; '.join(near)}." if near else "")
-            + (f" Not found anywhere, so not in the cart: {', '.join(missing)}." if missing else "")
+            + (f" Not on {SKILLS[task.service]['label']} (only other kinds), so NOT in the cart: {', '.join(missing)}. Say this plainly; "
+               "never call another kind the same thing. They can add something else or get it from another store." if missing else "")
             + " If they want another product or size for an item, more of an item, or one item added or removed: task_input "
               "change / add / remove (or more to see that item's options); the new total comes back for the same one confirm.")
 
@@ -1233,9 +1234,11 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     more = d.get("more")
     asked_items = [str(i.get("name") or "") for i in d.get("items") or []]
     for i in found:
-        if i.get("exact_match") is None:  # a browser agent's report does not say: every asked word in the name (and pack)?
-            i["exact_match"] = asked_match(i.get("for_item") or (asked_items[0] if len(asked_items) == 1 else ""),
-                                           f"{i.get('name')} {i.get('pack') or ''}")
+        if not i.get("exact_match"):
+            # a browser agent's report does not say, and a store's own search misses spelling variants ("muruku" for
+            # "Murukku"): every asked word in the name (and pack)?
+            m = asked_match(i.get("for_item") or (asked_items[0] if len(asked_items) == 1 else ""), f"{i.get('name')} {i.get('pack') or ''}")
+            i["exact_match"] = True if m else (i.get("exact_match") if i.get("exact_match") is not None else m)
     groups = _groups(task, found)
     medicine = d.get("agent") == "pharmacy"
     limits_of = {str(i.get("name") or ""): i for i in d.get("items") or []}
@@ -1247,6 +1250,15 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
         if picks[asked]:
             used.add(str(picks[asked].get("store_id") or picks[asked].get("name")))
     missing = [m.removeprefix("not found: ") for m in [str(out.get("problem") or "")] if m.startswith("not found: ")]
+    if groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
+        # Nothing here is what they asked for (only other variants): the other usual stores look (tick falls back).
+        return "failed", f"Not on {label} exactly ({'; '.join(a for a, _ in groups)}); looking on the other stores."
+    unpicked = [a for a, _ in groups if not picks.get(a)]
+    if groups and any(picks.values()) and unpicked and not more and not medicine:
+        # Some items are not here (only other variants): the rest goes in the cart, the confirm says what is missing.
+        missing = unpicked + missing
+        groups = [(a, g) for a, g in groups if picks.get(a)]
+        picks = {a: p for a, p in picks.items() if p}
     if groups and all(picks.values()) and not more:
         # Founder 2026-10-10: ask only what, where, and one confirm with the amount. Saheli picks the product herself
         # (the one clearly asked for, else the closest); the confirm names it, and they can change it there.
@@ -1280,7 +1292,7 @@ def auto_pick(asked: str, found: list[dict], *, medicine: bool = False, max_pric
     if not found:
         return None
     clear = best_exact(asked, found)
-    if clear and not _multipack(clear):
+    if clear and not _multipack(clear) and clear.get("exact_match") is not False:  # a lone listing must still be what was asked
         return clear
     want_multi = bool(MULTIPACK.search(asked or ""))
     # Live 2026-10-10: "khakhra" got a ₹412 seven-pack sold by another Blinkit store, not Maa's (the cart refused it).
@@ -1290,6 +1302,12 @@ def auto_pick(asked: str, found: list[dict], *, medicine: bool = False, max_pric
     main = max(set(merchants), key=merchants.count) if any(merchants) else ""
     home = (lambda xs: [i for i in xs if str((i.get("cart_ref") or {}).get("merchant_id") or "") == main] or xs) if main else (lambda xs: xs)
     exact = [i for i in found if i.get("exact_match")]
+    if not exact and not medicine and asked:
+        # Founder 2026-10-10: "asked peri peri muruku, you got butter muruku; take care next time". A product that has some
+        # of the words asked but not all is another variant: never put it in silently. One that shares none is the store's
+        # own match for other words ("doodh" → milk) and may go in.
+        want = _asked_words(asked)
+        found = [i for i in found if not (want & _stems(f"{i.get('name')} {i.get('pack') or ''}"))]
     pool = home(single(exact)) if exact else ([] if medicine else home(single(found)))
     if not pool:
         return None
@@ -1313,14 +1331,37 @@ def _stems(text: str) -> set[str]:
     return {w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in _words(text)}
 
 
+FILLER = {"wala", "wale", "wali", "packet", "bhi", "dono", "aur", "the", "and", "some", "thoda", "please", "mangao", "mangaao"}
+
+
+def _near(a: str, b: str) -> bool:
+    """Spelling variants of one word ("muruku" / "murukku", "khakra" / "khakhra"): same start, at most 2 edits."""
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 5 or a[:3] != b[:3] or abs(len(a) - len(b)) > 2 or a.isdigit() or b.isdigit():
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= 2
+
+
+def _asked_words(asked: str) -> set[str]:
+    return {w for w in _stems(asked) if w not in FILLER}
+
+
 def asked_match(asked: str, name: str) -> bool | None:
     """Every word (and pack number) they asked for is in the product name; None when nothing was asked. A long word
-    also matches when the name writes it apart ("RiteBite" in "Rite Bite Max Protein")."""
-    want = _stems(asked)
+    also matches when the name writes it apart ("RiteBite" in "Rite Bite Max Protein") or spells it a little
+    differently ("muruku" / "Murukku")."""
+    want = _asked_words(asked)
     if not want:
         return None
     have, joined = _stems(name), re.sub(r"[^a-z0-9]", "", str(name or "").lower())
-    return all(w in have or (len(w) >= 5 and w in joined) for w in want)
+    return all(w in have or (len(w) >= 5 and w in joined) or any(_near(w, h) for h in have) for w in want)
 
 
 MULTIPACK = re.compile(r"\bx\s*\d+\b|\bpack of \d+|\b\d+\s*x\b", re.I)
