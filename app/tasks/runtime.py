@@ -952,6 +952,13 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
         return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet and no login code is "
                                     "needed. Ask which one they want and pass its name as the value of task_input go.")
     task.input_needed = "go"
+    groups = _groups(task, found)
+    if len(groups) > 1:
+        # several items: every item's options, not the first six of all (lab 2026-10-10: the paneer options were cut off)
+        listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:5]) + "." for asked, g in groups)
+        return "awaiting_confirm", (f"Found on {label}: {listed} Delivers to {where}{eta}. Nothing is ordered yet. To order, {label} needs a "
+                                    f"login: a code will come to {code_to}. Ask which one they want for each item and pass the names, "
+                                    "separated by ' | ', as the value of task_input go (or yes for the first of each).")
     pick = (" If several are listed, ask which one and pass its name as the value of task_input go." if len(found) > 1 else "")
     return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet. To order, {label} needs a "
                                 f"login: a code will come to {code_to}. Ask whether to go ahead (task_input go).{pick}")

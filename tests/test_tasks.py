@@ -970,3 +970,109 @@ async def test_instamart_place_without_a_clear_answer_is_never_retried(db, at, s
         await h.tick()
     await db.refresh(t)
     assert t.status != "done" and len(calls["place"]) == 1 and h.agent.runs == []
+
+
+class _FakeBlinkitTab:
+    """Stand-in for the cloud browser's CDP socket while Blinkit's checkout runs: the payment frame (Zomato's zpaykit)
+    attaches as its own target, and Pay Now loads the order page with a full navigation (order lab 2026-10-10)."""
+
+    def __init__(self, press_error=None, order_url="https://blinkit.com/account/orders/track/9001/3837182613"):
+        from app.tasks import fastpath
+        self.js = {n: (fastpath.JS_DIR / f"{n}.js").read_text() for n in ("blinkit_cash_frame", "blinkit_paynow", "blinkit_clear_cart")}
+        self.out, self.press_error, self.order_url = [], press_error, order_url
+        self.pressed, self.cleared, self.closed = False, False, False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def send(self, raw):
+        import json as _j
+        m = _j.loads(raw)
+        method, p, sid, res = m["method"], m.get("params") or {}, m.get("sessionId"), {}
+        if method == "Target.createTarget":
+            res = {"targetId": "T"}
+        elif method == "Target.attachToTarget":
+            res = {"sessionId": "S"}
+        elif method == "Target.setAutoAttach":
+            self.out.append({"method": "Target.attachedToTarget", "params": {"sessionId": "FS", "targetInfo": {"targetId": "F", "url": "https://www.zomato.com/zpaykit/init?x=1"}}})
+        elif method == "Target.getTargetInfo":
+            res = {"targetInfo": {"url": self.order_url if self.pressed else "https://blinkit.com/checkout"}}
+        elif method == "Target.closeTarget":
+            self.closed = True
+        elif method == "Runtime.evaluate":
+            e = p["expression"]
+            if sid == "FS":
+                res = {"result": {"value": {"cash": True}}}
+            elif e == self.js["blinkit_paynow"]:
+                if self.press_error:
+                    self.out.append({"id": m["id"], "error": {"code": -32000, "message": self.press_error}})
+                    return
+                self.pressed = True
+                res = {"result": {"value": {"clicked": True}}}
+            elif e == self.js["blinkit_clear_cart"]:
+                self.cleared = True
+                res = {"result": {"value": True}}
+            else:  # the checkout check on the main page
+                res = {"result": {"value": {"ok": True, "page": {"count": 2, "total": 180}}}}
+        self.out.append({"id": m["id"], "result": res})
+
+    async def recv(self):
+        import json as _j
+        while not self.out:
+            await asyncio.sleep(0.05)
+        return _j.dumps(self.out.pop(0))
+
+
+def _fake_cdp(monkeypatch, tab):
+    from app.tasks import fastpath
+
+    class Resp:
+        def json(self):
+            return {"webSocketDebuggerUrl": "ws://fake"}
+
+    class Client:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, url): return Resp()
+
+    monkeypatch.setattr(fastpath.httpx, "AsyncClient", Client)
+    monkeypatch.setattr(fastpath.websockets, "connect", lambda *a, **k: tab)
+
+
+BLINKIT_CHECK = {"count": 2, "prices": [78, 63], "address": "504 Block C", "total": 180}
+
+
+async def test_blinkit_place_reads_the_order_id_after_the_full_page_load_and_empties_the_app_cart(monkeypatch):
+    """Lab order 2 (₹180, 2026-10-10) went through but was reported unclear: Pay Now reloads the whole tab."""
+    from app.tasks import fastpath
+    tab = _FakeBlinkitTab()
+    _fake_cdp(monkeypatch, tab)
+    out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
+    assert out == {"placed": True, "order_id": "3837182613", "total": "₹180", "payment_method": "Cash on Delivery"}
+    assert tab.cleared and tab.closed
+
+
+async def test_blinkit_place_dry_run_stops_before_pay_now(monkeypatch):
+    from app.tasks import fastpath
+    tab = _FakeBlinkitTab()
+    _fake_cdp(monkeypatch, tab)
+    out = await fastpath.blinkit_place("http://cdp", BLINKIT_CHECK, dry=True)
+    assert out["ready"] is True and not tab.pressed
+
+
+async def test_blinkit_place_that_breaks_after_pay_now_is_unclear_never_not_placed(monkeypatch):
+    from app.tasks import fastpath
+    tab = _FakeBlinkitTab(press_error="Inspected target navigated or closed")
+    _fake_cdp(monkeypatch, tab)
+    out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
+    assert out["placed"] is False and out["unclear"] is True
+
+
+async def test_blinkit_place_without_a_checked_cart_sends_nothing():
+    from app.tasks import fastpath
+    with pytest.raises(fastpath.FastPathError):
+        await fastpath.place("blinkit", "http://cdp", {"count": 0})

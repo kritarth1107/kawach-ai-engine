@@ -192,7 +192,7 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
             "available": bool(p.get("available", True)), "exact_match": asked <= has if asked else None,
             "rx_required": p.get("rx_required"), "restaurant": p.get("restaurant"), "eta": p.get("eta"), "store_id": p.get("id"),
             # ids a logged-in cart step needs (Instamart: product, variant, item)
-            "cart_ref": {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,
+            "cart_ref": p.get("cart_item") or {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,
         }.items() if v is not None})
     return {"deliverable": True, "eta": out.get("eta"), "items": items[:6], "logged_in": bool(out.get("logged_in"))}
 
@@ -272,7 +272,7 @@ async def instamart_cart(cdp_url: str, products: list[dict], place: dict) -> dic
             "place_check": {"items": want, "total": out.get("total"), "address_id": out.get("address_id")}}
 
 
-PLACE_SITES = {"instamart"}
+PLACE_SITES = {"instamart", "blinkit"}
 CART_PAGE = "https://www.swiggy.com/instamart/cart"
 
 
@@ -280,6 +280,8 @@ async def place(service: str, cdp_url: str, check: dict) -> dict:
     """Place the confirmed cart, cash on delivery, with the store's own requests. Returns an agent-style report:
     {placed, order_id, total, payment_method, eta} | {placed: False, unclear: True} (sent, no clear answer: never retry) |
     raises FastPathError (nothing was sent: the cart changed or the page could not be used)."""
+    if service == "blinkit":
+        return await blinkit_place(cdp_url, check)
     if service != "instamart":
         raise FastPathError(f"no place step for {service}")
     if not (check or {}).get("items") or not check.get("total") or not check.get("address_id"):
@@ -309,7 +311,9 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
     items = [{"product_id": str(p["store_id"]), "quantity": int(p.get("qty") or 1)} for p in products if p.get("store_id")]
     if not items:
         raise FastPathError("no store product ids to put in the cart")
-    js = _snippet("blinkit_cart", {"items": json.dumps(items), "address_id": "", "lat": lat, "lon": lon})
+    local = [{**(p.get("cart_ref") or {}), "quantity": int(p.get("qty") or 1)} for p in products if (p.get("cart_ref") or {}).get("product_id")]
+    js = _snippet("blinkit_cart", {"items": json.dumps(items), "address_id": "", "lat": lat, "lon": lon,
+                                   "local": json.dumps(local if len(local) == len(items) else [])})
     url, pattern = CART_SITES["blinkit"]
     out = await cdp_evaluate(cdp_url, url, js, settle_s=4.0, copy_headers=pattern)
     if not isinstance(out, dict) or not out.get("logged_in"):
@@ -325,6 +329,128 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
     fees = sum(float(c.get("amount") or 0) for c in data.get("additional_charges") or []) + float(bill.get("delivery_charge") or 0)
     cod = '"value": "cash_on_delivery", "eta": null, "serviceable": true' in json.dumps(json.loads(out["raw"])) or (
         "cash_on_delivery" not in json.dumps(data.get("disabled_payment_modes") or []))
-    return {"items": lines, "total": _rupees(bill.get("payable_amount")), "fees": _rupees(fees) if fees else None,
-            "cod_available": bool(cod), "logged_in": True, "cart_id": str(json.loads(out["raw"]).get("cart_id") or ""),
-            "address_used": f"{addr.get('label') or ''}: {addr.get('line1') or ''}, {addr.get('city') or ''} {addr.get('pincode') or ''}".strip(": ")}
+    report = {"items": lines, "total": _rupees(bill.get("payable_amount")), "fees": _rupees(fees) if fees else None,
+              "cod_available": bool(cod), "logged_in": True, "cart_id": str(json.loads(out["raw"]).get("cart_id") or ""),
+              "address_used": f"{addr.get('label') or ''}: {addr.get('line1') or ''}, {addr.get('city') or ''} {addr.get('pincode') or ''}".strip(": ")}
+    if out.get("local_written"):
+        # the place step checks the checkout page against this before it presses Pay Now
+        report["place_check"] = {"count": sum(i["quantity"] for i in items), "prices": sorted(int(round(float(re.sub(r"[^\d.]", "", str(l.get("price") or 0)) or 0))) for l in lines),
+                                 "total": int(round(float(bill.get("payable_amount") or 0))), "address": str(addr.get("line1") or "")[:40]}
+    return report
+
+
+
+async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict:
+    """Blinkit: the place call goes out from Zomato's payment frame (zomato.com/zpaykit, cross-origin), so this opens the
+    checkout page, checks the cart lines and address, makes Cash the open option inside that frame (its own CDP session),
+    then presses the page's Pay Now. Same report shape as place()."""
+    if not (check or {}).get("count") or not check.get("prices"):
+        raise FastPathError("nothing to check the checkout page against")
+    want = json.dumps({k: check.get(k) for k in ("count", "prices", "address")})
+    js_check = _snippet("blinkit_checkout_check", {"want": want})
+    js_frame, js_press = (JS_DIR / "blinkit_cash_frame.js").read_text(), (JS_DIR / "blinkit_paynow.js").read_text()
+    pressed = False
+
+    async def run():
+        nonlocal pressed
+        async with httpx.AsyncClient(timeout=15) as c:
+            ws_url = (await c.get(cdp_url.rstrip("/") + "/json/version")).json()["webSocketDebuggerUrl"]
+        async with websockets.connect(ws_url, max_size=20_000_000) as ws:
+            counter, frames = 0, {}  # targetId -> {"session", "url"}
+
+            def on_event(msg: dict) -> None:
+                m, p = msg.get("method"), msg.get("params") or {}
+                if m == "Target.attachedToTarget":
+                    ti = p.get("targetInfo") or {}
+                    frames[ti.get("targetId")] = {"session": p.get("sessionId"), "url": ti.get("url", "")}
+                elif m == "Target.targetInfoChanged":
+                    ti = p.get("targetInfo") or {}
+                    if ti.get("targetId") in frames:
+                        frames[ti["targetId"]]["url"] = ti.get("url", "")
+
+            async def send(method: str, params: dict | None = None, session: str | None = None, timeout: float = 30) -> dict:
+                nonlocal counter
+                counter += 1
+                mid = counter
+                await ws.send(json.dumps({"id": mid, "method": method, "params": params or {}, **({"sessionId": session} if session else {})}))
+                while True:
+                    msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=timeout))
+                    if msg.get("id") == mid:
+                        if "error" in msg:
+                            raise FastPathError(f"{method}: {msg['error']}")
+                        return msg.get("result") or {}
+                    on_event(msg)
+
+            async def evaluate(expr: str, session: str, timeout: float = 30):
+                r = await send("Runtime.evaluate", {"expression": expr, "awaitPromise": True, "returnByValue": True}, session=session, timeout=timeout)
+                if r.get("exceptionDetails"):
+                    raise FastPathError(str(r["exceptionDetails"].get("text") or "script error")[:200])
+                return (r.get("result") or {}).get("value")
+
+            target = (await send("Target.createTarget", {"url": "about:blank"}))["targetId"]
+            try:
+                sid = (await send("Target.attachToTarget", {"targetId": target, "flatten": True}))["sessionId"]
+                await send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True}, session=sid)
+                await send("Page.enable", {}, session=sid)
+                await send("Page.navigate", {"url": "https://blinkit.com/checkout"}, session=sid)
+                await asyncio.sleep(3.0)
+                page = await evaluate(js_check, sid, timeout=40)
+                if not (page or {}).get("ok"):
+                    return {"clicked": False, "problem": (page or {}).get("problem") or "checkout check failed", "page": (page or {}).get("page")}
+                pay = None
+                for _ in range(40):  # the payment frame attaches as its own target
+                    pay = next((f for f in frames.values() if "zpaykit" in (f.get("url") or "")), None)
+                    if pay:
+                        break
+                    try:
+                        on_event(json.loads(await asyncio.wait_for(ws.recv(), timeout=0.5)))
+                    except asyncio.TimeoutError:
+                        pass
+                if not pay:
+                    return {"clicked": False, "problem": "the payment frame did not load"}
+                cash = await evaluate(js_frame, pay["session"], timeout=20)
+                if not (cash or {}).get("cash"):
+                    return {"clicked": False, "problem": "cash on delivery could not be selected", "frame": cash}
+                if dry:
+                    return {"clicked": False, "ready": True, "page": page.get("page")}
+                pressed = True
+                press = await evaluate(js_press, sid, timeout=20)
+                if not (press or {}).get("clicked"):
+                    pressed = False
+                    return {"clicked": False, "problem": (press or {}).get("problem") or "Pay Now not found"}
+                # the order page comes with a full navigation: watch the tab's address
+                for _ in range(60):
+                    await asyncio.sleep(0.5)
+                    try:
+                        url = ((await send("Target.getTargetInfo", {"targetId": target}, timeout=10)).get("targetInfo") or {}).get("url", "")
+                    except FastPathError:
+                        continue
+                    m = re.search(r"/track/(\d+)/(\d+)", url)
+                    if m:
+                        try:  # the app keeps the ordered items in its own cart copy: empty it
+                            await asyncio.sleep(1.5)
+                            await evaluate((JS_DIR / "blinkit_clear_cart.js").read_text(), sid, timeout=10)
+                        except Exception:  # noqa: BLE001 — the next cart step overwrites it anyway
+                            pass
+                        return {"clicked": True, "placed": True, "cart_id": m.group(1), "order_id": m.group(2)}
+                return {"clicked": True, "placed": False, "problem": "no order page within 30 s"}
+            finally:
+                try:
+                    await send("Target.closeTarget", {"targetId": target}, timeout=10)
+                except Exception:  # noqa: BLE001
+                    pass
+
+    try:
+        out = await asyncio.wait_for(run(), timeout=70)
+    except Exception as exc:  # noqa: BLE001
+        if not pressed:
+            raise FastPathError(f"not placed: {str(exc)[:120]}") from exc
+        return {"placed": False, "unclear": True, "problem": f"the browser stopped after Pay Now ({str(exc)[:80]}); check the app before trying again"}
+    if dry:
+        return out
+    if not out.get("clicked"):
+        raise FastPathError(f"not placed: {out.get('problem') or 'checkout check failed'}")
+    if out.get("placed") and out.get("order_id"):
+        return {"placed": True, "order_id": out["order_id"], "total": _rupees(check.get("total")) if check.get("total") else None,
+                "payment_method": "Cash on Delivery"}
+    return {"placed": False, "unclear": True, "problem": f"Pay Now was pressed but no order page came ({out.get('problem')}); check the app before trying again"}
