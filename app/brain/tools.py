@@ -1713,7 +1713,7 @@ async def forget_skill(ctx: TurnCtx, a: dict) -> dict:
     "Whether you answer a person with voice notes: 'auto' (a voice note back when they send one; the default), 'always' "
     "(every reply and reminder also as a voice note, for someone who finds reading hard), or 'never' (text only). Use for "
     "'mujhe awaaz mein jawab do', 'sirf text bhejo', 'Maa ko bol ke batao', 'what is the voice setting?'. Leave out mode to "
-    "read the current setting. The text always goes too.",
+    "read the current setting. The text always goes too. Not for a request to sing ('gaake sunao'): that is sing.",
     {"mode": {"type": "string", "enum": ["auto", "always", "never"]}, "about": ABOUT},
     [],
 )
@@ -1729,6 +1729,50 @@ async def voice_replies(ctx: TurnCtx, a: dict) -> dict:
     if not a.get("mode"):
         return await ctx.host.call("get_voice_preference", {}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
     return await ctx.host.call("set_voice_preference", {"mode": a["mode"]}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+
+
+SONG_MAX_LINES = 8
+
+
+@tool(
+    "sing",
+    "Sing a short song as a WhatsApp voice note, in your own singing voice: a bhajan, aarti, lullaby, folk song, birthday "
+    "song, or a few lines you make up for them. Use whenever someone asks you to sing ('gaake sunao', 'ek bhajan sunao', "
+    "'Maa ko lori sunao'). Write 2 to 8 lines of lyrics in the listener's language and script. Only traditional, "
+    "public-domain songs (Meera, Kabir, Tulsidas, Surdas, folk songs, aartis) or your own lines; never film or other "
+    "copyrighted lyrics: offer a traditional one instead. Your reply goes as well: keep it one short line, no lyrics in it.",
+    {
+        "lyrics": {"type": "string", "description": "2 to 8 lines, one per line"},
+        "style": {"type": "string", "description": "How to sing it, e.g. 'slow Meera bhajan', 'soft lullaby', 'happy birthday song', 'Rajasthani folk song'"},
+        "title": {"type": "string"},
+        "to": {"type": "string", "description": "Person id from HOUSEHOLD; leave out to sing to the person you are replying to"},
+    },
+    ["lyrics"],
+)
+async def sing(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system:
+        raise ToolRefused("Sing when someone asks for a song.")
+    to = a.get("to") or ctx.speaker.get("id") or ctx.elder_id
+    if to not in {m.get("id") for m in ctx.members} | {ctx.elder_id}:
+        raise ToolRefused("Sing only to people in HOUSEHOLD, by id.")
+    lines = [line.strip() for line in (a.get("lyrics") or "").splitlines() if line.strip()]
+    if not lines:
+        raise ToolRefused("Write the lyrics, one line per line.")
+    if len(lines) > SONG_MAX_LINES:
+        raise ToolRefused(f"Keep it short: at most {SONG_MAX_LINES} lines.")
+    lyrics = "\n".join(lines)
+    res = await ctx.host.call(
+        "send_song", {"to": to, "lyrics": lyrics, "style": (a.get("style") or "")[:80], "title": (a.get("title") or "")[:80]},
+        family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+    )
+    going = bool(res.get("delivered") or res.get("sending") or res.get("shadow"))
+    await store.add_turn(
+        ctx.session, family_id=ctx.family_id, thread_id=to, role="assistant", text=f"(sang {a.get('title') or 'a song'} as a voice note)\n{lyrics}",
+        meta={"song": True, "delivered": res.get("delivered"), "sending": res.get("sending")},
+    )
+    if going:
+        return {**res, "note": "The song is on its way as a voice note. Reply with one short warm line; do not repeat the lyrics."}
+    return {**res, "note": "The song could not be sent. Say so simply in one line and offer the words as text."}
 
 
 @tool(

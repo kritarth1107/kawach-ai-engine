@@ -38,6 +38,7 @@ WRITE_TOOLS = {
     "confirm_and_place_order",
     "claim_schedule_rows",
     "send_whatsapp",
+    "send_song",
 }
 
 

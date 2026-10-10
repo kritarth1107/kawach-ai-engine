@@ -136,6 +136,9 @@ class SimHost:
         if tool == "send_whatsapp":
             w.sent.append({**args, "at": clock.now().isoformat()})
             return {"delivered": True}
+        if tool == "send_song":
+            w.sent.append({**args, "song": True, "at": clock.now().isoformat()})
+            return {"delivered": True}
         if tool == "claim_schedule_rows":
             return {"claimed": len(args.get("scheduleIds") or [])}
         return {"ok": True, "note": f"sim: {tool} not modelled"}
