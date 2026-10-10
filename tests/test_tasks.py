@@ -892,3 +892,81 @@ def test_medicine_strength_written_with_its_unit_still_matches():
     from app.tasks.fastpath import _words
     assert _words("Dolo 650") <= _words("Dolo 650Mg Strip Of 15 Tablets")
     assert not _words("Telma 40") <= _words("Telma 80 Tablet")
+
+
+
+async def _instamart_browser_order(db, h, monkeypatch, place_result):
+    """Instamart through the browser with the saved steps (order lab 2026-10-10): look-up, cart and place by the store's own
+    requests in the family's logged-in cloud browser; the agent is never started."""
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    calls = {"cart": 0, "place": []}
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None):
+        return {"deliverable": True, "eta": "15 mins", "items": [
+            {"name": "Vachan Butter", "pack": "200 g", "price": "₹117", "available": True, "exact_match": True,
+             "cart_ref": {"product_id": "P1", "spin": "S1", "item_id": "I1"}}]}
+
+    async def fake_cart(service, cdp, products, place=None, lat=None, lon=None):
+        calls["cart"] += 1
+        assert service == "instamart" and products[0]["cart_ref"]["item_id"] == "I1" and place["pincode"] == "492001"
+        return {"items": [{"name": "Vachan Butter", "qty": 1, "price": "₹117", "available": True}], "total": "₹129", "fees": "₹12",
+                "cod_available": True, "logged_in": True, "address_used": "Kavach Home: C504 Sunita Park, Raipur 492001",
+                "place_check": {"items": {"I1": 1}, "total": 129, "address_id": "A1"}}
+
+    async def fake_place(service, cdp, check):
+        calls["place"].append(check)
+        if isinstance(place_result, Exception):
+            raise place_result
+        return place_result
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "cart", fake_cart)
+    monkeypatch.setattr(fastpath, "place", fake_place)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "C504 Sunita Park, Raipur", "line1": "C504, Sunita Park", "lat": 21.24, "lng": 81.69}
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order", goal="butter",
+                             details={"items": [{"name": "butter", "qty": 1}], "channel": "browser"}, limits=Limits(place=place))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "go"
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹129" and calls["cart"] == 1
+    await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    return t, calls
+
+
+async def test_instamart_browser_order_places_with_the_saved_steps(db, at, sessions, monkeypatch):
+    at("2026-10-10 16:00")
+    h = LoginHarness(sessions, FastAgent(), "9000012345")
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, {"placed": True, "order_id": "IM-77", "total": "₹129", "payment_method": "Cash on Delivery", "eta": "15-16 min"})
+    assert t.status == "done" and t.result["order_id"] == "IM-77" and h.agent.runs == []
+    assert calls["place"] == [{"items": {"I1": 1}, "total": 129, "address_id": "A1"}]
+
+
+async def test_instamart_cart_that_changed_before_placing_sends_nothing_and_asks_again(db, at, sessions, monkeypatch):
+    from app.tasks import fastpath
+
+    at("2026-10-10 16:00")
+    h = LoginHarness(sessions, FastAgent(), "9000012345")
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, fastpath.FastPathError("not placed: total_changed"))
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and calls["cart"] == 2 and len(calls["place"]) == 1
+    assert not t.result.get("order_id") and h.agent.runs == []
+
+
+async def test_instamart_place_without_a_clear_answer_is_never_retried(db, at, sessions, monkeypatch):
+    at("2026-10-10 16:00")
+    h = LoginHarness(sessions, FastAgent(), "9000012345")
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, {"placed": False, "unclear": True, "problem": "check the app"})
+    for _ in range(2):
+        await h.tick()
+    await db.refresh(t)
+    assert t.status != "done" and len(calls["place"]) == 1 and h.agent.runs == []

@@ -16,6 +16,9 @@
   const post = (url, body) => F(url, { method: 'POST', credentials: 'same-origin', body: JSON.stringify(body),
     headers: { 'Content-Type': 'application/json', 'matcher': matcher() } });
   const units = m => (m && m.units != null) ? Number(m.units) + (Number(m.nanos || 0) / 1e9) : null;
+  // logged in on this profile already? (the saved user with addresses; empty for a guest) — no code needed then
+  const su = (window.___INITIAL_STATE___ || {}).user || {};
+  out.logged_in = !!(Object.keys(su).length && Array.isArray(su.addresses) && su.addresses.length);
   try {
     // 1) location -> serving store (pod)
     const r1 = await post('/api/instamart/home/select-location/v2', { data: { lat, lng, clientId: 'INSTAMART-APP' } });
@@ -57,6 +60,8 @@
           mrp: units(p.mrp),
           available: !!((inv.inStock != null ? inv.inStock : it.inStock) && it.isAvail !== false && !(v.slotInfo && v.slotInfo.isAvail === false)),
           id,
+          // what the logged-in cart needs (instamart_cart.js): product, variant (spin) and item (sku) ids
+          product_id: it.productId || '', spin: v.spinId || '', item_id: v.skuId || '',
         });
       }
     };

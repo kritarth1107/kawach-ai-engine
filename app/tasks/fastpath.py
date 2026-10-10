@@ -191,8 +191,10 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
             "name": name, "pack": pack, "price": _rupees(p.get("price")), "mrp": _rupees(p.get("mrp")),
             "available": bool(p.get("available", True)), "exact_match": asked <= has if asked else None,
             "rx_required": p.get("rx_required"), "restaurant": p.get("restaurant"), "eta": p.get("eta"), "store_id": p.get("id"),
+            # ids a logged-in cart step needs (Instamart: product, variant, item)
+            "cart_ref": {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,
         }.items() if v is not None})
-    return {"deliverable": True, "eta": out.get("eta"), "items": items[:6]}
+    return {"deliverable": True, "eta": out.get("eta"), "items": items[:6], "logged_in": bool(out.get("logged_in"))}
 
 
 async def fares(service: str, cdp_url: str, *, pickup: dict, drop: dict) -> dict:
@@ -217,7 +219,88 @@ async def blinkit_search(cdp_url: str, query: str, lat: float, lon: float) -> li
     return (await search("blinkit", cdp_url, query, lat=lat, lon=lon))["items"]
 
 
-CART_SITES = {"blinkit": ("https://blinkit.com/", r"blinkit\.com/v\d")}
+CART_SITES = {"blinkit": ("https://blinkit.com/", r"blinkit\.com/v\d"), "instamart": ("https://www.swiggy.com/instamart", None)}
+
+
+async def cart(service: str, cdp_url: str, products: list[dict], *, place: dict | None = None, lat=None, lon=None) -> dict:
+    """The store's logged-in cart step for these picked products; raises FastPathError so the agent does it instead."""
+    if service == "instamart":
+        return await instamart_cart(cdp_url, products, place or {})
+    return await blinkit_cart(cdp_url, products, lat=lat, lon=lon)
+
+
+async def instamart_cart(cdp_url: str, products: list[dict], place: dict) -> dict:
+    """Logged-in Swiggy Instamart (order lab 2026-10-10, recorded from the web app): the family place among the account's
+    saved addresses, select it, sync the cart to exactly these products, read the bill and COD. An agent-style report."""
+    items = [{"product_id": r.get("product_id"), "spin": r.get("spin"), "item_id": r.get("item_id"), "qty": int(p.get("qty") or 1)}
+             for p in products for r in [p.get("cart_ref") or {}] if r.get("spin") and r.get("item_id")]
+    if not items or len(items) != len(products):
+        raise FastPathError("no Instamart cart ids for every product")
+    if not place.get("pincode"):
+        raise FastPathError("no delivery pincode to find the saved address")
+    js = _snippet("instamart_cart", {"items": json.dumps(items),
+                                     "place": json.dumps({k: place.get(k) for k in ("pincode", "line1", "full")})})
+    site = SITES["instamart"]
+    out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=40)
+    if not isinstance(out, dict) or not out.get("logged_in"):
+        raise FastPathError("not logged in")
+    if out.get("problem") == "address_missing":
+        raise FastPathError(f"the family address is not saved on the account ({out.get('addresses_seen')} saved)")
+    if out.get("problem") or out.get("error"):
+        raise FastPathError(f"instamart cart: {out.get('problem') or out.get('error')}")
+    lines = out.get("lines") or []
+    want = {i["item_id"]: i["qty"] for i in items}
+    got = {l.get("item_id"): l.get("qty") for l in lines}
+    if got != want or not all(l.get("available") for l in lines) or out.get("unavailable"):
+        raise FastPathError(f"the cart does not match the picked items ({got} vs {want}; {out.get('unavailable') or ''})")
+    if not out.get("address_matches"):
+        raise FastPathError("the cart is not on the family address")
+    # cash on delivery, read on the cart page (the app sets its session headers there); it also shows the same cart
+    cod = await cdp_evaluate(cdp_url, CART_PAGE, _snippet("instamart_cod", {}), settle_s=2.0, ready=site.ready, timeout_s=40)
+    if not isinstance(cod, dict) or cod.get("items") != want:
+        raise FastPathError(f"the cart page shows a different cart ({(cod or {}).get('items') if isinstance(cod, dict) else cod})")
+    out["cod_available"] = cod.get("cod_available")
+    fee_total = round((out.get("total") or 0) - (out.get("item_total") or 0))
+    fees = ", ".join(f"{f['label']} ₹{round(f['value'])}" for f in out.get("fees") or [])
+    fees = f"₹{fee_total} ({fees})" if fee_total > 0 and fees else (f"₹{fee_total}" if fee_total > 0 else "none")
+    return {"items": [{"name": l["name"], "qty": l["qty"], "price": _rupees(round(l["price"])) if l.get("price") else None, "available": True} for l in lines],
+            "total": _rupees(round(out.get("total") or 0)) if out.get("total") else None, "fees": fees or None,
+            # None = could not be read: the place step then finds out (the store refuses cash it does not offer)
+            "cod_available": out.get("cod_available"), "logged_in": True, "cart_id": out.get("cart_id") or "",
+            "address_used": out.get("address_used"), "eta": out.get("eta") or None,
+            # what the place step re-checks before it sends the order
+            "place_check": {"items": want, "total": out.get("total"), "address_id": out.get("address_id")}}
+
+
+PLACE_SITES = {"instamart"}
+CART_PAGE = "https://www.swiggy.com/instamart/cart"
+
+
+async def place(service: str, cdp_url: str, check: dict) -> dict:
+    """Place the confirmed cart, cash on delivery, with the store's own requests. Returns an agent-style report:
+    {placed, order_id, total, payment_method, eta} | {placed: False, unclear: True} (sent, no clear answer: never retry) |
+    raises FastPathError (nothing was sent: the cart changed or the page could not be used)."""
+    if service != "instamart":
+        raise FastPathError(f"no place step for {service}")
+    if not (check or {}).get("items") or not check.get("total") or not check.get("address_id"):
+        raise FastPathError("nothing to check the cart against")
+    js = _snippet("instamart_place", {"want": json.dumps(check)})
+    site = SITES["instamart"]
+    try:
+        out = await cdp_evaluate(cdp_url, CART_PAGE, js, settle_s=2.0, ready=site.ready, timeout_s=50)
+    except FastPathError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — the tab broke: we cannot tell whether the order call left the page
+        return {"placed": False, "unclear": True, "problem": f"the browser stopped while placing ({str(exc)[:80]}); check the app before trying again"}
+    if not isinstance(out, dict):
+        return {"placed": False, "unclear": True, "problem": "no answer from the place step; check the app before trying again"}
+    if not out.get("sent"):
+        raise FastPathError(f"not placed: {out.get('problem') or out.get('error') or 'cart check failed'}")
+    if out.get("placed") and out.get("order_id"):
+        return {"placed": True, "order_id": out["order_id"], "total": _rupees(round(out.get("total") or 0)), "payment_method": "Cash on Delivery",
+                "eta": out.get("eta")}
+    return {"placed": False, "unclear": True, "order_id": out.get("order_id") or None,
+            "problem": f"the store's answer was not clear ({out.get('status') or out.get('problem') or out.get('error')}); check the app before trying again"}
 
 
 async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -> dict:

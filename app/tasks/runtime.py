@@ -1073,8 +1073,14 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
             task.details = {**(task.details or {}), "fast_session": True}
             note(task, f"fast fares on {SKILLS[task.service]['label']}: {len(got['options'])} options")
             return {"options": got["options"], "logged_in": False, "login_required": got["login_required"], "problem": ""}
-        query = " ".join(str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])[:1])
-        found = await fastpath.search(task.service, cdp, query, lat=lat, lon=lng, pincode=pincode)
+        # one look-up per asked item, together (order lab 2026-10-10: "banana + apple" searched only banana)
+        asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])][:channels.MAX_ITEMS] or [""]
+        results = await asyncio.gather(*(fastpath.search(task.service, cdp, q, lat=lat, lon=lng, pincode=pincode) for q in asked))
+        many = len(asked) > 1
+        found = {"deliverable": all(r["deliverable"] for r in results), "eta": next((r.get("eta") for r in results if r.get("eta")), None),
+                 "logged_in": all(r.get("logged_in") for r in results),
+                 "items": [{**i, **({"for_item": q} if many else {})} for q, r in zip(asked, results) for i in r["items"]],
+                 "missing": [q for q, r in zip(asked, results) if r["deliverable"] and not r["items"]]}
     except Exception as exc:  # noqa: BLE001 — a changed site or a slow browser: the agent looks instead
         note(task, f"fast look-up did not work ({str(exc)[:120]}); the browser agent looks instead")
         logger.warning("fast look-up failed task=%s: %s", task.id, exc)
@@ -1083,8 +1089,11 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
     task.details = {**(task.details or {}), "fast_session": True}
     items = found["items"]
     note(task, f"fast look-up on {SKILLS[task.service]['label']}: " + (f"{len(items)} matching products" if found["deliverable"] else "does not deliver there"))
-    return {"items": items, "deliverable": found["deliverable"], "eta": found.get("eta"), "logged_in": False,
-            "problem": "" if items else ("not serviceable" if not found["deliverable"] else "not found")}
+    return {"items": items, "deliverable": found["deliverable"], "eta": found.get("eta"),
+            # Instamart tells whether this profile is logged in already: then no code is needed (the cart is built straight away)
+            "logged_in": bool(found.get("logged_in")),
+            "problem": ("" if not found.get("missing") else f"not found: {', '.join(found['missing'])}") if items else
+                       ("not serviceable" if not found["deliverable"] else "not found")}
 
 
 async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for) -> dict | None:
@@ -1092,10 +1101,10 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     minutes). Tried once per task; None (not logged in, an item gone, a changed site) lets the browser agent log in and
     build it as before."""
     d = task.details or {}
-    chosen = [i for i in (d.get("chosen") or []) if i.get("store_id")]
+    chosen = [i for i in (d.get("chosen") or []) if i.get("store_id") or i.get("cart_ref")]
     if not chosen or not hasattr(agent, "open_session"):
         return None
-    task.details = {**d, "fast_cart_tried": True}
+    task.details = {**d, "fast_cart_tried": True, "fast_place_check": None}
     place = (d.get("limits") or {}).get("place") or {}
     try:
         if not task.agent_session:
@@ -1109,9 +1118,9 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         cdp = await agent.cdp_url(task.agent_session)
         if not cdp:
             raise fastpath.FastPathError("no CDP address for the browser")
-        qty = {str(i.get("name")): i.get("qty") for i in d.get("items") or []}
-        cart = await fastpath.blinkit_cart(cdp, [{**c, "qty": c.get("qty") or next(iter(qty.values()), 1)} for c in chosen],
-                                           lat=place.get("lat"), lon=place.get("lng"))
+        asked = d.get("items") or []
+        cart = await fastpath.cart(task.service, cdp, [{**c, "qty": c.get("qty") or channels._qty_for(asked, c)} for c in chosen],
+                                   place=place, lat=place.get("lat"), lon=place.get("lng"))
     except Exception as exc:  # noqa: BLE001 — not logged in yet, or the site changed: the agent does it
         if "not logged in" in str(exc) and not (task.details or {}).get("login_done"):
             task.details = {**(task.details or {}), "login_only": True}
@@ -1120,7 +1129,44 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             note(task, f"fast cart not possible ({str(exc)[:100]}); the browser agent builds it")
         return None
     note(task, f"fast cart on {SKILLS[task.service]['label']}: total {cart.get('total')}")
+    check = cart.pop("place_check", None)
+    if check:
+        # the place step re-reads the cart against this before sending the order
+        task.details = {**(task.details or {}), "fast_place_check": check}
     return cart
+
+
+async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for) -> dict | None:
+    """Place the confirmed cart with the store's own requests (order lab 2026-10-10: Instamart, cash). The cart is read
+    again first: any change → nothing is sent and the cart is built again for a fresh confirm. A sent order without a
+    clear answer is reported unclear and never retried. None only when the browser could not be reached (agent places)."""
+    d = task.details or {}
+    try:
+        cdp = await agent.cdp_url(task.agent_session) if task.agent_session else None
+        if not cdp:
+            # the kept-alive browser ended while the family decided: a new one on the same profile (the login is saved there)
+            got = await profile_for(task)
+            profile_id = got.get("profileId") if isinstance(got, dict) else got
+            task.agent_session = await agent.open_session(profile_id)
+            await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
+                                  service=task.service, profile_id=profile_id)
+            await session.commit()
+            cdp = await agent.cdp_url(task.agent_session)
+        if not cdp:
+            raise fastpath.FastPathError("no CDP address for the browser")
+    except Exception as exc:  # noqa: BLE001 — nothing was sent: the agent places as before
+        note(task, f"fast place not possible ({str(exc)[:100]}); the browser agent places it")
+        task.details = {**d, "fast_place_check": None}
+        return None
+    try:
+        out = await fastpath.place(task.service, cdp, d["fast_place_check"])
+    except fastpath.FastPathError as exc:
+        # Nothing was sent (the cart, total or address changed): build the cart again and ask for a fresh confirm.
+        task.phase = "prepare"
+        task.details = {**d, "fast_place_check": None, "fast_cart_tried": False, "cart_fp": None, "confirm_token": None, "place_started": None}
+        return {"requeue": True, "requeue_note": f"not placed, nothing sent ({str(exc)[:120]}); building the cart again for a fresh confirm"}
+    note(task, f"fast place on {SKILLS[task.service]['label']}: {'placed ' + str(out.get('order_id')) if out.get('placed') else 'unclear'}")
+    return out
 
 
 def _confirm_still_valid(task: Task) -> bool:
@@ -1351,13 +1397,17 @@ async def tick(
                     elif (report is None and task.phase == "prepare" and task.kind == "order" and task.service in fastpath.CART_SITES
                             and fastpath_on() and not (task.details or {}).get("fast_cart_tried")):
                         report = await _fast_cart(session, agent, task, profile_for)
+                    elif (report is None and task.phase == "place" and task.kind == "order" and task.service in fastpath.PLACE_SITES
+                            and fastpath_on() and (task.details or {}).get("fast_place_check")):
+                        report = await _fast_place(session, agent, task, profile_for)
                     if report is not None and report.get("requeue"):
-                        note(task, "connector card expired; building it again")
+                        note(task, report.get("requeue_note") or "connector card expired; building it again")
                     elif report is not None:
                         task.result = {**(task.result or {}), **{k: v for k, v in report.items() if v not in (None, "", [])}}
                         status, message = _outcome(task, report)
                         task.status = status
-                        via = "fast look-up" if (task.details or {}).get("fast_session") and task.phase == "browse" else "connector"
+                        via = ("connector" if (task.details or {}).get("channel") == "connector" else
+                               "fast look-up" if task.phase == "browse" else "saved steps")
                         note(task, f"{task.phase} → {status} ({via}): {message}")
                         if status == "done" and task.cancel_requested:
                             task.phase, task.status = "cancel", "queued"
