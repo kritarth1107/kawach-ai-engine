@@ -396,6 +396,11 @@ async def _hints(session: AsyncSession, service: str, phase: str = "prepare") ->
 
 
 def _goal(task: Task) -> str:
+    if task.phase == "prepare" and (task.details or {}).get("total_only"):
+        label = SKILLS[task.service]["label"]
+        return (f"On {label}, open the cart and go to checkout up to the payment step. Change nothing in the cart and do not place "
+                "the order. Report the items with their prices, the fees, the total to pay ('To Pay'), cod_available, address_used "
+                "and eta.")
     if task.phase == "prepare" and (task.details or {}).get("login_only"):
         # The cart is built through the store's own request once logged in: the agent only has to log in.
         label = SKILLS[task.service]["label"]
@@ -433,10 +438,24 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         if got is None:
             got = await profile_for(task)
         goal += login_line(got)
-    if task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only"):
+    if (task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only")
+            and not (task.details or {}).get("total_only")):
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
-        if seen:
+        if seen and SKILLS[task.service].get("kind") == "food":
+            # One restaurant per cart: the agent opens that restaurant and adds these dishes with their quantities.
+            asked = (task.details or {}).get("items") or []
+            rest = next((str(i["restaurant"]) for i in seen if i.get("restaurant")), "")
+            goal += ((f"\nOrder everything from ONE restaurant: {rest}. Open that restaurant's menu (search its name) and add exactly: " if rest
+                      else "\nAdd exactly: ")
+                     + "; ".join(f"{channels._qty_for(asked, i)} x {_label(i)} {i.get('price') or ''}".strip() for i in seen[:8]))
+            find = [a for a in (task.details or {}).get("menu_find") or [] if a]
+            if find:
+                goal += (". Also find in the same restaurant's menu and add: " + "; ".join(
+                    f"{next((int(x.get('qty') or 1) for x in asked if str(x.get('name')) == a), 1)} x {a}" for a in find)
+                         + " (the plainest everyday version; if the menu has none, add nothing for it and report it missing)")
+            goal += ". Nothing else; never items from another restaurant (if the cart has another restaurant's items, replace them)."
+        elif seen:
             goal += ("\nThe person chose these exact products: " + "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in seen[:8])
                      + ". Put exactly these in the cart (same pack size), nothing else.")
             pages = [product_page(task.service, i) for i in seen[:8]]
@@ -554,7 +573,8 @@ async def _relook(session: AsyncSession, task: Task, d: dict, new_items: list[di
             "Say only that you are updating it")
 LADDER_RESET = {"ladder_asked_at": None, "ladder_emailed_at": None, "ladder_carers": None, "ladder_due": None}
 # What a new look-up clears (the products, the cart and anything confirmed for it).
-RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": None, "fast_cart_tried": False,
+RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": None, "fast_cart_tried": False, "total_relook": False,
+          "total_only": False, "menu_find": None,
           "fast_place_check": None, "confirm_token": None, "missing_items": None, "auto_picked": None, "matched": None,
           "refused": None, "repicks": None, "found": None}
 
@@ -995,6 +1015,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         v = guard.check_cart("order", spec.name, asked, out, limits)
         if not v.ok:
             return "failed", "Stopped before placing: " + "; ".join(v.block) + ". Nothing was placed."
+        if rupees(out.get("total")) is None and not d.get("total_relook"):
+            # Live 2026-10-11: the cart came back without a total and Maa was asked to confirm with no amount. One short look
+            # at the cart and checkout for the total, changing nothing (founder: one confirm WITH the amount).
+            task.details = {**d, "total_relook": True, "total_only": True}
+            note(task, "cart reported without a total: looking at the checkout for it")
+            return "queued", ""
+        d = {**d, "total_only": False}
         task.details = {**d, "approval": v.approval, "cart_fp": guard.cart_fingerprint(out), "confirm_token": None}
         if not out.get("alternatives"):
             task.result = {**(task.result or {}), "alternatives": None}  # an earlier report's, not this cart's
@@ -1093,6 +1120,32 @@ def _confirm_ask(task: Task, out: dict) -> str:
               "change / add / remove (or more to see that item's options); the new total comes back for the same one confirm.")
 
 
+def _one_restaurant(groups: list[tuple[str, list[dict]]], matched: dict) -> tuple[dict, list[str]]:
+    """Food: the restaurant with an exact dish for the most asked items (then the lowest total) and each item's best exact
+    dish there (the AI's order). Items it has no exact listing for are looked for in its own menu by the agent. Returns
+    (picks by asked item, items to find in that restaurant's menu)."""
+    by_rest: dict[str, dict[str, dict]] = {}
+    for asked, g in groups:
+        byk = {_pkey(i): i for i in g}
+        for k in (matched.get(asked) or {}).get("exact") or []:
+            i = byk.get(k)
+            if i:
+                by_rest.setdefault(str(i.get("restaurantId") or i.get("restaurant") or ""), {}).setdefault(asked, i)
+    if not by_rest:
+        return {}, []
+
+    def price(i: dict) -> float:
+        try:
+            return float(re.sub(r"[^\d.]", "", str(i.get("price") or "")) or 0)
+        except ValueError:
+            return 0.0
+
+    first = groups[0][0]  # what they asked for first is the meal; a side dish alone never picks the restaurant
+    best = min(by_rest, key=lambda r: (-len(by_rest[r]), first not in by_rest[r], sum(price(i) for i in by_rest[r].values())))
+    picks = {asked: by_rest[best].get(asked) for asked, _ in groups}
+    return {a: p for a, p in picks.items() if p}, [a for a, _ in groups if not picks.get(a)]
+
+
 def _closed_note(out: dict) -> str:
     """Restaurants in a food look-up that have it but are closed now, with when they open (the store's own words)."""
     seen, bits = set(), []
@@ -1171,11 +1224,17 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             picks[asked] = next((byk[k] for k in keys if k in byk and k not in used), None)
             if picks[asked]:
                 used.add(_pkey(picks[asked]))
+    menu_find: list[str] = []
+    if matched is not None and SKILLS[task.service].get("kind") == "food" and len(groups) > 1:
+        # A food cart holds one restaurant (live 2026-10-11: paneer from one place, roti from another; only the roti went in).
+        picks, menu_find = _one_restaurant(groups, matched)
     if matched is not None and groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
         # Nothing here is what they asked for (only other variants, or nothing): the other usual stores look.
         return "failed", (f"Not on {label} exactly ({'; '.join(a for a, _ in groups)})"
                           + (f". Closed now on {label}: {closed}" if closed else "") + "; looking on the other stores.")
-    unpicked = [a for a, _ in groups if not picks.get(a)]
+    unpicked = [a for a, _ in groups if not picks.get(a) and a not in menu_find]
+    if menu_find:
+        groups = [(a, g) for a, g in groups if a not in menu_find]
     if matched is not None and any(picks.values()) and unpicked and not more and not medicine:
         # Some items are not here exactly: the rest goes in the cart; the confirm says what is missing and the closest kind.
         for a in unpicked:
@@ -1186,7 +1245,7 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     if groups and picks and all(picks.get(a) for a, _ in groups) and not more:
         # Founder 2026-10-10: ask only what, where, and one confirm with the amount. The AI picked the product; the
         # confirm names it, and they can change it there.
-        task.details = {**task.details, "chosen": [picks[a] for a, _ in groups], "auto_picked": True,
+        task.details = {**task.details, "chosen": [picks[a] for a, _ in groups], "auto_picked": True, "menu_find": menu_find or None,
                         # the look-up's products, kept: a cart report replaces result items, and a refused product needs the next one
                         "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40],
                         "missing_items": missing or None}
