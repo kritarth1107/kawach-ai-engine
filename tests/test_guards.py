@@ -273,6 +273,10 @@ def test_no_greeting_or_name_opener_in_a_running_conversation():
     live = "राम राम सा वसुंधरा जी, घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
     assert g.tidy_opening(live, greeted_today=True, mid_conversation=True) == "घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
     assert g.tidy_opening("वसुंधरा जी, आज कोई दवाई लिखी कोनी है।", greeted_today=True, mid_conversation=True) == "आज कोई दवाई लिखी कोनी है।"
+    # live run 2026-10-11: two honorifics, and after a short "ठीक है"
+    assert g.tidy_opening("वसुंधरा जी सा, पनीर बटर मसाला मँगाऊँ कांई?", greeted_today=True, mid_conversation=True) == "पनीर बटर मसाला मँगाऊँ कांई?"
+    assert g.tidy_opening("ठीक है वसुंधरा जी सा, मैं खोज रही हूँ।", greeted_today=True, mid_conversation=True) == "ठीक है, मैं खोज रही हूँ।"
+    assert g.tidy_opening("हाँ जी, ले ली।", greeted_today=True, mid_conversation=True) == "हाँ जी, ले ली।"
     assert g.tidy_opening("Namaste Asha ji! Maa took her BP tablet.", greeted_today=True, mid_conversation=True) == "Maa took her BP tablet."
     # hours later the same day: no second greeting, but calling her by name is fine
     assert g.tidy_opening("राम राम सा! वसुंधरा जी, दवाई ले ली?", greeted_today=True, mid_conversation=False) == "वसुंधरा जी, दवाई ले ली?"

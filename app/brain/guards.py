@@ -466,7 +466,9 @@ _GREETING = (r"(?:राम[\s-]*राम|जय\s*श्री\s*(?:कृष�
              r"सत\s*श्री\s*अकाल|ram[\s-]*ram|namaste|namaskar|pranam|hello|hi|hey|good\s+(?:morning|afternoon|evening))")
 _HONORIFIC = r"(?:\s*(?:सा|जी|ji|sa|साहब))?"
 GREETING_OPENER = re.compile(rf"^\s*{_GREETING}{_HONORIFIC}(?=[\s,!।.]|$)[\s,!।.]*", re.I)
-NAME_OPENER = re.compile(r"^\s*([^\s,!।.?]+)\s*(?:जी|ji|सा)\s*[,!।]\s*", re.I)
+# "वसुंधरा जी," and also "वसुंधरा जी सा," (two honorifics) or after a short "ठीक है" (live run 2026-10-11: nearly every message
+# to Maa opened with "वसुंधरा जी सा," mid-conversation).
+NAME_OPENER = re.compile(r"^\s*((?:ठीक है|हाँ|हां|जी हाँ|अच्छा|ok|okay|theek hai|haan)[\s,]+)?([^\s,!।.?]+)\s*(?:जी|ji|सा|sa)(?:\s*(?:जी|ji|सा|sa))?\s*[,!।]\s*", re.I)
 NOT_A_NAME = {"हाँ", "हां", "हा", "ठीक", "अच्छा", "बिल्कुल", "नहीं", "ना", "जी", "han", "haan", "ok", "theek", "accha"}
 
 
@@ -493,8 +495,9 @@ def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool) -> s
         out = GREETING_OPENER.sub("", out, count=1)
     if mid_conversation:
         m = NAME_OPENER.match(out)
-        if m and m.group(1).lower() not in NOT_A_NAME:
-            out = out[m.end():]
+        if m and m.group(2).lower() not in NOT_A_NAME:
+            lead = (m.group(1) or "").strip(" ,")
+            out = (f"{lead}, " if lead else "") + out[m.end():]
     out = out.strip()
     if len(words(out)) < 2:  # the greeting was the whole message
         return text
