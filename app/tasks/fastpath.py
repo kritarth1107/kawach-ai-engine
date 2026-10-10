@@ -115,16 +115,6 @@ async def cdp_evaluate(cdp_url: str, url: str, expression: str, *, settle_s: flo
     return await asyncio.wait_for(run(), timeout=timeout_s)
 
 
-# Words a store's product name often leaves out ("Parle G Glucose" for "Parle-G biscuit"): not needed for an exact match
-GENERIC = {"the", "and", "for", "with", "pack", "of", "ml", "ltr", "kg", "gm", "pcs", "soft", "drink", "biscuit", "biscuits",
-           "cookie", "cookies", "tablet", "tablets", "strip", "capsule", "capsules", "packet", "pouch", "bottle", "can", "cans"}
-
-
-def _words(text: str) -> set[str]:
-    # "650mg" counts as 650 (numbers and letters split)
-    return {w for w in re.findall(r"[a-z]+|\d+", str(text or "").lower()) if (len(w) > 2 or w.isdigit()) and w not in GENERIC}
-
-
 @dataclass(frozen=True)
 class Site:
     start_url: str  # the page whose origin the snippet runs on (cookies, same-site requests)
@@ -170,7 +160,7 @@ def _rupees(v) -> str | None:
     return t if t.startswith("₹") else (f"₹{t}" if re.fullmatch(r"\d+(\.\d+)?", t) else t)
 
 
-async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 6) -> dict:
+async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 8) -> dict:
     """A store's own search, run in the task's cloud browser. Returns {deliverable, eta, items}; raises FastPathError when
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
@@ -186,18 +176,15 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
         return {"deliverable": False, "eta": None, "items": []}
     if not isinstance(out.get("products"), list):
         raise FastPathError(f"{service} search returned no product list")
-    asked = _words(query)
     items = []
     for p in out["products"]:
         name = str(p.get("name") or "").strip()
-        label = f"{name} {p.get('restaurant') or ''}"
-        if not name or (asked and not asked & _words(label)):
-            continue  # searches mix in unrelated products: keep only ones sharing a word asked for
+        if not name:
+            continue  # which listing is what was asked is the AI's choice (app.tasks.matcher), not a word match here
         pack = p.get("pack")
-        has = _words(f"{label} {pack or ''}") | _words(re.sub(r"(\d+)\s*(ml|g|kg|l|ltr|mg)", r"\1", str(pack or "")))
         items.append({k: v for k, v in {
             "name": name, "pack": pack, "price": _rupees(p.get("price")), "mrp": _rupees(p.get("mrp")),
-            "available": bool(p.get("available", True)), "exact_match": asked <= has if asked else None,
+            "available": bool(p.get("available", True)),
             "rx_required": p.get("rx_required"), "restaurant": p.get("restaurant"), "eta": p.get("eta"), "store_id": p.get("id"),
             # ids a logged-in cart step needs (Instamart: product, variant, item)
             "cart_ref": p.get("cart_item") or {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,

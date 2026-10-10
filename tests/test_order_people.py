@@ -197,7 +197,7 @@ async def test_keep_trying_or_any_answer_starts_the_20_minutes_again(db, at, ses
     at("2026-10-10 20:21")
     await tick()
     assert told and told[-1][0] == SON
-    await runtime.provide_input(db, t, kind="keep", value="haan", by=SON, by_is_elder=False); await db.commit()
+    await runtime.provide_input(db, t, kind="keep", value="yes", by=SON, by_is_elder=False); await db.commit()
     at("2026-10-10 20:35")
     await tick()
     await db.refresh(t)
@@ -207,7 +207,7 @@ async def test_keep_trying_or_any_answer_starts_the_20_minutes_again(db, at, ses
     assert len(told) == 2 and told[-1][1].startswith("[Order needs you]"), "asked again 20 minutes after keep"
     # Maa answers the cart herself: the ladder starts over and her yes places it
     await db.refresh(t)
-    out = await runtime.provide_input(db, t, kind="confirm", value="haan", by=ELDER, by_is_elder=True); await db.commit()
+    out = await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True); await db.commit()
     await db.refresh(t)
     assert "placing" in out and not t.details.get("ladder_asked_at")
 

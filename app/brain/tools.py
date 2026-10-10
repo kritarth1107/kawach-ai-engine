@@ -855,8 +855,14 @@ async def _task(ctx: TurnCtx, task_id: str):
         "category": {"type": "string", "enum": ["grocery", "medicine", "food"], "description": "For an order with no store named: compare the usual stores"},
         "kind": {"type": "string", "enum": ["order", "ride"]},
         "goal": {"type": "string", "description": "One line, e.g. 'Atta and toor dal for Amma' or 'Cab to Dr Iyer's clinic'"},
-        "items": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "qty": {"type": "integer"}}, "required": ["name"]},
-                  "description": "For orders: exact item names with brand and pack size when known"},
+        "items": {"type": "array", "items": {"type": "object", "properties": {
+                    "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},
+                    "qty": {"type": "integer"},
+                    "must_match": {"type": "array", "items": {"type": "string"}, "description": "Traits they insisted on that must be exact: flavour, variant, brand, size, strength (e.g. ['peri peri'], ['Amul', '1 litre'])"},
+                    "max_price": {"type": "number", "description": "Rupees, when they gave a price limit ('100 tak', 'under 100', '80-100' → 100)"},
+                    "cheapest": {"type": "boolean", "description": "They want the cheapest one ('sasta wala')"}},
+                    "required": ["name"]},
+                  "description": "For orders: one entry per product (never two products in one name), read from their words in any language"},
         "pickup": {"type": "string"},
         "drop": {"type": "string"},
         "vehicle": {"type": "string", "description": "auto, mini, sedan, bike, or omit for cheapest car"},
@@ -1049,24 +1055,33 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
     "code (otp, from whoever the update says has it), the name of the product they picked when options were listed (go), "
     "approval of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an item "
     "that is out of stock (swap: the alternative's name, or 'no'), the family approver's answer (approve: yes/no; only an "
-    "approver's answer counts), or, at the confirm, a change they ask for: change (another product, brand or size for one "
-    "item, e.g. 'Amul Gold 1 litre', 'maggi 840 g', '2 x milk'; several products separated by commas replace it with all of "
-    "them), add (more items, separated by commas: 'bread, 2 x eggs'; never squash two products into one name), remove "
-    "(one item), more (they want to see that item's options, e.g. 'maggi'; the list comes back in a task update), keep "
-    "(a caregiver says keep trying when asked about a slow order). The new cart and total come back for the one confirm.",
+    "approver's answer counts), or, at the confirm, a change they ask for: change (target = which asked item, items = what "
+    "replaces it: another product, brand, size or quantity; several products are several entries), add (items), remove "
+    "(target), more (target: they want to see that item's options; the list comes back in a task update), keep (value yes: a "
+    "caregiver says keep trying when asked about a slow order). You read their words; pass data, never their raw words. The "
+    "new cart and total come back for the one confirm.",
     {
         "task_id": {"type": "string"},
         "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep"]},
-        "value": {"type": "string"},
+        "value": {"type": "string", "description": "confirm / approve / fee / keep: exactly 'yes' or 'no' (you decide from their words, any language); go: the option id(s) as listed (e.g. 'p3' or 'p3, p7'), or 'yes' for Saheli's own pick; otp: the digits; choice / swap: the option as listed"},
+        "items": {"type": "array", "items": {"type": "object", "properties": {
+                    "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},
+                    "qty": {"type": "integer"},
+                    "must_match": {"type": "array", "items": {"type": "string"}, "description": "Traits they insisted on that must be exact: flavour, variant, brand, size, strength (e.g. ['peri peri'], ['Amul', '1 litre'])"},
+                    "max_price": {"type": "number", "description": "Rupees, when they gave a price limit ('100 tak', 'under 100', '80-100' → 100)"},
+                    "cheapest": {"type": "boolean", "description": "They want the cheapest one ('sasta wala')"}},
+                    "required": ["name"]}, "description": "change / add / more: the new item(s), one entry per product"},
+        "target": {"type": "integer", "description": "change / remove / more: the number of the asked item it is about (from 'asked: 1. … 2. …' in the task)"},
     },
-    ["task_id", "kind", "value"],
+    ["task_id", "kind"],
 )
 async def task_input(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
     task = await _task(ctx, a["task_id"])
     outcome = await runtime.provide_input(
-        ctx.session, task, kind=a["kind"], value=a["value"], by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
+        ctx.session, task, kind=a["kind"], value=str(a.get("value") or ""), by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
+        items=a.get("items"), target=a.get("target"),
     )
     return {"result": outcome, "task": runtime.describe(task), **(_tell_who_cancelled(ctx, task) if task.status == "cancelled" else {})}
 

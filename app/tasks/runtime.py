@@ -242,7 +242,31 @@ async def choose_stores(sessions: async_sessionmaker) -> list[tuple[Task, str]]:
     return out
 
 
-YES_WORDS = ("yes", "confirm", "true", "haan", "ha", "han", "ok", "okay", "theek hai", "go", "go ahead", "kar do", "karo")
+def clean_item(i: dict) -> dict:
+    """An item as the brain gave it (structured: it read the person's words): product words, quantity, the traits that
+    must match, a price limit, cheapest. Kept as data; nothing here reads language."""
+    out = {"name": str(i.get("name") or "").strip()[:120], "qty": max(1, min(int(i.get("qty") or 1), 50))}
+    if isinstance(i.get("must_match"), list):
+        out["must_match"] = [str(x).strip()[:60] for x in i["must_match"] if str(x).strip()][:5]
+    try:
+        if i.get("max_price"):
+            out["max_price"] = float(i["max_price"])
+    except (TypeError, ValueError):
+        pass
+    if i.get("cheapest"):
+        out["cheapest"] = True
+    if i.get("restaurant"):
+        out["restaurant"] = str(i["restaurant"])[:80]
+    return out
+
+
+def _is_yes(value: str) -> bool:
+    """The brain turns the person's words (any language) into "yes" or "no"; code never reads their words."""
+    return (value or "").strip().lower() == "yes"
+
+
+def _is_no(value: str) -> bool:
+    return (value or "").strip().lower() == "no"
 
 
 def flash_phases() -> set[str]:
@@ -287,7 +311,7 @@ async def create(
             return t
     limits = limits or Limits()
     if kind == "order" and details.get("items"):
-        details = {**details, "items": [_price_words(i) if isinstance(i, dict) else i for i in details["items"]]}
+        details = {**details, "items": [clean_item(i) for i in details["items"] if isinstance(i, dict)]}
     verdict = guard.check_request(kind, agent.name, details.get("items") or [], limits, pickup=details.get("pickup"), drop=details.get("drop"))
     if not verdict.ok:
         raise TaskRefused("; ".join(verdict.block))
@@ -325,6 +349,8 @@ def describe(task: Task) -> str:
         bits.append(f"via {d['channel']}")
     if task.input_needed:
         bits.append(f"waiting for {task.input_needed}")
+    if d.get("items") and task.kind == "order":
+        bits.append("asked: " + "; ".join(f"{n}. {i.get('name')} x{i.get('qty', 1)}" for n, i in enumerate(d["items"], 1) if isinstance(i, dict)))
     if r.get("items"):
         in_cart = task.phase != "browse" and bool(d.get("cart_fp") or r.get("total"))
         bits.append(("cart: " if in_cart else "found (not in a cart yet): ") + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
@@ -458,7 +484,6 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     note(task, f"started {task.phase} run ({spec.name} agent, browser)")
 
 
-NO_WORDS = ("no", "nahi", "nahin", "na", "cancel", "drop", "none", "stop", "mat")
 
 
 def _ride_fp(cart_fp: str | None, choice: str) -> str:
@@ -481,37 +506,6 @@ def _match_option(options: list[dict], value: str) -> dict | str | None:
     return "ambiguous" if partial or len(exact) > 1 else None
 
 
-def _match_product(found: list[dict], value: str) -> dict | str | None:
-    """The product the person picked from a look-up: its exact name, else a part that fits exactly one, else the one
-    sharing clearly the most words (two at least). "ambiguous" when it could be more than one."""
-    norm = lambda x: re.sub(r"[^a-z0-9]+", " ", str(x or "").lower()).strip()  # noqa: E731
-    v = norm(value)
-    if len(v) < 3:
-        return None
-    # Two packs can share a name (live 2026-10-09: "Pepsi Zero Sugar Soft Drink" at ₹20 and ₹40, and Saheli asked
-    # "₹20 or ₹40?" again and again). The name with its pack and price as listed is unique.
-    full = [i for i in found if norm(_label(i)) == v or norm(f"{_label(i)} {i.get('price') or ''}") == v
-            or norm(f"{i.get('name')} {i.get('price') or ''}") == v]
-    if len(full) == 1:
-        return full[0]
-    exact = [i for i in found if norm(i.get("name")) == v]
-    if len(exact) == 1:
-        return exact[0]
-    price = re.search(r"(?:₹|rs\.?\s*)\s*(\d+)", str(value), re.I)
-    if exact and price:
-        by_price = [i for i in exact if re.sub(r"\D", "", str(i.get("price") or "")) == price.group(1)]
-        if len(by_price) == 1:
-            return by_price[0]
-    part = [i for i in found if v in norm(i.get("name")) or norm(i.get("name")) in v]
-    if len(part) == 1:
-        return part[0]
-    words = set(v.split())
-    scored = sorted(((len(words & set(norm(i.get("name")).split())), n) for n, i in enumerate(found)), reverse=True)
-    if scored and scored[0][0] >= 2 and (len(scored) == 1 or scored[0][0] > scored[1][0]):
-        return found[scored[0][1]]
-    return "ambiguous" if len(part) > 1 or len(exact) > 1 else None
-
-
 def _groups(task: Task, found: list[dict]) -> list[tuple[str, list[dict]]]:
     """(asked item, its products): one group per asked item when the look-up tagged them (for_item), else one group."""
     asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])]
@@ -523,63 +517,25 @@ def _groups(task: Task, found: list[dict]) -> list[tuple[str, list[dict]]]:
     return list(keyed.items())
 
 
-def _named_in(value: str, groups: list[tuple[str, list[dict]]]) -> list[dict] | None:
-    """The product named for each item when the answer contains whole product names; the longest name wins inside a
-    group ("71.5 g x 2" over "71.5 g" when both appear). None unless every item got exactly one."""
-    norm = lambda x: re.sub(r"[^a-z0-9]+", "", str(x or "").lower())  # noqa: E731
-    v, picks = norm(value), []
-    for _, g in groups:
-        hits = sorted((i for i in g if norm(i.get("name")) and norm(i.get("name")) in v), key=lambda i: len(norm(i.get("name"))), reverse=True)
-        if not hits:
-            return None
-        priced = [i for i in hits if len(norm(i.get("name"))) == len(norm(hits[0].get("name")))]
-        if len(priced) > 1:
-            priced = [i for i in priced if norm(f"{i.get('name')} {i.get('price') or ''}") in v] or priced
-        if len(priced) != 1:
-            return None
-        picks.append(priced[0])
-    return picks
-
-
-def _chosen(task: Task, pick: dict | list | None) -> list[dict]:
-    """One product per requested item for the cart: the one picked, else the best match the look-up listed first."""
-    if isinstance(pick, list):
-        picks = pick
-        return [next((p for p in picks if p in g), None) or best_exact(asked, g) or g[0] for asked, g in _groups(task, _found(task))]
-    found = _found(task)
-    asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])]
-    if not any(i.get("for_item") for i in found):
-        # Older reports (one best match per item, no for_item): one item asked → one group; several → as listed.
-        groups = [found] if len(asked) <= 1 else [[i] for i in found]
-    else:
-        keyed: dict[str, list[dict]] = {}
-        for i in found:
-            keyed.setdefault(str(i.get("for_item") or i["name"]).lower(), []).append(i)
-        groups = list(keyed.values())
-    return [pick if pick in g else g[0] for g in groups if g]
+def _chosen(task: Task, pick: list[dict] | None) -> list[dict]:
+    """One product per asked item for the cart: the one picked by id, else the AI's choice, else the first listed."""
+    d = task.details or {}
+    out = []
+    for asked, g in _groups(task, _found(task)):
+        mine = next((p for p in pick or [] if p in g), None)
+        ai = next((i for k in ((d.get("matched") or {}).get(asked) or {}).get("exact") or [] for i in g if _pkey(i) == k), None)
+        chosen = mine or ai or (None if pick else g[0])
+        if chosen:
+            out.append(chosen)
+    return out
 
 
 EDIT_KINDS = ("more", "change", "add", "remove")
-_SPLIT = re.compile(r"\s*(?:,|;|\+|&|\n|\baur\b|\band\b|\bsaath (?:me|mein)\b|\bphir\b)\s*", re.I)
-
-
-def split_items(words: str) -> list[str]:
-    """'Noice methi khakhra, masala khakhra aur peri peri muruku' → three products (a size like '1 kg' stays with its item)."""
-    filler = re.compile(r"\s+\b(bhi|dono|bhi kar do|kar do|mangao|mangaao|mangwa do|le aao|please)\b\s*$", re.I)
-    parts = [filler.sub("", p.strip(" .-")).strip(" .-") for p in _SPLIT.split(words or "") if p and p.strip(" .-")]
-    return [p for p in parts if len(p) >= 2 and not re.fullmatch(r"(bhi|dono|bhi kar do|kar do|mangao|mangaao|le aao)", p, re.I)]
-
-
-def _qty_item(words: str) -> dict:
-    m = re.match(r"^(\d{1,2})\s*(?:(?:x|×|\*)\s*|\s+(?!(?:g|gm|gms|gram|grams|kg|kgs|ml|l|ltr|litre|litres|liter|pc|pcs|pack)\b))(.+)$", words, re.I)
-    return {"name": m.group(2).strip(), "qty": int(m.group(1))} if m else {"name": words, "qty": 1}
-
-
 async def _relook(session: AsyncSession, task: Task, d: dict, new_items: list[dict], kind: str, value: str, by: str) -> str:
     v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
     if not v.ok:
         return "cannot do that: " + "; ".join(v.block)
-    task.details = {**d, **RELOOK, "items": [_price_words(i) for i in new_items], "more": None, "alternatives": None,
+    task.details = {**d, **RELOOK, "items": [clean_item(i) for i in new_items], "more": None, "alternatives": None,
                     "connector_card": None, "channel": None}  # a linked store's connector is tried again for the new items
     task.result = {}
     task.phase, task.status, task.input_needed = "prepare", "queued", None
@@ -591,43 +547,8 @@ async def _relook(session: AsyncSession, task: Task, d: dict, new_items: list[di
 LADDER_RESET = {"ladder_asked_at": None, "ladder_emailed_at": None, "ladder_carers": None, "ladder_due": None}
 # What a new look-up clears (the products, the cart and anything confirmed for it).
 RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": None, "fast_cart_tried": False,
-          "fast_place_check": None, "confirm_token": None, "missing_items": None, "auto_picked": None}
-
-
-_PRICE = re.compile(r"(?:(?:under|below|upto|up to|max|tak|se kam)\s*(?:₹|rs\.?|rupees?)?\s*(\d{2,5})|(\d{2,5})\s*(?:-|to|se)\s*(\d{2,5})\s*(?:₹|rs\.?|rupees?|rupaye|rupaiye|wal[ae])?|(?:₹|rs\.?)\s*(\d{2,5})\s*(?:tak|max|or less)?)", re.I)
-_CHEAP = re.compile(r"\b(sasta|saste|sasti|cheap|cheaper|cheapest|kam daam|wale|wala|wali|rupee|rupees|rupaye)\b", re.I)
-
-
-def _price_words(item: dict) -> dict:
-    """'sasta khakhra 80-100 rupee wale' → name 'khakhra', max_price 100 (the store search gets the product words only)."""
-    name = str(item.get("name") or "")
-    m = _PRICE.search(name)
-    if not m and not _CHEAP.search(name):
-        return item
-    top = next((int(g) for g in (m.group(3), m.group(1), m.group(4)) if g), None) if m else None
-    words = re.sub(r"\s+", " ", _CHEAP.sub(" ", _PRICE.sub(" ", name))).strip(" ,-") or name
-    return {**item, "name": words, **({"max_price": top} if top else {}), **({"cheapest": True} if _CHEAP.search(name) else {})}
-
-
-def _item_index(task: Task, words: str) -> int | None:
-    """Which asked item the words are about: the one sharing the most words with its name or its product. None when
-    it is unclear and there is more than one item."""
-    items = list((task.details or {}).get("items") or [])
-    if not items:
-        return None
-    want = _stems(words)
-    groups = dict(_groups(task, _found(task)))
-    chosen = (task.details or {}).get("chosen") or []
-
-    def score(i: int) -> int:
-        asked = str(items[i].get("name") or "")
-        seen = _stems(asked) | {w for p in groups.get(asked, []) for w in _stems(str(p.get("name") or ""))}
-        if len(chosen) == len(items):
-            seen |= _stems(str(chosen[i].get("name") or ""))
-        return len(want & seen)
-
-    best = max(range(len(items)), key=score)
-    return best if score(best) > 0 or len(items) == 1 else None
+          "fast_place_check": None, "confirm_token": None, "missing_items": None, "auto_picked": None, "matched": None,
+          "refused": None, "repicks": None, "found": None}
 
 
 APPROVAL_WAIT = timedelta(minutes=90)
@@ -734,7 +655,8 @@ async def ask_approvers(sessions: async_sessionmaker, notify) -> int:
     return len(out)
 
 
-async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str, by: str, by_is_elder: bool) -> str:
+async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str = "", by: str, by_is_elder: bool,
+                        items: list[dict] | None = None, target: int | str | None = None) -> str:
     """The person answered: an OTP, a confirm, a fee approval, a ride choice or a swap. Returns what happens next.
 
     The answer must be the one the task is waiting for (task.input_needed); anything else is refused, so a
@@ -760,7 +682,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.details = {**(task.details or {}), **LADDER_RESET, "ladder_from": clock.now().isoformat()}
     d = task.details or {}
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
-    if kind in ("confirm", "choice", "swap", "go", "approve") and value.lower() in NO_WORDS and not placed:
+    if kind in ("confirm", "choice", "swap", "go", "approve") and _is_no(value) and not placed:
         if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id):
             return "only the family's approver can decline this"
         task.status, task.cancel_requested = "cancelled", True
@@ -787,48 +709,22 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         if task.phase != "browse" or task.status != "awaiting_confirm":
             return "nothing to go ahead with right now"
         pick = None
-        if value.lower() not in YES_WORDS:
+        if not _is_yes(value):
+            # The person picked from the listed options: the brain passes their ids (p3, p7), never a name to match.
             found = _found(task)
-            groups = _groups(task, found)
-            auto = {a: auto_pick(a, g, medicine=d.get("agent") == "pharmacy") for a, g in groups}
-            shown = [(a, g) for a, g in groups if (a == d.get("more") if d.get("more") else not auto[a])]
-            if len(groups) > 1 and len(shown) == 1:
-                # Only one item's options were listed (more options asked, or a medicine with no exact match): the name
-                # picks that one; the other items keep Saheli's pick.
-                hit = _match_product(shown[0][1], value)
-                listed = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in shown[0][1])
-                if hit == "ambiguous":
-                    return f"that could be more than one product; ask which exactly: {listed}"
-                if not hit:
-                    return f"'{value}' is not one of the products listed; ask again: {listed}"
-                pick = [hit if a == shown[0][0] else auto[a] for a, _ in groups]
-                if not all(pick):
-                    return "pick one product for every item listed"
-            elif len(groups) > 1:
-                # One name per item (several items in one cart). Full product names first: a name can itself contain
-                # " | " (Instamart: "Britannia 5050 Potazos … Crisps | 71.5 g | Potato and Biscuit …"); then "a | b" parts.
-                picks = _named_in(value, groups)
-                if picks is None:
-                    picks = []
-                    for part in [p.strip() for p in re.split(r"\s*\|\s*|\n", value) if p.strip()]:
-                        hit = next((m for _, g in groups if isinstance(m := _match_product(g, part), dict)), None)
-                        if not hit:
-                            return f"'{part}' is not one of the products found; ask again, one name per item separated by ' | '"
-                        picks.append(hit)
-                pick = picks
-            else:
-                pick = _match_product(found, value)
-                listed = "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in found)
-                if pick == "ambiguous":
-                    return f"that could be more than one product; ask which exactly: {listed}"
-                if not pick:
-                    return (f"say yes to log in and build the cart, name one of the products found ({listed}), or no to drop it"
-                            if found else "say yes to log in and build the cart, or no to drop it")
+            _number(found)
+            ids = [x.strip().lower() for x in re.split(r"[,\s]+", value) if x.strip()]
+            byid = {str(i.get("oid")).lower(): i for i in found}
+            if not ids or any(x not in byid for x in ids):
+                listed = "; ".join(f"[{i['oid']}] {_label(i)} {i.get('price') or ''}".strip() for i in found[:12])
+                return f"pass the id(s) of the option(s) they picked, as listed: {listed}"
+            pick = [byid[x] for x in ids]
         chosen = _chosen(task, pick)
-        task.details = {**d, "chosen": chosen, "more": None} if chosen else {**d, "more": None}
+        task.details = {**d, "chosen": chosen, "more": None, "auto_picked": not pick,
+                        "found": [{k: v for k, v in i.items() if k != "image_url"} for i in _found(task)][:40]} if chosen else {**d, "more": None}
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"go-ahead from {by}" + (f" for {'; '.join(_label(p) for p in pick)}" if isinstance(pick, list) else f" for {_label(pick)}" if pick else ""))
+        note(task, f"go-ahead from {by}" + (f" for {'; '.join(_label(p) for p in pick)}" if pick else ""))
         dropped = ""
         if compare_group(task):
             group = await siblings(session, task)
@@ -841,72 +737,55 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
                "building the cart (NOT ordered). Say only that you are getting the cart ready; do not promise a login code: if one "
                "is needed you will get a task update to ask for it")
         return f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: {how}"
-    if kind == "more":
-        # During the look-up: more options, or another pack or size, of one item (order lab 2026-10-10: "Maggi more" →
-        # the 840 g pack was not among the six listed). That item is looked up again with the words given, longer list.
-        if task.kind != "order" or task.status != "awaiting_confirm" or not (task.phase == "browse" or task.input_needed == "confirm"):
-            return "nothing is being looked up right now"
-        words, items = value.strip(), list(d.get("items") or [])
-        if not words or not items:
-            return "say which item to look for again, e.g. 'maggi' or 'maggi 840 g'"
-        best = _item_index(task, words)
-        if best is None:
-            return "which item is that for? say its name with what to look for, e.g. 'maggi 840 g'"
-        asked = str(items[best].get("name") or "")
-        name = words if _stems(words) & _stems(asked) or not asked else f"{asked} {words}"
-        new_items = items[:best] + [{**items[best], "name": name}] + items[best + 1:]
-        v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
-        if not v.ok:
-            return "cannot look for that: " + "; ".join(v.block)
-        task.details = {**d, **RELOOK, "items": new_items, "more": name}
-        task.result = {**(task.result or {}), "alternatives": None}
-        task.phase, task.status, task.input_needed = "prepare", "queued", None
-        task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"more options for {name} asked by {by}")
-        return (f"looking for more {name} on {SKILLS[task.service]['label']}; the list comes back in a task update (nothing ordered). "
-                "Say only that you are looking for more options")
-    if kind in ("change", "add", "remove"):
-        # At the confirm (or while choosing): another product or size for one item, one more item, or one item fewer.
-        # It is looked up again, Saheli picks, and the new cart and total come back for one confirm.
+    if kind in EDIT_KINDS:
+        # At the confirm (or while choosing): the brain says, as data, which item (target: its number in the list) and the
+        # new item(s); it is looked up again, the AI picks, and the new cart and total come back for the one confirm.
         if task.kind != "order" or task.status not in ("awaiting_confirm", "needs_input"):
             return "nothing to change right now"
-        items, words = list(d.get("items") or []), value.strip()
-        parts = split_items(words)
-        if len(parts) > 1 and kind in ("change", "add"):
-            # Live 2026-10-10: "Noice methi khakhra, masala khakhra, peri peri muruku" went in as ONE item, and the cart had one
-            # product. Several products: each is its own item (a change replaces that item, or all of them, with the list).
-            new = [_qty_item(x) for x in parts]
-            if kind == "add":
-                new_items = items + new
-            else:
-                idx = _item_index(task, parts[0]) if len(items) > 1 else 0
-                new_items = (items[:idx] + new + items[idx + 1:]) if idx is not None and len(items) > 1 else new
-            return await _relook(session, task, d, new_items, kind, value, by)
-        # "2 x bread", "2 bread": a quantity; "1 kg", "500 ml": a size
-        m = re.match(r"^(\d{1,2})\s*(?:(?:x|×|\*)\s*|\s+(?!(?:g|gm|gms|gram|grams|kg|kgs|ml|l|ltr|litre|litres|liter|pc|pcs|pack)\b))(.+)$", words, re.I)
-        qty, words = (int(m.group(1)), m.group(2).strip()) if m else (None, words)
-        if not words:
-            return "say what to change, add or remove"
+        cur = list(d.get("items") or [])
+        new = [clean_item(i) for i in (items or []) if isinstance(i, dict) and str(i.get("name") or "").strip()]
+        idx = (int(target) - 1) if isinstance(target, int) or (isinstance(target, str) and target.isdigit()) else None
+        if idx is not None and not 0 <= idx < len(cur):
+            return "target must be the number of an asked item: " + "; ".join(f"{n}. {i.get('name')}" for n, i in enumerate(cur, 1))
         if kind == "add":
-            new_items = items + [{"name": words, "qty": qty or 1}]
-        else:
-            idx = _item_index(task, words)
+            if not new:
+                return "pass the item(s) to add in items"
+            new_items = cur + new
+        elif kind == "remove":
             if idx is None:
-                return "which item? say its name: " + "; ".join(str(i.get("name")) for i in items)
-            if kind == "remove":
-                new_items = items[:idx] + items[idx + 1:]
-                if not new_items:
-                    return "that is the only item; to drop the whole order use task_input confirm no"
-            else:
-                asked = str(items[idx].get("name") or "")
-                name = words if _stems(words) & _stems(asked) or not asked else f"{asked} {words}"
-                new_items = items[:idx] + [{**items[idx], "name": name, **({"qty": qty} if qty else {})}] + items[idx + 1:]
-        return await _relook(session, task, d, new_items, kind, value, by)
+                return "pass target, the number of the item to remove: " + "; ".join(f"{n}. {i.get('name')}" for n, i in enumerate(cur, 1))
+            new_items = cur[:idx] + cur[idx + 1:]
+            if not new_items:
+                return "that is the only item; to drop the whole order use task_input confirm no"
+        elif kind == "change":
+            if not new:
+                return "pass the replacement item(s) in items (and target, the item they replace)"
+            if idx is None and len(cur) > 1:
+                return "pass target, the number of the item to change: " + "; ".join(f"{n}. {i.get('name')}" for n, i in enumerate(cur, 1))
+            idx = idx or 0
+            new_items = cur[:idx] + new + cur[idx + 1:]
+        else:  # more: that item's options are listed (a refined ask may come in items)
+            if idx is None and len(cur) > 1:
+                return "pass target, the number of the item to see more of: " + "; ".join(f"{n}. {i.get('name')}" for n, i in enumerate(cur, 1))
+            idx = idx or 0
+            new_items = cur[:idx] + (new[:1] or [cur[idx]]) + cur[idx + 1:]
+            v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
+            if not v.ok:
+                return "cannot look for that: " + "; ".join(v.block)
+            name = str(new_items[idx].get("name"))
+            task.details = {**d, **RELOOK, "items": [clean_item(i) for i in new_items], "more": name}
+            task.result = {**(task.result or {}), "alternatives": None}
+            task.phase, task.status, task.input_needed = "prepare", "queued", None
+            task.deadline_at = clock.now() + TASK_LIFETIME
+            note(task, f"more options for {name} asked by {by}")
+            return (f"looking for more {name} on {SKILLS[task.service]['label']}; the list comes back in a task update (nothing "
+                    "ordered). Say only that you are looking for more options")
+        return await _relook(session, task, d, new_items, kind, value or ", ".join(i["name"] for i in new), by)
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
             return "nothing to confirm right now"
-        if value.lower() not in YES_WORDS:
-            return "say yes to place it, or no to drop it"
+        if not _is_yes(value):
+            return "pass value yes to place it (or no to drop it), after the person clearly agreed"
         fp = d.get("cart_fp")
         if not fp:
             return "there is no cart to confirm yet; wait for the task update"
@@ -923,7 +802,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         note(task, "otp received")
         return "code received; continuing"
     if kind == "fee":
-        if value.lower() in ("yes", "approve", "true", "haan", "ok"):
+        if _is_yes(value):
             task.details = {**d, "fee_ok": True}
             task.phase, task.status = "cancel", "queued"
             task.deadline_at = clock.now() + TASK_LIFETIME
@@ -979,8 +858,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
             return "nothing is waiting for approval"
         if not may_approve(ap.get("approvers") or [], by, task.subject_id):
             return "only the family's approver can approve this; it was sent to them"
-        if value.lower() not in YES_WORDS:
-            return "say yes to approve or no to decline"
+        if not _is_yes(value):
+            return "pass value yes to approve or no to decline"
         task.details = {**d, "approval_needed": None, "approved_by": by, "approved_at": clock.now().isoformat()}
         note(task, f"approved by {by}")
         if task.kind == "ride":
@@ -1232,150 +1111,108 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             return "needs_input", f"Not on {label} ({out.get('problem') or 'not found'}). It has: {listed}. Ask which one to get instead, or whether to drop it."
         return "failed", f"Could not find it on {label} ({out.get('problem') or 'not found'}); nothing was ordered. Offer another service."
     more = d.get("more")
-    asked_items = [str(i.get("name") or "") for i in d.get("items") or []]
-    for i in found:
-        if not i.get("exact_match"):
-            # a browser agent's report does not say, and a store's own search misses spelling variants ("muruku" for
-            # "Murukku"): every asked word in the name (and pack)?
-            m = asked_match(i.get("for_item") or (asked_items[0] if len(asked_items) == 1 else ""), f"{i.get('name')} {i.get('pack') or ''}")
-            i["exact_match"] = True if m else (i.get("exact_match") if i.get("exact_match") is not None else m)
-    groups = _groups(task, found)
     medicine = d.get("agent") == "pharmacy"
-    limits_of = {str(i.get("name") or ""): i for i in d.get("items") or []}
-    picks, used = {}, set()
-    for asked, g in sorted(groups, key=lambda x: len(x[1])):  # items with fewest options pick first
-        lim = limits_of.get(asked) or {}
-        fresh = [i for i in g if str(i.get("store_id") or i.get("name")) not in used] or g  # each item its own product
-        picks[asked] = auto_pick(asked, fresh, medicine=medicine, max_price=lim.get("max_price"), cheapest=bool(lim.get("cheapest")))
-        if picks[asked]:
-            used.add(str(picks[asked].get("store_id") or picks[asked].get("name")))
-    missing = [m.removeprefix("not found: ") for m in [str(out.get("problem") or "")] if m.startswith("not found: ")]
-    if groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
-        # Nothing here is what they asked for (only other variants): the other usual stores look (tick falls back).
+    _number(found)
+    groups = _groups(task, found)
+    matched = d.get("matched")
+    picks, missing = {}, [m.removeprefix("not found: ") for m in [str(out.get("problem") or "")] if m.startswith("not found: ")]
+    missing = missing[0].split(", ") if missing else []
+    if matched is not None:
+        used: set[str] = set()
+        # items with the fewest exact choices pick first, so no item takes the only product another one has
+        for asked, g in sorted(groups, key=lambda x: len((matched.get(x[0]) or {}).get("exact") or [])):
+            keys = (matched.get(asked) or {}).get("exact") or []
+            byk = {_pkey(i): i for i in g}
+            # the AI's exact listings, best first; each item its own product
+            picks[asked] = next((byk[k] for k in keys if k in byk and k not in used), None)
+            if picks[asked]:
+                used.add(_pkey(picks[asked]))
+    if matched is not None and groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
+        # Nothing here is what they asked for (only other variants, or nothing): the other usual stores look.
         return "failed", f"Not on {label} exactly ({'; '.join(a for a, _ in groups)}); looking on the other stores."
     unpicked = [a for a, _ in groups if not picks.get(a)]
-    if groups and any(picks.values()) and unpicked and not more and not medicine:
-        # Some items are not here (only other variants): the rest goes in the cart, the confirm says what is missing.
-        missing = unpicked + missing
+    if matched is not None and any(picks.values()) and unpicked and not more and not medicine:
+        # Some items are not here exactly: the rest goes in the cart; the confirm says what is missing and the closest kind.
+        for a in unpicked:
+            near = next((i for i in dict(groups).get(a, []) if _pkey(i) == (matched.get(a) or {}).get("closest")), None)
+            missing.append(a + (f" (closest here: {_label(near)} {near.get('price') or ''})".rstrip() if near else ""))
         groups = [(a, g) for a, g in groups if picks.get(a)]
         picks = {a: p for a, p in picks.items() if p}
-    if groups and all(picks.values()) and not more:
-        # Founder 2026-10-10: ask only what, where, and one confirm with the amount. Saheli picks the product herself
-        # (the one clearly asked for, else the closest); the confirm names it, and they can change it there.
+    if groups and picks and all(picks.get(a) for a, _ in groups) and not more:
+        # Founder 2026-10-10: ask only what, where, and one confirm with the amount. The AI picked the product; the
+        # confirm names it, and they can change it there.
         task.details = {**task.details, "chosen": [picks[a] for a, _ in groups], "auto_picked": True,
                         # the look-up's products, kept: a cart report replaces result items, and a refused product needs the next one
                         "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40],
-                        "missing_items": missing[0].split(", ") if missing else None}
+                        "missing_items": missing or None}
         if compare_group(task):
             # In a comparison the store is picked once every store has looked (choose_stores): no login or cart here yet.
             task.input_needed = "go"
             return "awaiting_confirm", f"{label} has it: " + "; ".join(_option(i) for i in picks.values())
         task.phase = "prepare"
         return "queued", ""
-    # They asked to see more of one item, or a medicine has no exact match: list that item's options.
+    # They asked to see more of one item, a medicine has no exact match, or the AI could not choose: list the options.
     task.input_needed = "go"
     show = [(asked, g) for asked, g in groups if (asked == more if more else not picks.get(asked))] or groups
     keep = [f"{asked}: {_label(p)} {p.get('price') or ''}".strip() for asked, p in picks.items() if p and all(asked != a for a, _ in show)]
-    listed = " ".join(f"For {asked or 'it'}: " + "; ".join(_option(i) for i in g[:MORE_LIMIT if more else 5]) + "." for asked, g in show)
+    listed = " ".join(f"For {asked or 'it'}: " + "; ".join(f"[{i['oid']}] {_option(i)}" for i in g[:MORE_LIMIT if more else 6]) + "."
+                      for asked, g in show)
     eta = f", about {out['eta']}" if out.get("eta") else ""
     why = "Medicines are never swapped for a near match." if medicine and not more else ""
     return "awaiting_confirm", (f"Found on {label}: {listed}" + (f" Kept for the rest: {'; '.join(keep)}." if keep else "")
-                                + f" Delivers to {where}{eta}. Nothing is ordered yet. {why} Ask which one they want and pass its "
-                                "name as the value of task_input go.")
+                                + f" Delivers to {where}{eta}. Nothing is ordered yet. {why} Ask which one they want; pass its id in "
+                                "brackets (e.g. p3; one per item listed, comma separated) as the value of task_input go.")
 
 
-def auto_pick(asked: str, found: list[dict], *, medicine: bool = False, max_price: float | None = None, cheapest: bool = False) -> dict | None:
-    """Saheli's own pick for one asked item: the product clearly asked for, else the first full match in the store's
-    order (a single pack unless a multipack was asked), else, except for medicines, the store's first listing (the
-    confirm says it is the closest match). None: the person picks."""
-    found = [i for i in found if i.get("available") is not False]
-    if not found:
-        return None
-    clear = best_exact(asked, found)
-    if clear and not _multipack(clear) and clear.get("exact_match") is not False:  # a lone listing must still be what was asked
-        return clear
-    want_multi = bool(MULTIPACK.search(asked or ""))
-    # Live 2026-10-10: "khakhra" got a ₹412 seven-pack sold by another Blinkit store, not Maa's (the cart refused it).
-    # Prefer single packs, the store most of the listings come from, then the cheapest of the store's first three.
-    single = (lambda xs: [i for i in xs if not _multipack(i)] or xs) if not want_multi else (lambda xs: xs)
-    merchants = [str((i.get("cart_ref") or {}).get("merchant_id") or "") for i in found]
-    main = max(set(merchants), key=merchants.count) if any(merchants) else ""
-    home = (lambda xs: [i for i in xs if str((i.get("cart_ref") or {}).get("merchant_id") or "") == main] or xs) if main else (lambda xs: xs)
-    exact = [i for i in found if i.get("exact_match")]
-    if not exact and not medicine and asked:
-        # Founder 2026-10-10: "asked peri peri muruku, you got butter muruku; take care next time". A product that has some
-        # of the words asked but not all is another variant: never put it in silently. One that shares none is the store's
-        # own match for other words ("doodh" → milk) and may go in.
-        want = _asked_words(asked)
-        found = [i for i in found if not (want & _stems(f"{i.get('name')} {i.get('pack') or ''}"))]
-    pool = home(single(exact)) if exact else ([] if medicine else home(single(found)))
-    if not pool:
-        return None
-    if max_price:
-        pool = [i for i in pool if 0 < _rupee_value(i.get("price")) <= max_price] or pool
-    if cheapest or max_price:
-        return min(pool, key=lambda i: _rupee_value(i.get("price")) or 1e9)
-    return min(pool[:3], key=lambda i: _rupee_value(i.get("price")) or 1e9)
+def _pkey(p: dict) -> str:
+    """A store product's own id (what the AI's choice and a refused cart refer to)."""
+    ref = p.get("ref") or p.get("cart_ref") or {}
+    return str(p.get("store_id") or ref.get("spinId") or ref.get("product_id") or p.get("item_id") or p.get("name") or "")
 
 
-def _multipack(item: dict) -> bool:
-    return bool(MULTIPACK.search(f"{item.get('name') or ''} {item.get('pack') or ''}"))
+def _number(found: list[dict]) -> None:
+    """Short ids for the options shown to the person (the brain passes them back; nothing is matched by name)."""
+    for n, i in enumerate(found, 1):
+        i.setdefault("oid", f"p{n}")
 
 
-def _words(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z]+|\d+", str(text or "").lower()) if len(w) > 2 or w.isdigit()}
+async def _ai_pick(task: Task, report: dict) -> None:
+    """The AI chooses the product for each asked item from the look-up (founder 2026-10-10: the AI decides, not word
+    rules, since people order in many languages). Saved as details.matched {asked name: {exact: [ids], closest, why}};
+    None when it could not answer (the options are then shown to the person)."""
+    d = task.details or {}
+    found = [i for i in report.get("items") or [] if i.get("name") and i.get("available") is not False]
+    items = [i for i in d.get("items") or [] if isinstance(i, dict)]
+    if task.kind != "order" or not found or not items:
+        return
+    _number(found)
+    names = [str(i.get("name") or "") for i in items]
+    tagged = any(i.get("for_item") for i in found)
+    if tagged:
+        lists = [[i for i in found if i.get("for_item") == n] for n in names]
+    else:  # one look-up for everything (a browser agent's report): every item is chosen from all of it
+        lists = [found for _ in names]
+    from app.tasks import matcher
 
-
-def _stems(text: str) -> set[str]:
-    """Words without a plural s, so "biscuit" matches "Biscuits" and "475 g" keeps its 475."""
-    return {w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in _words(text)}
-
-
-FILLER = {"wala", "wale", "wali", "packet", "bhi", "dono", "aur", "the", "and", "some", "thoda", "please", "mangao", "mangaao"}
-
-
-def _near(a: str, b: str) -> bool:
-    """Spelling variants of one word ("muruku" / "murukku", "khakra" / "khakhra"): same start, at most 2 edits."""
-    if a == b:
-        return True
-    if min(len(a), len(b)) < 5 or a[:3] != b[:3] or abs(len(a) - len(b)) > 2 or a.isdigit() or b.isdigit():
-        return False
-    prev = list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i]
-        for j, cb in enumerate(b, 1):
-            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
-        prev = cur
-    return prev[-1] <= 2
-
-
-def _asked_words(asked: str) -> set[str]:
-    return {w for w in _stems(asked) if w not in FILLER}
-
-
-def asked_match(asked: str, name: str) -> bool | None:
-    """Every word (and pack number) they asked for is in the product name; None when nothing was asked. A long word
-    also matches when the name writes it apart ("RiteBite" in "Rite Bite Max Protein") or spells it a little
-    differently ("muruku" / "Murukku")."""
-    want = _asked_words(asked)
-    if not want:
-        return None
-    have, joined = _stems(name), re.sub(r"[^a-z0-9]", "", str(name or "").lower())
-    return all(w in have or (len(w) >= 5 and w in joined) or any(_near(w, h) for h in have) for w in want)
-
-
-MULTIPACK = re.compile(r"\bx\s*\d+\b|\bpack of \d+|\b\d+\s*x\b", re.I)
-
-
-def best_exact(asked: str, found: list[dict]) -> dict | None:
-    """The one product that is clearly what was asked: a single listing, else the only full match, else (when the ask
-    names no multipack) the only full match that is not a multipack ("240 g" over "240 g x 2")."""
-    if len(found) == 1:
-        return found[0]
-    exact = [i for i in found if i.get("exact_match")]
-    if len(exact) > 1 and not MULTIPACK.search(asked or ""):
-        exact = [i for i in exact if not MULTIPACK.search(str(i.get("name") or ""))]
-    return exact[0] if len(exact) == 1 else None
+    res = await matcher.choose(items, lists, medicine=d.get("agent") == "pharmacy")
+    if res is None:
+        task.details = {**d, "matched": None}
+        note(task, "the product choice could not be made; the options go to the person")
+        return
+    if not tagged and len(items) > 1:
+        # tag each listing with the item it was chosen for, so the items are kept apart from here on
+        for n, ls, r in zip(names, lists, res):
+            for j in r["exact"] + ([r["closest"]] if r.get("closest") is not None else []):
+                ls[j].setdefault("for_item", n)
+        for i in found:
+            i.setdefault("for_item", names[0])
+    key = (lambda n: n) if (tagged or len(items) > 1) else (lambda n: _groups(task, found)[0][0])
+    matched = {key(n): {"exact": [_pkey(ls[i]) for i in r["exact"]],
+                        "closest": _pkey(ls[r["closest"]]) if r.get("closest") is not None else None, "why": r.get("why")}
+               for n, ls, r in zip(names, lists, res)}
+    task.details = {**d, "matched": matched}
+    note(task, "AI choice: " + "; ".join(f"{n or 'item'}: {('exact ' + str(len(m['exact']))) if m['exact'] else 'none'}"
+                                         for n, m in matched.items())[:280])
 
 
 async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
@@ -1399,9 +1236,7 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
         return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
     many = len(asked_items) > 1
     items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
-              **({"for_item": it.get("name")} if many else {}),
-              # the connector does not say; a product missing a word that was asked for (Coke Zero for Diet Coke) is only similar
-              "exact_match": asked_match(it.get("name") or "", i.get("name"))}
+              **({"for_item": it.get("name")} if many else {})}
              for it, r in zip(asked_items, results) for i in (r.get("items") or []) if i.get("name")]
     missing = [it.get("name") for it, r in zip(asked_items, results) if not [i for i in (r.get("items") or []) if i.get("name")]]
     return {"items": items, "deliverable": True, "logged_in": True,
@@ -1537,24 +1372,33 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
 
 
 def _repick_without(task: Task, ids: list[str]) -> str | None:
-    """Mark the refused products unavailable and pick again for their items (at most 3 times). Returns what is tried
-    now, or None when an item has nothing else (or it was the person's own pick, or a medicine)."""
-    d, r = task.details or {}, task.result or {}
+    """A product the store refused (not sold at the serving store, out of stock): the AI's next exact listing for that
+    item (at most 3 times). Returns what is tried now, or None (it was the person's own pick, a medicine, or nothing
+    exact is left: the cart is then built without it and the confirm says so)."""
+    d = task.details or {}
     if not d.get("auto_picked") or d.get("agent") == "pharmacy" or int(d.get("repicks") or 0) >= 3 or not ids:
         return None
-    gone = set(map(str, ids))
-    items = [{**i, "available": False} if str(i.get("store_id") or "") in gone else i for i in (d.get("found") or r.get("items") or [])]
-    if d.get("found"):
-        d = {**d, "found": items}
-    else:
-        task.result = {**r, "items": items}
-    groups = _groups(task, [i for i in items if i.get("name") and i.get("available") is not False])
-    lim = {str(i.get("name") or ""): i for i in d.get("items") or []}
-    picks = [auto_pick(a, g, max_price=(lim.get(a) or {}).get("max_price"), cheapest=bool((lim.get(a) or {}).get("cheapest"))) for a, g in groups]
-    if not groups or not all(picks):
+    gone = set(map(str, ids)) | set(d.get("refused") or [])
+    found = d.get("found") or []
+    byk = {_pkey(i): i for i in found}
+    chosen, missing, tried = [], list(d.get("missing_items") or []), []
+    for c in d.get("chosen") or []:
+        if _pkey(c) not in gone:
+            chosen.append(c)
+            continue
+        asked = str(c.get("for_item") or "") or next(iter((d.get("matched") or {}).keys()), "")
+        nxt = next((byk[k] for k in ((d.get("matched") or {}).get(asked) or {}).get("exact") or []
+                    if k in byk and k not in gone and k not in {_pkey(x) for x in chosen}), None)
+        if nxt:
+            chosen.append(nxt)
+            tried.append(f"{_label(nxt)} {nxt.get('price') or ''}".strip())
+        else:
+            missing.append(asked or _label(c))
+    if not chosen or not tried and len(chosen) == len(d.get("chosen") or []):
         return None
-    task.details = {**d, "chosen": picks, "fast_cart_tried": False, "repicks": int(d.get("repicks") or 0) + 1}
-    return "; ".join(f"{_label(p)} {p.get('price') or ''}".strip() for p in picks)
+    task.details = {**d, "chosen": chosen, "missing_items": missing or None, "refused": sorted(gone), "fast_cart_tried": False,
+                    "repicks": int(d.get("repicks") or 0) + 1}
+    return "; ".join(tried) or "the rest without the unavailable item"
 
 
 async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for, host=None) -> dict | None:
@@ -1974,7 +1818,9 @@ async def tick(
                         note(task, report.get("requeue_note") or "connector card expired; building it again")
                     elif report is not None:
                         task.result = {**(task.result or {}), **{k: v for k, v in report.items() if v not in (None, "", [])}}
-                        status, message = _outcome(task, report)
+                        if task.phase == "browse":
+                            await _ai_pick(task, task.result)
+                        status, message = _outcome(task, task.result if task.phase == "browse" else report)
                         task.status = status
                         via = ("connector" if (task.details or {}).get("channel") == "connector" else
                                "fast look-up" if task.phase == "browse" else "saved steps")
@@ -2030,6 +1876,9 @@ async def tick(
                             if task.phase == "place":
                                 out["unclear"] = True  # the run may have clicked place before it died
                         task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
+                        if task.phase == "browse":
+                            await _ai_pick(task, task.result)
+                            out = task.result
                         status, message = _outcome(task, out)
                         task.status = status
                         note(task, f"{task.phase} → {status}: {message}")

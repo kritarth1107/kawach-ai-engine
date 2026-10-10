@@ -422,22 +422,11 @@ async def test_go_ahead_after_the_look_up_browser_closed_starts_a_fresh_one(db, 
     await h.tick(); await h.tick()
     await db.refresh(t)
     agent.sessions_stopped.append(t.agent_session)  # Browser Use closed it on its own
-    await runtime.provide_input(db, t, kind="go", value="ok", by=ELDER, by_is_elder=True); await db.commit()
+    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
     await h.tick()
     await db.refresh(t)
     assert t.status == "running" and agent.runs[-1]["phase"] == "prepare" and agent.runs[-1]["session"] is None
     assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and "fresh one" in t.history[-2]["note"]
-
-
-def test_pick_among_packs_with_the_same_name():
-    """Live 2026-10-09 15:59: two 'Pepsi Zero Sugar Soft Drink' packs (₹20, ₹40); 'the ₹20 one' was asked again and again."""
-    found = [{"name": "Pepsi Zero Sugar Soft Drink", "price": "₹40", "pack": "300 ml"},
-             {"name": "Pepsi Zero Sugar Soft Drink", "price": "₹20", "pack": "160 ml"}]
-    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink") == "ambiguous"
-    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink ₹20")["price"] == "₹20"
-    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (160 ml) ₹20")["pack"] == "160 ml"
-    assert runtime._match_product(found, "Pepsi Zero Sugar Soft Drink (300 ml)")["price"] == "₹40"
-    assert runtime._option({"name": "Coke Zero", "price": "₹39", "exact_match": False}).endswith("[similar, not exactly what was asked]")
 
 
 async def test_code_for_a_closed_login_page_asks_for_a_new_one_and_is_not_kept(db, at, sessions):
@@ -560,30 +549,17 @@ async def test_connector_builds_the_cart_for_the_pack_asked_not_the_first_hit(db
     assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P2"
 
 
-async def test_connector_picks_a_single_pack_when_several_fit(db, at, sessions, monkeypatch):
+async def test_connector_cart_uses_the_ais_first_exact_listing(db, at, sessions, monkeypatch, fake_matcher):
+    """The AI ranks the exact listings (a single pack first); the cart takes its first one and asks once."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 14:30")
     host = ParleHost()
+    fake_matcher.script["Parle-G biscuit"] = {"exact": ["Parle Parle G Gold Biscuits Pouch — 1 kg", "Parle Parle-G Gold Biscuits — 475 g"]}
     t, told = await _connector_order(db, sessions, host, "Parle-G biscuit")
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
-    assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P1", "the first single pack, not 1 kg x 2"
+    assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P1"
     assert len(told) == 1 and "ONE short question" in told[0]
-
-
-def test_asked_words_match_plurals_and_pack_numbers():
-    assert runtime.asked_match("Parle-G biscuit 475 g", "Parle Parle-G Gold Biscuits — 475 g")
-    assert not runtime.asked_match("Parle-G biscuit 475 g", "Parle Parle G Gold Biscuits Pouch — 1 kg x 2")
-    assert not runtime.asked_match("Diet Coke", "Coca-Cola Zero Sugar 300 ml")
-    assert runtime.asked_match("", "anything") is None
-    assert runtime.asked_match("RiteBite Max Protein wafer bar 240 g", "Rite Bite Max Protein Assorted 10g Protein Millet Wafer Bar — 240 g")
-
-
-def test_single_pack_ask_prefers_the_single_pack_over_a_multipack():
-    box, two = "Rite Bite Max Protein Wafer Bar — 240 g", "Rite Bite Max Protein Wafer Bar — 240 g x 2"
-    found = [{"name": two, "exact_match": True}, {"name": box, "exact_match": True}]
-    assert runtime.best_exact("RiteBite wafer bar 240 g", found)["name"] == box
-    assert runtime.best_exact("RiteBite wafer bar 240 g x 2", found) is None  # both fit a multipack ask: they pick
-    assert runtime.best_exact("anything", [{"name": box}])["name"] == box
+    assert fake_matcher.calls[0][0] == ["Parle-G biscuit"] and len(fake_matcher.calls[0][1][0]) == 3, "the AI saw every listing"
 
 
 class SnackHost(LinkedHost):
@@ -605,12 +581,13 @@ class SnackHost(LinkedHost):
         return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
 
 
-async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monkeypatch):
+async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monkeypatch, fake_matcher):
     """Order lab 2026-10-10: "add biscuits and munchies" — two items, one Instamart cart, each from its own look-up;
     Saheli picks each herself and asks once."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 15:30")
     host = SnackHost()
+    fake_matcher.script["munchies"] = {"exact": ["Kurkure Masala Munch — 90 g"]}
     told = []
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order",
                              goal="biscuits and munchies", details={"items": [{"name": "biscuits", "qty": 1}, {"name": "munchies", "qty": 2}]})
@@ -638,10 +615,11 @@ async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monke
     assert "not in the cart" not in told[-1]  # the cart is checked against the picked products, not the words asked
 
 
-async def test_a_pick_naming_a_product_not_listed_is_asked_again(db, at, sessions, monkeypatch):
+async def test_a_pick_is_an_option_id_never_a_name(db, at, sessions, monkeypatch, fake_matcher):
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 15:30")
     host = SnackHost()
+    fake_matcher.script["munchies"] = {"exact": ["Kurkure Masala Munch — 90 g"]}
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order",
                              goal="biscuits and munchies", details={"items": [{"name": "biscuits", "qty": 1}, {"name": "munchies", "qty": 1}]})
     await db.commit()
@@ -658,26 +636,16 @@ async def test_a_pick_naming_a_product_not_listed_is_asked_again(db, at, session
     await tick(); await tick()
     await db.refresh(t)
     assert t.input_needed == "confirm"
-    assert "looking for more" in await runtime.provide_input(db, t, kind="more", value="munchies", by=ELDER, by_is_elder=True)
+    assert "looking for more" in await runtime.provide_input(db, t, kind="more", target=2, by=ELDER, by_is_elder=True)
     await db.commit()
     await tick()
     await db.refresh(t)
     assert t.input_needed == "go"
-    said = await runtime.provide_input(db, t, kind="go", value="Haldiram bhujia", by=ELDER, by_is_elder=True)
-    assert "not one of the products listed" in said and t.phase == "browse"
     said = await runtime.provide_input(db, t, kind="go", value="Lay's India's Magic Masala Chips — 50 g", by=ELDER, by_is_elder=True)
+    assert "pass the id" in said and t.phase == "browse"
+    lays = next(i["oid"] for i in t.result["items"] if i["name"].startswith("Lay's"))
+    said = await runtime.provide_input(db, t, kind="go", value=lays, by=ELDER, by_is_elder=True)
     assert said.startswith("going ahead") and [c["name"][:6] for c in t.details["chosen"]] == ["Parle-", "Lay's "]
-
-
-def test_a_product_name_with_bars_in_it_is_still_picked_whole():
-    potazos = "Britannia 5050 Potazos Masti Masala Spicy Flavoured Crisps | 71.5 g | Potato and Biscuit Ka Tasty Combination — 71.5 g"
-    groups = [("biscuits", [{"name": "Sunfeast Bourbon Dark Fantasy Biscuit — 99 g", "price": "₹14"}, {"name": "Let's Try Atta Jeera Cookies — 200 g", "price": "₹92"}]),
-              ("munchies", [{"name": potazos + " x 3", "price": "₹84"}, {"name": potazos + " x 2", "price": "₹56"}, {"name": potazos, "price": "₹28"}])]
-    got = runtime._named_in(f"Sunfeast Bourbon Dark Fantasy Biscuit — 99 g ₹14 | {potazos} ₹28", groups)
-    assert [g["price"] for g in got] == ["₹14", "₹28"]
-    got = runtime._named_in(f"Sunfeast Bourbon Dark Fantasy Biscuit — 99 g | {potazos} x 2 ₹56", groups)
-    assert [g["price"] for g in got] == ["₹14", "₹56"]
-    assert runtime._named_in("Dark Fantasy | Potazos", groups) is None  # short names fall back to the per-part match
 
 
 def test_food_orders_stay_one_dish_on_the_connector():
@@ -744,13 +712,6 @@ async def test_fast_look_up_that_breaks_falls_back_to_the_agent(db, at, sessions
     await h.tick()
     await db.refresh(t)
     assert [r["phase"] for r in agent.runs] == ["browse"] and any("fast look-up did not work" in x["note"] for x in t.history)
-
-
-def test_fast_search_exact_match_counts_the_pack():
-    from app.tasks.fastpath import _words
-    asked = _words("Amul Taaza milk 500 ml")
-    assert asked == {"amul", "taaza", "milk", "500"}
-    assert asked <= (_words("Amul Taaza Toned Milk 500 ml") | _words("500"))
 
 
 def test_fast_snippets_fill_placeholders_safely_and_results_are_cleaned():
@@ -866,13 +827,6 @@ async def test_rapido_fares_come_through_its_own_request_with_places_resolved(db
     await runtime.tick(sessions, agent, profile_for=prof, notify=notify, host_for=lambda f: Host())
     await db.refresh(t)
     assert agent.runs == [] and t.status == "awaiting_confirm" and t.input_needed == "go" and "Auto ₹135 - ₹164" in told[-1]
-
-
-def test_medicine_strength_written_with_its_unit_still_matches():
-    from app.tasks.fastpath import _words
-    assert _words("Dolo 650") <= _words("Dolo 650Mg Strip Of 15 Tablets")
-    assert not _words("Telma 40") <= _words("Telma 80 Tablet")
-
 
 
 async def _instamart_browser_order(db, h, monkeypatch, place_result, second_total=None):
@@ -1157,14 +1111,16 @@ async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.input_needed == "confirm" and carts == [["Button Mushroom (180 g)", "Maggi 2 Minutes Noodles (70 g)"]] and len(h.told) == 1
-    assert "which item" in await runtime.provide_input(db, t, kind="more", value="something", by=ELDER, by_is_elder=True)
-    out = await runtime.provide_input(db, t, kind="more", value="maggi", by=ELDER, by_is_elder=True); await db.commit()
+    assert "pass target" in await runtime.provide_input(db, t, kind="more", by=ELDER, by_is_elder=True)
+    out = await runtime.provide_input(db, t, kind="more", target=2, by=ELDER, by_is_elder=True); await db.commit()
     assert "looking for more maggi" in out
     await h.tick()
     await db.refresh(t)
     assert ("maggi", 12) in asked and ("mushroom", 6) in asked[2:], asked
     assert t.input_needed == "go" and "840 g" in h.told[-1] and "Kept for the rest: mushroom: Button Mushroom (180 g)" in h.told[-1]
-    out = await runtime.provide_input(db, t, kind="go", value="Maggi 2 Minutes Noodles (840 g)", by=ELDER, by_is_elder=True)
+    assert "pass the id" in await runtime.provide_input(db, t, kind="go", value="Maggi 840 g", by=ELDER, by_is_elder=True)
+    big = next(i["oid"] for i in t.result["items"] if i.get("pack") == "840 g")
+    out = await runtime.provide_input(db, t, kind="go", value=big, by=ELDER, by_is_elder=True)
     assert "going ahead" in out, out
     await db.commit()
     await h.tick()
@@ -1172,7 +1128,7 @@ async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db
     assert carts[-1] == ["Button Mushroom (180 g)", "Maggi 2 Minutes Noodles (840 g)"] and t.input_needed == "confirm" and h.agent.runs == []
 
 
-async def test_change_at_the_confirm_looks_up_the_new_words_and_asks_once_again(db, at, sessions, monkeypatch):
+async def test_change_add_remove_at_the_confirm_are_data_from_the_brain(db, at, sessions, monkeypatch):
     from app.specialists.contract import Limits
     from app.tasks import fastpath
 
@@ -1195,24 +1151,24 @@ async def test_change_at_the_confirm_looks_up_the_new_words_and_asks_once_again(
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.input_needed == "confirm"
-    assert "updating" in await runtime.provide_input(db, t, kind="change", value="1 kg", by=ELDER, by_is_elder=True)
+    assert "updating" in await runtime.provide_input(db, t, kind="change", items=[{"name": "paneer 1 kg", "qty": 2}], by=ELDER, by_is_elder=True)
     await db.commit()
     await db.refresh(t)
     assert t.details["items"] == [{"name": "paneer 1 kg", "qty": 2}] and t.phase == "prepare" and not t.details.get("cart_fp")
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert asked[-1] == ("paneer 1 kg", 6) and carts[-1] == ["Amul Paneer (1 kg)"] and t.input_needed == "confirm"
-    await runtime.provide_input(db, t, kind="add", value="2 x bread", by=ELDER, by_is_elder=True); await db.commit()
+    await runtime.provide_input(db, t, kind="add", items=[{"name": "bread", "qty": 2}], by=ELDER, by_is_elder=True); await db.commit()
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.details["items"][-1] == {"name": "bread", "qty": 2} and carts[-1] == ["Amul Paneer (1 kg)", "Bread (200 g)"]
-    assert "only item" not in await runtime.provide_input(db, t, kind="remove", value="paneer", by=ELDER, by_is_elder=True)
+    assert "only item" not in await runtime.provide_input(db, t, kind="remove", target=1, by=ELDER, by_is_elder=True)
     await db.commit()
     await db.refresh(t)
     assert t.details["items"] == [{"name": "bread", "qty": 2}]
     await h.tick(); await h.tick()
     await db.refresh(t)
-    assert "only item" in await runtime.provide_input(db, t, kind="remove", value="bread", by=ELDER, by_is_elder=True)
+    assert "only item" in await runtime.provide_input(db, t, kind="remove", target=1, by=ELDER, by_is_elder=True)
 
 def test_blinkit_order_list_finds_the_order_a_place_step_lost():
     """Lab order 2 (2026-10-10): it went through at 5:06 pm and was reported unclear; the order list shows it."""
@@ -1265,13 +1221,7 @@ KHAKHRA = [
 ]
 
 
-def test_saheli_picks_a_normal_pack_from_the_serving_store_not_an_expensive_multipack():
-    """Live 2026-10-10: Maa's "khakhra" got the ₹412 seven-pack from another Blinkit store; the cart refused it."""
-    assert runtime.auto_pick("Khakhra", KHAKHRA)["name"] == "Charliee Methi Khakhra"
-    assert runtime.auto_pick("khakhra 7 x 50 g", KHAKHRA[:1])["price"] == "₹412", "asked for the multipack: it is kept"
-
-
-async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_cart_built_fast_again(db, at, sessions, monkeypatch):
+async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_cart_built_fast_again(db, at, sessions, monkeypatch, fake_matcher):
     from app.specialists.contract import Limits
     from app.tasks import fastpath
 
@@ -1294,6 +1244,7 @@ async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_
             alerts.append(tool)
             return {}
 
+    fake_matcher.script["Khakhra"] = {"exact": ["Charliee Methi Khakhra", "Jabsons Roasted Wheat Khakhra (Methi)", "Jabsons Roasted Wheat Khakhra Jeera"]}
     monkeypatch.setattr(fastpath, "search", fake_search)
     monkeypatch.setattr(fastpath, "cart", fake_cart)
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
@@ -1343,7 +1294,8 @@ async def test_an_agent_cart_with_a_product_it_could_not_add_is_not_asked_it_pic
                              details={"items": [{"name": "Khakhra", "qty": 1}]})
     t.result = {"items": [dict(i) for i in KHAKHRA]}
     t.details = {**t.details, "browsed": True, "auto_picked": True, "chosen": [dict(KHAKHRA[0])], "fast_cart_tried": True,
-                 "found": [dict(i) for i in KHAKHRA]}
+                 "found": [dict(i) for i in KHAKHRA],
+                 "matched": {"Khakhra": {"exact": ["676442", "56720", "546359"], "closest": None}}}
     await db.commit()
     for _ in range(4):
         await h.tick()
@@ -1352,66 +1304,52 @@ async def test_an_agent_cart_with_a_product_it_could_not_add_is_not_asked_it_pic
     assert len(h.told) == 1 and "ONE short question" in h.told[0] and "₹246" not in h.told[0]
 
 
-def test_price_words_become_a_limit_and_saheli_picks_within_it():
-    item = runtime._price_words({"name": "sasta khakhra 80-100 rupee wale", "qty": 1})
-    assert item == {"name": "khakhra", "qty": 1, "max_price": 100, "cheapest": True}
-    pricey = [{**KHAKHRA[0], "cart_ref": {"merchant_id": 37622}}, {**KHAKHRA[1]}, {**KHAKHRA[3], "price": "₹99"}]
-    assert runtime.auto_pick("khakhra", pricey, max_price=100, cheapest=True)["price"] == "₹80"
-
-
-def test_a_list_of_products_is_split_into_items():
-    assert runtime.split_items("Noice methi khakhra, masala khakhra, peri peri muruku") == ["Noice methi khakhra", "masala khakhra", "peri peri muruku"]
-    assert runtime.split_items("NOICE Methi Khakhra aur Peri Peri Muruku bhi") == ["NOICE Methi Khakhra", "Peri Peri Muruku"]
-    assert runtime.split_items("Amul Gold 1 litre") == ["Amul Gold 1 litre"]
-
-
 async def test_change_to_several_products_makes_each_its_own_item(db, at, sessions):
-    """Live 2026-10-10: Maa's 'Noice methi aur masala khakhra, peri peri muruku' became one item and a one-product cart."""
+    """Live 2026-10-10: Maa's 'Noice methi aur masala khakhra, peri peri muruku' became one item. The brain now passes each
+    product as its own item (data); the runtime keeps them apart."""
     at("2026-10-10 20:29")
     t = await _order(db)
     t.status, t.phase, t.input_needed = "awaiting_confirm", "prepare", "confirm"
     t.details = {**t.details, "cart_fp": "fp", "channel": "browser"}
     await db.commit()
-    out = await runtime.provide_input(db, t, kind="change", value="Noice methi khakhra, masala khakhra, peri peri muruku", by=ELDER, by_is_elder=True)
-    assert "Noice methi khakhra, masala khakhra, peri peri muruku" in out
-    assert [i["name"] for i in t.details["items"]] == ["Noice methi khakhra", "masala khakhra", "peri peri muruku"]
-    assert t.details["channel"] is None and t.phase == "prepare"
-    await runtime.provide_input(db, t, kind="add", value="bread, 2 x eggs", by=ELDER, by_is_elder=True) if t.status != "queued" else None
+    new = [{"name": "NOICE Methi Khakhra", "qty": 1}, {"name": "NOICE Masala Khakhra", "qty": 1},
+           {"name": "Peri Peri Muruku", "qty": 1, "must_match": ["peri peri"]}]
+    out = await runtime.provide_input(db, t, kind="change", target=1, items=new, by=ELDER, by_is_elder=True)
+    assert "NOICE Methi Khakhra, NOICE Masala Khakhra, Peri Peri Muruku" in out
+    assert [i["name"] for i in t.details["items"]] == ["NOICE Methi Khakhra", "NOICE Masala Khakhra", "Peri Peri Muruku"]
+    assert t.details["items"][2]["must_match"] == ["peri peri"] and t.details["channel"] is None and t.phase == "prepare"
 
 
 def test_two_items_do_not_get_the_same_product():
-    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "masala khakhra"}]}, result={})
-    found = [{"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "exact_match": True, "for_item": "methi khakhra"},
-             {"name": "NOICE Methi Khakhra", "price": "₹62", "store_id": "T", "exact_match": True, "for_item": "methi khakhra"},
-             {"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "exact_match": True, "for_item": "masala khakhra"}]
+    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "masala khakhra"}],
+                      "matched": {"methi khakhra": {"exact": ["M", "T"]}, "masala khakhra": {"exact": ["M"]}}}, result={})
+    found = [{"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "for_item": "methi khakhra"},
+             {"name": "NOICE Methi Khakhra", "price": "₹62", "store_id": "T", "for_item": "methi khakhra"},
+             {"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "for_item": "masala khakhra"}]
     t.service, t.kind, t.phase = "instamart", "order", "browse"
-    status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
+    runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
     assert sorted(c["store_id"] for c in t.details["chosen"]) == ["M", "T"]
 
 
 MURUKU = [{"name": "Modern Kitchens Butter Muruku", "pack": "150 g", "price": "₹35", "store_id": "B", "available": True, "exact_match": False}]
 
 
-def test_another_variant_is_never_put_in_silently():
+def test_when_the_ai_finds_only_another_variant_nothing_goes_in_and_other_stores_look():
     """Founder 2026-10-10: 'asked peri peri muruku, you got butter muruku; take care next time'."""
-    assert runtime.auto_pick("peri peri muruku", MURUKU) is None
-    peri = [{"name": "Haldiram Peri Peri Murukku", "pack": "150 g", "price": "₹40", "store_id": "P", "available": True, "exact_match": False}] + MURUKU
-    assert runtime.asked_match("peri peri muruku", "Haldiram Peri Peri Murukku 150 g")
-    milk = [{"name": "Amul Taaza Toned Milk", "pack": "500 ml", "price": "₹30", "store_id": "M", "available": True, "exact_match": False}]
-    assert runtime.auto_pick("doodh", milk)["store_id"] == "M", "the store's match for other words (doodh → milk) still goes in"
-    t = Task(details={"items": [{"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
-    status, _ = runtime._browse_outcome(t, {"items": [dict(i) for i in peri], "deliverable": True, "logged_in": True})
-    assert t.details["chosen"][0]["store_id"] == "P", "Murukku spelt differently is still peri peri muruku"
+    t = Task(details={"items": [{"name": "peri peri muruku"}], "matched": {"peri peri muruku": {"exact": [], "closest": "B"}}},
+             result={}, service="instamart", kind="order", phase="browse")
+    status, msg = runtime._browse_outcome(t, {"items": [dict(MURUKU[0])], "deliverable": True, "logged_in": True})
+    assert status == "failed" and "looking on the other stores" in msg and not t.details.get("chosen")
 
 
 def test_an_item_that_is_only_another_variant_stays_out_and_the_confirm_says_so():
-    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
-    found = [{"name": "NOICE Methi Khakhra", "price": "₹69", "store_id": "T", "exact_match": True, "for_item": "methi khakhra", "available": True},
+    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "peri peri muruku"}],
+                      "matched": {"methi khakhra": {"exact": ["T"]}, "peri peri muruku": {"exact": [], "closest": "B"}}},
+             result={}, service="instamart", kind="order", phase="browse")
+    found = [{"name": "NOICE Methi Khakhra", "price": "₹69", "store_id": "T", "for_item": "methi khakhra", "available": True},
              {**MURUKU[0], "for_item": "peri peri muruku"}]
     status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
-    assert status == "queued" and [c["store_id"] for c in t.details["chosen"]] == ["T"] and t.details["missing_items"] == ["peri peri muruku"]
+    assert status == "queued" and [c["store_id"] for c in t.details["chosen"]] == ["T"]
+    assert t.details["missing_items"] == ["peri peri muruku (closest here: Modern Kitchens Butter Muruku (150 g) ₹35)"]
     ask = runtime._confirm_ask(t, {"total": "₹120"})
     assert "NOT in the cart: peri peri muruku" in ask and "never call another kind the same thing" in ask
-    t2 = Task(details={"items": [{"name": "peri peri muruku"}]}, result={}, service="instamart", kind="order", phase="browse")
-    status, msg = runtime._browse_outcome(t2, {"items": [dict(MURUKU[0])], "deliverable": True, "logged_in": True})
-    assert status == "failed" and "looking on the other stores" in msg

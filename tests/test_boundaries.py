@@ -69,7 +69,7 @@ async def test_approval_round_trip_only_the_approver_counts(db, at, sessions):
     # someone who is not the approver cannot approve; the elder's second "yes" does not place it either
     assert "only the family's approver" in await runtime.provide_input(db, t, kind="approve", value="yes", by=NIECE, by_is_elder=False)
     assert "waiting for the family approver" in await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
-    out = await runtime.provide_input(db, t, kind="approve", value="haan", by=SON, by_is_elder=False)
+    out = await runtime.provide_input(db, t, kind="approve", value="yes", by=SON, by_is_elder=False)
     assert out.startswith("approved. confirmed; placing it now") and t.phase == "place" and t.details["approved_by"] == SON
     await db.commit()
     await h.tick(); await h.tick()
