@@ -871,15 +871,22 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         ask = await _confirm_address_first(ctx, a)
         if ask:
             return ask
+    place = None
+    if a["kind"] == "order" and a.get("area"):
+        # Also after the address was confirmed: a place they name now must be a saved one (it went to the default place).
+        place = await _delivery_place(ctx, a, keep_miss=True)
+        problem = _named_place_problem(a, place)
+        if problem:
+            return problem
     if not a.get("service"):
         stores = runtime.COMPARE_STORES.get(a.get("category") or "") if a["kind"] == "order" else None
         if not stores:
             raise ToolRefused("Say which store (service). Rides always need one; for an order with no store named, give category.")
-        return await _start_compare(ctx, a, stores)
+        return await _start_compare(ctx, a, stores, place=place)
     for t in await runtime.live_tasks(ctx.session, ctx.family_id):
         if t.service == a["service"] and t.kind == a["kind"]:
             return {"already_running": runtime.describe(t)}
-    task = await _create_task(ctx, a, a["service"])
+    task = await _create_task(ctx, a, a["service"], place=place)
     return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
 
 
@@ -900,16 +907,9 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     if asked:  # asked in this same turn already: they have not answered yet
         return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
     place = await _delivery_place(ctx, a, keep_miss=True)
-    if a.get("area") and place.get("lookup_failed"):
-        # They named a place but the saved places could not be read: never send it to some other address.
-        return {"status": "not started yet", "next": "The saved places could not be read just now, so nothing was started. Say so "
-                                                     "in one line and ask them to try again in a minute."}
-    if a.get("area") and place.get("matched") is False:
-        # They named a place that is not saved: ask (it used to go to the default place without a word).
-        saved = "; ".join(place.get("saved") or []) or "none yet"
-        return {"status": "not started yet", "unknown_place": a["area"], "saved_places": saved,
-                "next": f"'{a['area']}' is not a saved place (saved: {saved}). Ask which saved place, or for the new full address "
-                        "with pincode and what to call it; save it with save_place, then call start_task again with area set to its name."}
+    problem = _named_place_problem(a, place)
+    if problem:
+        return problem
     where = (f"{place.get('nickname') or 'Home'}: {place.get('full')}" if place.get("full") else
              f"pincode {place.get('pincode')}" if place.get("pincode") else
              f"near {a['area']}" if a.get("area") else "the address saved in the store account")
@@ -922,7 +922,23 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
                     "name another saved place, pass it as area."}
 
 
-async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...]) -> dict:
+def _named_place_problem(a: dict, place: dict) -> dict | None:
+    """A place they named that is not saved, or saved places that could not be read: ask, start nothing (an order must never
+    go to some other address)."""
+    if not a.get("area"):
+        return None
+    if place.get("lookup_failed"):
+        return {"status": "not started yet", "next": "The saved places could not be read just now, so nothing was started. Say so "
+                                                     "in one line and ask them to try again in a minute."}
+    if place.get("matched") is False:
+        saved = "; ".join(place.get("saved") or []) or "none yet"
+        return {"status": "not started yet", "unknown_place": a["area"], "saved_places": saved,
+                "next": f"'{a['area']}' is not a saved place (saved: {saved}). Ask which saved place, or for the new full address "
+                        "with pincode and what to call it; save it with save_place, then call start_task again with area set to its name."}
+    return None
+
+
+async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: dict | None = None) -> dict:
     """The same order looked up on several stores at once (no login); one task update brings every option."""
     from app.tasks import runtime
 
@@ -932,7 +948,8 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...]) -> dict
     free = [s for s in stores if s not in busy]
     if not free:
         raise ToolRefused("Every store for this already has an order running: " + "; ".join(runtime.describe(busy[s]) for s in stores))
-    gid, place = uuid.uuid4().hex[:10], await _delivery_place(ctx, a)
+    gid = uuid.uuid4().hex[:10]
+    place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
     started = [await _create_task(ctx, a, s, extra={"compare": gid}, place=place) for s in free]
     out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started],
                  "next": "One task update brings the options from every store (usually in 2 to 4 minutes); nothing is ordered before they pick."}
@@ -946,7 +963,7 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
     from app.specialists.contract import build_limits
     from app.tasks import runtime
 
-    if place is None:
+    if not place or not place.get("addressId"):
         place = await _delivery_place(ctx, a)
     limits = await build_limits(
         ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], agent=specialist_for(service).name,

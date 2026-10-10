@@ -110,3 +110,22 @@ async def test_a_named_place_is_never_ordered_to_when_the_saved_places_cannot_be
     out, _ = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
                                                                            "items": [{"name": "milk"}], "area": "Clinic"})
     assert "task_id" not in json.loads(out), "still nothing started on the next turn"
+
+
+async def test_a_place_named_after_the_address_was_confirmed_must_still_be_saved(db, at):
+    """Shadow check 2026-10-10: within 10 minutes of a confirmed address, "send it to Clinic" skipped the check and the
+    order would have gone to the default place."""
+    at("2026-10-10 19:00")
+    host = Host()
+    await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
+    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+                                                                             "items": [{"name": "milk"}], "area": "Clinic"})
+    r = json.loads(out)
+    assert not err and r.get("unknown_place") == "Clinic" and "task_id" not in r
+    out, _ = await tools.run(c(db, ELDER, host, ref="m3"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+                                                                           "items": [{"name": "milk"}], "area": "Vish ka ghar"})
+    r = json.loads(out)
+    assert r.get("task_id"), r
+    from app.tasks.models import Task
+    task = await db.get(Task, __import__("uuid").UUID(r["task_id"]))
+    assert ((task.details or {}).get("limits") or {}).get("place", {}).get("nickname") == "Vish's Home"
