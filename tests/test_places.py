@@ -89,3 +89,24 @@ def test_place_writes_are_not_run_in_shadow_and_saheli_knows_the_rule():
     assert "save_place" in persona.PERSONA
     names = {s.name for s in tools.specs()}
     assert {"places", "save_place", "remove_place"} <= names
+
+
+async def test_a_named_place_is_never_ordered_to_when_the_saved_places_cannot_be_read(db, at):
+    """Shadow check 2026-10-10: the place look-up failed, the address step said "near Clinic", and the next turn started
+    the order with no saved place (it would have gone to the store account's own address)."""
+    at("2026-10-10 18:40")
+
+    class Down(Host):
+        async def call(self, tool, args, **kw):
+            if tool == "delivery_place":
+                raise RuntimeError("backend down")
+            return await super().call(tool, args, **kw)
+
+    host = Down()
+    out, err = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+                                                                   "items": [{"name": "milk"}], "area": "Clinic"})
+    r = json.loads(out)
+    assert not err and r["status"] == "not started yet" and "try again" in r["next"] and "confirm_address" not in r
+    out, _ = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+                                                                           "items": [{"name": "milk"}], "area": "Clinic"})
+    assert "task_id" not in json.loads(out), "still nothing started on the next turn"

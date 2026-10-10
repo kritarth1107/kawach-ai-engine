@@ -900,6 +900,10 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     if asked:  # asked in this same turn already: they have not answered yet
         return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
     place = await _delivery_place(ctx, a, keep_miss=True)
+    if a.get("area") and place.get("lookup_failed"):
+        # They named a place but the saved places could not be read: never send it to some other address.
+        return {"status": "not started yet", "next": "The saved places could not be read just now, so nothing was started. Say so "
+                                                     "in one line and ask them to try again in a minute."}
     if a.get("area") and place.get("matched") is False:
         # They named a place that is not saved: ask (it used to go to the default place without a word).
         saved = "; ".join(place.get("saved") or []) or "none yet"
@@ -967,7 +971,7 @@ async def _delivery_place(ctx: TurnCtx, a: dict, keep_miss: bool = False) -> dic
             return got
         return got if got.get("addressId") else {}
     except Exception:  # noqa: BLE001 — no saved place: the agent uses the account's home address
-        return {}
+        return {"lookup_failed": True} if keep_miss else {}
 
 
 @tool(
