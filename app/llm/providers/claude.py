@@ -95,10 +95,14 @@ def to_claude_messages(messages: list[dict], model: str) -> list[dict]:
             for part in m["content"]:
                 if part["type"] == "text":
                     blocks.append({"type": "text", "text": scrub(part["text"])})
-                elif part["type"] == "image":
+                elif part["type"] == "image" and part["mime"].startswith("image/"):
                     blocks.append(
                         {"type": "image", "source": {"type": "base64", "media_type": part["mime"], "data": part["data"]}}
                     )
+                elif part["type"] == "image" and part["mime"] == "application/pdf":
+                    blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": part["data"]}})
+                elif part["type"] == "image":  # video or audio: this model cannot watch or hear it
+                    blocks.append({"type": "text", "text": f"[a {part['mime'].split('/')[0]} was attached that this model cannot open; say so and ask what it shows]"})
             push("user", blocks)
         elif m["role"] == "assistant":
             raw_model, raw = m.get("raw") or (None, None)

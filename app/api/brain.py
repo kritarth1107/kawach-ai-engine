@@ -40,7 +40,8 @@ class TurnIn(BaseModel):
     members: list[Person] = Field(default_factory=list)
     text: str = ""
     message_ref: str | None = None
-    images: list[Image] = Field(default_factory=list)
+    images: list[Image] = Field(default_factory=list)  # any media the model can see: image, video, audio, PDF (base64)
+    media_note: str = Field(default="", max_length=300)  # media they sent that could not be opened (too large, unknown type)
     channel: str = "whatsapp"
     modality: str = Field(default="text", pattern="^(text|voice)$")
     voice_confidence: float | None = Field(default=None, ge=0, le=1)
@@ -61,6 +62,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         text=body.text,
         message_ref=body.message_ref,
         images=[i.model_dump() for i in body.images],
+        media_note=body.media_note,
         channel=body.channel,
         modality=body.modality,
         voice_confidence=body.voice_confidence,

@@ -39,7 +39,8 @@ class TurnRequest:
     members: list[dict]
     text: str
     message_ref: str | None = None
-    images: list[dict] = field(default_factory=list)  # [{"mime", "data"}] base64
+    images: list[dict] = field(default_factory=list)  # [{"mime", "data"}] base64: image, video, audio or PDF they sent
+    media_note: str = ""  # media they sent that could not be opened
     channel: str = "whatsapp"
     modality: str = "text"  # text | voice (text is then the transcript of a voice note)
     voice_confidence: float | None = None  # 0..1 when the speech engine reported one
@@ -449,7 +450,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
         speaker_id=req.speaker["id"], message_ref=req.message_ref,
-        meta={"channel": req.channel, "images": len(req.images), **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {})},
+        meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {})},
     )
     if req.message_ref and inserted is None:
         prior = (
@@ -505,6 +506,11 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     data.history_full = True
     msgs = await history(session, req, data)
     said = f"(voice note, transcript) {req.text}" if req.voice else req.text
+    if req.images:
+        kinds = ", ".join(sorted({i["mime"].split("/")[0].replace("application", "document") for i in req.images}))
+        said = f"(they sent a {kinds}, attached; look at it) {said}".rstrip()
+    if req.media_note:
+        said = f"({req.media_note}) {said}".rstrip()
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {said}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
     msgs.append({"role": "user", "content": content})

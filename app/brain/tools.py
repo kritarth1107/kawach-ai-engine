@@ -1156,6 +1156,36 @@ async def find_lab_test(ctx: TurnCtx, a: dict) -> dict:
 
 
 @tool(
+    "web_search",
+    "Look something up on the internet when you need facts you do not have and cannot see: what a thing, food, plant or "
+    "product is and what it is for; a place's hours or address; weather; festival or holiday dates; train timings; news; "
+    "general health information (from reliable sites; never to change a medicine or dose). Ask one clear question in "
+    "English. You get a short answer with sources: tell it simply in their language. Not for the family's own information "
+    "(memory and the care record) and not for prices or ordering (start_task).",
+    {"question": {"type": "string", "description": "One clear question in English, with the place when it matters (e.g. 'Raipur weather tomorrow')"}},
+    ["question"],
+)
+async def web_search(ctx: TurnCtx, a: dict) -> dict:
+    from app.brain import websearch
+
+    q = str(a.get("question") or "").strip()
+    if not q:
+        raise ToolRefused("Ask one clear question.")
+    today = await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - timedelta(hours=24), kinds=["web_search"])
+    if len(today) >= websearch.daily_limit():
+        raise ToolRefused("Today's internet look-ups for this family are used up. Answer from what you know, and say plainly if you are not sure.")
+    try:
+        out = await websearch.search(q)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("web search failed: %s", exc)
+        raise ToolRefused("The internet look-up did not work just now. Say so plainly; do not guess.") from exc
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
+                             summary=f"Looked up: {q[:160]}", payload={"question": q[:300], "sources": out["sources"]},
+                             actor_id=ctx.speaker.get("id") or "saheli")
+    return {**out, "note": "From the internet. Tell it simply; name the source only if they ask or it matters."}
+
+
+@tool(
     "find_doctor",
     "Doctors near the care recipient for a specialty or a problem ('cardiologist', 'knee pain', 'sugar doctor'): fee, "
     "experience, clinic, next free slot, clinic visit or video, from Practo and Apollo 24|7. Takes about 15 seconds. "
