@@ -134,3 +134,16 @@ async def test_a_browser_only_family_skips_the_connector(db, at, monkeypatch):
             raise AssertionError("the connector is not asked")
 
     assert (await channels.pick_channel(db, Host(), t))[0] == "browser"
+
+
+async def test_a_named_restaurant_without_the_dish_offers_other_places_on_the_same_app(db, at):
+    at("2026-10-11 02:00")
+    t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="paneer",
+                             details={"items": [{"name": "paneer butter masala", "qty": 1, "restaurant": "Haldiram"}]})
+    t.phase = "browse"
+    t.details = {**t.details, "matched": {"paneer butter masala": {"exact": [], "closest": None}}}
+    found = [D("p1", "Paneer Butter Masala", "Indian Bawarchi", "₹149"), D("p2", "Paneer Butter Masala", "Patiala Plates", "₹318")]
+    status, message = runtime._browse_outcome(t, {"items": found, "deliverable": True})
+    assert status == "awaiting_confirm" and t.input_needed == "go"
+    assert message.startswith("Haldiram on Swiggy does not have it now. Other places on Swiggy have it: For paneer butter masala: [p1]")
+    assert "Indian Bawarchi" in message and not t.details.get("fell_back")

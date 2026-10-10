@@ -1228,6 +1228,18 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     if matched is not None and SKILLS[task.service].get("kind") == "food" and len(groups) > 1:
         # A food cart holds one restaurant (live 2026-10-11: paneer from one place, roti from another; only the roti went in).
         picks, menu_find = _one_restaurant(groups, matched)
+    named = [str(i["restaurant"]) for i in d.get("items") or [] if isinstance(i, dict) and i.get("restaurant")]
+    if (matched is not None and groups and not any(picks.values()) and named and SKILLS[task.service].get("kind") == "food"
+            and not more and not compare_group(task)):
+        # The restaurant they named does not have it here (or is shut): other places on this same app do. Ask before going to
+        # another app (live run 2026-10-11: "Haldiram se" → Zomato, though other Swiggy places had the dish).
+        task.input_needed = "go"
+        _number(found)
+        listed = " ".join(f"For {asked or 'it'}: " + "; ".join(f"[{i['oid']}] {_option(i)}" for i in g[:6]) + "." for asked, g in groups)
+        return "awaiting_confirm", (f"{', '.join(named)} on {label} does not have it now" + (f" (closed now: {closed})" if closed else "")
+                                    + f". Other places on {label} have it: {listed} Nothing is ordered yet. Tell them plainly and ask "
+                                    f"whether to get it from one of these places on {label} instead (pass its id in brackets, e.g. p2, as "
+                                    "the value of task_input go), or wait for the one they named.")
     if matched is not None and groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
         # Nothing here is what they asked for (only other variants, or nothing): the other usual stores look.
         return "failed", (f"Not on {label} exactly ({'; '.join(a for a, _ in groups)})"
