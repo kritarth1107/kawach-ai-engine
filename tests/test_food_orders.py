@@ -193,3 +193,17 @@ def test_the_agent_is_given_the_address_line_not_the_label():
     T.details = {**T.details, "confirmed_total": "₹200"}
     goal = specialist_for("swiggy").goal(T())
     assert "reads like: 'C504, Sunita Park, Raipur 492001'" in goal and "never by the label" in goal
+
+
+async def test_a_dish_left_out_of_the_cart_moves_the_order_to_the_next_restaurant(db, at):
+    at("2026-10-11 02:40")
+    t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="paneer, roti",
+                             details={"items": [{"name": "paneer butter masala", "qty": 1}, {"name": "roti", "qty": 2}]})
+    ib_p, ib_r = {**D("p1", "Paneer Butter Masala", "Indian Bawarchi", "₹149"), "for_item": "paneer butter masala"}, {**D("r1", "Tawa Roti", "Indian Bawarchi", "₹12"), "for_item": "roti"}
+    pp_p, pp_r = {**D("p2", "Paneer Butter Masala", "Patiala Plates", "₹189"), "for_item": "paneer butter masala"}, {**D("r2", "Tandoori Roti", "Patiala Plates", "₹25"), "for_item": "roti"}
+    t.phase = "prepare"
+    t.details = {**t.details, "auto_picked": True, "chosen": [ib_p, ib_r], "found": [ib_p, ib_r, pp_p, pp_r],
+                 "matched": {"paneer butter masala": {"exact": ["p1", "p2"]}, "roti": {"exact": ["r1", "r2"]}}}
+    status, _ = runtime._outcome(t, {"items": [{"name": "Plain Tawa Roti", "qty": 2, "price": "₹24"}], "total": "₹108", "cod_available": True})
+    assert status == "queued" and [c["restaurant"] for c in t.details["chosen"]] == ["Patiala Plates", "Patiala Plates"]
+    assert t.details["refused"] == ["p1"] and "left out of the cart: Paneer Butter Masala" in t.history[-1]["note"]

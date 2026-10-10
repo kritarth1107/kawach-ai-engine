@@ -1004,6 +1004,18 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
                 note(task, f"not available here; trying {tried}")
                 return "queued", ""
             out = {**out, "items": [i for i in out.get("items") or [] if i not in dead]}
+        chosen_ = [c for c in d.get("chosen") or [] if c.get("name")]
+        if chosen_ and d.get("auto_picked") and spec.name != "pharmacy" and out.get("items"):
+            # A picked product the agent left out of the cart (live run 2026-10-11: Indian Bawarchi's paneer failed to go in three
+            # times and Maa was offered a roti-only cart): the next best one is tried, before anyone is asked.
+            left_out = guard.missing_items([{"name": c["name"]} for c in chosen_], out.get("items") or [])
+            ids = [str(c.get("store_id")) for c in chosen_ if c.get("store_id") and str(c.get("name")) in left_out]
+            tried = (_repick_food(task, ids) if SKILLS[task.service].get("kind") == "food" else _repick_without(task, ids)) if ids else None
+            if tried:
+                task.phase, task.input_needed = "prepare", None
+                task.result = {**(task.result or {}), "alternatives": None, "total": None, "fees": None}
+                note(task, f"left out of the cart: {', '.join(left_out)}; trying {tried}")
+                return "queued", ""
         if not out.get("items"):
             alts = guard.alternatives(out.get("alternatives"))[:4]
             if alts and out.get("cod_available") is not False:
@@ -1566,6 +1578,24 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         # the place step re-reads the cart against this before sending the order
         task.details = {**(task.details or {}), "fast_place_check": check}
     return cart
+
+
+def _repick_food(task: Task, ids: list[str]) -> str | None:
+    """Food: a dish that would not go in the cart is dropped and the restaurant is chosen again from what is left (one
+    restaurant per cart, at most 3 times). Returns what is tried now, or None."""
+    d = task.details or {}
+    if not d.get("auto_picked") or int(d.get("repicks") or 0) >= 3 or not ids or not d.get("matched"):
+        return None
+    gone = set(map(str, ids)) | set(d.get("refused") or [])
+    found = [i for i in d.get("found") or [] if _pkey(i) not in gone]
+    matched = {a: {**(v or {}), "exact": [k for k in (v or {}).get("exact") or [] if k not in gone]} for a, v in d["matched"].items()}
+    groups = _groups(task, found)
+    picks, find = _one_restaurant(groups, matched) if groups else ({}, [])
+    if not picks:
+        return None
+    task.details = {**d, "chosen": [picks[a] for a, _ in groups if picks.get(a)], "menu_find": find or None, "refused": sorted(gone),
+                    "fast_cart_tried": False, "repicks": int(d.get("repicks") or 0) + 1}
+    return "; ".join(f"{_label(p)} from {p.get('restaurant')}" for p in picks.values())
 
 
 def _repick_without(task: Task, ids: list[str]) -> str | None:
