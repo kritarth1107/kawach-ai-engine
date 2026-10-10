@@ -601,6 +601,15 @@ def test_asked_words_match_plurals_and_pack_numbers():
     assert not runtime.asked_match("Parle-G biscuit 475 g", "Parle Parle G Gold Biscuits Pouch — 1 kg x 2")
     assert not runtime.asked_match("Diet Coke", "Coca-Cola Zero Sugar 300 ml")
     assert runtime.asked_match("", "anything") is None
+    assert runtime.asked_match("RiteBite Max Protein wafer bar 240 g", "Rite Bite Max Protein Assorted 10g Protein Millet Wafer Bar — 240 g")
+
+
+def test_single_pack_ask_prefers_the_single_pack_over_a_multipack():
+    box, two = "Rite Bite Max Protein Wafer Bar — 240 g", "Rite Bite Max Protein Wafer Bar — 240 g x 2"
+    found = [{"name": two, "exact_match": True}, {"name": box, "exact_match": True}]
+    assert runtime.best_exact("RiteBite wafer bar 240 g", found)["name"] == box
+    assert runtime.best_exact("RiteBite wafer bar 240 g x 2", found) is None  # both fit a multipack ask: they pick
+    assert runtime.best_exact("anything", [{"name": box}])["name"] == box
 
 
 class FastAgent(FakeAgent):

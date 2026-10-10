@@ -885,9 +885,9 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     if out.get("logged_in") and not compare_group(task):  # in a comparison the person picks the store first
         # Already logged in: no code needed. Build the cart straight away only for the one product that is clearly what
         # they asked for; otherwise they pick (lab 2026-10-10: "Parle-G 475 g" got the first hit, "1 kg x 2" ₹250).
-        exact = found if len(found) == 1 else [i for i in found if i.get("exact_match")]
-        if len(exact) == 1:
-            task.details = {**task.details, "chosen": [exact[0]]}
+        one = best_exact(((d.get("items") or [{}])[0].get("name") or "") if len(d.get("items") or []) == 1 else "", found)
+        if one:
+            task.details = {**task.details, "chosen": [one]}
             task.phase = "prepare"
             return "queued", ""
         task.input_needed = "go"
@@ -909,9 +909,27 @@ def _stems(text: str) -> set[str]:
 
 
 def asked_match(asked: str, name: str) -> bool | None:
-    """Every word (and pack number) they asked for is in the product name; None when nothing was asked."""
+    """Every word (and pack number) they asked for is in the product name; None when nothing was asked. A long word
+    also matches when the name writes it apart ("RiteBite" in "Rite Bite Max Protein")."""
     want = _stems(asked)
-    return want <= _stems(name) if want else None
+    if not want:
+        return None
+    have, joined = _stems(name), re.sub(r"[^a-z0-9]", "", str(name or "").lower())
+    return all(w in have or (len(w) >= 5 and w in joined) for w in want)
+
+
+MULTIPACK = re.compile(r"\bx\s*\d+\b|\bpack of \d+|\b\d+\s*x\b", re.I)
+
+
+def best_exact(asked: str, found: list[dict]) -> dict | None:
+    """The one product that is clearly what was asked: a single listing, else the only full match, else (when the ask
+    names no multipack) the only full match that is not a multipack ("240 g" over "240 g x 2")."""
+    if len(found) == 1:
+        return found[0]
+    exact = [i for i in found if i.get("exact_match")]
+    if len(exact) > 1 and not MULTIPACK.search(asked or ""):
+        exact = [i for i in exact if not MULTIPACK.search(str(i.get("name") or ""))]
+    return exact[0] if len(exact) == 1 else None
 
 
 async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
