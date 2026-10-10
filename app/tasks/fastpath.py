@@ -190,6 +190,8 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
             "name": name, "pack": pack, "price": _rupees(p.get("price")), "mrp": _rupees(p.get("mrp")),
             "available": bool(p.get("available", True)),
             "rx_required": p.get("rx_required"), "restaurant": p.get("restaurant"), "eta": p.get("eta"), "store_id": p.get("id"),
+            # food: which restaurant, and whether it is shut now with when it opens (the store's own words)
+            "restaurantId": p.get("restaurantId") or None, "closed": True if p.get("closed") else None, "opens": p.get("opens") or None,
             # ids a logged-in cart step needs (Instamart: product, variant, item)
             "cart_ref": p.get("cart_item") or {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,
         }.items() if v is not None})

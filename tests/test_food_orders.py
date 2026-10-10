@@ -81,3 +81,19 @@ async def test_a_cart_without_a_total_gets_one_look_at_the_checkout_before_the_c
 
 async def _p():
     return {"profileId": "p", "loginPhone": "9000012345"}
+
+
+async def test_the_swiggy_look_up_keeps_restaurant_and_closed_state(monkeypatch):
+    from app.tasks import fastpath
+
+    async def fake_eval(cdp, url, js, **kw):
+        return {"status": 200, "products": [{"name": "Masala Dosa", "price": 120, "available": False, "id": "d1", "restaurant": "Sagar Ratna",
+                                             "restaurantId": "555", "closed": True, "opens": "Opens at 7 am"},
+                                            {"name": "Masala Dosa", "price": 90, "available": True, "id": "d2", "restaurant": "Anand", "restaurantId": "777",
+                                             "closed": False, "opens": ""}]}
+
+    monkeypatch.setattr(fastpath, "cdp_evaluate", fake_eval)
+    out = await fastpath.search("swiggy", "ws://x", "masala dosa", lat=21.2, lon=81.6)
+    a, b = out["items"]
+    assert a["restaurantId"] == "555" and a["closed"] is True and a["opens"] == "Opens at 7 am"
+    assert b["restaurantId"] == "777" and "closed" not in b and "opens" not in b
