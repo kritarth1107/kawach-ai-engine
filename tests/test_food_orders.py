@@ -220,3 +220,20 @@ async def test_items_left_from_earlier_are_cleared_before_the_confirm(db, at):
     assert status == "queued" and t.details["cart_cleaned"] and "Plain Tawa Roti" in t.history[-1]["note"]
     from app.specialists.agents import specialist_for
     assert "remove anything already in it" in specialist_for("swiggy").goal(t)
+
+
+async def test_a_named_app_without_the_dish_asks_before_ordering_on_another(db, at):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    at("2026-10-11 03:10")
+    sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+    z = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="zomato", kind="order", goal="veg biryani",
+                             details={"items": [{"name": "veg biryani"}], "compare": "g1", "fallback_from": "swiggy"})
+    z.phase, z.status, z.input_needed = "browse", "awaiting_confirm", "go"
+    z.details = {**z.details, "compare_seen": "2026-10-10T21:40:00+00:00", "chosen": [D("b1", "Veg Biryani", "Behrouz", "₹249")]}
+    z.result = {"items": [D("b1", "Veg Biryani", "Behrouz", "₹249")], "total": None}
+    await db.commit()
+    out = await runtime.choose_stores(sessions)
+    await db.refresh(z)
+    assert z.status == "awaiting_confirm" and z.input_needed == "go" and z.phase == "browse", "nothing is built on Zomato before a yes"
+    assert out and out[0][1].startswith("Swiggy does not have it now. Zomato has: Veg Biryani ₹249 from Behrouz")

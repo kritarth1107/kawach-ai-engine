@@ -233,9 +233,21 @@ async def choose_stores(sessions: async_sessionmaker) -> list[tuple[Task, str]]:
                 first = f"{SKILLS[fb]['label']} did not have it or does not deliver there either. " if fb in SKILLS else ""
                 out.append((t, first + _compare_summary(group)))
                 continue
+            label = SKILLS[best.service]["label"]
+            fb = next(((g.details or {}).get("fallback_from") for g in group if (g.details or {}).get("fallback_from")), None)
+            if fb in SKILLS and best.phase == "browse":
+                # They named another app: ask before ordering here (live run 2026-10-11: "swiggy se veg biryani" went to Zomato and
+                # Maa heard about it only at the confirm).
+                best.status, best.input_needed = "awaiting_confirm", "go"
+                note(best, f"{SKILLS[fb]['label']} did not have it; asking before ordering on {label}")
+                _drop_others(group, best, f"Saheli offered {label}")
+                out.append((best, f"{SKILLS[fb]['label']} does not have it now. {label} has: "
+                                  + "; ".join(_option(c) for c in (best.details or {}).get("chosen") or []) + f". Nothing is ordered yet. Ask in one "
+                                  f"short question whether to get it from {label} instead; yes → task_input go with value yes on task {best.id}; "
+                                  "no → cancel_task."))
+                continue
             best.phase, best.status, best.input_needed = "prepare", "queued", None
             best.deadline_at = clock.now() + TASK_LIFETIME
-            label = SKILLS[best.service]["label"]
             note(best, f"picked {label} of {len(group)} stores: " + "; ".join(_label(c) for c in (best.details or {}).get("chosen") or []))
             _drop_others(group, best, f"Saheli picked {label}")
         await session.commit()

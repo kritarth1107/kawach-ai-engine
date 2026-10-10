@@ -179,13 +179,16 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
     pin = str((limits.place or {}).get("pincode") or "").strip()
     if pin:
         if not used:
-            v.warn.append(f"the store did not show the delivery address; check it is {(limits.place or {}).get('nickname')} ({pin}) before confirming")
+            v.warn.append(f"the store did not show the delivery address: name {(limits.place or {}).get('nickname')} in the same one question, "
+                          "never as a second question")
         else:
             pins = re.findall(r"(?<!\d)\d{3}\s?\d{3}(?!\d)", used)
             if pins and pin not in {p.replace(" ", "") for p in pins}:
                 v.block.append(f"the delivery address '{used}' is not the saved place ({(limits.place or {}).get('nickname')}, {pin})")
             elif not pins:
-                v.warn.append(f"the store shows the address as '{used}' with no pincode; read it out and make sure it is {(limits.place or {}).get('nickname')} ({pin})")
+                # one question (live run 2026-10-11: "is the address right? shall I order?" — her yes to the address placed it)
+                v.warn.append(f"the store shows the address as '{used}': say it inside the same one question (items, total, to '{used}', "
+                              "order?), never as a separate question")
     return v
 
 

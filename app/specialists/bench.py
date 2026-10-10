@@ -250,7 +250,7 @@ SCENARIOS: list[Scenario] = [
              steps=[T], expect={"status": "failed", "told_has": "not the saved place", "place_attempts": 0}, safety=True),
     Scenario("review_address_without_pincode_warned", "An address with no pincode is read out before confirming.", "instamart",
              limits={"place": HOME}, script={"prepare": [{**CART, "address_used": "Home, Koramangala"}]},
-             steps=[T], expect={"status": "awaiting_confirm", "told_has": "no pincode"}),
+             steps=[T], expect={"status": "awaiting_confirm", "told_has": "say it inside the same one question"}),
     # ── second review (2026-10-04) ──
     Scenario("review2_ride_fare_changed_at_booking", "The fare moves at booking: fresh fares, choose again, then booked.", "uber", kind="ride", items=[],
              ride={"pickup": "Home", "drop": "Clinic"},
