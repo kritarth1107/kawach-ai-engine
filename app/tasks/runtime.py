@@ -258,6 +258,7 @@ def task_max_cost() -> float:
 # Founder 2026-10-10: an order not placed after 20 minutes → ask the caregiver; no answer in 5 minutes → email them too
 # (if they have an email); still none 5 minutes later → cancel it properly. Any answer starts the 20 minutes again.
 LADDER_ASK, LADDER_EMAIL, LADDER_CANCEL = timedelta(minutes=20), timedelta(minutes=5), timedelta(minutes=5)
+STILL_WORKING = timedelta(minutes=5)  # one "still working" line after this long with nothing to answer
 
 
 MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
@@ -1200,18 +1201,28 @@ def auto_pick(asked: str, found: list[dict], *, medicine: bool = False) -> dict 
     """Saheli's own pick for one asked item: the product clearly asked for, else the first full match in the store's
     order (a single pack unless a multipack was asked), else, except for medicines, the store's first listing (the
     confirm says it is the closest match). None: the person picks."""
+    found = [i for i in found if i.get("available") is not False]
     if not found:
         return None
     clear = best_exact(asked, found)
-    if clear:
+    if clear and not _multipack(clear):
         return clear
-    single = (lambda xs: [i for i in xs if not MULTIPACK.search(str(i.get("name") or ""))] or xs) if not MULTIPACK.search(asked or "") else (lambda xs: xs)
+    want_multi = bool(MULTIPACK.search(asked or ""))
+    # Live 2026-10-10: "khakhra" got a ₹412 seven-pack sold by another Blinkit store, not Maa's (the cart refused it).
+    # Prefer single packs, the store most of the listings come from, then the cheapest of the store's first three.
+    single = (lambda xs: [i for i in xs if not _multipack(i)] or xs) if not want_multi else (lambda xs: xs)
+    merchants = [str((i.get("cart_ref") or {}).get("merchant_id") or "") for i in found]
+    main = max(set(merchants), key=merchants.count) if any(merchants) else ""
+    home = (lambda xs: [i for i in xs if str((i.get("cart_ref") or {}).get("merchant_id") or "") == main] or xs) if main else (lambda xs: xs)
     exact = [i for i in found if i.get("exact_match")]
-    if exact:
-        return single(exact)[0]
-    if medicine:
+    pool = home(single(exact)) if exact else ([] if medicine else home(single(found)))
+    if not pool:
         return None
-    return single(found)[0]
+    return min(pool[:3], key=lambda i: _rupee_value(i.get("price")) or 1e9)
+
+
+def _multipack(item: dict) -> bool:
+    return bool(MULTIPACK.search(f"{item.get('name') or ''} {item.get('pack') or ''}"))
 
 
 def _words(text: str) -> set[str]:
@@ -1381,6 +1392,13 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         asked = d.get("items") or []
         cart = await fastpath.cart(task.service, cdp, [{**c, "qty": c.get("qty") or channels._qty_for(asked, c)} for c in chosen],
                                    place=place, lat=place.get("lat"), lon=place.get("lng"))
+    except fastpath.ItemsUnavailable as exc:
+        # Not sold at the serving store or out of stock (not a broken step): the next best product, fast cart again.
+        repick = _repick_without(task, exc.ids)
+        if repick:
+            return {"requeue": True, "requeue_note": f"not available here: {', '.join(exc.ids)}; trying {repick}"}
+        note(task, "no other product of that kind is available here; the browser agent looks")
+        return None
     except Exception as exc:  # noqa: BLE001 — not logged in yet, or the site changed: the agent does it
         if "not logged in" in str(exc) and not (task.details or {}).get("login_done"):
             task.details = {**(task.details or {}), "login_only": True}
@@ -1396,6 +1414,23 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         # the place step re-reads the cart against this before sending the order
         task.details = {**(task.details or {}), "fast_place_check": check}
     return cart
+
+
+def _repick_without(task: Task, ids: list[str]) -> str | None:
+    """Mark the refused products unavailable and pick again for their items (at most 3 times). Returns what is tried
+    now, or None when an item has nothing else (or it was the person's own pick, or a medicine)."""
+    d, r = task.details or {}, task.result or {}
+    if not d.get("auto_picked") or d.get("agent") == "pharmacy" or int(d.get("repicks") or 0) >= 3 or not ids:
+        return None
+    gone = set(map(str, ids))
+    items = [{**i, "available": False} if str(i.get("store_id") or "") in gone else i for i in r.get("items") or []]
+    task.result = {**r, "items": items}
+    groups = _groups(task, _found(task))
+    picks = [auto_pick(a, g) for a, g in groups]
+    if not groups or not all(picks):
+        return None
+    task.details = {**d, "chosen": picks, "fast_cart_tried": False, "repicks": int(d.get("repicks") or 0) + 1}
+    return "; ".join(f"{_label(p)} {p.get('price') or ''}".strip() for p in picks)
 
 
 async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for, host=None) -> dict | None:
@@ -1608,6 +1643,14 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
             if compare_group(t) and not d.get("compare_announced"):
                 continue  # still looking on several stores
             start = datetime.fromisoformat(d["ladder_from"]) if d.get("ladder_from") else t.created_at
+            if (t.status in ("queued", "running") and not d.get("told_working") and now - t.created_at >= STILL_WORKING
+                    and not d.get("ladder_asked_at")):
+                # Live 2026-10-10: Maa heard nothing for minutes while the browser agent worked. One short line, no question.
+                t.details = d = {**d, "told_working": True}
+                sends.append(("notify", t.family_id, t.requested_by, (
+                    f"[Task update] {describe(t)}. Still working on it on {SKILLS[t.service]['label']} (the website is slow); nothing "
+                    "to answer. Tell them in one short line that it is taking a few more minutes and you will message when it is "
+                    "ready. Do not ask anything.")))
             asked = datetime.fromisoformat(d["ladder_asked_at"]) if d.get("ladder_asked_at") else None
             emailed = datetime.fromisoformat(d["ladder_emailed_at"]) if d.get("ladder_emailed_at") else None
             label = SKILLS[t.service]["label"]

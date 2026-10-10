@@ -26,6 +26,14 @@ class FastPathError(RuntimeError):
     pass
 
 
+class ItemsUnavailable(FastPathError):
+    """Products the store's cart refused (not sold at the serving store, out of stock): ids = their store ids."""
+
+    def __init__(self, ids: list[str]):
+        super().__init__(f"an item is not available in the cart ({', '.join(ids) or 'unknown'})")
+        self.ids = ids
+
+
 async def cdp_evaluate(cdp_url: str, url: str, expression: str, *, settle_s: float = 3.0, timeout_s: float = 30.0,
                        copy_headers: str | None = None, ready: str | None = None):
     """Open url in a new tab of the cloud browser, run expression (awaited), return its value, close the tab.
@@ -338,7 +346,10 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
     lines = [{"name": i.get("name"), "qty": i.get("quantity"), "price": _rupees(i.get("total_price") or i.get("price")),
               "available": not i.get("is_forced_oos") and (i.get("unavailable_quantity") or 0) == 0} for i in data.get("items") or []]
     if len(lines) != len(items) or not all(l["available"] for l in lines):
-        raise FastPathError("an item is not available in the cart")
+        got = {str(i.get("product_id")): i for i in data.get("items") or []}
+        bad = [it["product_id"] for it in items if it["product_id"] not in got
+               or got[it["product_id"]].get("is_forced_oos") or (got[it["product_id"]].get("unavailable_quantity") or 0) > 0]
+        raise ItemsUnavailable(bad or [it["product_id"] for it in items] if len(items) == 1 else bad)
     fees = sum(float(c.get("amount") or 0) for c in data.get("additional_charges") or []) + float(bill.get("delivery_charge") or 0)
     cod = '"value": "cash_on_delivery", "eta": null, "serviceable": true' in json.dumps(json.loads(out["raw"])) or (
         "cash_on_delivery" not in json.dumps(data.get("disabled_payment_modes") or []))

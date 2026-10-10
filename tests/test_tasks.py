@@ -346,7 +346,8 @@ async def test_comparison_waits_a_little_for_a_slow_store_then_picks_from_what_i
     await h.tick()
     for t in (b, i, z):
         await db.refresh(t)
-    assert b.phase == "prepare" and b.status == "queued" and i.status == z.status == "cancelled" and h.told == []
+    assert b.phase == "prepare" and b.status == "queued" and i.status == z.status == "cancelled"
+    assert all("Still working" in m for m in h.told), "no list of options; at most the one 'taking a few minutes' line"
 
 
 async def test_cancelling_a_look_up_on_several_stores_stops_every_store(db, at, sessions):
@@ -1250,3 +1251,81 @@ async def test_blinkit_unclear_place_is_resolved_from_the_order_list(monkeypatch
     monkeypatch.setattr(fastpath.asyncio, "sleep", no_wait)
     out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
     assert out == {"placed": True, "order_id": "3837182613", "total": "₹180", "payment_method": "Cash on Delivery"}
+
+
+KHAKHRA = [
+    {"name": "Prolicious High Protein & Fiber Thin Khakhra - Assorted Flavours", "pack": "7 x 50 g", "price": "₹412", "store_id": "676442",
+     "available": True, "exact_match": True, "cart_ref": {"product_id": 676442, "merchant_id": 46743}},
+    {"name": "Jabsons Roasted Wheat Khakhra (Methi)", "pack": "180 g", "price": "₹80", "store_id": "546359", "available": True,
+     "exact_match": True, "cart_ref": {"product_id": 546359, "merchant_id": 37622}},
+    {"name": "Charliee Methi Khakhra", "pack": "150 g", "price": "₹65", "store_id": "56720", "available": True, "exact_match": True,
+     "cart_ref": {"product_id": 56720, "merchant_id": 37622}},
+    {"name": "Jabsons Roasted Wheat Khakhra Jeera", "pack": "180 g", "price": "₹80", "store_id": "546362", "available": True,
+     "exact_match": True, "cart_ref": {"product_id": 546362, "merchant_id": 37622}},
+]
+
+
+def test_saheli_picks_a_normal_pack_from_the_serving_store_not_an_expensive_multipack():
+    """Live 2026-10-10: Maa's "khakhra" got the ₹412 seven-pack from another Blinkit store; the cart refused it."""
+    assert runtime.auto_pick("Khakhra", KHAKHRA)["name"] == "Charliee Methi Khakhra"
+    assert runtime.auto_pick("khakhra 7 x 50 g", KHAKHRA[:1])["price"] == "₹412", "asked for the multipack: it is kept"
+
+
+async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_cart_built_fast_again(db, at, sessions, monkeypatch):
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None, limit=6):
+        return {"deliverable": True, "eta": None, "items": [dict(i) for i in KHAKHRA]}
+
+    carts = []
+
+    async def fake_cart(service, cdp, products, place=None, lat=None, lon=None):
+        carts.append([p["store_id"] for p in products])
+        if products[0]["store_id"] == "56720":
+            raise fastpath.ItemsUnavailable(["56720"])
+        return {"items": [{"name": products[0]["name"], "qty": 1, "price": products[0]["price"], "available": True}], "total": "₹95",
+                "cod_available": True, "logged_in": True}
+
+    alerts = []
+
+    class Host:
+        async def call(self, tool, args, **kw):
+            alerts.append(tool)
+            return {}
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "cart", fake_cart)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 20:08")
+    agent = FastAgent(script={})
+    told = []
+
+    async def notify(f, r, p):
+        told.append(p)
+
+    async def prof(t):
+        return {"profileId": "p", "loginPhone": "9000012345"}
+
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Khakhra",
+                             details={"items": [{"name": "Khakhra", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+    await db.commit()
+    for _ in range(4):
+        await runtime.tick(sessions, agent, profile_for=prof, notify=notify, host_for=lambda f: Host())
+    await db.refresh(t)
+    assert carts == [["56720"], ["546359"]] and agent.runs == [] and alerts == []
+    assert t.input_needed == "confirm" and "Jabsons Roasted Wheat Khakhra (Methi)" in t.details["chosen"][0]["name"]
+
+
+async def test_maa_hears_once_that_it_is_taking_a_few_minutes(db, at, sessions):
+    at("2026-10-10 20:08")
+    agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=99)
+    h = Harness(sessions, agent)
+    t = await _order(db)
+    await h.tick()
+    at("2026-10-10 20:12")
+    await h.tick()
+    assert h.told == []
+    at("2026-10-10 20:14")
+    await h.tick(); await h.tick()
+    assert len(h.told) == 1 and "Still working" in h.told[0] and "Do not ask anything" in h.told[0]
