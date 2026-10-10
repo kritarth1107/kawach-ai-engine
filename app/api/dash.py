@@ -89,8 +89,10 @@ async def overview(family_id: str, elder_id: str, session: DB, day: str | None =
         (await session.execute(select(Task).where(Task.family_id == family_id).order_by(Task.created_at.desc()).limit(30))).scalars()
     )
     notes = await store.notes(session, family_id, [elder_id, "family"])
+    meds = [f for f in facts if f.domain == "medicine" and f.status == "active"]
     return {
         "day": day,
+        "doses": _day_doses(meds, list(events), day),
         "domains": DOMAINS,
         "facts": [fact_json(f) for f in facts],
         "pending": [fact_json(f) for f in facts if f.status == "pending"],
@@ -317,6 +319,44 @@ def _hm(t: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _doses_on(meds: list, day: str) -> list[dict]:
+    """The day's doses: a weekly medicine only on its day (live 2026-10-09: weekly Vitamin D3 showed every day)."""
+    from app.care import doses as dose_days
+
+    return sorted(
+        ({"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "dose": f.value.get("dose"), "time": t, "key": f.key}
+         for f in meds if dose_days.due_on(f.value, day) for t in (f.value.get("times") or [])),
+        key=lambda d: d["time"],
+    )
+
+
+def _day_doses(meds: list, day_events: list, day: str) -> list[dict]:
+    """Each dose due that day with its status (taken / missed / … from the day's events), the one list the Home card and
+    the Day page both show (live 2026-10-10: Home said 3/3, the Day page 3/4 with the weekly Vitamin D3 counted)."""
+    now = clock.ist()
+    today = clock.ist_day()
+    mins_now = now.hour * 60 + now.minute if day == today else (24 * 60 * 2 if day < today else -1)
+    out, used = [], set()
+    for d in _doses_on(meds, day):
+        status = "upcoming"
+        for e in day_events:
+            if e.id in used or e.kind not in DOSE_KINDS:
+                continue
+            if _mentions(e.summary, d["name"]) or _mentions(str((e.payload or {}).get("medicine", "")), d["name"]):
+                status = DOSE_KINDS[e.kind]
+                used.add(e.id)
+                break
+        if status == "upcoming":
+            reminded = any(e.kind == "reminder_sent" and _mentions(e.summary, d["name"]) and d["time"] in e.summary for e in day_events)
+            delta = mins_now - _hm(d["time"])
+            if 0 <= delta <= 90:
+                status = "due"
+            elif delta > 90:
+                status = "reminded" if reminded else "unmarked"
+        out.append({"id": f"{d['key']}@{d['time']}", "time": d["time"], "name": d["name"], "dose": d.get("dose"), "status": status})
+    return out
+
+
 @router.get("/{family_id}/{elder_id}/home")
 async def home(family_id: str, elder_id: str, session: DB) -> dict:
     from datetime import timedelta
@@ -330,14 +370,8 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
     meds = [f for f in await store.facts(session, family_id, elder_id, domains=["medicine"], statuses=("active",))]
 
     def doses_on(day: str) -> list[dict]:
-        """The day's doses: a weekly medicine only on its day (live 2026-10-09: weekly Vitamin D3 showed every day)."""
-        return sorted(
-            ({"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "dose": f.value.get("dose"), "time": t, "key": f.key}
-             for f in meds if dose_days.due_on(f.value, day) for t in (f.value.get("times") or [])),
-            key=lambda d: d["time"],
-        )
+        return _doses_on(meds, day)
 
-    schedule = doses_on(today)
     since = clock.now() - timedelta(days=14)
     evs = await store.events(session, family_id, elder_id, since=since, limit=5000)
     by_day: dict[str, list] = {}
@@ -346,26 +380,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
 
     # today's doses
     todays = by_day.get(today, [])
-    doses = []
-    used: set[int] = set()
-    mins_now = now.hour * 60 + now.minute
-    for i, d in enumerate(schedule):
-        status = "upcoming"
-        for e in todays:
-            if e.id in used or e.kind not in DOSE_KINDS:
-                continue
-            if _mentions(e.summary, d["name"]) or _mentions(str(e.payload.get("medicine", "")), d["name"]):
-                status = DOSE_KINDS[e.kind]
-                used.add(e.id)
-                break
-        if status == "upcoming":
-            reminded = any(e.kind == "reminder_sent" and _mentions(e.summary, d["name"]) and d["time"] in e.summary for e in todays)
-            delta = mins_now - _hm(d["time"])
-            if delta >= 0 and delta <= 90:
-                status = "due"
-            elif delta > 90:
-                status = "reminded" if reminded else "unmarked"
-        doses.append({"id": f"{d['key']}@{d['time']}", "time": d["time"], "name": d["name"], "dose": d.get("dose"), "status": status})
+    doses = _day_doses(meds, todays, today)
 
     # 14-day adherence: of the doses due that day, how many were taken (a dose of a medicine not due does not count)
     def day_counts(day: str) -> tuple[int, int]:
