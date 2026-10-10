@@ -96,7 +96,8 @@ class Specialist:
             total = d.get("confirmed_total") or (task.result or {}).get("total")
             return (f"On {label}, the cart for: {items} is ready and the family confirmed a total of {total}. Open the cart (if it is empty, "
                     f"add exactly these items again first). Place the order now with Cash on "
-                    f"Delivery only.{where} If the cart items changed or the total is now more than {total} by over ₹10, do NOT place: report "
+                    f"Delivery only: choose Cash / Pay on Delivery as the payment method, never a saved card, UPI or wallet; if cash on "
+                    f"delivery is not offered, do NOT place and report problem='cod_unavailable'.{where} If the cart items changed or the total is now more than {total} by over ₹10, do NOT place: report "
                     f"price_changed=true and new_total. Otherwise report placed, order_id, payment_method, total and eta.")
         if task.phase == "cancel":
             return (f"On {label}, open the order {(task.result or {}).get('order_id', 'just placed')} and cancel it. If a cancellation "

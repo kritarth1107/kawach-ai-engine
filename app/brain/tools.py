@@ -839,16 +839,16 @@ async def _task(ctx: TurnCtx, task_id: str):
 
 @tool(
     "start_task",
-    "Start an order or a ride on one of the family's own accounts. It runs in the background: an order first looks "
-    "the item up without logging in (price, stock, whether it delivers to their place) and comes back to you; after "
-    "their go-ahead it logs in (a login code may come to their phone), builds the cart and comes back to confirm "
-    "before anything is placed. Rides find fares and come back to choose. Cash on delivery only. Allergies and the "
-    "never-order list are checked first. Tell the person you are on it; you will get a task update when it needs "
-    "them. For 'the usual' or 'same as last time', look at past_orders first and use the exact item names and service from there. "
-    "If they did not name a store for an order, leave service out and give category: it looks on every usual store for that "
-    "(groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, PharmEasy; food: Swiggy, Zomato) at once, and one task "
-    "update brings all the options to offer them. The first call for an order only returns the delivery address to confirm: "
-    "ask them, and call start_task again after they say yes (with area if they named another saved place).",
+    "Start an order or a ride on one of the family's own accounts. It runs in the background until it is placed or "
+    "cancelled: an order looks the items up, picks the product that fits what they asked (and, with no store named, the "
+    "best store), logs in if the store needs it (the login code is asked from the person the family set for codes), builds "
+    "the cart and comes back with ONE confirm: items and total. Never ask which product or which store. Rides find fares "
+    "and come back to choose. Cash on delivery only. Allergies and the never-order list are checked first. Tell the person "
+    "in a few words that you are on it; you get a task update when someone has to answer. For 'the usual' or 'same as last "
+    "time', look at past_orders first and use the exact item names and service from there. If they did not name a store "
+    "for an order, leave service out and give category (groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, "
+    "PharmEasy; food: Swiggy, Zomato). The first call for an order only returns the delivery address to confirm: ask them, "
+    "and call start_task again after they say yes (with area if they named another saved place).",
     {
         "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"],
                     "description": "Only when they named a store (or for 'the usual'); rides always need one"},
@@ -1045,17 +1045,17 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "task_input",
-    "Give a running task what it is waiting for: their go-ahead to log in and build the cart after hearing the "
-    "price (go: yes/no, or the name of the product they picked from the options; on a comparison, use the task of the "
-    "store they picked), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
-    "of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an "
-    "item that is out of stock (swap: the alternative's name, or 'no' to drop it), the family approver's answer to an "
-    "approval request (approve: yes/no; only an approver's answer counts), or, while they are choosing from the options, "
-    "a fresh look for one item when they want more options or another pack or size (more: that item with what to look "
-    "for, e.g. 'maggi', 'maggi 840 g', 'bada paneer'; the longer list comes back in a task update).",
+    "Give a running task what it is waiting for: the person's confirm of the cart and total (confirm: yes/no), the login "
+    "code (otp, from whoever the update says has it), the name of the product they picked when options were listed (go), "
+    "approval of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an item "
+    "that is out of stock (swap: the alternative's name, or 'no'), the family approver's answer (approve: yes/no; only an "
+    "approver's answer counts), or, at the confirm, a change they ask for: change (another product, brand or size for one "
+    "item, e.g. 'Amul Gold 1 litre', 'maggi 840 g', '2 x milk'), add (one more item, e.g. 'bread' or '2 x eggs'), remove "
+    "(one item), more (they want to see that item's options, e.g. 'maggi'; the list comes back in a task update), keep "
+    "(a caregiver says keep trying when asked about a slow order). The new cart and total come back for the one confirm.",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep"]},
         "value": {"type": "string"},
     },
     ["task_id", "kind", "value"],
@@ -1067,7 +1067,7 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
     outcome = await runtime.provide_input(
         ctx.session, task, kind=a["kind"], value=a["value"], by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
     )
-    return {"result": outcome, "task": runtime.describe(task)}
+    return {"result": outcome, "task": runtime.describe(task), **(_tell_who_cancelled(ctx, task) if task.status == "cancelled" else {})}
 
 
 @tool(
@@ -1181,9 +1181,11 @@ async def boundaries_read(ctx: TurnCtx, a: dict) -> dict:
     "Change the family's limits (only an approver can; never the care recipient). Give only what changes: "
     "elder_order_limit / elder_ride_limit (₹; the care recipient's own orders or rides above this need approval), "
     "anyone_over (₹; anything above needs approval; 0 turns it off), monthly_cap (₹; 0 off), approval_categories "
-    "(subset of grocery, food, pharmacy, ride), approvers (member ids), members ({id: {can_order, can_ride}}). Repeat back "
-    "the new limits in one line after.",
+    "(subset of grocery, food, pharmacy, ride), approvers (member ids), members ({id: {can_order, can_ride}}), login_codes "
+    "({person id: 'self' or a caregiver's member id}: who gives store login codes for that person's orders; the store then "
+    "logs in with that person's number). Repeat back the new limits in one line after.",
     {
+        "login_codes": {"type": "object", "description": "{person id: 'self' | member id}"},
         "elder_order_limit": {"type": "integer", "minimum": 0}, "elder_ride_limit": {"type": "integer", "minimum": 0},
         "anyone_over": {"type": "integer", "minimum": 0}, "monthly_cap": {"type": "integer", "minimum": 0},
         "approval_categories": {"type": "array", "items": {"type": "string", "enum": ["grocery", "food", "pharmacy", "ride"]}},
@@ -1203,6 +1205,9 @@ async def set_boundaries(ctx: TurnCtx, a: dict) -> dict:
     ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
     if any(x not in ids for x in a.get("approvers") or []) or any(x not in ids for x in (a.get("members") or {})):
         raise ToolRefused("Use member ids from HOUSEHOLD.")
+    codes = a.get("login_codes") or {}
+    if not isinstance(codes, dict) or any(k not in ids or (v != "self" and v not in ids) for k, v in codes.items()):
+        raise ToolRefused("login_codes: {person id: 'self' or a member id} with ids from HOUSEHOLD.")
     if a.get("approvers") and ctx.elder_id in a["approvers"]:
         raise ToolRefused("The care recipient cannot be the approver of their own orders.")
     new = await boundaries.save(ctx.session, ctx.family_id, a, by=me)
@@ -1221,7 +1226,18 @@ async def cancel_task(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
     task = await _task(ctx, a["task_id"])
-    return {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}
+    out = {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}
+    return {**out, **_tell_who_cancelled(ctx, task)}
+
+
+def _tell_who_cancelled(ctx: TurnCtx, task) -> dict:
+    """Founder 2026-10-10: when a caregiver cancels an order the care recipient asked for, tell the care recipient who."""
+    me = ctx.speaker.get("id") or ""
+    if not task.cancel_requested or ctx.is_system or not me or me == task.requested_by:
+        return {}
+    who = next((m.get("name") for m in [ctx.elder, *ctx.members] if m.get("id") == me), "a family member")
+    return {"tell": f"Tell person {task.requested_by} kindly in one line with send_message that {who} asked to cancel this order "
+                    f"({task.goal}); nothing was ordered unless it said placed."}
 
 
 @tool(

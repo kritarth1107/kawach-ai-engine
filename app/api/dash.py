@@ -812,6 +812,29 @@ async def boundaries_save(family_id: str, elder_id: str, body: BoundariesIn, ses
     return {"policy": new}
 
 
+class LoginCodesIn(BaseModel):
+    actor: Actor
+    codes: dict[str, str]
+
+
+@router.put("/{family_id}/{elder_id}/login-codes")
+async def login_codes_save(family_id: str, elder_id: str, body: LoginCodesIn, session: DB) -> dict:
+    """Who gives store login codes for each person's orders ({person id: "self" | member id}). Set at onboarding (the
+    household may not be on file yet: then only "self" or the caregiver setting it up) or later by an approver."""
+    from app.care import boundaries
+
+    policy = await boundaries.get(session, family_id)
+    roster = await store.roster(session, family_id)
+    if roster is not None and not boundaries.can_manage(policy, roster, body.actor.id):
+        raise HTTPException(status_code=403, detail="Only the family's approver can change this")
+    ids = {m.get("id") for m in ([roster.elder, *roster.members] if roster else [])} | {body.actor.id}
+    if any(v != "self" and v not in ids for v in body.codes.values()) or not body.codes:
+        raise HTTPException(status_code=400, detail="codes: {person id: 'self' or a family member id}")
+    new = await boundaries.save(session, family_id, {"login_codes": body.codes}, by=body.actor.id, source_kind="dashboard")
+    await session.commit()
+    return {"login_codes": new["login_codes"]}
+
+
 class SkillIn(BaseModel):
     actor: Actor
     text: str = Field(min_length=3, max_length=600)

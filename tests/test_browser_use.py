@@ -77,7 +77,9 @@ async def test_otp_browser_is_kept(db, at, sessions):
     assert t.input_needed == "otp" and t.agent_session and not h.agent.sessions_stopped
 
 
-async def test_cost_ceiling_stops_a_task(db, at, sessions, monkeypatch):
+async def test_cost_ceiling_pauses_and_asks_whether_to_keep_trying(db, at, sessions, monkeypatch):
+    """Founder 2026-10-10: keep going until placed or cancelled. Past the cost ceiling no new browser run starts; the
+    caregiver (here the person who asked: no household on file) is asked keep trying or cancel; keep resumes it."""
     at("2026-10-02 10:00")
     monkeypatch.setenv("TASK_MAX_COST_INR", "20")
     h = H(sessions, FakeAgent(script={"prepare": [OTP]}, steps_per_run=30))  # each run costs ~₹30
@@ -88,7 +90,12 @@ async def test_cost_ceiling_stops_a_task(db, at, sessions, monkeypatch):
     await db.commit()
     await h.tick()
     await db.refresh(t)
-    assert t.status == "failed" and "too many tries" in h.told[-1] and len(h.agent.runs) == 1
+    assert t.status == "queued" and t.details["ladder_due"] and len(h.agent.runs) == 1
+    assert "[Order needs you]" in h.told[-1] and "browser time" in h.told[-1]
+    await runtime.provide_input(db, t, kind="keep", value="yes", by="e", by_is_elder=True)
+    await db.commit()
+    await h.tick()
+    assert len(h.agent.runs) == 2, "keep trying lifts the pause"
 
 
 async def test_route_that_worked_is_remembered(db, at, sessions):

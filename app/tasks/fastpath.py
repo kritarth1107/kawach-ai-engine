@@ -281,7 +281,20 @@ async def place(service: str, cdp_url: str, check: dict) -> dict:
     {placed, order_id, total, payment_method, eta} | {placed: False, unclear: True} (sent, no clear answer: never retry) |
     raises FastPathError (nothing was sent: the cart changed or the page could not be used)."""
     if service == "blinkit":
-        return await blinkit_place(cdp_url, check)
+        out = await blinkit_place(cdp_url, check)
+        if out.get("unclear") and check.get("total"):
+            # Pay Now was pressed but no order page came: look in the account's order list before calling it unclear
+            # (lab 2026-10-10: order 2 went through and was reported unclear).
+            for wait in (0, 8):
+                await asyncio.sleep(wait)
+                try:
+                    found = await blinkit_recent_order(cdp_url, check["total"])
+                except Exception as exc:  # noqa: BLE001 — still unclear: never retried
+                    logger.warning("blinkit order list failed: %s", exc)
+                    found = None
+                if found:
+                    return {"placed": True, "order_id": found, "total": _rupees(check.get("total")), "payment_method": "Cash on Delivery"}
+        return out
     if service != "instamart":
         raise FastPathError(f"no place step for {service}")
     if not (check or {}).get("items") or not check.get("total") or not check.get("address_id"):
@@ -338,6 +351,57 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
                                  "total": int(round(float(bill.get("payable_amount") or 0))), "address": str(addr.get("line1") or "")[:40]}
     return report
 
+
+
+def blinkit_orders_from(body, now=None) -> list[dict]:
+    """Blinkit's order list (layout answer) → [{order_id, status, amount, minutes_ago}] for orders placed today."""
+    from datetime import datetime, timedelta, timezone
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now = (now or datetime.now(timezone.utc)).astimezone(ist)
+    found: list[dict] = []
+
+    def walk(o) -> None:
+        if isinstance(o, dict):
+            attrs = ((o.get("tracking") or {}).get("common_attributes") or {}) if isinstance(o.get("tracking"), dict) else {}
+            oid = str(attrs.get("order_id") or "")
+            if oid and not any(f["order_id"] == oid for f in found):
+                text = " ".join(_texts(o))
+                amount = re.search(r"₹\s*([\d,]+)", text)
+                when = re.search(r"Today,\s*(\d{1,2}):(\d{2})\s*([ap]m)", text, re.I)
+                minutes = None
+                if when:
+                    h = int(when.group(1)) % 12 + (12 if when.group(3).lower() == "pm" else 0)
+                    at = now.replace(hour=h, minute=int(when.group(2)), second=0, microsecond=0)
+                    minutes = int((now - at).total_seconds() // 60)
+                found.append({"order_id": oid, "status": attrs.get("order_status"), "minutes_ago": minutes,
+                              "amount": int(amount.group(1).replace(",", "")) if amount else None})
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(body)
+    return found
+
+
+async def blinkit_recent_order(cdp_url: str, total, within_min: int = 15) -> str | None:
+    """The id of an order placed in the last few minutes for this total (no other order of that total then), else None."""
+    out = None
+    for settle in (7.0, 12.0):  # a fresh browser's first page can be slow to make its own requests
+        try:
+            out = await cdp_evaluate(cdp_url, "https://blinkit.com/account/orders", (JS_DIR / "blinkit_orders.js").read_text(),
+                                     settle_s=settle, timeout_s=60, copy_headers=r"blinkit\.com/v1/")
+            break
+        except FastPathError:
+            continue
+    if not isinstance(out, dict) or out.get("status") != 200:
+        return None
+    want = round(float(re.sub(r"[^\d.]", "", str(total)) or 0))
+    hits = [o for o in blinkit_orders_from(out.get("body")) if o["amount"] == want and o["minutes_ago"] is not None
+            and 0 <= o["minutes_ago"] <= within_min and str(o.get("status") or "").upper() not in ("CANCELLED", "FAILED")]
+    return hits[0]["order_id"] if len(hits) == 1 else None
 
 
 def _texts(o, out: list | None = None) -> list[str]:

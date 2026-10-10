@@ -202,9 +202,9 @@ FOUND = {"logged_in": False, "needs_otp": False, "blocked": False, "problem": ""
          "items": [{"name": "Aashirvaad Atta 5kg", "price": "₹245", "available": True}]}
 
 
-async def test_order_looks_first_then_logs_in_after_go_ahead(db, at, sessions, monkeypatch):
-    """Founder's order of steps: find the product, price and delivery to their place without logging in; only after
-    the person's go-ahead log in (code to their phone), build the cart, confirm, place."""
+async def test_order_looks_first_picks_itself_logs_in_and_asks_once(db, at, sessions, monkeypatch):
+    """Founder 2026-10-10: ask only what, where, and one confirm with the amount. The look-up (no login) finds the product;
+    Saheli picks it herself and logs in without asking; the login code is asked; then the one confirm."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-08 20:00")
     h = LoginHarness(sessions, FakeAgent(script={"browse": [FOUND], "prepare": [OTP, CART]}), "9000012345")
@@ -213,11 +213,7 @@ async def test_order_looks_first_then_logs_in_after_go_ahead(db, at, sessions, m
     await db.refresh(t)
     browse = h.agent.runs[0]
     assert browse["phase"] == "browse" and "without logging in" in browse["goal"] and "9000012345" not in browse["goal"]
-    assert t.status == "awaiting_confirm" and t.input_needed == "go"
-    assert "₹245" in h.told[-1] and "Nothing is ordered" in h.told[-1] and "phone ending 2345" in h.told[-1]
-    assert "waiting for go" in await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
-    assert (await runtime.provide_input(db, t, kind="go", value="haan", by=ELDER, by_is_elder=True)).startswith("going ahead")
-    await db.commit()
+    assert t.status == "queued" and t.phase == "prepare" and h.told == [], "nothing asked: the product is clearly it"
     await h.tick()
     prep = h.agent.runs[1]
     assert prep["phase"] == "prepare" and "enter the mobile number 9000012345" in prep["goal"] and "Aashirvaad Atta 5kg ₹245" in prep["goal"]
@@ -231,17 +227,25 @@ async def test_order_looks_first_then_logs_in_after_go_ahead(db, at, sessions, m
     assert "4821" in code_run and "enter the mobile number" not in code_run  # enter the code given; never ask for a new one
     await h.tick()
     await db.refresh(t)
-    assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and len(h.told) == 2
+    assert "ONE short question" in h.told[-1] and "₹318" in h.told[-1] and "shall I order" in h.told[-1]
 
 
-async def test_look_up_says_plainly_when_it_does_not_deliver(db, at, sessions, monkeypatch):
+async def test_a_store_that_does_not_deliver_looks_on_the_other_stores_instead(db, at, sessions, monkeypatch):
+    """Founder 2026-10-10: keep going until it is placed, asking as little as possible: the store named does not deliver
+    there, so the other usual stores look (no question); nowhere at all → one message saying so."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-08 20:00")
-    h = LoginHarness(sessions, FakeAgent(script={"browse": [{**FOUND, "items": [], "deliverable": False, "location_set": "Raipur 492001"}]}), "9000012345")
+    nope = {**FOUND, "items": [], "deliverable": False, "location_set": "Raipur 492001"}
+    h = LoginHarness(sessions, FakeAgent(script={"browse": [nope]}), "9000012345")
     t = await _order(db)
     await h.tick(); await h.tick()
     await db.refresh(t)
-    assert t.status == "failed" and "does not deliver" in h.told[-1] and len(h.agent.runs) == 1
+    assert t.status == "failed" and h.told == [], "not asked: the other stores look instead"
+    others = await runtime.live_tasks(db, FAM)
+    assert sorted(x.service for x in others) == ["blinkit", "zepto"] and len({runtime.compare_group(x) for x in others}) == 1
+    await h.tick(); await h.tick()
+    assert len(h.told) == 1 and "not available on any of them" in h.told[0] and "Swiggy Instamart did not have it" in h.told[0]
 
 
 async def test_already_logged_in_goes_straight_to_the_cart(db, at, sessions, monkeypatch):
@@ -304,9 +308,9 @@ COKE_INSTAMART = {**FOUND, "eta": "15 mins", "items": [{"name": "Coca-Cola Diet 
 NO_ZEPTO = {**FOUND, "items": [], "deliverable": False, "location_set": "Raipur 492001"}
 
 
-async def test_no_store_named_looks_on_every_store_and_offers_all_options(db, at, sessions, monkeypatch):
-    """Founder 2026-10-09: 'how is it choosing Blinkit? it should go for other options like Instamart and Zepto, and give
-    the available options as we had earlier'. One look-up per store at once, one update with every option."""
+async def test_no_store_named_looks_on_every_store_and_orders_from_the_best_one(db, at, sessions, monkeypatch):
+    """Founder 2026-10-10 ('pick the best herself'): every usual store looks at once; the one with the item at the best
+    price is picked (no options to choose from), the others are dropped, and it goes on to the login and the cart."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "off")  # a comparison looks first even when single orders do not
     at("2026-10-09 15:03")
     h = LoginHarness(sessions, FakeAgent(script={"browse:blinkit": [COKE_BLINKIT], "browse:instamart": [COKE_INSTAMART], "browse:zepto": [NO_ZEPTO],
@@ -316,28 +320,18 @@ async def test_no_store_named_looks_on_every_store_and_offers_all_options(db, at
     assert sorted(r["service"] for r in h.agent.runs) == ["blinkit", "instamart", "zepto"]
     assert all(r["phase"] == "browse" and "9000012345" not in r["goal"] and "up to 3 matching products" in r["goal"] for r in h.agent.runs)
     await h.tick()
-    assert len(h.told) == 1, "one update for the whole comparison, not one per store"
-    msg = h.told[0]
-    assert msg.startswith("[Task update] Looked on Blinkit, Swiggy Instamart, Zepto without logging in")
-    assert "Diet Coke Can (300 ml) ₹40" in msg and "Diet Coke (6 x 300 ml) ₹220" in msg and "₹42" in msg
-    assert "Zepto: Zepto does not deliver" in msg and f"[task {b.id}]" in msg and f"[task {i.id}]" in msg and f"[task {z.id}]" not in msg
-    assert "numbered list" in msg and "phone ending 2345" in msg
+    assert h.told == [], "no list of options: the best store is picked"
     for t in (b, i, z):
         await db.refresh(t)
-    assert (b.status, b.input_needed, i.status, z.status) == ("awaiting_confirm", "go", "awaiting_confirm", "failed")
-    # she picks the single can on Blinkit: that is the go-ahead, and Instamart is dropped
-    said = await runtime.provide_input(db, b, kind="go", value="Diet Coke Can (300 ml)", by=ELDER, by_is_elder=True)
-    assert said.startswith("going ahead on Blinkit with Diet Coke Can (300 ml) ₹40; the other stores are dropped")
-    await db.commit()
-    await db.refresh(i)
-    assert i.status == "cancelled"
+    assert (b.status, b.phase, i.status, z.status) == ("queued", "prepare", "cancelled", "failed")
+    assert any("picked Blinkit of 3 stores" in n["note"] for n in b.history)
     await h.tick()
     prep = h.agent.runs[-1]
     assert prep["service"] == "blinkit" and prep["phase"] == "prepare" and "enter the mobile number 9000012345" in prep["goal"]
     assert "Diet Coke Can (300 ml) ₹40" in prep["goal"] and "6 x 300" not in prep["goal"]
 
 
-async def test_comparison_waits_a_little_for_a_slow_store_then_sends_what_it_has(db, at, sessions, monkeypatch):
+async def test_comparison_waits_a_little_for_a_slow_store_then_picks_from_what_it_has(db, at, sessions, monkeypatch):
     at("2026-10-09 15:03")
     agent = FakeAgent(script={"browse:blinkit": [COKE_BLINKIT], "browse:instamart": [COKE_INSTAMART], "browse:zepto": [NO_ZEPTO]})
     h = LoginHarness(sessions, agent, "9000012345")
@@ -346,43 +340,31 @@ async def test_comparison_waits_a_little_for_a_slow_store_then_sends_what_it_has
     agent.finish_after_polls = 99  # Instamart and Zepto keep loading
     agent._polls[[r["task"] for r in agent.runs if r["service"] == "blinkit"][0]] = 98
     await h.tick()
-    assert h.told == [], "the first answer waits for the others"
+    await db.refresh(b)
+    assert b.status == "awaiting_confirm" and h.told == [], "the first answer waits for the others"
     at("2026-10-09 15:08")
     await h.tick()
-    assert len(h.told) == 1 and "₹40" in h.told[0] and "Instamart: still looking" in h.told[0]
-    # Instamart answers later: told on its own as another option
-    agent.finish_after_polls = 1
-    await h.tick()
-    late = [m for m in h.told[1:] if "Instamart" in m]
-    assert late and "Another store answered after the options were sent" in late[0] and "₹42" in late[0]
-    assert not any("Zepto" in m for m in h.told[1:]), "a late 'does not deliver' is not worth a message"
-
-
-async def test_comparison_declined_drops_every_store_and_expires_once(db, at, sessions):
-    at("2026-10-09 15:03")
-    h = LoginHarness(sessions, FakeAgent(script={"browse": [COKE_INSTAMART]}), "9000012345")
-    b, i, z = await _compare(db)
-    await h.tick(); await h.tick()
     for t in (b, i, z):
         await db.refresh(t)
-    assert await runtime.provide_input(db, i, kind="go", value="nahi", by=ELDER, by_is_elder=True) == "declined on every store; nothing was ordered"
-    await db.commit()
-    for t in (b, z):
-        await db.refresh(t)
-    assert b.status == z.status == "cancelled"
-    # a fresh comparison nobody answers: one "nobody picked" message, not three
-    b2, i2, z2 = await _compare(db, item="Atta")
-    for t in (b2, i2, z2):
-        t.details = {**t.details, "compare": "g2"}
-    await db.commit()
-    await h.tick(); await h.tick()
-    n = len(h.told)
-    at("2026-10-09 16:00")
+    assert b.phase == "prepare" and b.status == "queued" and i.status == z.status == "cancelled" and h.told == []
+
+
+async def test_cancelling_a_look_up_on_several_stores_stops_every_store(db, at, sessions):
+    at("2026-10-09 15:03")
+    agent = FakeAgent(script={"browse": [COKE_INSTAMART]}, finish_after_polls=99)
+    h = LoginHarness(sessions, agent, "9000012345")
+    b, i, z = await _compare(db)
     await h.tick()
-    assert len(h.told) == n + 1 and "Nobody picked one of the options" in h.told[-1]
+    for t in (b, i, z):
+        await db.refresh(t)
+    said = await runtime.request_cancel(db, agent, i, by=ELDER, reason="nahi chahiye")
+    await db.commit()
+    for t in (b, i, z):
+        await db.refresh(t)
+    assert b.status == i.status == z.status == "cancelled" and "nothing was placed" in said and len(agent.stopped) == 3
 
 
-async def test_go_ahead_with_several_products_found_uses_the_best_match_or_the_named_one(db, at, sessions, monkeypatch):
+async def test_several_products_found_saheli_picks_the_single_pack_herself(db, at, sessions, monkeypatch):
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-09 15:03")
     h = LoginHarness(sessions, FakeAgent(script={"browse": [COKE_BLINKIT], "prepare": [OTP]}), "9000012345")
@@ -391,13 +373,9 @@ async def test_go_ahead_with_several_products_found_uses_the_best_match_or_the_n
     await db.commit()
     await h.tick(); await h.tick()
     await db.refresh(t)
-    assert "ask which one" in h.told[-1]
-    assert "more than one product" in await runtime.provide_input(db, t, kind="go", value="diet coke", by=ELDER, by_is_elder=True)
-    said = await runtime.provide_input(db, t, kind="go", value="6 x 300 ml pack", by=ELDER, by_is_elder=True)
-    assert "Diet Coke (6 x 300 ml) ₹220" in said
-    await db.commit()
+    assert t.phase == "prepare" and h.told == [] and t.details["chosen"][0]["name"] == "Diet Coke Can (300 ml)"
     await h.tick()
-    assert "Diet Coke (6 x 300 ml) ₹220" in h.agent.runs[-1]["goal"] and "Can (300 ml)" not in h.agent.runs[-1]["goal"]
+    assert "Diet Coke Can (300 ml) ₹40" in h.agent.runs[-1]["goal"] and "6 x 300" not in h.agent.runs[-1]["goal"]
 
 
 async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
@@ -507,7 +485,8 @@ class LinkedHost:
 
 async def test_linked_store_looks_up_and_orders_through_its_connector_without_a_code(db, at, sessions):
     """Founder 2026-10-09 'make it fast': Instamart is linked for Maa's family, so its look-up, cart and order go through
-    the connector (seconds, no browser, no login code); Blinkit still uses the browser."""
+    the connector (seconds, no browser, no login code); Blinkit still uses the browser. Same price on both: the linked
+    store wins (no login code), and the exact product, not the near one."""
     at("2026-10-09 17:00")
     host = LinkedHost()
     agent = FakeAgent(script={"browse:blinkit": [COKE_BLINKIT]})
@@ -528,16 +507,12 @@ async def test_linked_store_looks_up_and_orders_through_its_connector_without_a_
 
     await tick(); await tick()
     assert [r["service"] for r in agent.runs] == ["blinkit"], "Instamart was looked up through its connector, not a browser"
-    assert len(told) == 1 and "Swiggy Instamart [task" in told[0] and "(linked account: no login code)" in told[0]
-    assert "Coca-Cola Zero Sugar 300 ml ₹40 [similar" in told[0] and "Coca-Cola Diet Coke Can 300 ml ₹40" in told[0]
+    assert told == []
     im = next(t for t in await runtime.live_tasks(db, FAM) if t.service == "instamart")
-    said = await runtime.provide_input(db, im, kind="go", value="Coca-Cola Diet Coke Can 300 ml ₹40", by=ELDER, by_is_elder=True)
-    assert "linked account (no login code" in said
-    await db.commit()
+    assert im.phase == "prepare" and all(t.service == "instamart" for t in await runtime.live_tasks(db, FAM))
     await tick()
     await db.refresh(im)
     assert im.status == "awaiting_confirm" and im.input_needed == "confirm" and im.result["total"] == "₹49"
-    assert ("connector_prepare", ) == tuple(c[0] for c in host.calls if c[0] == "connector_prepare")[:1]
     assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "S1"
     await runtime.provide_input(db, im, kind="confirm", value="yes", by=ELDER, by_is_elder=True); await db.commit()
     await tick()
@@ -584,16 +559,14 @@ async def test_connector_builds_the_cart_for_the_pack_asked_not_the_first_hit(db
     assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P2"
 
 
-async def test_connector_asks_which_one_when_several_packs_fit(db, at, sessions, monkeypatch):
+async def test_connector_picks_a_single_pack_when_several_fit(db, at, sessions, monkeypatch):
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 14:30")
     host = ParleHost()
     t, told = await _connector_order(db, sessions, host, "Parle-G biscuit")
-    assert t.status == "awaiting_confirm" and t.input_needed == "go" and t.phase == "browse"
-    assert not any(c[0] == "connector_prepare" for c in host.calls)
-    assert "no login code" in told[-1] and "475 g" in told[-1] and "1 kg x 2" in told[-1]
-    said = await runtime.provide_input(db, t, kind="go", value="Parle Parle G Gold Biscuits Pouch — 1 kg", by=ELDER, by_is_elder=True)
-    assert "linked account" in said
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+    assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P1", "the first single pack, not 1 kg x 2"
+    assert len(told) == 1 and "ONE short question" in told[0]
 
 
 def test_asked_words_match_plurals_and_pack_numbers():
@@ -632,7 +605,8 @@ class SnackHost(LinkedHost):
 
 
 async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monkeypatch):
-    """Order lab 2026-10-10: "add biscuits and munchies" — two items, one Instamart cart, each picked from its own look-up."""
+    """Order lab 2026-10-10: "add biscuits and munchies" — two items, one Instamart cart, each from its own look-up;
+    Saheli picks each herself and asks once."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 15:30")
     host = SnackHost()
@@ -653,11 +627,7 @@ async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monke
     await tick()
     await db.refresh(t)
     assert [c[1]["item"] for c in host.calls if c[0] == "connector_search"] == ["biscuits", "munchies"]
-    assert t.status == "awaiting_confirm" and t.input_needed == "go" and "For biscuits:" in told[-1] and "For munchies:" in told[-1]
-    said = await runtime.provide_input(db, t, kind="go", value="Parle-G Gold Biscuits — 475 g | Kurkure Masala Munch — 90 g",
-                                       by=ELDER, by_is_elder=True)
-    assert "linked account" in said
-    await db.commit()
+    assert t.phase == "prepare" and told == []
     await tick()
     await db.refresh(t)
     prep = next(c[1] for c in host.calls if c[0] == "connector_prepare")
@@ -667,7 +637,7 @@ async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monke
     assert "not in the cart" not in told[-1]  # the cart is checked against the picked products, not the words asked
 
 
-async def test_a_go_naming_a_product_not_found_is_asked_again(db, at, sessions, monkeypatch):
+async def test_a_pick_naming_a_product_not_listed_is_asked_again(db, at, sessions, monkeypatch):
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 15:30")
     host = SnackHost()
@@ -681,10 +651,21 @@ async def test_a_go_naming_a_product_not_found_is_asked_again(db, at, sessions, 
     async def notify(f, r, p):
         return None
 
-    await runtime.tick(sessions, FakeAgent(), profile_for=no_profile, notify=notify, host_for=lambda f: host)
+    async def tick():
+        await runtime.tick(sessions, FakeAgent(), profile_for=no_profile, notify=notify, host_for=lambda f: host)
+
+    await tick(); await tick()
     await db.refresh(t)
-    said = await runtime.provide_input(db, t, kind="go", value="Parle-G Gold Biscuits — 475 g | Haldiram bhujia", by=ELDER, by_is_elder=True)
-    assert "not one of the products found" in said and t.phase == "browse"
+    assert t.input_needed == "confirm"
+    assert "looking for more" in await runtime.provide_input(db, t, kind="more", value="munchies", by=ELDER, by_is_elder=True)
+    await db.commit()
+    await tick()
+    await db.refresh(t)
+    assert t.input_needed == "go"
+    said = await runtime.provide_input(db, t, kind="go", value="Haldiram bhujia", by=ELDER, by_is_elder=True)
+    assert "not one of the products listed" in said and t.phase == "browse"
+    said = await runtime.provide_input(db, t, kind="go", value="Lay's India's Magic Masala Chips — 50 g", by=ELDER, by_is_elder=True)
+    assert said.startswith("going ahead") and [c["name"][:6] for c in t.details["chosen"]] == ["Parle-", "Lay's "]
 
 
 def test_a_product_name_with_bars_in_it_is_still_picked_whole():
@@ -715,7 +696,7 @@ class FastAgent(FakeAgent):
 
 async def test_blinkit_looks_up_through_its_own_web_request_in_seconds_then_the_agent_logs_in_there(db, at, sessions, monkeypatch):
     """Founder 2026-10-09 'make it fast': the agent's Blinkit look-up took 3 minutes; the fixed search runs Blinkit's own
-    request in the task's cloud browser. The same browser then serves the login and cart."""
+    request in the task's cloud browser. The same browser then serves the login and cart (no go-ahead asked)."""
     from app.specialists.contract import Limits
     from app.tasks import fastpath
 
@@ -738,9 +719,7 @@ async def test_blinkit_looks_up_through_its_own_web_request_in_seconds_then_the_
     await h.tick()
     await db.refresh(t)
     assert agent.runs == [] and asked == {"cdp": "https://fs-1.cdp.test", "query": "Diet Coke", "lat": 21.238, "lon": 81.6858}
-    assert t.status == "awaiting_confirm" and t.input_needed == "go" and t.agent_session == "fs-1"
-    assert "Coca-Cola Diet Coke Soft Drink No Caffeine (330 ml) ₹209" in h.told[-1]
-    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    assert t.status == "queued" and t.phase == "prepare" and t.agent_session == "fs-1" and h.told == []
     await h.tick()
     run = agent.runs[-1]
     assert run["phase"] == "prepare" and run["session"] == "fs-1" and "enter the mobile number 9000012345" in run["goal"]
@@ -895,7 +874,7 @@ def test_medicine_strength_written_with_its_unit_still_matches():
 
 
 
-async def _instamart_browser_order(db, h, monkeypatch, place_result):
+async def _instamart_browser_order(db, h, monkeypatch, place_result, second_total=None):
     """Instamart through the browser with the saved steps (order lab 2026-10-10): look-up, cart and place by the store's own
     requests in the family's logged-in cloud browser; the agent is never started."""
     from app.specialists.contract import Limits
@@ -911,9 +890,10 @@ async def _instamart_browser_order(db, h, monkeypatch, place_result):
     async def fake_cart(service, cdp, products, place=None, lat=None, lon=None):
         calls["cart"] += 1
         assert service == "instamart" and products[0]["cart_ref"]["item_id"] == "I1" and place["pincode"] == "492001"
-        return {"items": [{"name": "Vachan Butter", "qty": 1, "price": "₹117", "available": True}], "total": "₹129", "fees": "₹12",
+        total = second_total if second_total and calls["cart"] > 1 else 129
+        return {"items": [{"name": "Vachan Butter", "qty": 1, "price": "₹117", "available": True}], "total": f"₹{total}", "fees": "₹12",
                 "cod_available": True, "logged_in": True, "address_used": "Kavach Home: C504 Sunita Park, Raipur 492001",
-                "place_check": {"items": {"I1": 1}, "total": 129, "address_id": "A1"}}
+                "place_check": {"items": {"I1": 1}, "total": total, "address_id": "A1"}}
 
     async def fake_place(service, cdp, check):
         calls["place"].append(check)
@@ -931,8 +911,7 @@ async def _instamart_browser_order(db, h, monkeypatch, place_result):
     await db.commit()
     await h.tick()
     await db.refresh(t)
-    assert t.status == "awaiting_confirm" and t.input_needed == "go"
-    await runtime.provide_input(db, t, kind="go", value="yes", by=ELDER, by_is_elder=True); await db.commit()
+    assert t.status == "queued" and t.phase == "prepare", "Saheli picked the butter herself"
     await h.tick()
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and t.result["total"] == "₹129" and calls["cart"] == 1
@@ -955,11 +934,47 @@ async def test_instamart_cart_that_changed_before_placing_sends_nothing_and_asks
 
     at("2026-10-10 16:00")
     h = LoginHarness(sessions, FastAgent(), "9000012345")
-    t, calls = await _instamart_browser_order(db, h, monkeypatch, fastpath.FastPathError("not placed: total_changed"))
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, fastpath.FastPathError("not placed: total_changed"), second_total=140)
     await h.tick()
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm" and calls["cart"] == 2 and len(calls["place"]) == 1
-    assert not t.result.get("order_id") and h.agent.runs == []
+    assert not t.result.get("order_id") and h.agent.runs == [] and "₹140" in h.told[-1]
+
+
+async def test_a_saved_place_step_that_breaks_is_placed_by_the_agent_on_the_same_yes(db, at, sessions, monkeypatch):
+    """Founder 2026-10-10: even if the website changes, it should place. The saved place step fails before sending (site
+    changed): the cart is built again, it is the same cart at the same total, so the browser agent places it on the yes
+    already given; nobody is asked twice, and the founder gets one alert to fix the step."""
+    from app.sim.agent import PLACED
+    from app.tasks import fastpath
+
+    at("2026-10-10 16:00")
+    alerts = []
+
+    class Host:
+        async def call(self, tool, args, **kw):
+            alerts.append((tool, args.get("subject")))
+            return {}
+
+    agent = FastAgent(script={"place": [{**PLACED, "total": "₹129"}]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    h.host = Host()
+    orig = h.tick
+
+    async def tick():
+        return await runtime.tick(h.sessions, h.agent, profile_for=h.profile_for, notify=h.notify, host_for=lambda f: h.host)
+
+    h.tick = tick
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, fastpath.FastPathError("not placed: Pay button not found"))
+    asks = len(h.told)
+    for _ in range(4):
+        await h.tick()
+    await db.refresh(t)
+    assert calls["cart"] == 2 and len(calls["place"]) == 1, "the saved place step is not tried again"
+    assert [r["phase"] for r in agent.runs] == ["place"] and "Cash / Pay on Delivery" in agent.runs[0]["goal"]
+    assert t.status == "done" and t.result["order_id"] == "IM-55821" and len(h.told) == asks + 1 and "Placed" in h.told[-1]
+    assert alerts == [("ops_alert", "Saved place step broke on Swiggy Instamart")]
+    del orig
 
 
 async def test_instamart_place_without_a_clear_answer_is_never_retried(db, at, sessions, monkeypatch):
@@ -1105,22 +1120,32 @@ async def test_blinkit_place_without_a_checked_cart_sends_nothing():
         await fastpath.place("blinkit", "http://cdp", {"count": 0})
 
 
+def _fake_cart_from(products_seen):
+    async def fake_cart(service, cdp, products, place=None, lat=None, lon=None):
+        products_seen.append([f"{p['name']} ({p.get('pack')})" for p in products])
+        return {"items": [{"name": p["name"], "qty": p.get("qty") or 1, "price": p.get("price"), "available": True} for p in products],
+                "total": "₹300", "fees": "₹9", "cod_available": True, "logged_in": True}
+    return fake_cart
+
+
 async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db, at, sessions, monkeypatch):
-    """Order lab 2026-10-10 (Blinkit): "Maggi more" — the 840 g pack was not among the six listed; the person must be able
-    to see more of one item (or another pack) while choosing, then pick it."""
+    """Order lab 2026-10-10 (Blinkit): "Maggi more" — the 840 g pack was not among the ones listed; at the confirm the
+    person can ask to see more of one item, pick one, and the other item keeps Saheli's pick."""
     from app.specialists.contract import Limits
     from app.tasks import fastpath
 
-    asked = []
+    asked, carts = [], []
 
     async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None, limit=6):
         asked.append((query, limit))
         if "mushroom" in query:
-            return {"deliverable": True, "eta": None, "items": [{"name": "Button Mushroom", "pack": "180 g", "price": "₹68", "available": True}]}
-        packs = [(f"{70 + n} g", "₹20") for n in range(6)] + [("840 g", "₹167")]  # the big pack is 7th: cut at 6 and 5 shown
-        return {"deliverable": True, "eta": None, "items": [{"name": "Maggi 2 Minutes Noodles", "pack": p, "price": r, "available": True} for p, r in packs][:limit]}
+            return {"deliverable": True, "eta": None, "items": [{"name": "Button Mushroom", "pack": "180 g", "price": "₹68", "available": True, "store_id": "M1"}]}
+        packs = [(f"{70 + n} g", "₹20") for n in range(6)] + [("840 g", "₹167")]  # the big pack is 7th: cut at 6
+        return {"deliverable": True, "eta": None, "items": [{"name": "Maggi 2 Minutes Noodles", "pack": p, "price": r, "available": True,
+                                                              "store_id": f"G{p}"} for p, r in packs][:limit]}
 
     monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "cart", _fake_cart_from(carts))
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 17:30")
     h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
@@ -1128,42 +1153,100 @@ async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db
                              details={"items": [{"name": "mushroom", "qty": 1}, {"name": "maggi", "qty": 1}]},
                              limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
     await db.commit()
-    await h.tick()
+    await h.tick(); await h.tick()
     await db.refresh(t)
-    assert t.input_needed == "go" and "840 g" not in h.told[-1]
+    assert t.input_needed == "confirm" and carts == [["Button Mushroom (180 g)", "Maggi 2 Minutes Noodles (70 g)"]] and len(h.told) == 1
     assert "which item" in await runtime.provide_input(db, t, kind="more", value="something", by=ELDER, by_is_elder=True)
     out = await runtime.provide_input(db, t, kind="more", value="maggi", by=ELDER, by_is_elder=True); await db.commit()
     assert "looking for more maggi" in out
     await h.tick()
     await db.refresh(t)
     assert ("maggi", 12) in asked and ("mushroom", 6) in asked[2:], asked
-    assert t.input_needed == "go" and "840 g" in h.told[-1] and h.agent.runs == []
-    out = await runtime.provide_input(db, t, kind="go", value="Button Mushroom | Maggi 2 Minutes Noodles (840 g)", by=ELDER, by_is_elder=True)
+    assert t.input_needed == "go" and "840 g" in h.told[-1] and "Kept for the rest: mushroom: Button Mushroom (180 g)" in h.told[-1]
+    out = await runtime.provide_input(db, t, kind="go", value="Maggi 2 Minutes Noodles (840 g)", by=ELDER, by_is_elder=True)
     assert "going ahead" in out, out
-    assert [c.get("pack") for c in t.details["chosen"]] == ["180 g", "840 g"]
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert carts[-1] == ["Button Mushroom (180 g)", "Maggi 2 Minutes Noodles (840 g)"] and t.input_needed == "confirm" and h.agent.runs == []
 
 
-async def test_more_with_a_pack_size_searches_those_words_for_that_item(db, at, sessions, monkeypatch):
+async def test_change_at_the_confirm_looks_up_the_new_words_and_asks_once_again(db, at, sessions, monkeypatch):
     from app.specialists.contract import Limits
     from app.tasks import fastpath
 
-    asked = []
+    asked, carts = [], []
 
     async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None, limit=6):
         asked.append((query, limit))
-        return {"deliverable": True, "eta": None, "items": [{"name": "Amul Paneer", "pack": "200 g", "price": "₹90", "available": True}]}
+        size = "1 kg" if "1 kg" in query else "200 g"
+        name = "Bread" if "bread" in query else "Amul Paneer"
+        return {"deliverable": True, "eta": None, "items": [{"name": name, "pack": size, "price": "₹90", "available": True, "store_id": name + size}]}
 
     monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setattr(fastpath, "cart", _fake_cart_from(carts))
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-10 17:40")
     h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="paneer",
                              details={"items": [{"name": "paneer", "qty": 2}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
     await db.commit()
-    await h.tick()
+    await h.tick(); await h.tick()
     await db.refresh(t)
-    await runtime.provide_input(db, t, kind="more", value="1 kg", by=ELDER, by_is_elder=True); await db.commit()
+    assert t.input_needed == "confirm"
+    assert "updating" in await runtime.provide_input(db, t, kind="change", value="1 kg", by=ELDER, by_is_elder=True)
+    await db.commit()
     await db.refresh(t)
-    assert t.details["items"] == [{"name": "paneer 1 kg", "qty": 2}]
-    await h.tick()
-    assert asked[-1] == ("paneer 1 kg", 12)
+    assert t.details["items"] == [{"name": "paneer 1 kg", "qty": 2}] and t.phase == "prepare" and not t.details.get("cart_fp")
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert asked[-1] == ("paneer 1 kg", 6) and carts[-1] == ["Amul Paneer (1 kg)"] and t.input_needed == "confirm"
+    await runtime.provide_input(db, t, kind="add", value="2 x bread", by=ELDER, by_is_elder=True); await db.commit()
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.details["items"][-1] == {"name": "bread", "qty": 2} and carts[-1] == ["Amul Paneer (1 kg)", "Bread (200 g)"]
+    assert "only item" not in await runtime.provide_input(db, t, kind="remove", value="paneer", by=ELDER, by_is_elder=True)
+    await db.commit()
+    await db.refresh(t)
+    assert t.details["items"] == [{"name": "bread", "qty": 2}]
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert "only item" in await runtime.provide_input(db, t, kind="remove", value="bread", by=ELDER, by_is_elder=True)
+
+def test_blinkit_order_list_finds_the_order_a_place_step_lost():
+    """Lab order 2 (2026-10-10): it went through at 5:06 pm and was reported unclear; the order list shows it."""
+    from datetime import datetime, timezone
+
+    from app.tasks import fastpath
+
+    def card(oid, title, sub, status):
+        return {"data": {"title": {"text": title}, "subtitle": {"text": sub}},
+                "tracking": {"common_attributes": {"order_id": oid, "order_status": status}}}
+
+    body = {"response": {"snippets": [card("3837182613", "Order is confirmed", "₹180 • Today, 5:06 pm", "CONFIRMED"),
+                                      card("3837132565", "Order is on the way", "₹169 • Today, 4:58 pm", "ON_THE_WAY"),
+                                      card("3829904192", "Arrived in 12 minutes", "₹218 • 09 Oct, 4:33 pm", "DELIVERED")]}}
+    now = datetime(2026, 10, 10, 11, 38, tzinfo=timezone.utc)  # 5:08 pm IST
+    got = fastpath.blinkit_orders_from(body, now=now)
+    assert got[0] == {"order_id": "3837182613", "status": "CONFIRMED", "minutes_ago": 2, "amount": 180}
+    assert got[2]["minutes_ago"] is None
+
+
+async def test_blinkit_unclear_place_is_resolved_from_the_order_list(monkeypatch):
+    from app.tasks import fastpath
+
+    async def unclear(cdp, check, dry=False):
+        return {"placed": False, "unclear": True, "problem": "no order page"}
+
+    async def recent(cdp, total, within_min=15):
+        assert total == 180
+        return "3837182613"
+
+    async def no_wait(s):
+        return None
+
+    monkeypatch.setattr(fastpath, "blinkit_place", unclear)
+    monkeypatch.setattr(fastpath, "blinkit_recent_order", recent)
+    monkeypatch.setattr(fastpath.asyncio, "sleep", no_wait)
+    out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
+    assert out == {"placed": True, "order_id": "3837182613", "total": "₹180", "payment_method": "Cash on Delivery"}

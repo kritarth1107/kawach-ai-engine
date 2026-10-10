@@ -29,6 +29,9 @@ DEFAULTS: dict = {
     "approval_categories": [],   # categories that always need approval (grocery, food, pharmacy, ride)
     "approvers": [],             # member ids; empty: the primary caregivers
     "members": {},               # {member id: {"can_order": bool, "can_ride": bool}}; missing: allowed
+    # Who gives the store login codes for a person's orders (founder 2026-10-10: some elders cannot): {person id: "self"
+    # or a member id}. The store logs in with that person's number, so the code reaches them. Missing: whoever asked.
+    "login_codes": {},
 }
 
 
@@ -41,7 +44,16 @@ def _clean(policy: dict) -> dict:
     out["approvers"] = [str(a) for a in out["approvers"] or [] if a]
     out["members"] = {str(m): {"can_order": bool(v.get("can_order", True)), "can_ride": bool(v.get("can_ride", True))}
                       for m, v in (out["members"] or {}).items() if isinstance(v, dict)}
+    out["login_codes"] = {str(k): str(v) for k, v in (out["login_codes"] or {}).items() if k and v} if isinstance(out["login_codes"], dict) else {}
     return out
+
+
+def code_person(policy: dict, subject_id: str, requested_by: str) -> str:
+    """Whose phone a store login code goes to for an order for subject_id (their number is the one the store logs in with)."""
+    who = _clean(policy)["login_codes"].get(str(subject_id))
+    if who == "self":
+        return subject_id
+    return who or requested_by
 
 
 async def get(session: AsyncSession, family_id: str) -> dict:
@@ -62,6 +74,8 @@ def describe(policy: dict, names: dict[str, str]) -> str:
     blocked = [f"{names.get(m, m)} cannot {' or '.join(w for w, ok in (('order', v['can_order']), ('book rides', v['can_ride'])) if not ok)}"
                for m, v in p["members"].items() if not (v["can_order"] and v["can_ride"])]
     parts += blocked
+    parts += [f"login codes for {names.get(k, k)}'s orders go to {'them' if v in ('self', k) else names.get(v, v)}"
+              for k, v in p["login_codes"].items()]
     who = ", ".join(names.get(a, a) for a in p["approvers"]) or "the primary caregiver"
     return "; ".join(parts) + f". Approver: {who}."
 
@@ -70,7 +84,9 @@ async def save(session: AsyncSession, family_id: str, changes: dict, *, by: str,
     """Merge changes into the policy and save a new version."""
     current = await get(session, family_id)
     members = {**current["members"], **{str(k): v for k, v in (changes.get("members") or {}).items()}}
-    new = _clean({**current, **{k: v for k, v in changes.items() if k in DEFAULTS and k != "members"}, "members": members})
+    codes = {**current["login_codes"], **{str(k): str(v) for k, v in (changes.get("login_codes") or {}).items()}}
+    new = _clean({**current, **{k: v for k, v in changes.items() if k in DEFAULTS and k not in ("members", "login_codes")},
+                  "members": members, "login_codes": codes})
     await store.write_fact(session, family_id=family_id, subject_id=SUBJECT, domain="boundary", key=KEY, value=new,
                            text="Family boundaries: " + describe(new, {}), source_kind=source_kind, stated_by=by, replace=True)
     await store.record_event(session, family_id=family_id, subject_id=SUBJECT, kind="boundary_changed",

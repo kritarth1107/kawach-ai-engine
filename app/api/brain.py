@@ -223,10 +223,12 @@ async def tasks_job() -> dict:
         return ShadowHost() if fid.startswith("shadow:") else LiveHost()
 
     async def profile_for(task) -> dict:
-        # The family's browser profile for this store, and the number to log in with (the person who asked).
+        # The family's browser profile for this store, and the number to log in with: the person the family set to give
+        # login codes for this person's orders (else whoever asked), so the code reaches the phone of someone who can answer.
         return await host_for(task.family_id).call(
             "browser_profile", {"partner": task.service},
-            family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by,
+            family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id,
+            actor_id=(task.details or {}).get("code_from") or task.requested_by,
         )
 
     async def notify(family_id: str, requested_by: str, prompt: str) -> None:
