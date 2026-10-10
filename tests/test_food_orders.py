@@ -97,3 +97,40 @@ async def test_the_swiggy_look_up_keeps_restaurant_and_closed_state(monkeypatch)
     a, b = out["items"]
     assert a["restaurantId"] == "555" and a["closed"] is True and a["opens"] == "Opens at 7 am"
     assert b["restaurantId"] == "777" and "closed" not in b and "opens" not in b
+
+
+async def test_connector_food_look_up_searches_side_dishes_in_the_main_dishes_restaurant(db, at):
+    at("2026-10-11 02:00")
+    calls = []
+
+    class Host:
+        async def call(self, tool, args, *, family_id, subject_id, actor_id):
+            calls.append((tool, args))
+            if tool == "connector_search" and args["item"] == "paneer butter masala":
+                return {"ok": True, "items": [{"name": "Paneer Butter Masala", "price": "₹149",
+                                               "ref": {"menuItemId": "m1", "restaurantId": 11, "restaurantName": "Indian Bawarchi"}}]}
+            if tool == "connector_search":
+                return {"ok": True, "items": [{"name": "Tawa Roti", "price": "₹12",
+                                               "ref": {"menuItemId": "m2", "restaurantId": 11, "restaurantName": args.get("restaurant") or "?"}}]}
+            return {}
+
+    t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="paneer, roti",
+                             details={"items": [{"name": "paneer butter masala", "qty": 1}, {"name": "roti", "qty": 2}]})
+    out = await runtime._connector_lookup(db, Host(), t)
+    roti_search = next(a for tool, a in calls if tool == "connector_search" and a["item"] == "roti")
+    assert roti_search["restaurant"] == "Indian Bawarchi", "the side dish is looked for in the main dish's restaurant"
+    assert {i["restaurantId"] for i in out["items"]} == {"11"} and out["items"][0]["restaurant"] == "Indian Bawarchi"
+
+
+async def test_a_browser_only_family_skips_the_connector(db, at, monkeypatch):
+    from app.specialists import channels
+
+    monkeypatch.setenv("BROWSER_ONLY_FAMILIES", "fam-food")
+    t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="dosa",
+                             details={"items": [{"name": "masala dosa"}]})
+
+    class Host:
+        async def call(self, *a, **kw):
+            raise AssertionError("the connector is not asked")
+
+    assert (await channels.pick_channel(db, Host(), t))[0] == "browser"

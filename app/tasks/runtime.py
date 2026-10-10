@@ -1361,8 +1361,17 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
     metrics.on_connector_call(task)
     asked_items = (task.details or {}).get("items") or [{}]
     try:
-        # One look-up per asked item, together (several items go in one cart).
-        results = await asyncio.gather(*(channels.connector_search(host, task, it) for it in asked_items))
+        if SKILLS[task.service].get("kind") == "food" and len(asked_items) > 1:
+            # One restaurant per food cart: the first dish is looked up anywhere, the others inside the restaurant that has it
+            # (live run 2026-10-11: paneer from one place and roti from another cannot go in one cart).
+            first = await channels.connector_search(host, task, asked_items[0])
+            anchor = next(((i.get("ref") or {}).get("restaurantName") for i in first.get("items") or [] if (i.get("ref") or {}).get("restaurantName")), None)
+            rest = await asyncio.gather(*(channels.connector_search(host, task, {**it, "restaurant": it.get("restaurant") or anchor})
+                                          for it in asked_items[1:]))
+            results = [first, *rest]
+        else:
+            # One look-up per asked item, together (several items go in one cart).
+            results = await asyncio.gather(*(channels.connector_search(host, task, it) for it in asked_items))
     except Exception as exc:  # noqa: BLE001 — a broken connector falls back to the browser
         await channels.record(session, task.service, "connector", False, str(exc)[:200])
         return None
@@ -1377,6 +1386,9 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
         return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
     many = len(asked_items) > 1
     items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
+              # food: which restaurant (the picker keeps one restaurant per cart)
+              **({"restaurant": (i.get("ref") or {}).get("restaurantName"), "restaurantId": str((i.get("ref") or {}).get("restaurantId"))}
+                 if (i.get("ref") or {}).get("restaurantId") else {}),
               **({"for_item": it.get("name")} if many else {})}
              for it, r in zip(asked_items, results) for i in (r.get("items") or []) if i.get("name")]
     missing = [it.get("name") for it, r in zip(asked_items, results) if not [i for i in (r.get("items") or []) if i.get("name")]]

@@ -648,10 +648,11 @@ async def test_a_pick_is_an_option_id_never_a_name(db, at, sessions, monkeypatch
     assert said.startswith("going ahead") and [c["name"][:6] for c in t.details["chosen"]] == ["Parle-", "Lay's "]
 
 
-def test_food_orders_stay_one_dish_on_the_connector():
+def test_food_orders_take_several_dishes_of_one_restaurant_on_the_connector():
+    """Live run 2026-10-11: Swiggy's connector takes several dishes of one restaurant in one cart (zomato has no connector)."""
     from app.specialists import channels
 
-    assert "instamart" in channels.MULTI_ITEM and "swiggy" not in channels.MULTI_ITEM
+    assert {"instamart", "swiggy"} <= channels.MULTI_ITEM and "zomato" not in channels.MULTI_ITEM
 
 
 class FastAgent(FakeAgent):

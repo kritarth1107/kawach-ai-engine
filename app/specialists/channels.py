@@ -8,6 +8,8 @@ and channel; three failures in a row take a channel out for 30 minutes.
 
 from __future__ import annotations
 
+import os
+
 from datetime import datetime, timedelta
 
 from sqlalchemy import DateTime, Integer, String, Text, select
@@ -20,7 +22,7 @@ from app.tasks.models import Task
 
 CONNECTOR_SERVICES = {"swiggy", "instamart", "zepto"}
 # Grocery stores take several items in one cart (order lab 2026-10-10: "biscuits and munchies"); food stays one dish.
-MULTI_ITEM = {"instamart", "zepto"}
+MULTI_ITEM = {"instamart", "zepto", "swiggy"}  # Swiggy Food: several dishes of one restaurant (live run 2026-10-11)
 MAX_ITEMS = 6
 DEGRADE_AFTER = 3
 DEGRADED_FOR = timedelta(minutes=30)
@@ -68,9 +70,18 @@ async def healthy(session: AsyncSession, service: str, channel: str) -> bool:
     return not (row and row.degraded_until and row.degraded_until > clock.now())
 
 
+def browser_only(family_id: str) -> bool:
+    """Ops testing setting BROWSER_ONLY_FAMILIES (comma-separated family ids): their orders skip the store connectors, so
+    the browser path can be tested for a family whose stores are linked (repo variable, kept by every deploy)."""
+    ids = {x.strip() for x in os.getenv("BROWSER_ONLY_FAMILIES", "").split(",") if x.strip()}
+    return family_id.removeprefix("shadow:") in ids
+
+
 async def pick_channel(session: AsyncSession, host, task: Task) -> tuple[str, str]:
     """(channel, why). Connector only for a linked store, one item, healthy connector."""
     d = task.details or {}
+    if browser_only(task.family_id):
+        return "browser", "this family's orders use the browser only (testing setting)"
     if task.kind != "order" or task.service not in CONNECTOR_SERVICES:
         return "browser", "no connector for this service"
     n = len(d.get("items") or [])

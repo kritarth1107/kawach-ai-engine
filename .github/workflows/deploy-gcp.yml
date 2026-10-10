@@ -98,6 +98,8 @@ jobs:
           # Practice orders (app/tasks/practice.py): families whose orders stop at the store's last step. Set and cleared with
           # the repo variable PRACTICE_ORDER_FAMILIES, so every deploy keeps it (an env set by hand would be wiped here).
           PRACTICE_ORDER_FAMILIES: "${{ vars.PRACTICE_ORDER_FAMILIES }}"
+          # Testing: families whose orders skip the store connectors (app/specialists/channels.py browser_only).
+          BROWSER_ONLY_FAMILIES: "${{ vars.BROWSER_ONLY_FAMILIES }}"
           EOF
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \
