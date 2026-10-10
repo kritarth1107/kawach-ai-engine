@@ -1329,3 +1329,31 @@ async def test_maa_hears_once_that_it_is_taking_a_few_minutes(db, at, sessions):
     at("2026-10-10 20:14")
     await h.tick(); await h.tick()
     assert len(h.told) == 1 and "Still working" in h.told[0] and "Do not ask anything" in h.told[0]
+
+
+async def test_an_agent_cart_with_a_product_it_could_not_add_is_not_asked_it_picks_the_next(db, at, sessions, monkeypatch):
+    """Live 2026-10-10: the agent's cart said '0 x Prolicious Khakhra' and Maa was asked to choose among four ₹246 packs."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "off")
+    at("2026-10-10 20:13")
+    zero = {**CART, "items": [{"name": "Prolicious High Protein & Fiber Thin Khakhra - Assorted Flavours (7 x 50 g)", "qty": 0, "price": "₹412"}],
+            "total": None, "alternatives": [{"name": "Prolicious Jeera Khakhra (2 pcs)", "price": "₹246"}]}
+    ok = {**CART, "items": [{"name": "Jabsons Roasted Wheat Khakhra (Methi)", "qty": 1, "price": "₹80"}], "total": "₹139"}
+    h = Harness(sessions, FakeAgent(script={"prepare": [zero, ok]}))
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Khakhra",
+                             details={"items": [{"name": "Khakhra", "qty": 1}]})
+    t.result = {"items": [dict(i) for i in KHAKHRA]}
+    t.details = {**t.details, "browsed": True, "auto_picked": True, "chosen": [dict(KHAKHRA[0])], "fast_cart_tried": True,
+                 "found": [dict(i) for i in KHAKHRA]}
+    await db.commit()
+    for _ in range(4):
+        await h.tick()
+    await db.refresh(t)
+    assert [c["name"] for c in t.details["chosen"]] == ["Charliee Methi Khakhra"] and t.input_needed == "confirm"
+    assert len(h.told) == 1 and "ONE short question" in h.told[0] and "₹246" not in h.told[0]
+
+
+def test_price_words_become_a_limit_and_saheli_picks_within_it():
+    item = runtime._price_words({"name": "sasta khakhra 80-100 rupee wale", "qty": 1})
+    assert item == {"name": "khakhra", "qty": 1, "max_price": 100, "cheapest": True}
+    pricey = [{**KHAKHRA[0], "cart_ref": {"merchant_id": 37622}}, {**KHAKHRA[1]}, {**KHAKHRA[3], "price": "₹99"}]
+    assert runtime.auto_pick("khakhra", pricey, max_price=100, cheapest=True)["price"] == "₹80"

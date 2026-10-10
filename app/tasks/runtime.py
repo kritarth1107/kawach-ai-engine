@@ -286,6 +286,8 @@ async def create(
         if t.service == service and t.kind == kind:
             return t
     limits = limits or Limits()
+    if kind == "order" and details.get("items"):
+        details = {**details, "items": [_price_words(i) if isinstance(i, dict) else i for i in details["items"]]}
     verdict = guard.check_request(kind, agent.name, details.get("items") or [], limits, pickup=details.get("pickup"), drop=details.get("drop"))
     if not verdict.ok:
         raise TaskRefused("; ".join(verdict.block))
@@ -564,6 +566,21 @@ RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": N
           "fast_place_check": None, "confirm_token": None, "missing_items": None, "auto_picked": None}
 
 
+_PRICE = re.compile(r"(?:(?:under|below|upto|up to|max|tak|se kam)\s*(?:₹|rs\.?|rupees?)?\s*(\d{2,5})|(\d{2,5})\s*(?:-|to|se)\s*(\d{2,5})\s*(?:₹|rs\.?|rupees?|rupaye|rupaiye|wal[ae])?|(?:₹|rs\.?)\s*(\d{2,5})\s*(?:tak|max|or less)?)", re.I)
+_CHEAP = re.compile(r"\b(sasta|saste|sasti|cheap|cheaper|cheapest|kam daam|wale|wala|wali|rupee|rupees|rupaye)\b", re.I)
+
+
+def _price_words(item: dict) -> dict:
+    """'sasta khakhra 80-100 rupee wale' → name 'khakhra', max_price 100 (the store search gets the product words only)."""
+    name = str(item.get("name") or "")
+    m = _PRICE.search(name)
+    if not m and not _CHEAP.search(name):
+        return item
+    top = next((int(g) for g in (m.group(3), m.group(1), m.group(4)) if g), None) if m else None
+    words = re.sub(r"\s+", " ", _CHEAP.sub(" ", _PRICE.sub(" ", name))).strip(" ,-") or name
+    return {**item, "name": words, **({"max_price": top} if top else {}), **({"cheapest": True} if _CHEAP.search(name) else {})}
+
+
 def _item_index(task: Task, words: str) -> int | None:
     """Which asked item the words are about: the one sharing the most words with its name or its product. None when
     it is unclear and there is more than one item."""
@@ -709,6 +726,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
     from app.care.boundaries import may_approve
 
     value = (value or "").strip()
+    task.details = {**(task.details or {}), "active_from": clock.now().isoformat(), "told_working": None}
     if (task.details or {}).get("ladder_asked_at"):
         # someone answered: the order is moving again, so the 20 minutes start again
         task.details = {**(task.details or {}), **LADDER_RESET, "ladder_from": clock.now().isoformat()}
@@ -813,6 +831,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         if not v.ok:
             return "cannot look for that: " + "; ".join(v.block)
         task.details = {**d, **RELOOK, "items": new_items, "more": name}
+        task.result = {**(task.result or {}), "alternatives": None}
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"more options for {name} asked by {by}")
@@ -846,7 +865,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
         if not v.ok:
             return "cannot do that: " + "; ".join(v.block)
-        task.details = {**d, **RELOOK, "items": new_items, "more": None, "alternatives": None}
+        task.details = {**d, **RELOOK, "items": [_price_words(i) for i in new_items], "more": None, "alternatives": None}
+        task.result = {}
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"{kind} '{value}' by {by}")
@@ -1032,6 +1052,20 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             return "awaiting_confirm", "Ride options are ready; tell the person the fares (and any surge) and ask which one to book." + (f" {extra}" if extra else "")
         if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file, cart=out.get("items")):
             return "failed", "This medicine needs a prescription upload; ask the family to upload the prescription on the dashboard, then try again."
+        dead = [i for i in out.get("items") or [] if i.get("available") is False or str(i.get("qty", 1)).strip() in ("0", "0.0")]
+        if dead:
+            # Live 2026-10-10: the agent reported "0 x Prolicious Khakhra" (not sold here) as a cart and Maa was asked to pick
+            # from four ₹246 packs. Saheli picks the next best product herself and builds the cart again.
+            names = [str(i.get("name") or "").lower() for i in dead]
+            ids = [str(c.get("store_id")) for c in d.get("chosen") or [] if c.get("store_id")
+                   and (len(d.get("chosen") or []) == 1 or any(str(c.get("name") or "").lower()[:25] in n or n[:25] in str(c.get("name") or "").lower() for n in names))]
+            tried = _repick_without(task, ids)
+            if tried:
+                task.phase, task.input_needed = "prepare", None
+                task.result = {**(task.result or {}), "alternatives": None, "total": None, "fees": None}
+                note(task, f"not available here; trying {tried}")
+                return "queued", ""
+            out = {**out, "items": [i for i in out.get("items") or [] if i not in dead]}
         if not out.get("items"):
             alts = guard.alternatives(out.get("alternatives"))[:4]
             if alts and out.get("cod_available") is not False:
@@ -1051,6 +1085,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         if not v.ok:
             return "failed", "Stopped before placing: " + "; ".join(v.block) + ". Nothing was placed."
         task.details = {**d, "approval": v.approval, "cart_fp": guard.cart_fingerprint(out), "confirm_token": None}
+        if not out.get("alternatives"):
+            task.result = {**(task.result or {}), "alternatives": None}  # an earlier report's, not this cart's
         prev = d.get("replace_confirmed") or {}
         if (prev.get("fp") and prev.get("by") and task.details["cart_fp"] == prev["fp"] and not v.approval
                 and int(d.get("auto_replaced") or 0) < 2
@@ -1172,12 +1208,16 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                                            f"{i.get('name')} {i.get('pack') or ''}")
     groups = _groups(task, found)
     medicine = d.get("agent") == "pharmacy"
-    picks = {asked: auto_pick(asked, g, medicine=medicine) for asked, g in groups}
+    limits_of = {str(i.get("name") or ""): i for i in d.get("items") or []}
+    picks = {asked: auto_pick(asked, g, medicine=medicine, max_price=(limits_of.get(asked) or {}).get("max_price"),
+                              cheapest=bool((limits_of.get(asked) or {}).get("cheapest"))) for asked, g in groups}
     missing = [m.removeprefix("not found: ") for m in [str(out.get("problem") or "")] if m.startswith("not found: ")]
     if groups and all(picks.values()) and not more:
         # Founder 2026-10-10: ask only what, where, and one confirm with the amount. Saheli picks the product herself
         # (the one clearly asked for, else the closest); the confirm names it, and they can change it there.
         task.details = {**task.details, "chosen": list(picks.values()), "auto_picked": True,
+                        # the look-up's products, kept: a cart report replaces result items, and a refused product needs the next one
+                        "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40],
                         "missing_items": missing[0].split(", ") if missing else None}
         if compare_group(task):
             # In a comparison the store is picked once every store has looked (choose_stores): no login or cart here yet.
@@ -1197,7 +1237,7 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                                 "name as the value of task_input go.")
 
 
-def auto_pick(asked: str, found: list[dict], *, medicine: bool = False) -> dict | None:
+def auto_pick(asked: str, found: list[dict], *, medicine: bool = False, max_price: float | None = None, cheapest: bool = False) -> dict | None:
     """Saheli's own pick for one asked item: the product clearly asked for, else the first full match in the store's
     order (a single pack unless a multipack was asked), else, except for medicines, the store's first listing (the
     confirm says it is the closest match). None: the person picks."""
@@ -1218,6 +1258,10 @@ def auto_pick(asked: str, found: list[dict], *, medicine: bool = False) -> dict 
     pool = home(single(exact)) if exact else ([] if medicine else home(single(found)))
     if not pool:
         return None
+    if max_price:
+        pool = [i for i in pool if 0 < _rupee_value(i.get("price")) <= max_price] or pool
+    if cheapest or max_price:
+        return min(pool, key=lambda i: _rupee_value(i.get("price")) or 1e9)
     return min(pool[:3], key=lambda i: _rupee_value(i.get("price")) or 1e9)
 
 
@@ -1423,10 +1467,14 @@ def _repick_without(task: Task, ids: list[str]) -> str | None:
     if not d.get("auto_picked") or d.get("agent") == "pharmacy" or int(d.get("repicks") or 0) >= 3 or not ids:
         return None
     gone = set(map(str, ids))
-    items = [{**i, "available": False} if str(i.get("store_id") or "") in gone else i for i in r.get("items") or []]
-    task.result = {**r, "items": items}
-    groups = _groups(task, _found(task))
-    picks = [auto_pick(a, g) for a, g in groups]
+    items = [{**i, "available": False} if str(i.get("store_id") or "") in gone else i for i in (d.get("found") or r.get("items") or [])]
+    if d.get("found"):
+        d = {**d, "found": items}
+    else:
+        task.result = {**r, "items": items}
+    groups = _groups(task, [i for i in items if i.get("name") and i.get("available") is not False])
+    lim = {str(i.get("name") or ""): i for i in d.get("items") or []}
+    picks = [auto_pick(a, g, max_price=(lim.get(a) or {}).get("max_price"), cheapest=bool((lim.get(a) or {}).get("cheapest"))) for a, g in groups]
     if not groups or not all(picks):
         return None
     task.details = {**d, "chosen": picks, "fast_cart_tried": False, "repicks": int(d.get("repicks") or 0) + 1}
@@ -1643,7 +1691,8 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
             if compare_group(t) and not d.get("compare_announced"):
                 continue  # still looking on several stores
             start = datetime.fromisoformat(d["ladder_from"]) if d.get("ladder_from") else t.created_at
-            if (t.status in ("queued", "running") and not d.get("told_working") and now - t.created_at >= STILL_WORKING
+            busy_since = datetime.fromisoformat(d["active_from"]) if d.get("active_from") else t.created_at
+            if (t.status in ("queued", "running") and not d.get("told_working") and now - busy_since >= STILL_WORKING
                     and not d.get("ladder_asked_at")):
                 # Live 2026-10-10: Maa heard nothing for minutes while the browser agent worked. One short line, no question.
                 t.details = d = {**d, "told_working": True}
