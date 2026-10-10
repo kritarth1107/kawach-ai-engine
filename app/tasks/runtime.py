@@ -451,6 +451,24 @@ def _groups(task: Task, found: list[dict]) -> list[tuple[str, list[dict]]]:
     return list(keyed.items())
 
 
+def _named_in(value: str, groups: list[tuple[str, list[dict]]]) -> list[dict] | None:
+    """The product named for each item when the answer contains whole product names; the longest name wins inside a
+    group ("71.5 g x 2" over "71.5 g" when both appear). None unless every item got exactly one."""
+    norm = lambda x: re.sub(r"[^a-z0-9]+", "", str(x or "").lower())  # noqa: E731
+    v, picks = norm(value), []
+    for _, g in groups:
+        hits = sorted((i for i in g if norm(i.get("name")) and norm(i.get("name")) in v), key=lambda i: len(norm(i.get("name"))), reverse=True)
+        if not hits:
+            return None
+        priced = [i for i in hits if len(norm(i.get("name"))) == len(norm(hits[0].get("name")))]
+        if len(priced) > 1:
+            priced = [i for i in priced if norm(f"{i.get('name')} {i.get('price') or ''}") in v] or priced
+        if len(priced) != 1:
+            return None
+        picks.append(priced[0])
+    return picks
+
+
 def _chosen(task: Task, pick: dict | list | None) -> list[dict]:
     """One product per requested item for the cart: the one picked, else the best match the look-up listed first."""
     if isinstance(pick, list):
@@ -615,13 +633,16 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
             found = _found(task)
             groups = _groups(task, found)
             if len(groups) > 1:
-                # One name per item, "a | b" (several items in one cart): each must be one of that item's products.
-                picks = []
-                for part in [p.strip() for p in re.split(r"\s*\|\s*|\n", value) if p.strip()]:
-                    hit = next((m for _, g in groups if isinstance(m := _match_product(g, part), dict)), None)
-                    if not hit:
-                        return f"'{part}' is not one of the products found; ask again, one name per item separated by ' | '"
-                    picks.append(hit)
+                # One name per item (several items in one cart). Full product names first: a name can itself contain
+                # " | " (Instamart: "Britannia 5050 Potazos … Crisps | 71.5 g | Potato and Biscuit …"); then "a | b" parts.
+                picks = _named_in(value, groups)
+                if picks is None:
+                    picks = []
+                    for part in [p.strip() for p in re.split(r"\s*\|\s*|\n", value) if p.strip()]:
+                        hit = next((m for _, g in groups if isinstance(m := _match_product(g, part), dict)), None)
+                        if not hit:
+                            return f"'{part}' is not one of the products found; ask again, one name per item separated by ' | '"
+                        picks.append(hit)
                 pick = picks
             else:
                 pick = _match_product(found, value)

@@ -686,6 +686,17 @@ async def test_a_go_naming_a_product_not_found_is_asked_again(db, at, sessions, 
     assert "not one of the products found" in said and t.phase == "browse"
 
 
+def test_a_product_name_with_bars_in_it_is_still_picked_whole():
+    potazos = "Britannia 5050 Potazos Masti Masala Spicy Flavoured Crisps | 71.5 g | Potato and Biscuit Ka Tasty Combination — 71.5 g"
+    groups = [("biscuits", [{"name": "Sunfeast Bourbon Dark Fantasy Biscuit — 99 g", "price": "₹14"}, {"name": "Let's Try Atta Jeera Cookies — 200 g", "price": "₹92"}]),
+              ("munchies", [{"name": potazos + " x 3", "price": "₹84"}, {"name": potazos + " x 2", "price": "₹56"}, {"name": potazos, "price": "₹28"}])]
+    got = runtime._named_in(f"Sunfeast Bourbon Dark Fantasy Biscuit — 99 g ₹14 | {potazos} ₹28", groups)
+    assert [g["price"] for g in got] == ["₹14", "₹28"]
+    got = runtime._named_in(f"Sunfeast Bourbon Dark Fantasy Biscuit — 99 g | {potazos} x 2 ₹56", groups)
+    assert [g["price"] for g in got] == ["₹14", "₹56"]
+    assert runtime._named_in("Dark Fantasy | Potazos", groups) is None  # short names fall back to the per-part match
+
+
 def test_food_orders_stay_one_dish_on_the_connector():
     from app.specialists import channels
 
