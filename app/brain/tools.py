@@ -1050,7 +1050,8 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
     "approval of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an item "
     "that is out of stock (swap: the alternative's name, or 'no'), the family approver's answer (approve: yes/no; only an "
     "approver's answer counts), or, at the confirm, a change they ask for: change (another product, brand or size for one "
-    "item, e.g. 'Amul Gold 1 litre', 'maggi 840 g', '2 x milk'), add (one more item, e.g. 'bread' or '2 x eggs'), remove "
+    "item, e.g. 'Amul Gold 1 litre', 'maggi 840 g', '2 x milk'; several products separated by commas replace it with all of "
+    "them), add (more items, separated by commas: 'bread, 2 x eggs'; never squash two products into one name), remove "
     "(one item), more (they want to see that item's options, e.g. 'maggi'; the list comes back in a task update), keep "
     "(a caregiver says keep trying when asked about a slow order). The new cart and total come back for the one confirm.",
     {

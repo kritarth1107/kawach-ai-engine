@@ -1357,3 +1357,33 @@ def test_price_words_become_a_limit_and_saheli_picks_within_it():
     assert item == {"name": "khakhra", "qty": 1, "max_price": 100, "cheapest": True}
     pricey = [{**KHAKHRA[0], "cart_ref": {"merchant_id": 37622}}, {**KHAKHRA[1]}, {**KHAKHRA[3], "price": "₹99"}]
     assert runtime.auto_pick("khakhra", pricey, max_price=100, cheapest=True)["price"] == "₹80"
+
+
+def test_a_list_of_products_is_split_into_items():
+    assert runtime.split_items("Noice methi khakhra, masala khakhra, peri peri muruku") == ["Noice methi khakhra", "masala khakhra", "peri peri muruku"]
+    assert runtime.split_items("NOICE Methi Khakhra aur Peri Peri Muruku bhi") == ["NOICE Methi Khakhra", "Peri Peri Muruku"]
+    assert runtime.split_items("Amul Gold 1 litre") == ["Amul Gold 1 litre"]
+
+
+async def test_change_to_several_products_makes_each_its_own_item(db, at, sessions):
+    """Live 2026-10-10: Maa's 'Noice methi aur masala khakhra, peri peri muruku' became one item and a one-product cart."""
+    at("2026-10-10 20:29")
+    t = await _order(db)
+    t.status, t.phase, t.input_needed = "awaiting_confirm", "prepare", "confirm"
+    t.details = {**t.details, "cart_fp": "fp", "channel": "browser"}
+    await db.commit()
+    out = await runtime.provide_input(db, t, kind="change", value="Noice methi khakhra, masala khakhra, peri peri muruku", by=ELDER, by_is_elder=True)
+    assert "Noice methi khakhra, masala khakhra, peri peri muruku" in out
+    assert [i["name"] for i in t.details["items"]] == ["Noice methi khakhra", "masala khakhra", "peri peri muruku"]
+    assert t.details["channel"] is None and t.phase == "prepare"
+    await runtime.provide_input(db, t, kind="add", value="bread, 2 x eggs", by=ELDER, by_is_elder=True) if t.status != "queued" else None
+
+
+def test_two_items_do_not_get_the_same_product():
+    t = Task(details={"items": [{"name": "methi khakhra"}, {"name": "masala khakhra"}]}, result={})
+    found = [{"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "exact_match": True, "for_item": "methi khakhra"},
+             {"name": "NOICE Methi Khakhra", "price": "₹62", "store_id": "T", "exact_match": True, "for_item": "methi khakhra"},
+             {"name": "NOICE Masala Khakhra", "price": "₹59", "store_id": "M", "exact_match": True, "for_item": "masala khakhra"}]
+    t.service, t.kind, t.phase = "instamart", "order", "browse"
+    status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True, "logged_in": True})
+    assert sorted(c["store_id"] for c in t.details["chosen"]) == ["M", "T"]

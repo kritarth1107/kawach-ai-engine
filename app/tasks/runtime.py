@@ -560,6 +560,34 @@ def _chosen(task: Task, pick: dict | list | None) -> list[dict]:
 
 
 EDIT_KINDS = ("more", "change", "add", "remove")
+_SPLIT = re.compile(r"\s*(?:,|;|\+|&|\n|\baur\b|\band\b|\bsaath (?:me|mein)\b|\bphir\b)\s*", re.I)
+
+
+def split_items(words: str) -> list[str]:
+    """'Noice methi khakhra, masala khakhra aur peri peri muruku' → three products (a size like '1 kg' stays with its item)."""
+    filler = re.compile(r"\s+\b(bhi|dono|bhi kar do|kar do|mangao|mangaao|mangwa do|le aao|please)\b\s*$", re.I)
+    parts = [filler.sub("", p.strip(" .-")).strip(" .-") for p in _SPLIT.split(words or "") if p and p.strip(" .-")]
+    return [p for p in parts if len(p) >= 2 and not re.fullmatch(r"(bhi|dono|bhi kar do|kar do|mangao|mangaao|le aao)", p, re.I)]
+
+
+def _qty_item(words: str) -> dict:
+    m = re.match(r"^(\d{1,2})\s*(?:(?:x|×|\*)\s*|\s+(?!(?:g|gm|gms|gram|grams|kg|kgs|ml|l|ltr|litre|litres|liter|pc|pcs|pack)\b))(.+)$", words, re.I)
+    return {"name": m.group(2).strip(), "qty": int(m.group(1))} if m else {"name": words, "qty": 1}
+
+
+async def _relook(session: AsyncSession, task: Task, d: dict, new_items: list[dict], kind: str, value: str, by: str) -> str:
+    v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
+    if not v.ok:
+        return "cannot do that: " + "; ".join(v.block)
+    task.details = {**d, **RELOOK, "items": [_price_words(i) for i in new_items], "more": None, "alternatives": None,
+                    "connector_card": None, "channel": None}  # a linked store's connector is tried again for the new items
+    task.result = {}
+    task.phase, task.status, task.input_needed = "prepare", "queued", None
+    task.deadline_at = clock.now() + TASK_LIFETIME
+    note(task, f"{kind} '{value}' by {by}")
+    names = ", ".join(str(i.get("name")) for i in new_items)
+    return (f"getting it now: {names} (NOT ordered); the new cart and total come back in a task update for one confirm. "
+            "Say only that you are updating it")
 LADDER_RESET = {"ladder_asked_at": None, "ladder_emailed_at": None, "ladder_carers": None, "ladder_due": None}
 # What a new look-up clears (the products, the cart and anything confirmed for it).
 RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": None, "fast_cart_tried": False,
@@ -843,6 +871,17 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         if task.kind != "order" or task.status not in ("awaiting_confirm", "needs_input"):
             return "nothing to change right now"
         items, words = list(d.get("items") or []), value.strip()
+        parts = split_items(words)
+        if len(parts) > 1 and kind in ("change", "add"):
+            # Live 2026-10-10: "Noice methi khakhra, masala khakhra, peri peri muruku" went in as ONE item, and the cart had one
+            # product. Several products: each is its own item (a change replaces that item, or all of them, with the list).
+            new = [_qty_item(x) for x in parts]
+            if kind == "add":
+                new_items = items + new
+            else:
+                idx = _item_index(task, parts[0]) if len(items) > 1 else 0
+                new_items = (items[:idx] + new + items[idx + 1:]) if idx is not None and len(items) > 1 else new
+            return await _relook(session, task, d, new_items, kind, value, by)
         # "2 x bread", "2 bread": a quantity; "1 kg", "500 ml": a size
         m = re.match(r"^(\d{1,2})\s*(?:(?:x|×|\*)\s*|\s+(?!(?:g|gm|gms|gram|grams|kg|kgs|ml|l|ltr|litre|litres|liter|pc|pcs|pack)\b))(.+)$", words, re.I)
         qty, words = (int(m.group(1)), m.group(2).strip()) if m else (None, words)
@@ -862,16 +901,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
                 asked = str(items[idx].get("name") or "")
                 name = words if _stems(words) & _stems(asked) or not asked else f"{asked} {words}"
                 new_items = items[:idx] + [{**items[idx], "name": name, **({"qty": qty} if qty else {})}] + items[idx + 1:]
-        v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
-        if not v.ok:
-            return "cannot do that: " + "; ".join(v.block)
-        task.details = {**d, **RELOOK, "items": [_price_words(i) for i in new_items], "more": None, "alternatives": None}
-        task.result = {}
-        task.phase, task.status, task.input_needed = "prepare", "queued", None
-        task.deadline_at = clock.now() + TASK_LIFETIME
-        note(task, f"{kind} '{value}' by {by}")
-        return ("getting it now (NOT ordered); the new cart and total come back in a task update for one confirm. "
-                "Say only that you are updating it")
+        return await _relook(session, task, d, new_items, kind, value, by)
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
             return "nothing to confirm right now"
@@ -1209,13 +1239,18 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     groups = _groups(task, found)
     medicine = d.get("agent") == "pharmacy"
     limits_of = {str(i.get("name") or ""): i for i in d.get("items") or []}
-    picks = {asked: auto_pick(asked, g, medicine=medicine, max_price=(limits_of.get(asked) or {}).get("max_price"),
-                              cheapest=bool((limits_of.get(asked) or {}).get("cheapest"))) for asked, g in groups}
+    picks, used = {}, set()
+    for asked, g in sorted(groups, key=lambda x: len(x[1])):  # items with fewest options pick first
+        lim = limits_of.get(asked) or {}
+        fresh = [i for i in g if str(i.get("store_id") or i.get("name")) not in used] or g  # each item its own product
+        picks[asked] = auto_pick(asked, fresh, medicine=medicine, max_price=lim.get("max_price"), cheapest=bool(lim.get("cheapest")))
+        if picks[asked]:
+            used.add(str(picks[asked].get("store_id") or picks[asked].get("name")))
     missing = [m.removeprefix("not found: ") for m in [str(out.get("problem") or "")] if m.startswith("not found: ")]
     if groups and all(picks.values()) and not more:
         # Founder 2026-10-10: ask only what, where, and one confirm with the amount. Saheli picks the product herself
         # (the one clearly asked for, else the closest); the confirm names it, and they can change it there.
-        task.details = {**task.details, "chosen": list(picks.values()), "auto_picked": True,
+        task.details = {**task.details, "chosen": [picks[a] for a, _ in groups], "auto_picked": True,
                         # the look-up's products, kept: a cart report replaces result items, and a refused product needs the next one
                         "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40],
                         "missing_items": missing[0].split(", ") if missing else None}

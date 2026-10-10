@@ -110,6 +110,9 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     )
 
 
+MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]")  # updates that must reach the person
+
+
 async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None) -> None:
     """Let the brain act on something that happened without a person writing (a due loop, a task update).
 
@@ -129,6 +132,19 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     text = (result.reply or "").strip()
     known = {m.get("id") for m in [roster.elder, *roster.members]}
     sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
+    if (deliver_to and deliver_to in known and not sent and not result.duplicate and prompt.startswith(MUST_REACH)
+            and (not text or text.lower().strip(" .\"'") == "none")):
+        # Live 2026-10-10 20:29: an order's cart update came, the brain answered "none" and sent nothing; Maa heard nothing.
+        # Once more, firmly; its message is then delivered below even if it writes it as the reply.
+        logger.error("task update sent nothing; asking again family=%s ref=%s", family_id, ref)
+        async with sessions() as session:
+            result = await run_turn(session, host, TurnRequest(
+                family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, channel="scheduler",
+                message_ref=f"{ref}:again", text=(f"{prompt}\n\nYour last turn on this update sent NOTHING, so person {deliver_to} heard "
+                                                  f"nothing. Write the message for person {deliver_to} now, in their language, as your final "
+                                                  "reply (only the message, no notes).")))
+        text = (result.reply or "").strip()
+        sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
     if not deliver_to or deliver_to not in known or sent or result.duplicate or not text or text.lower().strip(" .\"'") == "none":
         return
     if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
