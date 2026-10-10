@@ -72,7 +72,10 @@ async def test_not_sent_in_shadow_mode(db, at):
     assert not err and host.would_have[-1]["tool"] == "send_song"
 
 
-def test_persona_says_she_can_sing_and_voice_setting_is_not_for_songs():
-    assert "You can sing" in persona.PERSONA and "Never say you cannot sing" in persona.PERSONA
+def test_persona_sings_only_when_asked_and_voice_setting_is_not_for_songs():
+    # founder 2026-10-10: sing only if asked to sing; "bhajan batao" (a suggestion) is answered in text
+    assert "only when someone asks you to sing" in persona.PERSONA and "never say you cannot sing" in persona.PERSONA
+    assert "bhajan batao" in persona.PERSONA and "Never sing on your own" in persona.PERSONA
+    assert "never for 'bhajan batao'" in next(s for s in tools.specs() if s.name == "sing").description
     spec = next(s for s in tools.specs() if s.name == "voice_replies")
     assert "sing" in spec.description

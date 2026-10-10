@@ -1737,8 +1737,9 @@ SONG_MAX_LINES = 8
 @tool(
     "sing",
     "Sing a short song as a WhatsApp voice note, in your own singing voice: a bhajan, aarti, lullaby, folk song, birthday "
-    "song, or a few lines you make up for them. Use whenever someone asks you to sing ('gaake sunao', 'ek bhajan sunao', "
-    "'Maa ko lori sunao'). Write 2 to 8 lines of lyrics in the listener's language and script. Only traditional, "
+    "song, or a few lines you make up for them. Only when someone asks you to sing ('gaake sunao', 'ek bhajan gaao', "
+    "'Maa ko lori gaake sunao', 'sing for me') or says yes to your offer to sing; never for 'bhajan batao' (name or words: "
+    "answer in text) and never on your own. Write 2 to 8 lines of lyrics in the listener's language and script. Only traditional, "
     "public-domain songs (Meera, Kabir, Tulsidas, Surdas, folk songs, aartis) or your own lines; never film or other "
     "copyrighted lyrics: offer a traditional one instead. Your reply goes as well: keep it one short line, no lyrics in it.",
     {
