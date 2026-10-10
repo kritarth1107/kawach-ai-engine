@@ -545,6 +545,64 @@ async def test_linked_store_looks_up_and_orders_through_its_connector_without_a_
     assert im.status == "done" and im.result["order_id"] == "IM-1" and [r["service"] for r in agent.runs] == ["blinkit"]
 
 
+class ParleHost(LinkedHost):
+    """Instamart linked; the search lists several Parle-G packs, the first is not the one asked for."""
+
+    async def call(self, tool, args, *, family_id, subject_id, actor_id):
+        if tool == "connector_search":
+            self.calls.append((tool, args))
+            names = ["Parle Parle G Gold Biscuits Pouch — 1 kg x 2", "Parle Parle G Gold Biscuits Pouch — 1 kg", "Parle Parle-G Gold Biscuits — 475 g"]
+            return {"ok": True, "items": [{"name": n, "price": "₹75", "ref": {"store": "instamart", "name": n, "spinId": f"P{i}"}} for i, n in enumerate(names)]}
+        return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
+
+
+async def _connector_order(db, sessions, host, asked):
+    told = []
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order", goal=asked,
+                             details={"items": [{"name": asked, "qty": 1}]})
+    await db.commit()
+
+    async def notify(f, r, p):
+        told.append(p)
+
+    async def no_profile(t):
+        return None
+
+    for _ in range(3):
+        await runtime.tick(sessions, FakeAgent(), profile_for=no_profile, notify=notify, host_for=lambda f: host)
+    await db.refresh(t)
+    return t, told
+
+
+async def test_connector_builds_the_cart_for_the_pack_asked_not_the_first_hit(db, at, sessions, monkeypatch):
+    """Order lab 2026-10-10: "Parle-G biscuit 475 g" on the linked Instamart got the first hit, "1 kg x 2" ₹250."""
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 14:30")
+    host = ParleHost()
+    t, _ = await _connector_order(db, sessions, host, "Parle-G biscuit 475 g")
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+    assert next(c[1] for c in host.calls if c[0] == "connector_prepare")["pick"]["spinId"] == "P2"
+
+
+async def test_connector_asks_which_one_when_several_packs_fit(db, at, sessions, monkeypatch):
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 14:30")
+    host = ParleHost()
+    t, told = await _connector_order(db, sessions, host, "Parle-G biscuit")
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and t.phase == "browse"
+    assert not any(c[0] == "connector_prepare" for c in host.calls)
+    assert "no login code" in told[-1] and "475 g" in told[-1] and "1 kg x 2" in told[-1]
+    said = await runtime.provide_input(db, t, kind="go", value="Parle Parle G Gold Biscuits Pouch — 1 kg", by=ELDER, by_is_elder=True)
+    assert "linked account" in said
+
+
+def test_asked_words_match_plurals_and_pack_numbers():
+    assert runtime.asked_match("Parle-G biscuit 475 g", "Parle Parle-G Gold Biscuits — 475 g")
+    assert not runtime.asked_match("Parle-G biscuit 475 g", "Parle Parle G Gold Biscuits Pouch — 1 kg x 2")
+    assert not runtime.asked_match("Diet Coke", "Coca-Cola Zero Sugar 300 ml")
+    assert runtime.asked_match("", "anything") is None
+
+
 class FastAgent(FakeAgent):
     async def open_session(self, profile_id):
         self.opened = profile_id

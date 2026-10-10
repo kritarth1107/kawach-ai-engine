@@ -883,9 +883,16 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     seen = "; ".join(_option(i) for i in found[:6])
     eta = f", about {out['eta']}" if out.get("eta") else ""
     if out.get("logged_in") and not compare_group(task):  # in a comparison the person picks the store first
-        # Already logged in: no code needed, so build the cart straight away; the cart comes back for a confirm.
-        task.phase = "prepare"
-        return "queued", ""
+        # Already logged in: no code needed. Build the cart straight away only for the one product that is clearly what
+        # they asked for; otherwise they pick (lab 2026-10-10: "Parle-G 475 g" got the first hit, "1 kg x 2" ₹250).
+        exact = found if len(found) == 1 else [i for i in found if i.get("exact_match")]
+        if len(exact) == 1:
+            task.details = {**task.details, "chosen": [exact[0]]}
+            task.phase = "prepare"
+            return "queued", ""
+        task.input_needed = "go"
+        return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet and no login code is "
+                                    "needed. Ask which one they want and pass its name as the value of task_input go.")
     task.input_needed = "go"
     pick = (" If several are listed, ask which one and pass its name as the value of task_input go." if len(found) > 1 else "")
     return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet. To order, {label} needs a "
@@ -894,6 +901,17 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
 
 def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z]+|\d+", str(text or "").lower()) if len(w) > 2 or w.isdigit()}
+
+
+def _stems(text: str) -> set[str]:
+    """Words without a plural s, so "biscuit" matches "Biscuits" and "475 g" keeps its 475."""
+    return {w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w for w in _words(text)}
+
+
+def asked_match(asked: str, name: str) -> bool | None:
+    """Every word (and pack number) they asked for is in the product name; None when nothing was asked."""
+    want = _stems(asked)
+    return want <= _stems(name) if want else None
 
 
 async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | None:
@@ -909,10 +927,10 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
         task.phase = "browse"
         if not r.get("ok"):
             return {"items": [], "deliverable": False, "problem": r.get("detail") or "not serviceable here", "logged_in": True}
-        asked = _words(((task.details or {}).get("items") or [{}])[0].get("name"))
+        asked = ((task.details or {}).get("items") or [{}])[0].get("name") or ""
         items = [{"name": i.get("name"), "price": i.get("price"), "available": True, "ref": i.get("ref"),
                   # the connector does not say; a product missing a word that was asked for (Coke Zero for Diet Coke) is only similar
-                  "exact_match": asked <= _words(i.get("name")) if asked else None}
+                  "exact_match": asked_match(asked, i.get("name"))}
                  for i in (r.get("items") or []) if i.get("name")]
         return {"items": items, "deliverable": True, "logged_in": True, "problem": "" if items else "not found"}
     await channels.record(session, task.service, "connector", False, r.get("detail"))
