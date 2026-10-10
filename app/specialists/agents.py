@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.tasks import practice
 from app.tasks.models import Task
 from app.tasks.skills import COMMON, SKILLS, schema_for
 
@@ -52,6 +53,8 @@ class Specialist:
         if task.phase == "place":
             s["properties"]["price_changed"] = {"type": "boolean"}
             s["properties"]["new_total"] = {"type": "string"}
+            if practice.on(task):
+                s["properties"].update(practice.SCHEMA)
         return s
 
     def goal(self, task: Task) -> str:
@@ -92,6 +95,8 @@ class Specialist:
                          f"with that pincode, add this one and use it: {place.get('full')} (use the account holder's name and number if asked).")
             return (f"On {label}, put exactly these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
                     f"Cash/Pay on Delivery is offered. Do NOT place the order. Report items with prices, total with fees, cod_available, address_used, eta.")
+        if task.phase == "place" and practice.on(task):
+            return practice.browser_goal(label, items, d.get("confirmed_total") or (task.result or {}).get("total"), where)
         if task.phase == "place":
             total = d.get("confirmed_total") or (task.result or {}).get("total")
             return (f"On {label}, the cart for: {items} is ready and the family confirmed a total of {total}. Open the cart (if it is empty, "

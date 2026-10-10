@@ -30,6 +30,8 @@ For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
 - closest: when exact is empty, the nearest other variant of the same kind of product (asked peri peri muruku, there is
   only butter muruku → closest is butter muruku), else null. It will NOT be bought without asking the person.
 - Medicines (medicine: true): exact only when the medicine name and strength match.
+- Food with restaurant given: exact only from that restaurant (spelling may differ: "Haldiram" = "Haldiram's"). A listing
+  marked closed or unavailable is never exact or closest.
 - FAMILY (when given): products this family bought before and what they said about them, what they like or must avoid.
   Among exact listings, put one they bought before and liked first; never rank first one they did not like, or one against
   their diet or "never order" notes.
@@ -38,7 +40,11 @@ For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
 
 def _listing(i: int, x: dict) -> str:
     bits = [f"{i}. {x.get('name')}", str(x.get("pack") or ""), str(x.get("price") or "")]
-    if x.get("available") is False:
+    if x.get("restaurant"):
+        bits.append(f"from {x['restaurant']}")
+    if x.get("closed"):
+        bits.append("[restaurant closed now" + (f", {x['opens']}" if x.get("opens") else "") + "]")
+    elif x.get("available") is False:
         bits.append("[unavailable]")
     return " | ".join(b for b in bits if b)
 
@@ -50,7 +56,7 @@ async def choose(items: list[dict], listings: list[list[dict]], *, medicine: boo
         return []
     blocks = []
     for n, (it, ls) in enumerate(zip(items, listings), 1):
-        ask = {k: it.get(k) for k in ("name", "qty", "must_match", "max_price", "cheapest") if it.get(k) not in (None, "", [], False)}
+        ask = {k: it.get(k) for k in ("name", "qty", "must_match", "max_price", "cheapest", "restaurant") if it.get(k) not in (None, "", [], False)}
         blocks.append(f"ITEM {n}: {json.dumps(ask, ensure_ascii=False)}" + (" medicine: true" if medicine else "")
                       + "\nLISTINGS:\n" + ("\n".join(_listing(i, x) for i, x in enumerate(ls, 1)) or "(none)"))
     try:

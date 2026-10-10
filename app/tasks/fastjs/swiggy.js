@@ -73,6 +73,9 @@
           restaurant: ri.name || '',
           eta: sla.slaString || (sla.deliveryTime ? sla.deliveryTime + ' MINS' : ''),
           restaurantId: String(ri.id || ''),
+          closed: !open,
+          opens: !open ? String((ri.availability || {}).nextOpenTimeMessage || (ri.availability || {}).nextOpenTime || '') : '',
+          far: !serviceable,
         });
         if (out.products.length >= MAX) return out;
       }

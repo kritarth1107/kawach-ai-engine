@@ -95,6 +95,9 @@ jobs:
           # /v2/admin: only the admin API's own identity, with its own secret (ENGINE_ADMIN_SECRET below)
           ADMIN_API_SA: kavach-admin-api@kavach-care.iam.gserviceaccount.com
           ENGINE_AUDIENCES: "https://kawach-ai-engine-303943038694.asia-south1.run.app,https://kawach-ai-engine-bcvowb5kfq-el.a.run.app"
+          # Practice orders (app/tasks/practice.py): families whose orders stop at the store's last step. Set and cleared with
+          # the repo variable PRACTICE_ORDER_FAMILIES, so every deploy keeps it (an env set by hand would be wiped here).
+          PRACTICE_ORDER_FAMILIES: "${{ vars.PRACTICE_ORDER_FAMILIES }}"
           EOF
           gcloud run deploy ${{ env.SERVICE }} \
             --project=${{ env.GCP_PROJECT_ID }} \

@@ -29,7 +29,7 @@ from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
-from app.tasks import fastpath, sandbox, tracking
+from app.tasks import fastpath, practice, sandbox, tracking
 from app.tasks.models import SkillNote, Task
 from app.tasks.skills import SKILLS
 
@@ -320,6 +320,8 @@ async def create(
 
         # the person whose number the store logs in with, so a login code reaches them (the family's setting)
         details = {**details, "code_from": boundaries.code_person(await boundaries.get(session, family_id), subject_id, requested_by)}
+    if practice.family_listed(family_id):
+        details = {**details, "practice": True}  # goes up to the store's last step and stops (app/tasks/practice.py)
     now = clock.now()
     task = Task(
         id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, requested_by=requested_by, service=service, kind=kind,
@@ -454,7 +456,8 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             profile_id=profile,
             # a browser opened for a fast look-up has no store tab of its own: the agent starts on the store's page
             start_url=None if session_id and not (task.details or {}).get("fast_session") else SKILLS[task.service]["start_url"],
-            max_steps=spec.steps.get(task.phase, 40),
+            # a practice place also opens the payment step and empties the cart afterwards
+            max_steps=spec.steps.get(task.phase, 40) + (15 if task.phase == "place" and practice.on(task) else 0),
             metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
             llm=spec.model,
             flash=task.phase in flash_phases(),
@@ -1012,6 +1015,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         extra = " ".join(v.warn + v.approval)
         return "awaiting_confirm", _confirm_ask(task, out) + (f" {extra}" if extra else "")
     if task.phase == "place":
+        if practice.on(task) and (out.get("placed") or out.get("booked") or out.get("order_id")):
+            # A practice must never place: whatever the agent did, the family checks the app at once.
+            task.details = {**(task.details or {}), "practice_accident": True}
+            logger.error("PRACTICE ORDER REPORTED PLACED task=%s order=%s", task.id, out.get("order_id"))
+            return "failed", (f"This was a practice order, but {SKILLS[task.service]['label']} may have placed a real order"
+                              + (f" (order id {out.get('order_id')})" if out.get("order_id") else "") + ". Tell the caregiver right "
+                              "away to check the app and cancel it there; do not order again.")
         if out.get("price_changed") and task.kind == "ride":
             # Fares moved at booking: fetch fresh fares and let the person choose again.
             task.phase, task.input_needed = "prepare", None
@@ -1022,6 +1032,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             task.details = {**d, "cart_fp": guard.cart_fingerprint(task.result), "confirm_token": None}
             task.input_needed = "confirm"
             return "awaiting_confirm", f"The total changed to {out.get('new_total')} since it was confirmed; nothing was placed. Read the new total and ask again."
+        if practice.on(task):
+            return "cancelled", _practice_message(task, out)
         if out.get("placed") or out.get("booked"):
             v = guard.check_placed(task.kind, out, guard.rupees(d.get("confirmed_total")))
             metrics.on_milestone(task, "placed")
@@ -1047,6 +1059,22 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     return "failed", "Unexpected state."
 
 
+def _practice_message(task: Task, out: dict) -> str:
+    """What the family hears when a practice order stopped (app/tasks/practice.py)."""
+    d = task.details or {}
+    where = ((d.get("limits") or {}).get("place") or {}).get("nickname") or "their saved place"
+    items = "; ".join(_label(c) + (f" x{c['qty']}" if str(c.get("qty") or 1) != "1" else "") for c in d.get("chosen") or []) or task.goal
+    total = out.get("total") or d.get("confirmed_total") or (task.result or {}).get("total")
+    if out.get("reached_final_step"):
+        button = f" ('{out['final_button']}')" if out.get("final_button") else ""
+        return (f"Practice order (the family turned on practice orders for testing): everything was done up to the store's final "
+                f"place-order button{button}: {items}, total {total}, cash on delivery, to {where}. It was NOT placed: nothing will "
+                "come and nothing is to be paid. Tell them in one short line that it was a practice order and nothing was ordered.")
+    return (f"Practice order (the family turned on practice orders for testing): it stopped before the last step "
+            f"({out.get('problem') or 'unknown'}); nothing was placed. Tell them in one short line that it was a practice order and "
+            "nothing was ordered.")
+
+
 def _confirm_ask(task: Task, out: dict) -> str:
     """The one question of an order (founder 2026-10-10: what, where, then confirm with the amount)."""
     d = task.details or {}
@@ -1063,6 +1091,17 @@ def _confirm_ask(task: Task, out: dict) -> str:
                "never call another kind the same thing. They can add something else or get it from another store." if missing else "")
             + " If they want another product or size for an item, more of an item, or one item added or removed: task_input "
               "change / add / remove (or more to see that item's options); the new total comes back for the same one confirm.")
+
+
+def _closed_note(out: dict) -> str:
+    """Restaurants in a food look-up that have it but are closed now, with when they open (the store's own words)."""
+    seen, bits = set(), []
+    for i in out.get("items") or []:
+        r = str(i.get("restaurant") or "")
+        if i.get("closed") and r and r not in seen:
+            seen.add(r)
+            bits.append(r + (f" ({i['opens']})" if i.get("opens") else ""))
+    return "; ".join(bits[:4])
 
 
 def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
@@ -1102,6 +1141,11 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             return "awaiting_confirm", f"{label} shows prices only after a login"
         task.phase = "prepare"
         return "queued", ""
+    closed = _closed_note(out)
+    if not found and closed:
+        # Live 2026-10-11 night: every place that has it is shut; say so, with when it opens (not "not found").
+        return "failed", (f"On {label} the places that have it are closed now ({closed}); nothing was ordered. Tell them plainly, "
+                          "with when it opens, and offer to order it then or something from a place that is open now.")
     if not found:
         alts = guard.alternatives(out.get("alternatives"))[:4]
         if alts and d.get("agent") != "pharmacy":
@@ -1129,7 +1173,8 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                 used.add(_pkey(picks[asked]))
     if matched is not None and groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
         # Nothing here is what they asked for (only other variants, or nothing): the other usual stores look.
-        return "failed", f"Not on {label} exactly ({'; '.join(a for a, _ in groups)}); looking on the other stores."
+        return "failed", (f"Not on {label} exactly ({'; '.join(a for a, _ in groups)})"
+                          + (f". Closed now on {label}: {closed}" if closed else "") + "; looking on the other stores.")
     unpicked = [a for a, _ in groups if not picks.get(a)]
     if matched is not None and any(picks.values()) and unpicked and not more and not medicine:
         # Some items are not here exactly: the rest goes in the cart; the confirm says what is missing and the closest kind.
@@ -1460,6 +1505,17 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
         note(task, f"fast place not possible ({str(exc)[:100]}); the browser agent places it")
         task.details = {**d, "fast_place_check": None}
         return None
+    if practice.on(task):
+        # Practice: Blinkit's saved steps go to checkout and choose cash, then stop before Pay Now; others are not run.
+        total = _rupees_text(d["fast_place_check"]["total"]) if (d.get("fast_place_check") or {}).get("total") else None
+        if task.service != "blinkit":
+            return {"practice": True, "reached_final_step": True, "final_button": "place order (saved step not run)", "total": total}
+        try:
+            got = await fastpath.blinkit_place(cdp, d["fast_place_check"], dry=True)
+        except fastpath.FastPathError as exc:
+            return {"practice": True, "reached_final_step": False, "problem": str(exc)[:160]}
+        return {"practice": True, "reached_final_step": bool(got.get("ready")), "final_button": "Pay Now", "total": total,
+                "payment_method": "Cash on Delivery", "problem": got.get("problem")}
     try:
         out = await fastpath.place(task.service, cdp, d["fast_place_check"])
     except fastpath.FastPathError as exc:
@@ -1525,6 +1581,17 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
     metrics.on_connector_call(task)
     d = task.details or {}
     try:
+        if task.phase == "place" and practice.on(task):
+            # Practice: the exact cart is built and checked again on the store, then emptied; the place call is never made.
+            r = await channels.connector_prepare(host, task)
+            if not r.get("ok"):
+                return {"practice": True, "reached_final_step": False, "problem": r.get("detail") or r.get("kind") or "the cart could not be built again"}
+            confirmed, now_total = guard.rupees(d.get("confirmed_total")), guard.rupees(r.get("total"))
+            if confirmed and now_total and now_total > confirmed + 10:
+                task.details = {**d, "connector_card": r.get("card")}
+                return {"price_changed": True, "new_total": r.get("total")}
+            return {"practice": True, "reached_final_step": True, "final_button": "the store's place-order call (not made)",
+                    "total": r.get("total"), "payment_method": "Cash on Delivery", "cart_emptied": True}
         if task.phase == "place":
             r = await channels.connector_place(host, task)
             if r.get("shadow"):
@@ -1928,6 +1995,16 @@ async def tick(
                             out = {"blocked": False, "problem": run.error or run.status}
                             if task.phase == "place":
                                 out["unclear"] = True  # the run may have clicked place before it died
+                        if task.phase == "place" and practice.on(task) and task.service == "swiggy" and task.agent_session:
+                            # Practice: the account's own order list must show nothing new (the agent might have pressed it).
+                            try:
+                                since = datetime.fromisoformat(task.details["run_started"]) - timedelta(minutes=2)
+                                new = await fastpath.swiggy_orders_since(await agent.cdp_url(task.agent_session), since)
+                                if new:
+                                    out = {**out, "placed": True, "order_id": new[0].get("id") or "unknown"}
+                                note(task, "practice check of the order list: " + ("unreadable" if new is None else f"{len(new)} new orders"))
+                            except Exception as exc:  # noqa: BLE001 — the agent's own report still stands
+                                logger.warning("practice order-list check failed task=%s: %s", task.id, exc)
                         task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
                         if task.phase == "browse":
                             await _ai_pick(task, task.result, session)
@@ -1973,6 +2050,10 @@ async def tick(
                             "place": "Placing took too long and was stopped. It is not clear whether it went through: do not order again; tell the caregiver to check the app.",
                         }.get(task.phase, "The service took too long and the task was stopped; nothing was placed.")
                         note(task, "run timed out")
+                if (task.details or {}).get("practice_accident") and not (task.details or {}).get("practice_alerted"):
+                    task.details = {**(task.details or {}), "practice_alerted": True}
+                    await _ops_alert(host_for(task.family_id) if host_for else None, task, "practice",
+                                     f"A practice order reported placed: {(task.result or {}).get('order_id') or 'no id'}. Check and cancel it.")
                 if (task.status == "failed" and task.kind == "order" and was_browse and not expired and not compare_group(task)
                         and not (task.details or {}).get("fell_back")):
                     # The store named does not deliver there or does not have it: look on the other usual stores for it

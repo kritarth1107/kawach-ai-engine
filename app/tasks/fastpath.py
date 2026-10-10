@@ -420,6 +420,32 @@ async def blinkit_order_status(cdp_url: str, order_id: str) -> dict | None:
     return None
 
 
+async def swiggy_orders_since(cdp_url: str, since) -> list[dict] | None:
+    """Swiggy food orders of the logged-in account placed at or after `since` (practice-order check). None when the list
+    could not be read (not logged in, another page shape)."""
+    from datetime import datetime, timezone
+
+    try:
+        out = await cdp_evaluate(cdp_url, SITES["swiggy"].start_url, (JS_DIR / "swiggy_orders.js").read_text(), settle_s=2.0,
+                                 ready=SITES["swiggy"].ready, timeout_s=40)
+    except FastPathError:
+        return None
+    if not isinstance(out, dict) or out.get("status") != 200 or not out.get("logged_in"):
+        return None
+    hits, readable = [], False
+    for o in out.get("orders") or []:
+        try:
+            at = datetime.fromisoformat(str(o.get("time")).replace("Z", "+00:00").replace(" ", "T"))
+        except ValueError:
+            continue
+        readable = True
+        if at.tzinfo is None:  # Swiggy writes IST without a zone
+            at = at.replace(tzinfo=timezone(__import__("datetime").timedelta(hours=5, minutes=30)))
+        if at >= since:
+            hits.append(o)
+    return hits if readable or not out.get("orders") else None
+
+
 def _texts(o, out: list | None = None) -> list[str]:
     """Every "text" string in a layout answer, in order."""
     out = [] if out is None else out
