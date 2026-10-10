@@ -664,6 +664,7 @@ async def test_connector_takes_several_items_in_one_cart(db, at, sessions, monke
     assert prep["pick"]["name"].startswith("Parle-G") and prep["qty"] == 1
     assert prep["more"] == [{"pick": {"store": "instamart", "name": "Kurkure Masala Munch — 90 g", "spinId": "Kurkur"}, "qty": 2}]
     assert t.status == "awaiting_confirm" and t.input_needed == "confirm"
+    assert "not in the cart" not in told[-1]  # the cart is checked against the picked products, not the words asked
 
 
 async def test_a_go_naming_a_product_not_found_is_asked_again(db, at, sessions, monkeypatch):

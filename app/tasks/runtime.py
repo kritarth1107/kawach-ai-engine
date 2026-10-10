@@ -848,7 +848,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
                 listed = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in alts)
                 return "needs_input", f"Not available ({out.get('problem') or 'out of stock'}). The store has: {listed}. Ask which one to get instead, or whether to drop it."
             return "failed", f"Could not build the cart ({out.get('problem') or 'unknown'})."
-        v = guard.check_cart("order", spec.name, d.get("items") or [], out, limits)
+        asked = d.get("items") or []
+        if d.get("chosen") and spec.name != "pharmacy":
+            # The person picked the products: check the cart against those, not the words asked (order lab 2026-10-10:
+            # "biscuits, munchies" were reported "not in the cart" next to Dark Fantasy and Potazos). Medicines keep the
+            # asked names: never substituted.
+            asked = [{"name": c.get("name"), "qty": channels._qty_for(asked, c) if asked else 1} for c in d["chosen"] if c.get("name")]
+        v = guard.check_cart("order", spec.name, asked, out, limits)
         if not v.ok:
             return "failed", "Stopped before placing: " + "; ".join(v.block) + ". Nothing was placed."
         task.details = {**d, "approval": v.approval, "cart_fp": guard.cart_fingerprint(out), "confirm_token": None}
