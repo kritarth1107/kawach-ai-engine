@@ -968,11 +968,13 @@ async def _delivery_place(ctx: TurnCtx, a: dict) -> dict:
     "price (go: yes/no, or the name of the product they picked from the options; on a comparison, use the task of the "
     "store they picked), the login code (otp), the person's confirm of the cart or fare (confirm: yes/no), approval "
     "of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an "
-    "item that is out of stock (swap: the alternative's name, or 'no' to drop it), or the family approver's answer to an "
-    "approval request (approve: yes/no; only an approver's answer counts).",
+    "item that is out of stock (swap: the alternative's name, or 'no' to drop it), the family approver's answer to an "
+    "approval request (approve: yes/no; only an approver's answer counts), or, while they are choosing from the options, "
+    "a fresh look for one item when they want more options or another pack or size (more: that item with what to look "
+    "for, e.g. 'maggi', 'maggi 840 g', 'bada paneer'; the longer list comes back in a task update).",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more"]},
         "value": {"type": "string"},
     },
     ["task_id", "kind", "value"],

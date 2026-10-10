@@ -488,6 +488,7 @@ def _chosen(task: Task, pick: dict | list | None) -> list[dict]:
 
 
 APPROVAL_WAIT = timedelta(minutes=90)
+MORE_LIMIT = 12  # products listed for an item they asked to see more of (6 otherwise)
 
 
 def _eta_wait(task: Task) -> timedelta:
@@ -621,7 +622,7 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
     may = may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id)
     if task.input_needed == "approve" and kind == "confirm" and may:
         kind = "approve"  # the approver saying "yes, confirm" is the approval
-    if task.input_needed and kind != task.input_needed:
+    if task.input_needed and kind != task.input_needed and not (kind == "more" and task.input_needed == "go"):
         if task.input_needed == "approve":
             return "this is waiting for the family approver's answer (already asked); nothing is placed until they say yes"
         return f"the task is waiting for {task.input_needed}, not {kind}; ask for that"
@@ -669,6 +670,37 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
                "building the cart (NOT ordered). Say only that you are getting the cart ready; do not promise a login code: if one "
                "is needed you will get a task update to ask for it")
         return f"going ahead on {SKILLS[task.service]['label']}" + (f" with {what}" if what else "") + f"{dropped}: {how}"
+    if kind == "more":
+        # During the look-up: more options, or another pack or size, of one item (order lab 2026-10-10: "Maggi more" →
+        # the 840 g pack was not among the six listed). That item is looked up again with the words given, longer list.
+        if task.kind != "order" or task.phase != "browse" or task.status != "awaiting_confirm":
+            return "nothing is being looked up right now"
+        words, items = value.strip(), list(d.get("items") or [])
+        if not words or not items:
+            return "say which item to look for again, e.g. 'maggi' or 'maggi 840 g'"
+        want = _stems(words)
+        groups = dict(_groups(task, _found(task)))
+
+        def score(i: int) -> int:
+            asked = str(items[i].get("name") or "")
+            seen = _stems(asked) | {w for p in groups.get(asked, []) for w in _stems(str(p.get("name") or ""))}
+            return len(want & seen)
+
+        best = max(range(len(items)), key=score)
+        if score(best) == 0 and len(items) > 1:
+            return "which item is that for? say its name with what to look for, e.g. 'maggi 840 g'"
+        asked = str(items[best].get("name") or "")
+        name = words if want & _stems(asked) or not asked else f"{asked} {words}"
+        new_items = items[:best] + [{**items[best], "name": name}] + items[best + 1:]
+        v = guard.check_request("order", d.get("agent") or "shopping", new_items, Limits.from_dict(d.get("limits")))
+        if not v.ok:
+            return "cannot look for that: " + "; ".join(v.block)
+        task.details = {**d, "items": new_items, "more": name, "browsed": False, "chosen": None}
+        task.phase, task.status, task.input_needed = "prepare", "queued", None
+        task.deadline_at = clock.now() + TASK_LIFETIME
+        note(task, f"more options for {name} asked by {by}")
+        return (f"looking for more {name} on {SKILLS[task.service]['label']}; the list comes back in a task update (nothing ordered). "
+                "Say only that you are looking for more options")
     if kind == "confirm":
         if task.kind != "order" or task.status != "awaiting_confirm":
             return "nothing to confirm right now"
@@ -932,7 +964,12 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             listed = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in alts)
             return "needs_input", f"Not on {label} ({out.get('problem') or 'not found'}). It has: {listed}. Ask which one to get instead, or whether to drop it."
         return "failed", f"Could not find it on {label} ({out.get('problem') or 'not found'}); nothing was ordered. Offer another service."
-    seen = "; ".join(_option(i) for i in found[:6])
+    more = d.get("more")
+
+    def shown(asked: str) -> int:  # the item they asked to see more of keeps its longer list
+        return MORE_LIMIT if more and asked == more else 5
+
+    seen = "; ".join(_option(i) for i in found[:MORE_LIMIT if more else 6])
     eta = f", about {out['eta']}" if out.get("eta") else ""
     if out.get("logged_in") and not compare_group(task):  # in a comparison the person picks the store first
         # Already logged in: no code needed. Build the cart straight away only for the one product that is clearly what
@@ -945,17 +982,17 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             return "queued", ""
         task.input_needed = "go"
         if len(groups) > 1:
-            listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:5]) + "." for asked, g in groups)
+            listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:shown(asked)]) + "." for asked, g in groups)
             return "awaiting_confirm", (f"Found on {label}: {listed} Delivers to {where}{eta}. Nothing is ordered yet and no login code is "
                                         "needed. Ask which one they want for each item and pass the names, separated by ' | ', as the "
-                                        "value of task_input go.")
+                                        "value of task_input go (more options or another size of one item: task_input more).")
         return "awaiting_confirm", (f"Found on {label}: {seen}; delivers to {where}{eta}. Nothing is ordered yet and no login code is "
-                                    "needed. Ask which one they want and pass its name as the value of task_input go.")
+                                    "needed. Ask which one they want and pass its name as the value of task_input go (more options or another size of one item: task_input more).")
     task.input_needed = "go"
     groups = _groups(task, found)
     if len(groups) > 1:
         # several items: every item's options, not the first six of all (lab 2026-10-10: the paneer options were cut off)
-        listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:5]) + "." for asked, g in groups)
+        listed = " ".join(f"For {asked}: " + "; ".join(_option(i) for i in g[:shown(asked)]) + "." for asked, g in groups)
         return "awaiting_confirm", (f"Found on {label}: {listed} Delivers to {where}{eta}. Nothing is ordered yet. To order, {label} needs a "
                                     f"login: a code will come to {code_to}. Ask which one they want for each item and pass the names, "
                                     "separated by ' | ', as the value of task_input go (or yes for the first of each).")
@@ -1082,7 +1119,9 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
             return {"options": got["options"], "logged_in": False, "login_required": got["login_required"], "problem": ""}
         # one look-up per asked item, together (order lab 2026-10-10: "banana + apple" searched only banana)
         asked = [str(i.get("name") or "") for i in ((task.details or {}).get("items") or [])][:channels.MAX_ITEMS] or [""]
-        results = await asyncio.gather(*(fastpath.search(task.service, cdp, q, lat=lat, lon=lng, pincode=pincode) for q in asked))
+        more = (task.details or {}).get("more")  # the item they asked to see more of gets a longer list
+        results = await asyncio.gather(*(fastpath.search(task.service, cdp, q, lat=lat, lon=lng, pincode=pincode,
+                                                         **({"limit": MORE_LIMIT} if more and q == more else {})) for q in asked))
         many = len(asked) > 1
         found = {"deliverable": all(r["deliverable"] for r in results), "eta": next((r.get("eta") for r in results if r.get("eta")), None),
                  "logged_in": all(r.get("logged_in") for r in results),

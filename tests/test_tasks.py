@@ -1076,3 +1076,67 @@ async def test_blinkit_place_without_a_checked_cart_sends_nothing():
     from app.tasks import fastpath
     with pytest.raises(fastpath.FastPathError):
         await fastpath.place("blinkit", "http://cdp", {"count": 0})
+
+
+async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db, at, sessions, monkeypatch):
+    """Order lab 2026-10-10 (Blinkit): "Maggi more" — the 840 g pack was not among the six listed; the person must be able
+    to see more of one item (or another pack) while choosing, then pick it."""
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    asked = []
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None, limit=6):
+        asked.append((query, limit))
+        if "mushroom" in query:
+            return {"deliverable": True, "eta": None, "items": [{"name": "Button Mushroom", "pack": "180 g", "price": "₹68", "available": True}]}
+        packs = [(f"{70 + n} g", "₹20") for n in range(6)] + [("840 g", "₹167")]  # the big pack is 7th: cut at 6 and 5 shown
+        return {"deliverable": True, "eta": None, "items": [{"name": "Maggi 2 Minutes Noodles", "pack": p, "price": r, "available": True} for p, r in packs][:limit]}
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 17:30")
+    h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="mushroom, maggi",
+                             details={"items": [{"name": "mushroom", "qty": 1}, {"name": "maggi", "qty": 1}]},
+                             limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    assert t.input_needed == "go" and "840 g" not in h.told[-1]
+    assert "which item" in await runtime.provide_input(db, t, kind="more", value="something", by=ELDER, by_is_elder=True)
+    out = await runtime.provide_input(db, t, kind="more", value="maggi", by=ELDER, by_is_elder=True); await db.commit()
+    assert "looking for more maggi" in out
+    await h.tick()
+    await db.refresh(t)
+    assert ("maggi", 12) in asked and ("mushroom", 6) in asked[2:], asked
+    assert t.input_needed == "go" and "840 g" in h.told[-1] and h.agent.runs == []
+    out = await runtime.provide_input(db, t, kind="go", value="Button Mushroom | Maggi 2 Minutes Noodles (840 g)", by=ELDER, by_is_elder=True)
+    assert "going ahead" in out, out
+    assert [c.get("pack") for c in t.details["chosen"]] == ["180 g", "840 g"]
+
+
+async def test_more_with_a_pack_size_searches_those_words_for_that_item(db, at, sessions, monkeypatch):
+    from app.specialists.contract import Limits
+    from app.tasks import fastpath
+
+    asked = []
+
+    async def fake_search(service, cdp, query, lat=None, lon=None, pincode=None, limit=6):
+        asked.append((query, limit))
+        return {"deliverable": True, "eta": None, "items": [{"name": "Amul Paneer", "pack": "200 g", "price": "₹90", "available": True}]}
+
+    monkeypatch.setattr(fastpath, "search", fake_search)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-10 17:40")
+    h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="paneer",
+                             details={"items": [{"name": "paneer", "qty": 2}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+    await db.commit()
+    await h.tick()
+    await db.refresh(t)
+    await runtime.provide_input(db, t, kind="more", value="1 kg", by=ELDER, by_is_elder=True); await db.commit()
+    await db.refresh(t)
+    assert t.details["items"] == [{"name": "paneer 1 kg", "qty": 2}]
+    await h.tick()
+    assert asked[-1] == ("paneer 1 kg", 12)

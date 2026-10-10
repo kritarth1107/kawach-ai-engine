@@ -162,7 +162,7 @@ def _rupees(v) -> str | None:
     return t if t.startswith("₹") else (f"₹{t}" if re.fullmatch(r"\d+(\.\d+)?", t) else t)
 
 
-async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None) -> dict:
+async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 6) -> dict:
     """A store's own search, run in the task's cloud browser. Returns {deliverable, eta, items}; raises FastPathError when
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
@@ -194,7 +194,7 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
             # ids a logged-in cart step needs (Instamart: product, variant, item)
             "cart_ref": p.get("cart_item") or {k: p[k] for k in ("product_id", "spin", "item_id") if p.get(k)} or None,
         }.items() if v is not None})
-    return {"deliverable": True, "eta": out.get("eta"), "items": items[:6], "logged_in": bool(out.get("logged_in"))}
+    return {"deliverable": True, "eta": out.get("eta"), "items": items[:limit], "logged_in": bool(out.get("logged_in"))}
 
 
 async def fares(service: str, cdp_url: str, *, pickup: dict, drop: dict) -> dict:
