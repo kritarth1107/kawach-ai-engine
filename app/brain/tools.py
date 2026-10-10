@@ -18,6 +18,7 @@ from app.brain import guards, policy
 from app.brain.host import ToolHost
 from app.care import store
 from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, fact_key, slug
+from app.care.models import OpenLoop
 from app.core import clock
 from app.llm.router import ToolSpec
 
@@ -574,6 +575,11 @@ async def close_loop_tool(ctx: TurnCtx, a: dict) -> dict:
         loop_id = uuid.UUID(a["loop_id"])
     except ValueError as exc:
         raise ToolRefused("loop_id must be the id shown in OPEN LOOPS") from exc
+    found = await ctx.session.get(OpenLoop, loop_id)
+    if found and found.kind == "delivery" and found.status == "open":
+        # An order's follow-up moves on through order_feedback (it came → how was it → done) and closes by itself (sim
+        # 2026-10-11: closed after "it came", so "how was it?" was never asked).
+        return {"closed": False, "why": "An order's follow-up closes by itself; pass what they said to order_feedback instead."}
     loop = await store.close_loop(ctx.session, loop_id, note=a["outcome"])
     return {"closed": bool(loop)}
 
@@ -879,6 +885,12 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         ask = await _confirm_address_first(ctx, a)
         if ask:
             return ask
+        if not a.get("service"):
+            # The store they named stays with the order through the address question (sim 2026-10-11: "Blinkit se …", then
+            # "haan ghar" → the second call left the store out and three stores were searched).
+            named = await _store_named_with_address(ctx)
+            if named:
+                a = {**a, "service": named}
     place = None
     if a["kind"] == "order" and a.get("area"):
         # Also after the address was confirmed: a place they name now must be a saved one (it went to the default place).
@@ -923,11 +935,21 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
              f"near {a['area']}" if a.get("area") else "the address saved in the store account")
     await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_address_asked",
                              summary=f"Asked to confirm the delivery address for: {a['goal']}", actor_id=speaker,
-                             payload={"speaker": speaker, "ref": ctx.message_ref, "where": where})
+                             payload={"speaker": speaker, "ref": ctx.message_ref, "where": where, "service": a.get("service")})
+    same = f" (service {a['service']}, the same items)" if a.get("service") else ""
     return {"status": "not started yet", "confirm_address": where,
             "next": "Nothing is searched yet. In one short line, ask them to confirm this delivery address (say the place name "
-                    "and the area, not the full line). When they say yes, call start_task again with the same order; if they "
+                    f"and the area, not the full line). When they say yes, call start_task again with the same order{same}; if they "
                     "name another saved place, pass it as area."}
+
+
+async def _store_named_with_address(ctx: TurnCtx) -> str | None:
+    """The store given with this person's order when its address was asked (in an earlier turn, minutes ago), if any."""
+    speaker = ctx.speaker.get("id") or ctx.elder_id
+    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - ADDRESS_OK_FOR,
+                                           kinds=["order_address_asked"])
+             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("ref") != ctx.message_ref]
+    return (asked[-1].payload or {}).get("service") if asked else None
 
 
 def _named_place_problem(a: dict, place: dict) -> dict | None:
@@ -1310,6 +1332,68 @@ async def task_status(ctx: TurnCtx, a: dict) -> dict:
                        "browser": sandbox.audit_text(t), "when": clock.ist(t.created_at).strftime("%d %b %H:%M")} for t in rows]}
 
 
+FEEDBACK_ITEM = {
+    "type": "object",
+    "properties": {
+        "item": {"type": "integer", "description": "The product's number in the follow-up (1, 2, …)"},
+        "liked": {"type": "string", "enum": ["yes", "no", "mixed"]},
+        "usual": {"type": "string", "enum": ["usual", "new"], "description": "usual: something they usually have; new: a first try"},
+        "again": {"type": "string", "enum": ["yes", "no"], "description": "Whether to get it again ('agli baar bhi yahi lana' is yes)"},
+        "note": {"type": "string", "description": "What they said about it, in a few words (taste, freshness, size, price, brand)"},
+    },
+    "required": ["item"],
+}
+
+
+@tool(
+    "order_feedback",
+    "What someone says about an order after it was placed: whether it came (arrived yes / no / partly = something missing or "
+    "wrong), the problem in a few words, and how they liked each product (liked yes/no/mixed; usual = something they usually "
+    "have, new = a first try; again = whether to get it again; note = their words in short). Use it for their answers to your "
+    "'has it come?' and 'how was it?' questions, and whenever they bring it up themselves ('order nahi aaya', 'doodh phata hua "
+    "tha', 'khakhra bahut accha tha'). Products are the numbers in the follow-up. It saves everything in the care memory, tells "
+    "the caregiver by itself when the order is long overdue or came wrong, and its result says what to tell them and what, if "
+    "anything, to ask next. Leave out task_id for their latest order.",
+    {
+        "task_id": {"type": "string", "description": "The order's task id (in the follow-up or the task update)"},
+        "arrived": {"type": "string", "enum": ["yes", "no", "partly"]},
+        "problem": {"type": "string", "description": "What was wrong, missing or damaged, in a few words"},
+        "items": {"type": "array", "items": FEEDBACK_ITEM},
+        "order_again": {"type": "string", "enum": ["yes", "no"], "description": "Order from this restaurant or shop again?"},
+        "note": {"type": "string", "description": "Anything else they said about the order as a whole, in a few words"},
+        "done": {"type": "boolean", "description": "true when they seem done talking about it (short answers, busy, tired)"},
+    },
+    [],
+)
+async def order_feedback(ctx: TurnCtx, a: dict) -> dict:
+    from sqlalchemy import select
+
+    from app.tasks import aftercare
+    from app.tasks.models import Task
+
+    if ctx.is_system:
+        # Only what a person says goes in (sim 2026-10-11: on a scheduled turn it decided "still not come" from an answer
+        # given ten minutes earlier and told the caregiver; the founder's rule is their complaint, asked again when late).
+        raise ToolRefused("Only their own answer goes into order_feedback. Ask them now with send_message, then reply none.")
+
+    if a.get("task_id"):
+        task = await _task(ctx, a["task_id"])
+    else:
+        rows = (await ctx.session.execute(
+            select(Task).where(Task.family_id == ctx.family_id, Task.status == "done", Task.kind.in_(("order", "ride")),
+                               Task.created_at >= clock.now() - timedelta(days=7)).order_by(Task.created_at.desc()).limit(10)
+        )).scalars()
+        task = next((t for t in rows if (t.result or {}).get("placed") or (t.result or {}).get("booked")), None)
+    if not task or not ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
+        raise ToolRefused("No placed order to give feedback on. If it is about something not ordered through you, save it with "
+                          "remember (domain preference).")
+    return await aftercare.record(
+        ctx.session, task, by=ctx.speaker.get("id") or ctx.elder_id, source_kind=ctx.source_kind,
+        confidence=0.9 if ctx.speaker_is_elder else 1.0, arrived=a.get("arrived"), problem=a.get("problem"), items=a.get("items"),
+        order_again=a.get("order_again"), note=a.get("note"), done=bool(a.get("done")), ref=ctx.message_ref,
+    )
+
+
 # ── care views: refills, emergency card, care team, reports, wellbeing, family tasks, spending ──
 # Each reads the same data the dashboard shows (app.care.features), so WhatsApp and the dashboard agree.
 
@@ -1509,8 +1593,12 @@ async def past_orders(ctx: TurnCtx, a: dict) -> dict:
         items = [f"{i.get('qty', 1)} x {i.get('name')}" for i in (r.get("items") or (t.details or {}).get("items") or [])]
         if word and word not in (" ".join(items) + " " + t.goal).lower():
             continue
+        fb = r.get("feedback") or {}
+        liked = {"yes": "liked", "no": "did not like", "mixed": "mixed"}
+        said = [f"{liked[v['liked']]} item {n}" + (f" ({v['note']})" if v.get("note") else "")
+                for n, v in (fb.get("items") or {}).items() if v.get("liked") in liked]
         out.append({"when": clock.ist(t.created_at).strftime("%d %b %Y"), "service": t.service, "kind": t.kind, "items": items,
-                    "total": r.get("total") or r.get("fare"), "for": t.subject_id})
+                    "total": r.get("total") or r.get("fare"), "for": t.subject_id, **({"they_said": "; ".join(said)} if said else {})})
         if len(out) >= int(a.get("limit") or 10):
             break
     return {"orders": out} if out else {"orders": [], "note": "Nothing placed before; ask what they want, with brand and size."}

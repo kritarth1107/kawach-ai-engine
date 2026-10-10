@@ -45,7 +45,7 @@ def _judge(states):
     return fake
 
 
-async def test_connector_order_is_told_on_the_way_once_and_delivered_closes_the_follow_up(db, at, sessions, monkeypatch):
+async def test_connector_order_is_told_on_the_way_once_and_delivered_moves_to_how_was_it(db, at, sessions, monkeypatch):
     at("2026-10-10 20:00")
     t = await _placed(db)
     told = []
@@ -69,10 +69,12 @@ async def test_connector_order_is_told_on_the_way_once_and_delivered_closes_the_
     at("2026-10-10 20:15")
     await tracking.sweep(sessions, None, notify, host_for=lambda f: host)
     assert len(told) == 2 and "was delivered" in told[1][1]
+    assert "ask whether they got it and everything is all right" in told[1][1], "she ordered it for herself: asked at once"
     await db.refresh(t)
     assert t.result["delivered"] is True and t.details["tracking"]["done"]
     loop = (await db.execute(select(OpenLoop).where(OpenLoop.dedupe_key == f"delivery:{t.id}"))).scalar_one()
-    assert loop.status == "done", "the 'did it arrive?' question is not asked any more"
+    assert loop.status == "open" and loop.detail["stage"] == "feedback", "next: how was it"
+    assert loop.wake_at.isoformat().startswith("2026-10-10T17:45"), "groceries: asked 3 hours after it came (IST 23:15 → deferred by quiet hours)"
     at("2026-10-10 20:30")
     assert await tracking.sweep(sessions, None, notify, host_for=lambda f: host) == 0, "finished: no more looks"
 
@@ -386,3 +388,23 @@ async def test_a_delivered_update_is_not_blocked_as_a_repeat_of_placed(db, at):
     nudge = tools.TurnCtx(session=db, host=None, family_id=FAM, elder=E, speaker={"id": "saheli-scheduler", "role": "system"}, members=[E],
                           message_ref="loop:x")
     assert [p for p in await tools.send_problems(nudge, ELDER, "आपका ब्लिंकिट सामान घर पहुँच गया है।") if "already sent" in p]
+
+
+async def test_a_tap_is_answered_in_the_script_the_confirm_was_written_in(db, at):
+    from app.brain.loop import TurnRequest, run_turn
+    from app.sim.world import SimHost
+
+    at("2026-10-11 10:30")
+    t = await _awaiting(db)
+    E = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    await store.save_roster(db, FAM, E, [E])
+    await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="user", text="blinkit se ek Amul butter mangwa do", meta={})
+    await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="assistant", text="ब्लिंकिट पर अमूल बटर तैयार है, ₹75। ऑर्डर कर दूँ?", meta={})
+    await db.commit()
+
+    class Shadow(SimHost):
+        shadow = True
+
+    res = await run_turn(db, Shadow(), TurnRequest(family_id=FAM, elder=E, speaker=E, members=[E],
+                                                  text=f"v2:od:yes:{t.id}:{t.details['cart_fp'][:8]}", message_ref="b2"))
+    assert res.reply == outcomes.ORDER_TAP["devanagari"]["yes"]

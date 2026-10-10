@@ -60,9 +60,21 @@ def _hit(item: dict, kw: list[str]) -> bool:
     return any(k in text for k in kw)
 
 
+class PlacesHost(SimHost):
+    """A family with one saved place, as every real family that orders has (without it the brain rightly asks for an
+    address first, and the case would test that instead)."""
+
+    async def call(self, tool, args, *, family_id, subject_id, actor_id):
+        if tool == "delivery_place":
+            return {"addressId": "addr-ghar", "nickname": "Ghar", "full": "12 Civil Lines, Raipur 492001", "pincode": "492001", "matched": True}
+        if tool == "list_places":
+            return {"places": [{"name": "Ghar", "address": "12 Civil Lines, Raipur 492001", "isDefault": True}]}
+        return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
+
+
 async def brain_case(lang: str, message: str, expected: list[dict]) -> list[str]:
     fam = f"langeval-{uuid.uuid4().hex[:8]}"
-    host = SimHost()
+    host = PlacesHost()
     async with SessionLocal() as session:
         res = await run_turn(session, host, TurnRequest(family_id=fam, elder=ELDER, speaker=ELDER, members=[ELDER, SON], text=message,
                                                         message_ref=f"m-{uuid.uuid4().hex[:8]}", channel="whatsapp"))

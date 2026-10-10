@@ -7,7 +7,7 @@ to do if nobody answered (alert_rule). The decision itself is the brain's, on a 
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Callable
 
 from sqlalchemy import select
@@ -55,12 +55,6 @@ KIND_PROMPTS = {
         "attaching buttons {{\"kind\": \"{set}\", \"key\": \"{key}\"}}. If the conversation already shows how it turned out, "
         "log_outcome instead of asking. Then close_loop {id} and reply none."
     ),
-    "delivery": (
-        "[Scheduled follow-up] {title}. Ask person {owner} one short question in their language with send_message: did it come, "
-        "and was everything right? When they answer: arrived and fine → close_loop {id}; not arrived → look at task_status, "
-        "tell them plainly what you know and offer to tell the caregiver (send_message), keep the loop open; wrong or missing "
-        "items → say you are noting it, tell the caregiver, close_loop {id}. Reply none."
-    ),
     "checkin": (
         "[Caregiver check-in] It is the weekly check-in on person {owner} themselves. Send them one short, warm message with "
         "send_message asking how they are doing this week (sleep, stress, their own health). One question only. If PATTERNS "
@@ -87,7 +81,12 @@ KIND_PROMPTS = {
 }
 
 
-async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str:
+async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str | None:
+    """The scheduled turn for a due loop; None when there is nothing left to do (the loop is closed)."""
+    if loop.kind == "delivery":
+        from app.tasks import aftercare  # did the order come, and later how was it
+
+        return await aftercare.wake_prompt(session, loop)
     if loop.kind in KIND_PROMPTS:
         d = loop.detail or {}
         return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver",
@@ -189,6 +188,14 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
             if not loop or loop.status != "open":
                 continue
             wakes = int((loop.detail or {}).get("wakes", 0))
+            expire_at = (loop.detail or {}).get("expire_at")
+            if expire_at and clock.now() >= datetime.fromisoformat(expire_at):
+                # a follow-up nobody answered closes by itself, without a last message
+                loop.status, loop.closed_note, loop.updated_at = "expired", "no answer; closed by itself", clock.now()
+                await store.record_event(session, family_id=family_id, subject_id=loop.subject_id, kind="loop_expired", summary=loop.title)
+                await session.commit()
+                stats["expired"] += 1
+                continue
             if wakes >= MAX_WAKES:
                 loop.status, loop.closed_note, loop.updated_at = "expired", "no resolution after wake-ups", clock.now()
                 await store.record_event(session, family_id=family_id, subject_id=loop.subject_id, kind="loop_expired", summary=loop.title)
@@ -207,11 +214,22 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 stats["failed"] += 1
                 continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
-            # Count the wake before the brain runs, so a crash cannot make it fire forever.
-            loop.detail = {**(loop.detail or {}), "wakes": wakes + 1}
-            # One-shot reminders (family tasks, appointments, refills) stay open on the dashboard but wake only once.
-            once = wakes + 1 >= int((loop.detail or {}).get("max_wakes", MAX_WAKES))
-            loop.wake_at = None if once else clock.now() + timedelta(hours=1)
+            kind = loop.kind
+            if prompt is None:
+                loop.status, loop.closed_note, loop.updated_at = "done", "nothing left to ask", clock.now()
+                await session.commit()
+                continue
+            # Count the wake before the brain runs, so a crash cannot make it fire forever. "runs" never goes back (an order's
+            # follow-up starts its wakes again when they say it has not come yet): it keeps each wake's turn its own.
+            runs = int((loop.detail or {}).get("runs", wakes)) + 1
+            d = loop.detail = {**(loop.detail or {}), "wakes": wakes + 1, "runs": runs}
+            # One-shot reminders (family tasks, appointments, refills) stay open on the dashboard but wake only once; a loop
+            # with expire_at wakes once more then, to close itself.
+            once = wakes + 1 >= int(d.get("max_wakes", MAX_WAKES))
+            if once:
+                loop.wake_at = datetime.fromisoformat(d["expire_at"]) if d.get("expire_at") else None
+            else:
+                loop.wake_at = clock.now() + timedelta(minutes=int(d.get("rewake_minutes") or 60))
             await session.commit()
         try:
             async with sessions() as session:
@@ -220,7 +238,9 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                     host_for(family_id),
                     TurnRequest(
                         family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt,
-                        message_ref=f"wake:{loop_id}:{wakes + 1}", channel="scheduler",
+                        # an order's follow-up answers their own order: like a task update, it is not held back as a nudge
+                        # (sim 2026-10-11: "has it come?" was blocked because they had not answered "placed")
+                        message_ref=f"{'task:' if kind == 'delivery' else ''}wake:{loop_id}:{runs}", channel="scheduler",
                     ),
                 )
             stats["ran"] += 1

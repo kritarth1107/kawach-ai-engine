@@ -396,7 +396,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     messaged |= await recently_messaged(session, req)
     from app.tasks import runtime as task_runtime
 
-    ordering_ok = any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions) or bool(
+    ordering_ok = any(a["tool"] in ("start_task", "task_input", "order_feedback") and a.get("ok") for a in ctx.actions) or bool(
         await data.tasks() if data else await task_runtime.live_tasks(session, req.family_id))
     prices_ok = ordering_ok or any(a["tool"] in ("past_orders", "spending") and a.get("ok") for a in ctx.actions)
     problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok, prices_ok=prices_ok)
@@ -467,6 +467,13 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     if parsed_button and parsed_button[0] == "od":
         # A tap on an order's confirm buttons: yes / cancel act at once; change (or a yes that needs explaining) goes to the brain.
         speaker_prof = (await writing_profiles(session, req.family_id, [req.speaker])).get(req.speaker["id"])
+        if not (speaker_prof or {}).get("saved") and guards.canned_key(speaker_prof) in ("english", "indic"):
+            # A few Roman words ("blinkit se butter", "haan ghar") do not say the language: answer the tap in the script the
+            # confirm itself was written in (sim 2026-10-11: a Hindi confirm got "Okay, placing the order now").
+            recent = await store.recent_turns(session, req.family_id, req.speaker["id"], limit=6)
+            shown = next((guards.script_of(t.text) for t in reversed(recent) if t.role == "assistant" and (t.text or "").strip() not in ("", "none")), None)
+            if shown and shown != "latin":
+                speaker_prof = {**(speaker_prof or {}), "script": shown}
         tapped, for_brain = await outcomes.handle_order_button(session, family_id=req.family_id, speaker_id=req.speaker["id"],
                                                                elder_id=req.elder["id"], code=parsed_button[1], task_id=parsed_button[2],
                                                                profile=speaker_prof)

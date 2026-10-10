@@ -1,7 +1,8 @@
 """Whole order conversations before a deploy: the real brain, product matcher and delivery-status reader, with fake stores
 (catalogue, cart, place, order status) and the real task runtime. Plays the night of 2026-10-10's conversations: several
 items with flavours, a flavour the store does not have, a change after the confirm, a tap on an old confirm, cancel,
-the confirm buttons and the updates after placing. Paid: about 25 fast-model calls (~₹10).
+the confirm buttons and the updates after placing; and after an order: did it come, how was it (remembered), and a late
+order told to the caregiver. Paid: about 40 fast-model calls (~₹10).
 
     DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_ordersim \\   (its own database: emptied each run)
     GCP_PROJECT_ID=sunny-ship-508214-q1 GOOGLE_CLOUD_PROJECT=sunny-ship-508214-q1 MEMORY_EMBEDDINGS=off \\
@@ -23,12 +24,14 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from app.brain.loop import TurnRequest, run_turn
+from app.brain import wake
 from app.brain.wake import system_turn
 from app.care import store
+from app.care.models import OpenLoop
 from app.core import clock
 from app.db.session import Base, SessionLocal, engine
 from app.sim.world import SimHost
-from app.tasks import fastpath, runtime
+from app.tasks import aftercare, fastpath, runtime
 from app.tasks.models import Task
 
 ELDER = {"id": "elder-sim", "name": "Vasundara Devi", "role": "elder"}
@@ -109,7 +112,7 @@ class Browser:
 class StoreHost(SimHost):
     async def call(self, tool, args, *, family_id, subject_id, actor_id):
         if tool == "delivery_place":
-            if args.get("words") and "ghar" not in args["words"].lower() and "home" not in args["words"].lower():
+            if args.get("words") and not any(w in args["words"].lower() for w in ("ghar", "home", "घर", "civil")):  # the fake's own book
                 return {"matched": False, "saved": ["Ghar"]}
             return {"addressId": "addr-ghar", "nickname": "Ghar", "full": "12 Civil Lines, Raipur 492001", "lat": 21.24, "lng": 81.69,
                     "pincode": "492001", "matched": True}
@@ -129,7 +132,25 @@ class Conversation:
         self.notified = 0
 
     def maa_messages(self) -> list[dict]:
-        return [m for m in self.host.world.sent if m.get("to") == ELDER["id"]]
+        return self.messages_to(ELDER["id"])
+
+    def messages_to(self, person: str) -> list[dict]:
+        return [m for m in self.host.world.sent if m.get("to") == person]
+
+    async def wake(self) -> int:
+        """The scheduler's wake-up run (due follow-ups), as production runs it every few minutes. Returns how many messages
+        went out."""
+        before = len(self.host.world.sent)
+        await wake.wake_due(SessionLocal, lambda fid: self.host)
+        for m in self.host.world.sent[before:]:
+            self.log.append(f"SAHELI (wake → {'Maa' if m.get('to') == ELDER['id'] else m.get('to')}): {m.get('text')}")
+            if str(m.get("text") or "").count("?") > 2:  # "आ गया? सब ठीक है न?" is one ask
+                self.problems.append(f"more than one question in one message: {m.get('text')}")
+        return len(self.host.world.sent) - before
+
+    async def facts(self, domain: str) -> list:
+        async with SessionLocal() as s:
+            return await store.facts(s, self.fam, ELDER["id"], domains=[domain], statuses=("active",))
 
     async def say(self, text: str) -> str:
         clock.set_now(clock.now() + timedelta(seconds=30))  # people take a moment to answer
@@ -146,12 +167,12 @@ class Conversation:
 
     async def notify(self, family_id, requested_by, prompt):
         self.notified += 1
-        before = len(self.maa_messages())
-        self.log.append(f"  <update> {prompt[:150]}")
+        before = len(self.messages_to(requested_by))
+        self.log.append(f"  <update to {'Maa' if requested_by == ELDER['id'] else requested_by}> {prompt[:150]}")
         await system_turn(SessionLocal, self.host, family_id,
                           f"{prompt} (Requested by {requested_by}: tell them with send_message to {requested_by}, in their language, then reply none.)",
                           f"task:{uuid.uuid4().hex[:12]}", deliver_to=requested_by)
-        new = self.maa_messages()[before:]
+        new = self.messages_to(requested_by)[before:]
         for m in new:
             ids = [b.get("id") for b in m.get("buttons") or []]
             self.log.append(f"SAHELI (sent): {m.get('text')}" + (f"   buttons={ids}" if ids else ""))
@@ -223,6 +244,26 @@ async def several_items_tap_yes_tracked(c: Conversation):
     clock.set_now(clock.now() + timedelta(minutes=9))
     t = await c.ticks(lambda t: (t.result or {}).get("delivered"), most=1)
     c.check(bool((t.result or {}).get("delivered")), f"delivery not seen: {(t.details or {}).get('tracking')}")
+    # she got it; three hours later Saheli asks how it was, one question at a time, and remembers the answers
+    await c.say("haan mil gaya, sab theek hai")
+    t = await c.task()
+    c.check(((t.result or {}).get("feedback") or {}).get("arrived") == "yes", f"arrival not saved: {(t.result or {}).get('feedback')}")
+    clock.set_now(clock.now() + timedelta(hours=3, minutes=5))
+    t = await c.task()
+    asked = await c.wake()
+    already = int((((t.result or {}).get("feedback") or {}).get("answers")) or 0)
+    c.check(asked == 1 or already > 0, "no 'how was it?' question (and they had not talked about it)")
+    await c.say("khakhra bahut accha laga, pehli baar khaya")
+    await c.say("doodh to roz wala hi hai")
+    await c.say("haan agli baar bhi yahi khakhra lana")
+    t = await c.task()
+    fb = (t.result or {}).get("feedback") or {}
+    likes = {f.value.get("item"): f.value for f in await c.facts("preference")}
+    khakhra = likes.get("Charliee Methi Khakhra") or {}
+    c.check(khakhra.get("liked") == "yes" and khakhra.get("usual") == "new", f"khakhra not remembered as a liked first try: {likes}")
+    c.check(any(v.get("usual") == "usual" for k, v in likes.items() if "Milk" in str(k)), f"milk not remembered as usual: {likes}")
+    c.check(int(fb.get("answers") or 0) <= aftercare.MAX_QUESTIONS + 1, f"too many questions: {fb}")
+    c.check(khakhra.get("again") == "yes", f"'get the same khakhra again' not saved: {khakhra}")
 
 
 async def flavour_then_cancel(c: Conversation):
@@ -260,9 +301,38 @@ async def missing_flavour_change_and_old_tap(c: Conversation):
         c.check(len(c.shop.placed) == 1, f"not placed once after the new Yes ({len(c.shop.placed)})")
 
 
-SCENARIOS = [("several items, Yes tap, tracked to the door", several_items_tap_yes_tracked),
+async def late_order_tells_the_caregiver(c: Conversation):
+    await c.setup()
+    await c.say("blinkit se ek Amul butter mangwa do")
+    await c.say("haan ghar")
+    await c.ticks(lambda t: t.status == "awaiting_confirm")
+    ids = confirm_buttons(c)
+    c.check(len(ids) == 3, f"confirm buttons missing: {ids}")
+    if not ids:
+        return
+    await c.say(ids[0])
+    t = await c.ticks(lambda t: t.status == "done")
+    c.check(bool((t.result or {}).get("placed")), "not placed")
+    # the store keeps saying "being packed"; 30 minutes later Saheli asks whether it came
+    clock.set_now(clock.now() + timedelta(minutes=31))
+    await c.ticks(lambda t: True, most=1)
+    c.check(await c.wake() == 1, "no 'has it come?' question")
+    await c.say("nahi aaya abhi tak")
+    t = await c.task()
+    c.check(not (t.details or {}).get("aftercare", {}).get("caregiver_due"), "caregiver told before it was late")
+    # ten minutes later it is long overdue: asked again, still not here → Kritarth is told
+    clock.set_now(clock.now() + timedelta(minutes=11))
+    c.check(await c.wake() == 1, "not asked again when it became late")
+    await c.say("abhi bhi nahi aaya")
+    before = len(c.messages_to(SON["id"]))
+    await c.ticks(lambda t: True, most=1)
+    c.check(len(c.messages_to(SON["id"])) > before, "the caregiver was not told about the late order")
+
+
+SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several_items_tap_yes_tracked),
              ("flavour kept, then cancel", flavour_then_cancel),
-             ("missing flavour, change, old Yes tap", missing_flavour_change_and_old_tap)]
+             ("missing flavour, change, old Yes tap", missing_flavour_change_and_old_tap),
+             ("late order: asked, checked again, caregiver told", late_order_tells_the_caregiver)]
 
 
 async def main() -> int:
@@ -303,6 +373,8 @@ async def main() -> int:
             async with SessionLocal() as s:  # nothing of this conversation carries into the next one
                 for t in (await s.execute(select(Task).where(Task.family_id == c.fam, Task.status.in_(runtime.LIVE)))).scalars():
                     t.status = "cancelled"
+                for loop in (await s.execute(select(OpenLoop).where(OpenLoop.family_id == c.fam, OpenLoop.status == "open"))).scalars():
+                    loop.status = "cancelled"
                 await s.commit()
             clock.set_now(None)
         if c.browser.agent_runs:

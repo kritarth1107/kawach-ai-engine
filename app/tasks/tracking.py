@@ -1,6 +1,6 @@
 """Delivery tracking after an order is placed: the store's own status for the order, read by a fast model (stores word it
 in their own way, in any language), told to the person once when it is on the way and once when it was delivered.
-Delivered closes the "did it arrive?" follow-up, so the order closes itself; a store cancellation is told plainly.
+Delivered moves the order's follow-up on to "how was it?" (app.tasks.aftercare); a store cancellation is told plainly.
 
 Where the status comes from:
 - Instamart, Swiggy: the linked account's order list on the store's connector (free), every few minutes.
@@ -20,10 +20,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.care import store
-from app.care.models import OpenLoop
 from app.core import clock
 from app.llm import router
-from app.tasks import fastpath
+from app.tasks import aftercare, fastpath
 from app.tasks.models import Task
 
 logger = logging.getLogger(__name__)
@@ -110,14 +109,16 @@ async def _status(task: Task, host, agent, profile_for) -> dict | None:
             logger.warning("tracking: stop session failed")
 
 
-def _say(task: Task, label: str, state: str, minutes: int | None, words: str) -> str:
+def _say(task: Task, label: str, state: str, minutes: int | None, words: str, ask_arrival: bool = False) -> str:
     what = f"{label} order ({task.goal[:80]})"
     if state == "on_the_way":
         when = f", arriving in about {minutes} min" if minutes else ""
         return f"[Task update] {what}: the store says it is on the way{when}. Tell them in one short line; ask nothing."
     if state == "delivered":
-        return (f"[Task update] {what}: the store says it was delivered. Tell them in one short line; ask nothing. If they "
-                "later say something is missing or wrong, tell the caregiver.")
+        if ask_arrival:
+            return (f"[Task update] {what}: the store says it was delivered. Tell them in one short message and ask whether they got "
+                    f"it and everything is all right (one question). Their answer goes into order_feedback with task_id {task.id}.")
+        return f"[Task update] {what}: the store says it was delivered. Tell them in one short line; ask nothing."
     return (f"[Task update] {what}: the store cancelled it ({words[:120]}). Nothing will come and nothing is to be paid. Tell "
             "them plainly in one short line and offer to order it again.")
 
@@ -156,9 +157,11 @@ async def sweep(sessions: async_sessionmaker, agent, notify, *, profile_for=None
                 tr["missing"] = int(tr.get("missing") or 0) + 1
             label = SKILLS[task.service]["label"]
             state, told = seen["state"], list(tr.get("told") or [])
+            # delivered: the follow-up moves on to "how was it?"; the person it is for is asked whether they got it
+            ask_arrival = await aftercare.store_delivered(session, task, now) if state == "delivered" else False
             if state in ("delivered", "cancelled") or (state == "on_the_way" and "on_the_way" not in told):
                 words = str((status or {}).get("currentStatus") or (status or {}).get("status") or (status or {}).get("text") or "")
-                sends.append(_say(task, label, state, seen["minutes_left"], words))
+                sends.append(_say(task, label, state, seen["minutes_left"], words, ask_arrival=ask_arrival))
                 told.append(state)
             tr.update(state=state if state != "unknown" else tr.get("state"), told=told, last_at=now.isoformat())
             placed_at = datetime.fromisoformat(tr["placed_at"])
@@ -175,10 +178,9 @@ async def sweep(sessions: async_sessionmaker, agent, notify, *, profile_for=None
             result = dict(task.result or {})
             if finished:
                 result.update({"delivered": state == "delivered", "store_cancelled": state == "cancelled", "tracked_at": now.isoformat()})
-                loop = (await session.execute(select(OpenLoop).where(
-                    OpenLoop.family_id == task.family_id, OpenLoop.dedupe_key == f"delivery:{task.id}", OpenLoop.status == "open"))).scalar_one_or_none()
+                loop = await aftercare.loop_for(session, task) if state == "cancelled" else None
                 if loop:
-                    await store.close_loop(session, loop.id, note=f"the store says {state}")
+                    await store.close_loop(session, loop.id, note="the store cancelled it")
                 await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id,
                                          kind="task_delivered" if state == "delivered" else "task_store_cancelled",
                                          summary=f"{label}: {'delivered' if state == 'delivered' else 'cancelled by the store'}",

@@ -576,16 +576,10 @@ def _eta_wait(task: Task) -> timedelta:
 
 
 async def delivery_followup(session: AsyncSession, task: Task) -> None:
-    """After an order or ride is placed: one follow-up to check it arrived (the task is not finished until it has)."""
-    label = SKILLS[task.service]["label"]
-    what = "the cab came" if task.kind == "ride" else "the order arrived"
-    await store.open_loop(
-        session, family_id=task.family_id, subject_id=task.subject_id, kind="delivery",
-        title=f"Check {what}: {label} {task.goal}"[:200], owner_id=task.requested_by,
-        wake_at=clock.now() + _eta_wait(task), alert_rule="dashboard", dedupe_key=f"delivery:{task.id}",
-        detail={"next_action": f"confirm {what}", "task_id": str(task.id), "max_wakes": 1,
-                "order_id": (task.result or {}).get("order_id") or (task.result or {}).get("ride_id")},
-    )
+    """After an order or ride is placed: the follow-up that asks whether it came, and later how it was (app.tasks.aftercare)."""
+    from app.tasks import aftercare
+
+    await aftercare.open_followup(session, task)
 
 
 async def _approval_gate(session: AsyncSession, task: Task, amount: float | None, by: str, choice: dict | None = None) -> str | None:
@@ -1198,13 +1192,17 @@ async def family_tastes(session: AsyncSession, task: Task) -> list[str]:
         select(Task).where(Task.family_id == task.family_id, Task.kind == "order", Task.status == "done",
                            Task.created_at >= clock.now() - timedelta(days=90)).order_by(Task.created_at.desc()).limit(30)
     )).scalars()
-    seen: set[str] = set()
+    bought: dict[tuple[str, str], int] = {}
     for t in rows:
+        if not (t.result or {}).get("placed"):
+            continue
         for c in (t.details or {}).get("chosen") or []:
             name = f"{_label(c)}".strip()
-            if name and name not in seen and (t.result or {}).get("placed"):
-                seen.add(name)
-                out.append(f"bought before on {SKILLS[t.service]['label']}: {name}")
+            if name:
+                bought[(SKILLS[t.service]["label"], name)] = bought.get((SKILLS[t.service]["label"], name), 0) + 1
+    # what they said about it after it came (liked, a first try, not again) is in the preference and never-order facts below
+    for (label, name), n in sorted(bought.items(), key=lambda x: -x[1]):
+        out.append(f"bought before on {label}: {name}" + (f" ({n} times)" if n > 1 else ""))
     try:
         facts = await store.facts(session, task.family_id, task.subject_id, domains=["preference", "diet", "no_order", "allergy", "dish"],
                                   statuses=("active",))
@@ -2058,4 +2056,10 @@ async def tick(
         stats["tracked"] = await tracking.sweep(sessions, agent, notify, profile_for=profile_for, host_for=host_for)
     except Exception:  # noqa: BLE001
         logger.exception("delivery tracking failed")
+    try:
+        from app.tasks import aftercare
+
+        stats["caregivers_told"] = await aftercare.sweep(sessions, notify)
+    except Exception:  # noqa: BLE001
+        logger.exception("order aftercare failed")
     return stats

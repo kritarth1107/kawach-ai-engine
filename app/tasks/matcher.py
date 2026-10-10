@@ -30,8 +30,9 @@ For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
 - closest: when exact is empty, the nearest other variant of the same kind of product (asked peri peri muruku, there is
   only butter muruku → closest is butter muruku), else null. It will NOT be bought without asking the person.
 - Medicines (medicine: true): exact only when the medicine name and strength match.
-- FAMILY (when given): products this family bought before and what they like or must avoid. Among exact listings, put one
-  they bought before or like first; never rank first something against their diet or "never order" notes.
+- FAMILY (when given): products this family bought before and what they said about them, what they like or must avoid.
+  Among exact listings, put one they bought before and liked first; never rank first one they did not like, or one against
+  their diet or "never order" notes.
 """
 
 

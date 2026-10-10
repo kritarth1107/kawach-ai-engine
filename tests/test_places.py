@@ -129,3 +129,19 @@ async def test_a_place_named_after_the_address_was_confirmed_must_still_be_saved
     from app.tasks.models import Task
     task = await db.get(Task, __import__("uuid").UUID(r["task_id"]))
     assert ((task.details or {}).get("limits") or {}).get("place", {}).get("nickname") == "Vish's Home"
+
+
+async def test_the_store_they_named_stays_with_the_order_after_the_address_question(db, at):
+    """Sim 2026-10-11: "Blinkit se …" → address asked → "haan ghar": the second start_task left the store out and three stores
+    were searched instead of Blinkit."""
+    at("2026-10-11 10:30")
+    host = Host()
+    out, _ = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
+    assert "service blinkit" in json.loads(out)["next"]
+    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "category": "grocery", "goal": "milk",
+                                                                             "items": [{"name": "milk"}]})
+    r = json.loads(out)
+    assert not err and r.get("task_id") and "looking_on" not in r, r
+    from app.tasks.models import Task
+    task = await db.get(Task, __import__("uuid").UUID(r["task_id"]))
+    assert task.service == "blinkit"
