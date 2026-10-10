@@ -82,7 +82,7 @@ async def test_cost_ceiling_pauses_and_asks_whether_to_keep_trying(db, at, sessi
     caregiver (here the person who asked: no household on file) is asked keep trying or cancel; keep resumes it."""
     at("2026-10-02 10:00")
     monkeypatch.setenv("TASK_MAX_COST_INR", "20")
-    h = H(sessions, FakeAgent(script={"prepare": [OTP]}, steps_per_run=30))  # each run costs ~₹30
+    h = H(sessions, FakeAgent(script={"prepare": [OTP]}, steps_per_run=100))  # each run costs ~₹30 (₹0.3 a step)
     t = await order(db)
     await h.tick(); await h.tick()
     await db.refresh(t)

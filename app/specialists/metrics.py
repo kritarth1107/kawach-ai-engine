@@ -22,7 +22,9 @@ ALERT_SUCCESS_BELOW = 0.7
 
 
 def _per_step() -> float:
-    return float(os.getenv("BROWSER_COST_PER_STEP_INR", "1.0"))
+    # Measured 2026-10-11 against the Browser Use bill: two Swiggy orders estimated at ~200 steps cost $0.81 (~₹68), so
+    # about ₹0.3 a step (₹1 paused orders at "₹200" after ~₹60 of real spend).
+    return float(os.getenv("BROWSER_COST_PER_STEP_INR", "0.3"))
 
 
 def _per_call() -> float:
