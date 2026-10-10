@@ -71,8 +71,9 @@ class FakeMatcher:
         self.script: dict = {}
         self.calls: list = []
 
-    async def choose(self, items, listings, *, medicine=False):
+    async def choose(self, items, listings, *, medicine=False, family=None):
         self.calls.append(([i.get("name") for i in items], [[x.get("name") for x in ls] for ls in listings]))
+        self.family = family
         out = []
         for it, ls in zip(items, listings):
             want = self.script.get(it.get("name"))

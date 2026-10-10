@@ -459,7 +459,21 @@ async def daily_job() -> dict:
             await session.commit()
     except Exception:  # noqa: BLE001 — refills are already saved; a course check failing must not undo them
         logger.exception("end finished courses failed")
-    return {"refills": opened, "courses_ended": ended}  # patterns and baselines are learned in the nightly dream (app/care/dream.py)
+    stores: dict = {}
+    try:
+        # One guest look-up per store: a changed site is found before a family's order hits it (alert to the founder).
+        from app.brain.tools import task_agent
+        from app.tasks import store_health
+
+        async def alert(subject: str, text: str) -> None:
+            from app.tasks.credits import OPS
+
+            await LiveHost().call("ops_alert", {"subject": subject, "text": text}, family_id=OPS, subject_id=OPS, actor_id=OPS)
+
+        stores = await store_health.check(task_agent(), alert)
+    except Exception:  # noqa: BLE001
+        logger.exception("store health check failed")
+    return {"refills": opened, "courses_ended": ended, "stores": stores}  # patterns and baselines are learned in the nightly dream
 
 
 async def _plan_checkins() -> dict:

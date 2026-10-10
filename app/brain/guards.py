@@ -501,10 +501,10 @@ def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool) -> s
     return out[0].upper() + out[1:] if out[0].isascii() else out
 
 
-def duplicate_message(text: str, sent: list[tuple[str, bool]]) -> str | None:
+def duplicate_message(text: str, sent: list[tuple[str, bool]], *, near: float = 0.6) -> str | None:
     """sent: [(earlier message to this person, they answered since)], newest last. The earlier one this repeats, if any."""
     for old, answered in reversed(sent):
-        if similar(text, old) >= 0.6:
+        if similar(text, old) >= near:
             return old if not answered else None
     return None
 

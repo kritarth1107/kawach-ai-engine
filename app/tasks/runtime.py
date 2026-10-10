@@ -29,7 +29,7 @@ from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
-from app.tasks import fastpath, sandbox
+from app.tasks import fastpath, sandbox, tracking
 from app.tasks.models import SkillNote, Task
 from app.tasks.skills import SKILLS
 
@@ -437,6 +437,11 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         if seen:
             goal += ("\nThe person chose these exact products: " + "; ".join(f"{_label(i)} {i.get('price') or ''}".strip() for i in seen[:8])
                      + ". Put exactly these in the cart (same pack size), nothing else.")
+            pages = [product_page(task.service, i) for i in seen[:8]]
+            if all(pages):
+                # Straight to each product's own page (founder 2026-10-10: the fallback took 5-6 minutes searching).
+                goal += " Open each product's own page and add it there (no searching): " + "; ".join(
+                    f"{_label(i)} → {u}" for i, u in zip(seen[:8], pages)) + "."
     if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
         phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
         task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
@@ -1057,7 +1062,8 @@ def _confirm_ask(task: Task, out: dict) -> str:
     missing = [m for m in d.get("missing_items") or [] if m]
     eta = f", delivery in about {out['eta']}" if out.get("eta") else ""
     return (f"The cart is ready on {SKILLS[task.service]['label']}. Ask ONE short question: the items (name, pack, quantity), the "
-            f"total {out.get('total') or 'shown'} with fees, to {where}{eta}, cash on delivery, shall I order? Nothing else to ask."
+            f"total {out.get('total') or 'shown'} with fees, to {where}{eta}, cash on delivery, shall I order? Nothing else to ask. "
+            f"Attach buttons {{kind: order, key: {task.id}:{str(d.get('cart_fp') or '')[:8]}}} to that message (yes / change / cancel)."
             + (f" Say these are the closest match to what they asked: {'; '.join(near)}." if near else "")
             + (f" Not on {SKILLS[task.service]['label']} (only other kinds), so NOT in the cart: {', '.join(missing)}. Say this plainly; "
                "never call another kind the same thing. They can add something else or get it from another store." if missing else "")
@@ -1164,6 +1170,14 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                                 "brackets (e.g. p3; one per item listed, comma separated) as the value of task_input go.")
 
 
+def product_page(service: str, item: dict) -> str | None:
+    """The store's own page for a product, when its id is known (checked live 2026-10-10: Blinkit opens /prn/x/prid/<id>)."""
+    ref = item.get("cart_ref") or {}
+    if service == "blinkit" and (ref.get("product_id") or item.get("store_id")):
+        return f"https://blinkit.com/prn/x/prid/{ref.get('product_id') or item.get('store_id')}"
+    return None
+
+
 def _pkey(p: dict) -> str:
     """A store product's own id (what the AI's choice and a refused cart refer to)."""
     ref = p.get("ref") or p.get("cart_ref") or {}
@@ -1176,7 +1190,31 @@ def _number(found: list[dict]) -> None:
         i.setdefault("oid", f"p{n}")
 
 
-async def _ai_pick(task: Task, report: dict) -> None:
+async def family_tastes(session: AsyncSession, task: Task) -> list[str]:
+    """What the AI matcher should know about this family's shopping: products they bought before (placed orders, last 90
+    days) and their likes, diet and never-order notes from memory. Data only; the AI decides what fits."""
+    out: list[str] = []
+    rows = (await session.execute(
+        select(Task).where(Task.family_id == task.family_id, Task.kind == "order", Task.status == "done",
+                           Task.created_at >= clock.now() - timedelta(days=90)).order_by(Task.created_at.desc()).limit(30)
+    )).scalars()
+    seen: set[str] = set()
+    for t in rows:
+        for c in (t.details or {}).get("chosen") or []:
+            name = f"{_label(c)}".strip()
+            if name and name not in seen and (t.result or {}).get("placed"):
+                seen.add(name)
+                out.append(f"bought before on {SKILLS[t.service]['label']}: {name}")
+    try:
+        facts = await store.facts(session, task.family_id, task.subject_id, domains=["preference", "diet", "no_order", "allergy", "dish"],
+                                  statuses=("active",))
+        out += [f"{f.domain}: {f.text}" for f in facts if f.text][:20]
+    except Exception:  # noqa: BLE001 — tastes are a hint, never a blocker
+        logger.warning("family tastes unavailable task=%s", task.id)
+    return out[:40]
+
+
+async def _ai_pick(task: Task, report: dict, session: AsyncSession | None = None) -> None:
     """The AI chooses the product for each asked item from the look-up (founder 2026-10-10: the AI decides, not word
     rules, since people order in many languages). Saved as details.matched {asked name: {exact: [ids], closest, why}};
     None when it could not answer (the options are then shown to the person)."""
@@ -1194,7 +1232,8 @@ async def _ai_pick(task: Task, report: dict) -> None:
         lists = [found for _ in names]
     from app.tasks import matcher
 
-    res = await matcher.choose(items, lists, medicine=d.get("agent") == "pharmacy")
+    tastes = await family_tastes(session, task) if session is not None else []
+    res = await matcher.choose(items, lists, medicine=d.get("agent") == "pharmacy", family=tastes or None)
     if res is None:
         task.details = {**d, "matched": None}
         note(task, "the product choice could not be made; the options go to the person")
@@ -1437,8 +1476,24 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
                         "fast_place_failures": int(d.get("fast_place_failures") or 0) + (0 if changed else 1),
                         "replace_confirmed": {"fp": d.get("confirmed_fp"), "total": d.get("confirmed_total"), "by": d.get("confirmed_by")}}
         return {"requeue": True, "requeue_note": f"not placed, nothing sent ({str(exc)[:120]}); building the cart again"}
+    if out.get("unclear") and task.service == "instamart" and host is not None and (task.details or {}).get("fast_place_check", {}).get("total"):
+        # Sent but no clear answer: the linked Swiggy account's order list says whether it went through (never placed twice).
+        try:
+            sent = datetime.fromisoformat(str((task.details or {}).get("place_started") or clock.now().isoformat()))
+            got = await host.call("connector_recent_order", {"store": "instamart", "total": d["fast_place_check"]["total"],
+                                                            "since_ms": int(sent.timestamp() * 1000)},
+                                  family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by)
+            if got and got.get("orderId"):
+                out = {"placed": True, "order_id": got["orderId"], "total": _rupees_text(d["fast_place_check"]["total"]),
+                       "payment_method": "Cash on Delivery", "eta": got.get("eta")}
+        except Exception:  # noqa: BLE001 — stays unclear: never retried
+            logger.warning("instamart order list check failed task=%s", task.id)
     note(task, f"fast place on {SKILLS[task.service]['label']}: {'placed ' + str(out.get('order_id')) if out.get('placed') else 'unclear'}")
     return out
+
+
+def _rupees_text(v) -> str:
+    return f"₹{round(float(v))}"
 
 
 _ALERTED: dict[str, datetime] = {}
@@ -1819,7 +1874,7 @@ async def tick(
                     elif report is not None:
                         task.result = {**(task.result or {}), **{k: v for k, v in report.items() if v not in (None, "", [])}}
                         if task.phase == "browse":
-                            await _ai_pick(task, task.result)
+                            await _ai_pick(task, task.result, session)
                         status, message = _outcome(task, task.result if task.phase == "browse" else report)
                         task.status = status
                         via = ("connector" if (task.details or {}).get("channel") == "connector" else
@@ -1877,7 +1932,7 @@ async def tick(
                                 out["unclear"] = True  # the run may have clicked place before it died
                         task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
                         if task.phase == "browse":
-                            await _ai_pick(task, task.result)
+                            await _ai_pick(task, task.result, session)
                             out = task.result
                         status, message = _outcome(task, out)
                         task.status = status
@@ -1937,6 +1992,7 @@ async def tick(
                     )
                 if task.status == "done" and ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
                     await delivery_followup(session, task)
+                    tracking.start(task)
                 await session.commit()
             except Exception as exc:  # noqa: BLE001 — one task's failure must not stop the others
                 logger.exception("task tick failed task=%s", task_id)
@@ -1998,4 +2054,8 @@ async def tick(
         stats["escalated"] = await escalate(sessions, agent, notify, host_for)
     except Exception:  # noqa: BLE001
         logger.exception("order escalation failed")
+    try:
+        stats["tracked"] = await tracking.sweep(sessions, agent, notify, profile_for=profile_for, host_for=host_for)
+    except Exception:  # noqa: BLE001
+        logger.exception("delivery tracking failed")
     return stats

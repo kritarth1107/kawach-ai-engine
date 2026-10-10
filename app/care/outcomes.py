@@ -121,6 +121,8 @@ BUTTON_SETS = {
     "visit": [("nochange", "No change", "Koi badlav nahi", "कोई बदलाव नहीं"), ("medicine_changed", "Medicine changed", "Dawai badli", "दवा बदली"),
               ("later", "Tell later", "Baad mein", "बाद में")],
     "feedback": [("up", "👍 Useful", "👍 Kaam ka", "👍 काम का"), ("down", "👎 Not useful", "👎 Kaam ka nahi", "👎 काम का नहीं")],
+    # the one confirm of an order (key = task id): a tap places, changes or cancels it without a model reading words
+    "order": [("yes", "Yes, order it", "Haan, mangao", "हाँ, मंगाओ"), ("change", "Change", "Badlo", "बदलो"), ("cancel", "Cancel", "Cancel karo", "रद्द करो")],
 }
 
 
@@ -130,8 +132,51 @@ def buttons(kind: str, key: str, profile: dict | None) -> list[dict]:
 
     k = guards.canned_key(profile)
     col = 3 if k in ("devanagari", "mr") else (2 if k == "indic" else 1)
-    tag = "fb" if kind == "feedback" else "oc"
+    tag = {"feedback": "fb", "order": "od"}.get(kind, "oc")
     return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": row[col][:20]} for row in BUTTON_SETS[kind]]
+
+
+ORDER_TAP = {
+    "english": {"yes": "Okay, placing the order now 🙏", "cancel": "Okay, cancelled. Nothing was ordered 🙏", "done": "That order is not waiting any more."},
+    "indic": {"yes": "Theek hai, order kar rahi hoon 🙏", "cancel": "Theek hai, cancel kar diya. Kuch order nahi hua 🙏", "done": "Woh order ab ruka hua nahi hai."},
+    "devanagari": {"yes": "ठीक है, ऑर्डर कर रही हूँ 🙏", "cancel": "ठीक है, रद्द कर दिया। कुछ ऑर्डर नहीं हुआ 🙏", "done": "वो ऑर्डर अब रुका हुआ नहीं है।"},
+}
+
+
+async def handle_order_button(session: AsyncSession, *, family_id: str, speaker_id: str, elder_id: str, code: str, task_id: str,
+                              profile: dict | None) -> tuple[str | None, str | None]:
+    """A tap on an order's confirm buttons (key "<task id>:<cart check>"): yes places it (the same checks as a spoken yes),
+    cancel drops it. Returns (reply, None) when done, or (None, note for the brain) when the brain should answer: change,
+    a yes that needs explaining, or a yes on an older confirm whose cart has changed since (never placed on an old tap)."""
+    import uuid as _uuid
+
+    from app.brain import guards
+    from app.brain.tools import task_agent
+    from app.tasks import runtime
+    from app.tasks.models import Task
+
+    tid, _, fp = task_id.partition(":")
+    if code == "change":
+        return None, f"(tapped the Change button on order {tid}: ask in one short line what they want to change)"
+    t = guards.canned(profile, ORDER_TAP)
+    try:
+        task = await session.get(Task, _uuid.UUID(tid), with_for_update=True, populate_existing=True)
+    except ValueError:
+        task = None
+    if not task or task.family_id != family_id or task.status not in runtime.LIVE:
+        return t["done"], None
+    if code == "yes":
+        if fp and fp != str((task.details or {}).get("cart_fp") or "")[:8]:
+            return None, (f"(tapped Yes on an older confirm of order {tid}; the cart or amount changed since, so nothing was placed: "
+                          "tell them the current cart and amount from task_status in one short line and ask again)")
+        out = await runtime.provide_input(session, task, kind="confirm", value="yes", by=speaker_id, by_is_elder=speaker_id == elder_id)
+        if out.startswith("confirmed"):
+            return t["yes"], None
+        return None, f"(tapped Yes on order {tid}; it could not be placed yet: {out[:300]}. Tell them in one short line)"
+    if code == "cancel":
+        await runtime.request_cancel(session, task_agent(), task, by=speaker_id, reason="tapped cancel")
+        return t["cancel"], None
+    return None, None
 
 
 THANKS = {
@@ -151,7 +196,7 @@ THANKS = {
                    "nochange": "ठीक है, कुछ नहीं बदला 🙏", "medicine_changed": "नई दवा, खुराक और समय बताइए, मैं रिमाइंडर बदल दूँगी।",
                    "later": "ठीक है, जब आपको ठीक लगे 🙏"},
 }
-BUTTON_ID = re.compile(r"^v2:(fb|oc):([a-z_]+):(.+)$")
+BUTTON_ID = re.compile(r"^v2:(fb|oc|od):([a-z_]+):(.+)$")
 
 
 def parse_button(text: str) -> tuple[str, str, str] | None:

@@ -30,6 +30,8 @@ For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
 - closest: when exact is empty, the nearest other variant of the same kind of product (asked peri peri muruku, there is
   only butter muruku → closest is butter muruku), else null. It will NOT be bought without asking the person.
 - Medicines (medicine: true): exact only when the medicine name and strength match.
+- FAMILY (when given): products this family bought before and what they like or must avoid. Among exact listings, put one
+  they bought before or like first; never rank first something against their diet or "never order" notes.
 """
 
 
@@ -40,7 +42,7 @@ def _listing(i: int, x: dict) -> str:
     return " | ".join(b for b in bits if b)
 
 
-async def choose(items: list[dict], listings: list[list[dict]], *, medicine: bool = False) -> list[dict] | None:
+async def choose(items: list[dict], listings: list[list[dict]], *, medicine: bool = False, family: list[str] | None = None) -> list[dict] | None:
     """items[i] (structured ask) with listings[i] (store results) → per item {"exact": [listing idx, best first],
     "closest": idx | None, "why"}. None when the model could not answer (the person then picks from the listings)."""
     if not items:
@@ -51,8 +53,9 @@ async def choose(items: list[dict], listings: list[list[dict]], *, medicine: boo
         blocks.append(f"ITEM {n}: {json.dumps(ask, ensure_ascii=False)}" + (" medicine: true" if medicine else "")
                       + "\nLISTINGS:\n" + ("\n".join(_listing(i, x) for i, x in enumerate(ls, 1)) or "(none)"))
     try:
+        fam = ("FAMILY:\n" + "\n".join(f"- {x}" for x in family[:40]) + "\n\n") if family else ""
         reply = await router.complete("classify", system_stable=PROMPT, effort="low", max_tokens=1200, timeout_s=25,
-                                      messages=[{"role": "user", "content": [{"type": "text", "text": "\n\n".join(blocks)}]}])
+                                      messages=[{"role": "user", "content": [{"type": "text", "text": fam + "\n\n".join(blocks)}]}])
         from app.care.extract import parse_json
 
         data = parse_json(reply.text)

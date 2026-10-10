@@ -590,14 +590,16 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     for i, t in enumerate(recent):
         if t.role == "assistant":
             sent.append((t.text, any(u.role == "user" for u in recent[i + 1:])))
-    dup = guards.duplicate_message(text, sent)
+    # An order/ride update answers something they asked for ("I'll tell you when the cart is ready"), so it is not
+    # a nudge: waiting for them to write first would leave the login code or the failure unsaid. Each update is a new
+    # state of the same order, so its words look alike (sim 2026-10-10: "delivered" was blocked as a repeat of "placed,
+    # arriving in 10 min"); only a near-exact repeat is stopped.
+    task_update = ctx.is_system and (ctx.message_ref or "").startswith("task:")
+    dup = guards.duplicate_message(text, sent, near=0.9 if task_update else 0.6)
     if dup:
         problems.append(f"you already sent them this today and they have not answered yet: \"{dup[:120]}\". Do not send it again")
     last_out = next((t for t in reversed(recent) if t.role == "assistant"), None)
     answered = last_out is not None and any(t.role == "user" and t.at > last_out.at for t in recent)
-    # An order/ride update answers something they asked for ("I'll tell you when the cart is ready"), so it is not
-    # a nudge: waiting for them to write first would leave the login code or the failure unsaid.
-    task_update = ctx.is_system and (ctx.message_ref or "").startswith("task:")
     if ctx.is_system and not task_update and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
                         "(reply none now; alert_caregiver only if the loop's rule says so)")
@@ -622,8 +624,8 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     {
         "to": {"type": "string", "description": "Person id from HOUSEHOLD"},
         "text": {"type": "string"},
-        "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback, key: the key given in the prompt}",
-                    "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback"]}, "key": {"type": "string"}}},
+        "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback|order, key: the key given in the prompt (for order: the task id)}",
+                    "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order"]}, "key": {"type": "string"}}},
     },
     ["to", "text"],
 )
@@ -1559,8 +1561,9 @@ async def log_outcome(ctx: TurnCtx, a: dict) -> dict:
     "offer_buttons",
     "Attach one-tap answers to your reply. kind 'feedback' (👍/👎) after you mention a pattern, with key "
     "'pattern:<pattern key>:subj=<person id>' as given in PATTERNS NOTICED; kind 'outcome' (all fine / saw doctor / "
-    "hospital) or 'visit' (no change / medicine changed / later) when you ask how something turned out.",
-    {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback"]}, "key": {"type": "string"}},
+    "hospital) or 'visit' (no change / medicine changed / later) when you ask how something turned out; kind 'order' (yes / "
+    "change / cancel) with key = the task id when you ask the one confirm of an order in your reply.",
+    {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order"]}, "key": {"type": "string"}},
     ["kind", "key"],
 )
 async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:

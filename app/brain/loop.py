@@ -463,7 +463,28 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
     from app.care import outcomes
 
-    if outcomes.parse_button(req.text):
+    parsed_button = outcomes.parse_button(req.text)
+    if parsed_button and parsed_button[0] == "od":
+        # A tap on an order's confirm buttons: yes / cancel act at once; change (or a yes that needs explaining) goes to the brain.
+        speaker_prof = (await writing_profiles(session, req.family_id, [req.speaker])).get(req.speaker["id"])
+        tapped, for_brain = await outcomes.handle_order_button(session, family_id=req.family_id, speaker_id=req.speaker["id"],
+                                                               elder_id=req.elder["id"], code=parsed_button[1], task_id=parsed_button[2],
+                                                               profile=speaker_prof)
+        if tapped:
+            await store.add_turn(session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=tapped,
+                                 meta={"reply_to": req.message_ref, "model": "none", "button": True})
+            await session.commit()
+            if not getattr(host, "shadow", False):
+                try:  # place it now, not at the next minute's run
+                    from app.api.brain import kick_tasks
+
+                    kick_tasks()
+                except Exception:  # noqa: BLE001
+                    logger.exception("kick tasks failed")
+            return TurnResult(reply=tapped, actions=[{"tool": "order_button", "args": {"id": req.text}, "ok": True}], alerts=[], model="none",
+                              ms=int((time.monotonic() - started) * 1000))
+        req.text = for_brain or req.text
+    elif parsed_button:
         # A tapped Saheli button: record it and answer without a model call.
         speaker_prof = (await writing_profiles(session, req.family_id, [req.speaker])).get(req.speaker["id"])
         tapped = await outcomes.handle_button(session, family_id=req.family_id, elder_id=req.elder["id"], speaker_id=req.speaker["id"],

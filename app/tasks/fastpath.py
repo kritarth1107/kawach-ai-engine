@@ -165,9 +165,13 @@ async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, 
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
     js = _snippet(service, {"q": query, "lat": lat, "lon": lon, "pincode": pincode})
-    out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=45)
-    if isinstance(out, dict) and out.get("status") == 0:
-        # the page was not really there yet (a bot-check reload with old cookies in the profile): once more
+    try:
+        out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=45)
+    except FastPathError as exc:
+        out = {"status": 0, "error": str(exc)}  # the page was not there yet (a cold browser): once more below
+    if isinstance(out, dict) and out.get("status") in (0, 202, 403):
+        # the page was not really there yet: a bot-check page (202/403 from a cold browser, store health 2026-10-10) or a
+        # reload with old cookies in the profile; once more, with longer settling
         await asyncio.sleep(2.0)
         out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s + 3, ready=site.ready, timeout_s=45)
     if not isinstance(out, dict) or out.get("status") != 200:
@@ -373,7 +377,7 @@ def blinkit_orders_from(body, now=None) -> list[dict]:
                     at = now.replace(hour=h, minute=int(when.group(2)), second=0, microsecond=0)
                     minutes = int((now - at).total_seconds() // 60)
                 found.append({"order_id": oid, "status": attrs.get("order_status"), "minutes_ago": minutes,
-                              "amount": int(amount.group(1).replace(",", "")) if amount else None})
+                              "amount": int(amount.group(1).replace(",", "")) if amount else None, "text": text[:300]})
             for v in o.values():
                 walk(v)
         elif isinstance(o, list):
@@ -400,6 +404,20 @@ async def blinkit_recent_order(cdp_url: str, total, within_min: int = 15) -> str
     hits = [o for o in blinkit_orders_from(out.get("body")) if o["amount"] == want and o["minutes_ago"] is not None
             and 0 <= o["minutes_ago"] <= within_min and str(o.get("status") or "").upper() not in ("CANCELLED", "FAILED")]
     return hits[0]["order_id"] if len(hits) == 1 else None
+
+
+async def blinkit_order_status(cdp_url: str, order_id: str) -> dict | None:
+    """Delivery tracking: this order's status on Blinkit's order list (logged-in profile), the store's own words, or None."""
+    for settle in (7.0, 12.0):
+        try:
+            out = await cdp_evaluate(cdp_url, "https://blinkit.com/account/orders", (JS_DIR / "blinkit_orders.js").read_text(),
+                                     settle_s=settle, timeout_s=60, copy_headers=r"blinkit\.com/v1/")
+        except FastPathError:
+            continue
+        if isinstance(out, dict) and out.get("status") == 200:
+            hit = next((o for o in blinkit_orders_from(out.get("body")) if o["order_id"] == str(order_id)), None)
+            return {"status": hit.get("status"), "text": hit.get("text")} if hit else None
+    return None
 
 
 def _texts(o, out: list | None = None) -> list[str]:

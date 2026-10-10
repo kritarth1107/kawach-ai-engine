@@ -1185,7 +1185,7 @@ def test_blinkit_order_list_finds_the_order_a_place_step_lost():
                                       card("3829904192", "Arrived in 12 minutes", "₹218 • 09 Oct, 4:33 pm", "DELIVERED")]}}
     now = datetime(2026, 10, 10, 11, 38, tzinfo=timezone.utc)  # 5:08 pm IST
     got = fastpath.blinkit_orders_from(body, now=now)
-    assert got[0] == {"order_id": "3837182613", "status": "CONFIRMED", "minutes_ago": 2, "amount": 180}
+    assert {k: got[0][k] for k in ("order_id", "status", "minutes_ago", "amount")} == {"order_id": "3837182613", "status": "CONFIRMED", "minutes_ago": 2, "amount": 180}
     assert got[2]["minutes_ago"] is None
 
 
