@@ -976,11 +976,13 @@ class _FakeBlinkitTab:
     """Stand-in for the cloud browser's CDP socket while Blinkit's checkout runs: the payment frame (Zomato's zpaykit)
     attaches as its own target, and Pay Now loads the order page with a full navigation (order lab 2026-10-10)."""
 
-    def __init__(self, press_error=None, order_url="https://blinkit.com/account/orders/track/9001/3837182613"):
+    def __init__(self, press_error=None, order_url="https://blinkit.com/account/orders/track/9001/3837182613",
+                 track_texts=("Order is on the way", "Arriving in 9 minutes")):
         from app.tasks import fastpath
         self.js = {n: (fastpath.JS_DIR / f"{n}.js").read_text() for n in ("blinkit_cash_frame", "blinkit_paynow", "blinkit_clear_cart")}
         self.out, self.press_error, self.order_url = [], press_error, order_url
         self.pressed, self.cleared, self.closed = False, False, False
+        self.track_texts, self.track_sent = track_texts, False
 
     async def __aenter__(self):
         return self
@@ -1000,6 +1002,14 @@ class _FakeBlinkitTab:
             self.out.append({"method": "Target.attachedToTarget", "params": {"sessionId": "FS", "targetInfo": {"targetId": "F", "url": "https://www.zomato.com/zpaykit/init?x=1"}}})
         elif method == "Target.getTargetInfo":
             res = {"targetInfo": {"url": self.order_url if self.pressed else "https://blinkit.com/checkout"}}
+            if self.pressed and not self.track_sent:  # the order page asks for its tracking layout
+                self.track_sent = True
+                url = "https://blinkit.com/v1/layout/crystal_track_order?cart_id=9001&order_id=3837182613"
+                self.out.append({"method": "Network.responseReceived", "sessionId": "S", "params": {"requestId": "R1", "response": {"url": url}}})
+                self.out.append({"method": "Network.loadingFinished", "sessionId": "S", "params": {"requestId": "R1"}})
+        elif method == "Network.getResponseBody":
+            body = {"response": {"snippets": [{"data": {"title": {"text": t}}} for t in self.track_texts]}}
+            res = {"body": _j.dumps(body), "base64Encoded": False}
         elif method == "Target.closeTarget":
             self.closed = True
         elif method == "Runtime.evaluate":
@@ -1052,8 +1062,25 @@ async def test_blinkit_place_reads_the_order_id_after_the_full_page_load_and_emp
     tab = _FakeBlinkitTab()
     _fake_cdp(monkeypatch, tab)
     out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
-    assert out == {"placed": True, "order_id": "3837182613", "total": "₹180", "payment_method": "Cash on Delivery"}
+    assert out == {"placed": True, "order_id": "3837182613", "total": "₹180", "payment_method": "Cash on Delivery", "eta": "9 min"}
     assert tab.cleared and tab.closed
+
+
+async def test_blinkit_place_without_a_delivery_time_on_the_order_page_gives_none(monkeypatch):
+    """The page header's store time ("Delivery in 10 minutes") is not the order's; an arrived order has no time to come."""
+    from app.tasks import fastpath
+    tab = _FakeBlinkitTab(track_texts=("Delivery in 10 minutes", "Order arrived in 20 minutes"))
+    _fake_cdp(monkeypatch, tab)
+    out = await fastpath.place("blinkit", "http://cdp", BLINKIT_CHECK)
+    assert out["placed"] is True and "eta" not in out
+
+
+def test_blinkit_delivery_time_words():
+    from app.tasks.fastpath import blinkit_eta
+    assert blinkit_eta(["Order is on the way", "Arriving in 9 minutes"]) == "9 min"
+    assert blinkit_eta(["Ajay is 6 mins away"]) == "6 min"
+    assert blinkit_eta(["Delivery in 10 minutes Home"]) is None
+    assert blinkit_eta(["Order arrived in 20 minutes"]) is None
 
 
 async def test_blinkit_place_dry_run_stops_before_pay_now(monkeypatch):

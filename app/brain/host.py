@@ -15,6 +15,8 @@ from app.agents.tool_client import execute_backend_tool
 WRITE_TOOLS = {
     "record_review",
     "connector_place",
+    "save_place",
+    "remove_place",
     "set_voice_preference",
     "sync_medicine_schedule",
     "mark_schedule_completed",

@@ -340,6 +340,37 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
 
 
 
+def _texts(o, out: list | None = None) -> list[str]:
+    """Every "text" string in a layout answer, in order."""
+    out = [] if out is None else out
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == "text" and isinstance(v, str):
+                out.append(v)
+            else:
+                _texts(v, out)
+    elif isinstance(o, list):
+        for v in o:
+            _texts(v, out)
+    return out
+
+
+_ETA_TEXT = re.compile(r"\b(?:arriving|arrives|reaching|delivering|on (?:the|its) way)\b[^.\n]{0,30}?\bin\s+(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:min|mins|minutes)\b", re.I)
+_AWAY = re.compile(r"\b(\d{1,3})(?:\s*-\s*(\d{1,3}))?\s*(?:min|mins|minutes)\s+away\b", re.I)
+
+
+def blinkit_eta(texts: list[str]) -> str | None:
+    """When a Blinkit order will come, from its order page ("Arriving in 9 minutes", "8 mins away"). Not the page header's
+    store time ("Delivery in 10 minutes"), and nothing once it has arrived."""
+    for t in texts:
+        if re.search(r"\barrived\b|\bdelivered\b", t, re.I):
+            continue
+        m = _ETA_TEXT.search(t) or _AWAY.search(t)
+        if m:
+            return f"{m.group(1)}-{m.group(2)} min" if m.group(2) else f"{m.group(1)} min"
+    return None
+
+
 async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict:
     """Blinkit: the place call goes out from Zomato's payment frame (zomato.com/zpaykit, cross-origin), so this opens the
     checkout page, checks the cart lines and address, makes Cash the open option inside that frame (its own CDP session),
@@ -357,10 +388,15 @@ async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict
             ws_url = (await c.get(cdp_url.rstrip("/") + "/json/version")).json()["webSocketDebuggerUrl"]
         async with websockets.connect(ws_url, max_size=20_000_000) as ws:
             counter, frames = 0, {}  # targetId -> {"session", "url"}
+            track = {}  # the order page's own tracking answer (crystal_track_order): requestId, done
 
             def on_event(msg: dict) -> None:
                 m, p = msg.get("method"), msg.get("params") or {}
-                if m == "Target.attachedToTarget":
+                if m == "Network.responseReceived" and "crystal_track_order" in ((p.get("response") or {}).get("url") or ""):
+                    track["id"] = p.get("requestId")
+                elif m == "Network.loadingFinished" and p.get("requestId") and p.get("requestId") == track.get("id"):
+                    track["done"] = True
+                elif m == "Target.attachedToTarget":
                     ti = p.get("targetInfo") or {}
                     frames[ti.get("targetId")] = {"session": p.get("sessionId"), "url": ti.get("url", "")}
                 elif m == "Target.targetInfoChanged":
@@ -387,11 +423,33 @@ async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict
                     raise FastPathError(str(r["exceptionDetails"].get("text") or "script error")[:200])
                 return (r.get("result") or {}).get("value")
 
+            async def order_page_eta() -> str | None:
+                for _ in range(20):  # up to ~10 s for the page's tracking answer
+                    if track.get("done"):
+                        break
+                    await asyncio.sleep(0.5)
+                    await send("Target.getTargetInfo", {"targetId": target}, timeout=10)  # lets events in
+                if track.get("done"):
+                    got = await send("Network.getResponseBody", {"requestId": track["id"]}, session=sid, timeout=10)
+                    raw = got.get("body") or ""
+                    if got.get("base64Encoded"):
+                        import base64
+                        raw = base64.b64decode(raw).decode("utf-8", "replace")
+                    try:
+                        eta = blinkit_eta(_texts(json.loads(raw)))
+                    except ValueError:
+                        eta = blinkit_eta([raw])
+                    if eta:
+                        return eta
+                text = await evaluate("document.body ? document.body.innerText : ''", sid, timeout=10)
+                return blinkit_eta([str(text or "")])
+
             target = (await send("Target.createTarget", {"url": "about:blank"}))["targetId"]
             try:
                 sid = (await send("Target.attachToTarget", {"targetId": target, "flatten": True}))["sessionId"]
                 await send("Target.setAutoAttach", {"autoAttach": True, "waitForDebuggerOnStart": False, "flatten": True}, session=sid)
                 await send("Page.enable", {}, session=sid)
+                await send("Network.enable", {}, session=sid)
                 await send("Page.navigate", {"url": "https://blinkit.com/checkout"}, session=sid)
                 await asyncio.sleep(3.0)
                 page = await evaluate(js_check, sid, timeout=40)
@@ -427,12 +485,16 @@ async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict
                         continue
                     m = re.search(r"/track/(\d+)/(\d+)", url)
                     if m:
+                        placed = {"clicked": True, "placed": True, "cart_id": m.group(1), "order_id": m.group(2)}
+                        try:  # when it comes: the order page's own tracking answer, else its text
+                            placed["eta"] = await order_page_eta()
+                        except Exception:  # noqa: BLE001 — the order is placed either way
+                            pass
                         try:  # the app keeps the ordered items in its own cart copy: empty it
-                            await asyncio.sleep(1.5)
                             await evaluate((JS_DIR / "blinkit_clear_cart.js").read_text(), sid, timeout=10)
                         except Exception:  # noqa: BLE001 — the next cart step overwrites it anyway
                             pass
-                        return {"clicked": True, "placed": True, "cart_id": m.group(1), "order_id": m.group(2)}
+                        return placed
                 return {"clicked": True, "placed": False, "problem": "no order page within 30 s"}
             finally:
                 try:
@@ -452,5 +514,5 @@ async def blinkit_place(cdp_url: str, check: dict, *, dry: bool = False) -> dict
         raise FastPathError(f"not placed: {out.get('problem') or 'checkout check failed'}")
     if out.get("placed") and out.get("order_id"):
         return {"placed": True, "order_id": out["order_id"], "total": _rupees(check.get("total")) if check.get("total") else None,
-                "payment_method": "Cash on Delivery"}
+                "payment_method": "Cash on Delivery", **({"eta": out["eta"]} if out.get("eta") else {})}
     return {"placed": False, "unclear": True, "problem": f"Pay Now was pressed but no order page came ({out.get('problem')}); check the app before trying again"}

@@ -899,7 +899,13 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
         return None
     if asked:  # asked in this same turn already: they have not answered yet
         return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
-    place = await _delivery_place(ctx, a)
+    place = await _delivery_place(ctx, a, keep_miss=True)
+    if a.get("area") and place.get("matched") is False:
+        # They named a place that is not saved: ask (it used to go to the default place without a word).
+        saved = "; ".join(place.get("saved") or []) or "none yet"
+        return {"status": "not started yet", "unknown_place": a["area"], "saved_places": saved,
+                "next": f"'{a['area']}' is not a saved place (saved: {saved}). Ask which saved place, or for the new full address "
+                        "with pincode and what to call it; save it with save_place, then call start_task again with area set to its name."}
     where = (f"{place.get('nickname') or 'Home'}: {place.get('full')}" if place.get("full") else
              f"pincode {place.get('pincode')}" if place.get("pincode") else
              f"near {a['area']}" if a.get("area") else "the address saved in the store account")
@@ -952,14 +958,68 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
 
 
-async def _delivery_place(ctx: TurnCtx, a: dict) -> dict:
+async def _delivery_place(ctx: TurnCtx, a: dict, keep_miss: bool = False) -> dict:
     if a["kind"] != "order":
         return {}
     try:
         got = await ctx.host.call("delivery_place", {"words": a.get("area") or ""}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id)
+        if keep_miss and got.get("matched") is False:
+            return got
         return got if got.get("addressId") else {}
     except Exception:  # noqa: BLE001 — no saved place: the agent uses the account's home address
         return {}
+
+
+@tool(
+    "places",
+    "The family's saved delivery places (address book) for the person: each place's name, address, receiver and which one is "
+    "their default. Use for 'kaun kaun se address save hain?', 'which address do you have for Beta?', before changing one.",
+    {},
+    [],
+)
+async def places(ctx: TurnCtx, a: dict) -> dict:
+    return await ctx.host.call("list_places", {}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+
+
+@tool(
+    "save_place",
+    "Save a delivery place in the family address book (the same one the dashboard shows), or change a saved one. New place: "
+    "the full address with house/flat, street, city and 6-digit pincode, and a short name for it (\"Beta's flat\", \"Clinic\"; "
+    "the first place is Home); ask for what is missing. Change one: place = its saved name, plus what changes (address, name, "
+    "receiver). receiver_name/receiver_phone: who takes the delivery there when it is not the person. make_default: orders go "
+    "there unless they say otherwise. Read the name and area back in one line after saving. The person can save their own "
+    "places; a caregiver can save any.",
+    {
+        "address": {"type": "string", "description": "Full address as they said it, with pincode (for a new place or a changed address)"},
+        "name": {"type": "string", "description": "What to call the place (new name when renaming)"},
+        "place": {"type": "string", "description": "Saved place to change (its name); leave out for a new place"},
+        "receiver_name": {"type": "string"},
+        "receiver_phone": {"type": "string"},
+        "make_default": {"type": "boolean"},
+    },
+    [],
+)
+async def save_place(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system:
+        raise ToolRefused("Only the family saves places.")
+    if not ctx.is_caregiver and not ctx.speaker_is_elder:
+        raise ToolRefused("Only the person themselves or a caregiver can save or change places.")
+    args = {k: a[k] for k in ("address", "name", "place", "receiver_name", "receiver_phone", "make_default") if a.get(k) not in (None, "")}
+    return await ctx.host.call("save_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+
+
+@tool(
+    "remove_place",
+    "Remove a saved delivery place. Caregivers only. First ask them to confirm (say the place's name and area); call with "
+    "confirmed=true only after they said yes in their reply.",
+    {"place": {"type": "string", "description": "The saved place's name"}, "confirmed": {"type": "boolean"}},
+    ["place"],
+)
+async def remove_place(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system or not ctx.is_caregiver:
+        raise ToolRefused("Only a caregiver can remove a saved place.")
+    return await ctx.host.call("remove_place", {"place": a["place"], "confirmed": a.get("confirmed") is True},
+                               family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
 
 
 @tool(

@@ -910,7 +910,12 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             metrics.on_milestone(task, "placed")
             if v.warn:
                 return "done", "Placed, but: " + "; ".join(v.warn)
-            return "done", "Placed. Tell the person the order/ride id and the ETA."
+            eta = str(out.get("eta") or "").strip()
+            if eta:
+                return "done", f"Placed. Tell the person the order/ride id and the delivery time: {eta}."
+            # Live 2026-10-10: connector and Blinkit orders came back without a time and the brain was told to give one.
+            return "done", ("Placed. Tell the person the order/ride id. The store gave no delivery time: do not guess one; "
+                            "say you will check on it.")
         if out.get("unclear"):
             return "failed", f"It is not clear whether the order went through ({out.get('problem')}). Do not order again; tell the caregiver to check the app."
         return "failed", f"Placing did not go through ({out.get('problem') or 'unknown'}). Nothing was charged."
