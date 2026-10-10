@@ -207,3 +207,16 @@ async def test_a_dish_left_out_of_the_cart_moves_the_order_to_the_next_restauran
     status, _ = runtime._outcome(t, {"items": [{"name": "Plain Tawa Roti", "qty": 2, "price": "₹24"}], "total": "₹108", "cod_available": True})
     assert status == "queued" and [c["restaurant"] for c in t.details["chosen"]] == ["Patiala Plates", "Patiala Plates"]
     assert t.details["refused"] == ["p1"] and "left out of the cart: Paneer Butter Masala" in t.history[-1]["note"]
+
+
+async def test_items_left_from_earlier_are_cleared_before_the_confirm(db, at):
+    at("2026-10-11 03:00")
+    t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="chole bhature",
+                             details={"items": [{"name": "chole bhature", "qty": 1}]})
+    t.phase = "prepare"
+    t.details = {**t.details, "chosen": [{**D("c1", "Chole Bhature", "Haldiram's", "₹180")}]}
+    status, _ = runtime._outcome(t, {"items": [{"name": "Chole Bhature", "qty": 1, "price": "₹180"}, {"name": "Plain Tawa Roti", "qty": 2, "price": "₹24"}],
+                                     "total": "₹260", "cod_available": True})
+    assert status == "queued" and t.details["cart_cleaned"] and "Plain Tawa Roti" in t.history[-1]["note"]
+    from app.specialists.agents import specialist_for
+    assert "remove anything already in it" in specialist_for("swiggy").goal(t)

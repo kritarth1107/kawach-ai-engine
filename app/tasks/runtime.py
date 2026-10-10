@@ -581,6 +581,7 @@ async def _relook(session: AsyncSession, task: Task, d: dict, new_items: list[di
 LADDER_RESET = {"ladder_asked_at": None, "ladder_emailed_at": None, "ladder_carers": None, "ladder_due": None}
 # What a new look-up clears (the products, the cart and anything confirmed for it).
 RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": None, "fast_cart_tried": False, "total_relook": False,
+          "cart_cleaned": False,
           "total_only": False, "menu_find": None,
           "fast_place_check": None, "confirm_token": None, "missing_items": None, "auto_picked": None, "matched": None,
           "refused": None, "repicks": None, "found": None}
@@ -1005,6 +1006,17 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
                 return "queued", ""
             out = {**out, "items": [i for i in out.get("items") or [] if i not in dead]}
         chosen_ = [c for c in d.get("chosen") or [] if c.get("name")]
+        wanted = [{"name": c["name"]} for c in chosen_] + [{"name": a} for a in d.get("menu_find") or []]
+        extra = [str(i.get("name")) for i in out.get("items") or [] if i.get("name") and guard.missing_items([{"name": i["name"]}], wanted)
+                 and guard.missing_items(wanted, [i]) == [w["name"] for w in wanted]] if chosen_ and spec.name != "pharmacy" else []
+        if extra and not d.get("cart_cleaned"):
+            # Items nobody asked for in this order (live run 2026-10-11: rotis left in the cart from earlier runs were offered):
+            # the cart is emptied and built again once, before anyone is asked.
+            task.details = {**d, "cart_cleaned": True}
+            task.phase, task.input_needed = "prepare", None
+            task.result = {**(task.result or {}), "total": None, "fees": None}
+            note(task, f"the cart had items nobody asked for ({', '.join(extra)[:120]}); emptying it and building it again")
+            return "queued", ""
         if chosen_ and d.get("auto_picked") and spec.name != "pharmacy" and out.get("items"):
             # A picked product the agent left out of the cart (live run 2026-10-11: Indian Bawarchi's paneer failed to go in three
             # times and Maa was offered a roti-only cart): the next best one is tried, before anyone is asked.

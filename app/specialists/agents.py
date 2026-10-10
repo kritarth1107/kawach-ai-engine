@@ -99,7 +99,8 @@ class Specialist:
                 where = (f" Deliver to the account's saved address that reads like: '{place.get('full')}' (pincode {place.get('pincode')}); "
                          "choose it by this address line, never by a label such as 'Home' (the account may have several). If the account has "
                          "no such address, add this one and use it (use the account holder's name and number if asked).")
-            return (f"On {label}, put exactly these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
+            return (f"On {label}, first open the cart and remove anything already in it (items left from earlier). Then put exactly "
+                    f"these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
                     f"Cash/Pay on Delivery is offered. Do NOT place the order. Report items with prices, total with fees, cod_available, address_used, eta.")
         if task.phase == "place" and practice.on(task):
             return practice.browser_goal(label, items, d.get("confirmed_total") or (task.result or {}).get("total"), where)
