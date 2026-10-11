@@ -579,7 +579,8 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
 
 REMINDER_SCHEDULE = {
     "repeat": {"type": "string", "enum": ["daily", "weekly", "once"],
-               "description": "daily (default); weekly on days; once on date (a reminder for one day, e.g. 'on 15 Oct at 5 pm')"},
+               "description": "once for a one-off ('in an hour', 'tonight at 9', 'on 15 Oct at 5 pm'); daily or weekly (on days) only "
+                              "when they asked for it to repeat ('every day', 'roz', 'every Monday')"},
     "date": {"type": "string", "description": "once only: the day, YYYY-MM-DD (IST)"},
     "days": {"type": "array", "items": {"type": "integer"}, "description": "weekly only: days, Monday=0 … Sunday=6"},
     "until": {"type": "string", "description": "Last day it goes out, YYYY-MM-DD, when they gave an end ('till 30 Nov', 'for a week')"},
@@ -621,22 +622,46 @@ def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
 
 @tool(
     "set_reminder",
-    "A reminder that is not a medicine (medicines get reminders through remember): every day at times, on chosen weekdays, "
-    "once on one date, or every hour between two times; optionally until a date. times are 'HH:MM' in IST. Read their words "
-    "and fill the fields: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times ['17:00']; 'every Monday and Thursday "
-    "at 7' is weekly days [0, 3]; 'every hour from 2 pm to 3 am' is every_hour {from 14:00, to 03:00}. Tell them the schedule "
-    "the tool returns.",
+    "A reminder for anything except a medicine's regular dose times (those come from the medicine in the CARE RECORD, "
+    "through remember). Say whether it repeats (repeat): once for a one-off, daily or weekly only when they asked for it to "
+    "repeat. 'in 20 minutes' / 'in an hour': give in_minutes and repeat once (the time and date are worked out for you, also "
+    "past midnight). Otherwise times are 'HH:MM' in IST: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times "
+    "['17:00']; 'every Monday and Thursday at 7' is weekly days [0, 3]; 'every hour from 2 pm to 3 am' is every_hour "
+    "{from 14:00, to 03:00}. When it is about something on the CARE RECORD (an extra 'remind me again to take it' for a "
+    "medicine), give item, its key: a medicine reminder is then not sent once that dose is marked taken. Tell them the "
+    "schedule the tool returns.",
     {"text": {"type": "string", "description": "What to remind, in the person's own words"},
-     "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM times (leave out for every_hour)"},
+     "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM times (leave out for every_hour or in_minutes)"},
+     "in_minutes": {"type": "integer", "description": "A one-off in this many minutes from now ('in an hour' = 60)"},
+     "item": {"type": "string", "description": "The CARE RECORD key it is about, e.g. medicine:metformin (leave out if none)"},
      **REMINDER_SCHEDULE, "about": ABOUT},
     ["text"],
 )
 async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
+    a = dict(a)
+    if a.get("in_minutes") is not None:
+        try:
+            minutes = int(a["in_minutes"])
+        except (TypeError, ValueError):
+            raise ToolRefused("in_minutes must be a whole number of minutes.") from None
+        if not 1 <= minutes <= 7 * 24 * 60:
+            raise ToolRefused("in_minutes must be between 1 minute and 7 days; for later, give the date and time.")
+        if a.get("times") or isinstance(a.get("every_hour"), dict):
+            raise ToolRefused("Give either in_minutes or times, not both.")
+        when = clock.ist() + timedelta(minutes=minutes)
+        a.update(repeat="once", date=when.strftime("%Y-%m-%d"), times=[when.strftime("%H:%M")])
     if not a.get("times") and not isinstance(a.get("every_hour"), dict):
-        raise ToolRefused("Give times (HH:MM), or every_hour with from and to. If they did not say when, ask.")
+        raise ToolRefused("Give times (HH:MM), in_minutes, or every_hour with from and to. If they did not say when, ask.")
+    if not a.get("repeat"):
+        # live 2026-10-12: "remind me in next 1 hour" became a reminder every night
+        raise ToolRefused("Say whether it repeats: repeat once for a one-off ('in an hour', 'tonight at 9', 'tomorrow at 7'), "
+                          "daily or weekly only if they asked for it to repeat ('every day', 'every Monday').")
     subject = ctx.subject(a.get("about"))
+    args: dict = {"text": a["text"], "schedule": _reminder_schedule(a)}
+    if a.get("item"):
+        args["item"] = str(a["item"]).strip()
     out = await ctx.host.call(
-        "create_reminder", {"text": a["text"], "schedule": _reminder_schedule(a)},
+        "create_reminder", args,
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
     if isinstance(out, dict) and out.get("status") == "not_set":
@@ -671,15 +696,18 @@ async def reminders_tool(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "change_reminder",
-    "Skip, stop or change one reminder from the reminders tool (by its id). skip: one time ('not tomorrow', 'skip today's'): "
-    "give date (and time for one of several times that day), or leave both out for the next time; unskip undoes a skip. "
-    "stop: it never goes out again. change: new times / repeat / days / date / until / every_hour (what you leave out stays). "
-    "Say exactly what changed, from the tool's result.",
-    {"id": {"type": "string", "description": "The reminder id from the reminders tool"},
+    "Skip, stop or change one reminder (by its id, from the reminders tool or REMINDERS DUE SOON). skip: one time ('not "
+    "tomorrow', 'skip today's', or they already did what it is for): give date (and time for one of several times that day), "
+    "or leave both out for the next time; unskip undoes a skip. stop: it never goes out again. change: new words (text: how "
+    "it reads, emoji included; a reminder goes out with its saved words, so a note or skill never changes them) and/or times / "
+    "repeat / days / date / until / every_hour / item (what you leave out stays). Say exactly what changed, from the tool's "
+    "result.",
+    {"id": {"type": "string", "description": "The reminder id"},
      "action": {"type": "string", "enum": ["skip", "unskip", "stop", "change"]},
      "time": {"type": "string", "description": "skip / unskip: the HH:MM time on that date"},
      "times": {"type": "array", "items": {"type": "string"}, "description": "change: new HH:MM times"},
-     "text": {"type": "string", "description": "change: new words for the reminder"},
+     "text": {"type": "string", "description": "change: the reminder's new words, exactly as it should read"},
+     "item": {"type": "string", "description": "change: the CARE RECORD key it is about (empty to remove the link)"},
      **REMINDER_SCHEDULE, "about": ABOUT},
     ["id", "action"],
 )
@@ -701,8 +729,10 @@ async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
             args["schedule"] = _reminder_schedule(sched_fields, partial=True)
         if a.get("text"):
             args["text"] = a["text"]
+        if "item" in a:
+            args["item"] = str(a["item"]).strip() or None
         if len(args) == 1:
-            raise ToolRefused("Say what to change: times, days, date, until, every_hour or the words.")
+            raise ToolRefused("Say what to change: the words, times, days, date, until, every_hour or item.")
         out = await ctx.host.call("update_reminder", args, **kw)
     if isinstance(out, dict) and out.get("ok") is False:
         raise ToolRefused(f"Not done: {out.get('error')}")

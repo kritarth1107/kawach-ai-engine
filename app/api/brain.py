@@ -33,6 +33,16 @@ class Image(BaseModel):
     data: str
 
 
+class ReminderSoon(BaseModel):
+    id: str = Field(max_length=80)
+    person: str = Field(max_length=80)
+    text: str = Field(default="", max_length=400)
+    day: str = Field(max_length=10)
+    time: str = Field(max_length=5)
+    repeat: str = Field(default="daily", max_length=10)
+    item: str | None = Field(default=None, max_length=200)
+
+
 class TurnIn(BaseModel):
     family_id: str
     elder: Person
@@ -46,6 +56,7 @@ class TurnIn(BaseModel):
     modality: str = Field(default="text", pattern="^(text|voice)$")
     voice_confidence: float | None = Field(default=None, ge=0, le=1)
     voice_language: str | None = Field(default=None, max_length=16)
+    reminders_soon: list[ReminderSoon] = Field(default_factory=list, max_length=24)  # due in the next hours (backend)
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
 
@@ -67,6 +78,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         modality=body.modality,
         voice_confidence=body.voice_confidence,
         voice_language=body.voice_language,
+        reminders_soon=[r.model_dump() for r in body.reminders_soon],
     )
     try:
         result = await run_turn(session, host, req)

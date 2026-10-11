@@ -49,6 +49,9 @@ class TurnRequest:
     # A system turn about something that can move on while it waits for this family's turn (a task update): checked once
     # the turn is held; False → nothing is said (founder 2026-10-11: one true status).
     still_true: Callable[[AsyncSession], Awaitable[bool]] | None = None
+    # reminders due in the next hours for the speaker and the person cared for (from the backend, with the message):
+    # [{"id", "person", "text", "day", "time", "repeat", "item"}]
+    reminders_soon: list[dict] = field(default_factory=list)
 
     @property
     def voice(self) -> bool:
@@ -187,6 +190,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         digest.loops(loops),
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
+        reminders_block(req),
     ]
     if req.speaker["id"] != req.elder["id"]:
         # A caregiver asking "what's pending?" gets who acts next on every job (the elder's turns stay short).
@@ -251,6 +255,23 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             )
     known = "\n".join(h.text for h in hits) + "\n" + "\n".join(e.summary for e in day_events)
     return "\n\n".join(parts), known
+
+
+def reminders_block(req: TurnRequest) -> str:
+    """Reminders due in the next hours, so one the person says is already done is skipped instead of going out anyway
+    (live 2026-10-12: "i had the medicine" at 00:12, and the reminder for it still came at 00:15)."""
+    rows = [r for r in (req.reminders_soon or []) if isinstance(r, dict) and r.get("id")]
+    if not rows:
+        return ""
+    names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
+    lines = []
+    for r in rows[:12]:
+        who = "the speaker" if r.get("person") == req.speaker["id"] else (names.get(r.get("person")) or "them")
+        item = f"; for {r['item']}" if r.get("item") else ""
+        lines.append(f"  [{r['id']}] {r.get('day')} {r.get('time')} for {who}: \"{str(r.get('text') or '')[:140]}\" ({r.get('repeat') or 'daily'}{item})")
+    return ("REMINDERS DUE SOON (they go out with these exact words at these times): if someone says they already did what one "
+            "is for, or it no longer applies, skip that time with change_reminder (action skip, its id, date and time) and say "
+            "it will not come; a repeating one carries on after that.\n" + "\n".join(lines))
 
 
 VOICE_SURE = 0.6
