@@ -115,6 +115,12 @@ def roman_kind(text: str) -> str | None:
     return None
 
 
+def usual_script(texts: list[str]) -> str | None:
+    """The script most of these messages are in (Unicode ranges only: no reading of the words)."""
+    scripts = Counter(s for s in map(script_of, texts) if s)
+    return scripts.most_common(1)[0][0] if scripts else None
+
+
 def profile(texts: list[str]) -> dict | None:
     """How a person writes, from their recent messages: {"script": devanagari|bengali|…|latin, "roman": indic|english|None}."""
     scripts: Counter = Counter()
@@ -140,7 +146,11 @@ def target(p: dict | None) -> str | None:
     Saheli writes every Indian language in its own script, also when the person types it in Roman letters ("Hinglish
     gets Hindi in Devanagari"). Roman letters only when they asked for that (saved script "roman"); English for English.
     Returns a script name, "indic" (an Indian language typed in Roman letters whose language is not saved: any Indian
-    script, Devanagari for Hindi), "latin" (English, or Roman letters on request), or None (not known yet)."""
+    script, Devanagari for Hindi), "latin" (English, or Roman letters on request), or None (not known yet).
+
+    With no saved setting, a message too short to tell ("Leave it", "ok") keeps English when Saheli has been writing to
+    them in English ("replied": the usual script of her recent replies to them). Live 2026-10-11: a caregiver who writes
+    English got "Leave it" answered in Hindi, the language of the elder in the same family."""
     if not p:
         return None
     from app.care import language
@@ -154,10 +164,15 @@ def target(p: dict | None) -> str | None:
         return now  # they just wrote in another Indian script (Gujarati to a Marwari setting): answer in what they wrote
     if by_saved:
         return by_saved
+    if now and now != "latin":
+        return now  # no setting saved and they just wrote in an Indian script (a Hindi voice note): answer in it
     if p.get("script") and p["script"] != "latin":
         return p["script"]
     if p.get("script") == "latin":
-        return "indic" if p.get("roman") == "indic" else ("latin" if p.get("roman") == "english" else None)
+        if p.get("roman") == "indic":
+            return "indic"
+        if p.get("roman") == "english" or p.get("replied") == "latin":
+            return "latin"
     return None
 
 
@@ -186,7 +201,9 @@ def describe(p: dict | None) -> str:
     if t:
         lang = language.label(saved) if saved.get("language") else SCRIPT_LANG.get(t, t)
         return f"{lang}, written in {t.capitalize()} script{dialect}"
-    return "not known yet"
+    return ("not known yet: answer in the language of their latest message (English for English, an Indian language in its "
+            "own script); if it is too short to tell, keep the language you have been writing to them in, never another "
+            "family member's language")
 
 
 # Everyday English words that have a word in every Indian language. Only these count as mixing scripts: names,
@@ -486,10 +503,10 @@ def opening_state(turns: list, now, *, day_of) -> tuple[bool, bool]:
     return any(day_of(at) == day_of(now) for at in mine), any((now - at).total_seconds() < 2 * 3600 for at in mine)
 
 
-def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool) -> str:
+def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool, names: list[str] | None = None) -> str:
     """No second greeting in a day, and no greeting or name opener in a running conversation (founder 2026-10-09: "no one
     greets again in an active conversation; make it crisp and direct"). Live: "राम राम सा सरला जी, घबराओ मत सा…" one
-    minute after her last message."""
+    minute after her last message. names: how the person is called (a bare "Rohan, your …" opener is dropped too)."""
     out = text
     if greeted_today or mid_conversation:
         out = GREETING_OPENER.sub("", out, count=1)
@@ -498,6 +515,11 @@ def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool) -> s
         if m and m.group(2).lower() not in NOT_A_NAME:
             lead = (m.group(1) or "").strip(" ,")
             out = (f"{lead}, " if lead else "") + out[m.end():]
+        for name in sorted({n.strip() for n in names or [] if len(n.strip()) > 1}, key=len, reverse=True):
+            bare = re.match(rf"\s*{re.escape(name)}\s*[,!:—–]\s*", out, re.I)
+            if bare:
+                out = out[bare.end():]
+                break
     out = out.strip()
     if len(words(out)) < 2:  # the greeting was the whole message
         return text

@@ -130,6 +130,9 @@ async def writing_profiles(session: AsyncSession, family_id: str, people: list[d
             prof = {"script": prof.get("script"), "roman": prof.get("roman"), "saved": language.normalise(saved.value)}
         if prof and turns:
             prof["now"] = guards.script_of(turns[-1].text)  # the script of their latest message wins over the saved one
+            mine = [t.text for t in recent if t.role == "assistant" and (t.text or "").strip() not in ("", "none")][-5:]
+            if replied := guards.usual_script(mine):
+                prof["replied"] = replied  # the script Saheli has been writing to them in (keeps a short reply in it)
         if prof:
             out[p["id"]] = prof
     return out
@@ -648,8 +651,9 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
-        final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(final, greeted_today=greeted, mid_conversation=mid)),
-                                    ctx.profiles.get(req.speaker["id"]))
+        name = (req.speaker.get("name") or "").strip()
+        final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(
+            final, greeted_today=greeted, mid_conversation=mid, names=[name, *name.split()[:1]])), ctx.profiles.get(req.speaker["id"]))
 
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
