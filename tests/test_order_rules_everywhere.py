@@ -122,6 +122,115 @@ async def test_a_ride_with_no_app_named_compares_every_ride_app_and_named_apps_a
     assert out["looking_on"] == ["Ola", "Uber"], "only the ride apps they named"
 
 
+# ── a ride's pickup and drop are the places meant ────────────────────────────
+
+HOME = {"nickname": "Ghar", "full": "12 Civil Lines, Raipur 492001", "pincode": "492001", "lat": 21.25, "lng": 81.63}
+
+
+class PlacesHost(SimHost):
+    """The family's address book: one saved place."""
+
+    async def call(self, tool, args, *, family_id, subject_id, actor_id):
+        if tool == "list_places":
+            return {"places": [{"name": "Ghar", "address": HOME["full"], "isDefault": True}]}
+        if tool == "delivery_place":
+            return {**HOME, "addressId": "a1", "matched": True} if args.get("exact") and args.get("words") == "Ghar" else {"matched": False}
+        return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
+
+
+async def test_a_ride_from_a_saved_place_gives_the_app_its_full_address(db, at, monkeypatch):
+    """Live 2026-10-12: a saved home went to the ride app as words, the app chose the city and the ride was booked there.
+    A saved place they mean (an AI decision) goes as its full address; a landmark goes as their words."""
+    from app.specialists.agents import specialist_for
+    from app.tasks import matcher
+
+    at("2026-10-12 08:00")
+
+    async def which(words, places):
+        return "Ghar" if "home" in words.lower() else None  # the AI's answer, faked
+
+    monkeypatch.setattr(matcher, "which_place", which)
+    ctx = tools.TurnCtx(session=db, host=PlacesHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    await tools.start_task(ctx, {"kind": "ride", "goal": "Auto to the station", "pickup": "my home", "drop": "Raipur railway station",
+                                 "services": ["ola"]})
+    t = (await runtime.live_tasks(db, FAM))[0]
+    assert t.details["pickup_place"]["full"] == HOME["full"] and "drop_place" not in t.details
+    t.phase = "prepare"
+    goal = specialist_for("ola").goal(t)
+    assert f"Set the pickup to exactly '{HOME['full']}' and the drop to exactly 'Raipur railway station'" in goal
+    assert "never a city or area alone" in goal and "pickup_used" in goal
+    assert f"from Ghar ({HOME['full']}) to Raipur railway station" in runtime.describe(t)
+
+
+async def _ride_from_home(db, script, monkeypatch):
+    from app.tasks import matcher
+
+    async def same(asked, shown, *, saved):
+        return "Civil Lines" in shown or shown == "Raipur Railway Station"  # the AI's answer, faked
+
+    monkeypatch.setattr(matcher, "same_ride_end", same)
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "off")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="ola", kind="ride", goal="Auto to the station",
+                             details={"pickup": "my home", "drop": "Raipur railway station", "pickup_place": HOME})
+    await db.commit()
+    return t, FakeAgent(script=script)
+
+
+async def _until(h, db, t, ok, most=8):
+    for _ in range(most):
+        await h.tick()
+        await db.refresh(t)
+        if ok(t):
+            return
+
+
+RIGHT = {"pickup_used": "Ghar, 12 Civil Lines, Raipur", "drop_used": "Raipur Railway Station"}
+CITY = {"pickup_used": "Raipur, Chhattisgarh", "drop_used": "Raipur Railway Station"}
+FARES_ = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "options": [{"type": "Auto", "fare": "₹142", "eta": "4 min"}]}
+
+
+async def test_a_ride_the_app_set_to_a_city_is_set_again_then_stopped_never_offered_from_there(db, at, sessions, monkeypatch):
+    at("2026-10-12 08:05")
+    t, agent = await _ride_from_home(db, {"prepare": [{**FARES_, **CITY}, {**FARES_, **CITY}]}, monkeypatch)
+    h = Harness(sessions, agent)
+    await _until(h, db, t, lambda t: t.status == "failed")
+    goals = [r["goal"] for r in agent.runs if r["phase"] == "prepare"]
+    assert len(goals) == 2 and "The last run set the pickup to 'Raipur, Chhattisgarh' instead of '12 Civil Lines" in goals[1]
+    assert t.status == "failed" and "Nothing was booked: Ola kept setting the pickup to 'Raipur, Chhattisgarh'" in h.told[-1][1]
+    assert not any("₹142" in p for _, p in h.told), "no fare from the wrong pickup was offered"
+
+
+async def test_a_ride_is_never_booked_from_a_pickup_the_app_shows_wrong_and_the_booking_is_tried_once_more(db, at, sessions, monkeypatch):
+    at("2026-10-12 08:10")
+    mismatch = {**FARES_, "booked": False, "pickup_mismatch": True, **CITY}
+    t, agent = await _ride_from_home(db, {"prepare": [{**FARES_, **RIGHT}], "place": [mismatch, {**BOOKED, "ride_id": "OLA-9", **RIGHT}]}, monkeypatch)
+    h = Harness(sessions, agent)
+    await _until(h, db, t, lambda t: t.input_needed == "choice")
+    assert "[the app set: Ghar, 12 Civil Lines, Raipur]" in h.told[-1][1], "the confirm says where the app set the pickup"
+    await runtime.provide_input(db, t, kind="choice", value="1", by=ELDER, by_is_elder=True)
+    await db.commit()
+    await _until(h, db, t, lambda t: t.status == "done")
+    places = [r["goal"] for r in agent.runs if r["phase"] == "place"]
+    assert len(places) == 2 and "The last run set the pickup to 'Raipur, Chhattisgarh'" in places[1]
+    assert "do NOT book: report pickup_mismatch=true" in places[0]
+    assert t.status == "done" and t.result["ride_id"] == "OLA-9" and "Booked: Auto" in h.told[-1][1]
+    assert "[the app set: Ghar, 12 Civil Lines, Raipur]" in runtime.describe(t)
+
+
+async def test_a_ride_booked_from_another_place_is_said_first(db, at, sessions, monkeypatch):
+    at("2026-10-12 08:15")
+    t, agent = await _ride_from_home(db, {"prepare": [{**FARES_, **RIGHT}], "place": [{**BOOKED, "ride_id": "OLA-10", **CITY}]}, monkeypatch)
+    h = Harness(sessions, agent)
+    await _until(h, db, t, lambda t: t.input_needed == "choice")
+    await runtime.provide_input(db, t, kind="choice", value="1", by=ELDER, by_is_elder=True)
+    await db.commit()
+    await _until(h, db, t, lambda t: t.status == "done")
+    said = h.told[-1][1]
+    assert "Booked, BUT Ola set the pickup to 'Raipur, Chhattisgarh' instead of '12 Civil Lines, Raipur 492001'" in said
+    assert "Never say it is from the place they meant" in said
+    assert "[the app set: Raipur, Chhattisgarh]" in runtime.describe(t)
+
+
 # ── one true status ──────────────────────────────────────────────────────────
 
 
@@ -192,7 +301,7 @@ async def test_a_cancel_tap_says_cancelled_only_when_it_was_stopped(db, at, sess
     reply, note = await outcomes.handle_order_button(db, family_id=FAM, speaker_id=ELDER, elder_id=ELDER, code="cancel",
                                                      task_id=f"{t.id}:{t.details['cart_fp'][:8]}", profile=None)
     await db.commit()
-    assert reply is None and "NOT cancelled: the order is being placed on Swiggy Instamart right now" in note
+    assert reply is None and "NOT cancelled yet: the order is being placed on Swiggy Instamart right now" in note
     await h.tick(2)
     await db.refresh(t)
     assert t.status == "done" and [p for who, p in h.told if who == SON and p.startswith("[Order needs you]")]
@@ -264,3 +373,166 @@ async def test_what_a_store_has_instead_is_offered_marked_similar(db, at, sessio
     assert (t.status, t.input_needed) == ("awaiting_confirm", "go")
     assert "1. Nandini Toned Milk 500 ml ₹26 [similar: not exactly Aavin milk] ← suggested" in h.told[-1][1]
     assert json.dumps(t.details["offer"])
+
+
+# ── name what was bought; never re-ask a step the order has left (founder 2026-10-12, Tata 1mg) ─────────────────────────
+
+
+async def test_what_was_bought_is_named_never_the_words_of_the_request(db, at, sessions):
+    """Live 2026-10-12: the confirm named the cart's product, but "placed" said "Magnesium Citrate tablets" (his words). The
+    order line, the placed outcome and the delivery updates name what was bought, and say when it is not exactly that."""
+    from app.tasks import tracking
+
+    at("2026-10-12 01:47")
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=SON, service="1mg", kind="order", goal="Magnesium citrate tablets",
+                             details={"items": [{"name": "Magnesium citrate tablets", "qty": 1}]})
+    calcium = {"name": "Calcium and Vitamin D3 Veg Tablets with Zinc, Magnesium & Alfalfa", "price": "₹369", "store_id": "c1",
+               "exact_match": False, "for_item": "Magnesium citrate tablets"}
+    t.status, t.phase = "done", "place"
+    t.details = {**t.details, "chosen": [calcium], "cart_fp": "fp1"}
+    t.result = {"placed": True, "order_id": "PO1", "total": "₹384",
+                "items": [{"name": calcium["name"], "qty": 1, "price": "₹369"}]}
+    await db.commit()
+    line = runtime.describe(t)
+    assert "BOUGHT: 1 x Calcium and Vitamin D3 Veg Tablets with Zinc, Magnesium & Alfalfa" in line
+    assert "NOT exactly what was asked: Calcium and Vitamin D3" in line and "is not exactly 'Magnesium citrate tablets'" in line
+    assert "never the ask" in line
+    status, msg = runtime._outcome(t.__class__(**{c: getattr(t, c) for c in ("id", "family_id", "subject_id", "requested_by", "service",
+                                                                                 "kind", "goal", "status", "phase", "result")},
+                                              details={**t.details, "confirmed_total": "₹384"}),
+                                   {"placed": True, "order_id": "PO1", "total": "₹384", "payment_method": "Cash on Delivery", "eta": "1 day"})
+    assert status == "done" and msg.startswith("Placed: 1 x Calcium and Vitamin D3") and "never the words they asked with" in msg
+    said = tracking._say(t, "Tata 1mg", "on_the_way", 30, "")
+    assert "Tata 1mg order of 1 x Calcium and Vitamin D3" in said and "Magnesium citrate tablets (" not in said.split("NOT exactly")[0]
+
+
+async def test_confirm_buttons_go_only_on_an_order_still_waiting_for_that_confirm(db, at):
+    """The buttons carry the cart check; an order already being placed, placed or changed gets none (no re-asked confirm)."""
+    at("2026-10-12 01:50")
+    await store.save_roster(db, FAM, E, [E, S])
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="milk",
+                             details={"items": [{"name": "milk"}]})
+    t.status, t.phase, t.input_needed = "awaiting_confirm", "prepare", "confirm"
+    t.details = {**t.details, "cart_fp": "abcdef123456"}
+    await db.commit()
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    out, err = await tools.run(ctx, "offer_buttons", {"kind": "order", "key": str(t.id)})
+    assert not err and ctx.buttons and all(f"{t.id}:abcdef12" in b["id"] for b in ctx.buttons), "the cart check rides on the buttons"
+    t.status, t.phase, t.input_needed = "running", "place", None
+    await db.commit()
+    ctx2 = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    out, err = await tools.run(ctx2, "offer_buttons", {"kind": "order", "key": str(t.id)})
+    assert err and "not waiting for a yes any more" in out and not ctx2.buttons
+
+
+async def test_a_second_yes_tap_says_where_it_stands_never_could_not_be_placed(db, at):
+    at("2026-10-12 01:52")
+    await store.save_roster(db, FAM, E, [E, S])
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="milk",
+                             details={"items": [{"name": "milk"}]})
+    t.status, t.phase, t.input_needed = "queued", "place", None
+    t.details = {**t.details, "cart_fp": "abcdef123456", "place_started": "2026-10-12T01:51:00+05:30"}
+    await db.commit()
+    reply, note = await outcomes.handle_order_button(db, family_id=FAM, speaker_id=ELDER, elder_id=ELDER, code="yes",
+                                                     task_id=f"{t.id}:abcdef12", profile=None)
+    assert reply == outcomes.ORDER_TAP["english"]["yes"] and note is None, "it is being placed: that is the truth"
+    t.status, t.result = "done", {"placed": True, "order_id": "B1"}
+    await db.commit()
+    reply, note = await outcomes.handle_order_button(db, family_id=FAM, speaker_id=ELDER, elder_id=ELDER, code="yes",
+                                                     task_id=f"{t.id}:abcdef12", profile=None)
+    assert reply is None and "already placed" in note
+
+
+def test_a_ride_fares_pickup_time_reads_naturally():
+    from app.tasks.models import Task
+
+    t = Task(kind="ride", details={}, result={"options": [{"type": "Auto", "fare": "₹364", "eta": "Available"},
+                                                          {"type": "Mini", "fare": "₹548", "eta": "4 min"}]})
+    texts = [o["text"] for o in runtime._ride_offers(t)]
+    assert texts == ["Auto ₹364 (Available)", "Mini ₹548 (pickup in 4 min)"]
+
+
+# ── after booking: every detail, and a cancel done in the app ─────────────────
+
+
+async def test_a_booked_ride_and_a_placed_order_give_every_detail(db, at, sessions, monkeypatch):
+    """Founder 2026-10-12: the booking details never reached him. The update carries the ride id, driver, car and plate,
+    the pickup time and the ride PIN; an order its id, total and delivery time. The agent is asked for all of them."""
+    from app.specialists.agents import specialist_for
+
+    at("2026-10-12 08:20")
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "off")
+    booked = {**BOOKED, "ride_id": "CRN-7", "driver": "Ajay", "vehicle": "White Dzire", "plate": "CG04 AB 0001", "pickup_eta": "4 min",
+              "ride_pin": "4321"}
+    agent = FakeAgent(script={"prepare": [{"logged_in": True, "needs_otp": False, "blocked": False, "problem": "",
+                                           "options": [{"type": "Mini", "fare": "₹548", "eta": "4 min"}]}], "place": [booked]})
+    h = Harness(sessions, agent)
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=SON, service="ola", kind="ride", goal="Cab to the airport",
+                             details={"pickup": "Home", "drop": "Airport"})
+    await db.commit()
+    await _until(h, db, t, lambda t: t.input_needed == "choice")
+    await runtime.provide_input(db, t, kind="choice", value="1", by=SON, by_is_elder=False)
+    await db.commit()
+    assert "pickup_eta, ride_pin" in specialist_for("ola").goal(t)
+    await _until(h, db, t, lambda t: t.status == "done")
+    said = h.told[-1][1]
+    for bit in ("ride id CRN-7", "driver Ajay", "car White Dzire CG04 AB 0001", "pickup in about 4 min", "ride PIN 4321"):
+        assert bit in said, bit
+    o = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=SON, service="blinkit", kind="order", goal="milk",
+                             details={"items": [{"name": "milk"}], "confirmed_total": "₹71"})
+    # as the tick does: the report is on the task before its outcome is written
+    o.phase, o.result = "place", {"items": [{"name": "Amul Taaza Toned Milk", "qty": 2, "price": "₹56"}], "placed": True, "order_id": "B-9",
+                                  "total": "₹71", "eta": "12 min"}
+    status, msg = runtime._outcome(o, {"placed": True, "order_id": "B-9", "total": "₹71", "eta": "12 min"})
+    assert status == "done" and "order id B-9; total ₹71, cash on delivery; delivery in about 12 min" in msg
+
+
+async def test_a_cancel_they_did_themselves_in_the_app_is_recorded_and_nothing_more_is_asked(db, at, sessions):
+    """Live 2026-10-12: he cancelled the booked Ola ride in the app himself; the task still read booked (counted in the
+    month's spend) and "did the cab come?" was due in the morning. Recorded by the brain's done_in_app, for every store and
+    ride app and both roles."""
+    from app.care import boundaries
+    from app.care.models import OpenLoop
+    from app.tasks import aftercare
+
+    at("2026-10-12 02:07")
+    await store.save_roster(db, FAM, E, [E, S])
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="ola", kind="ride", goal="Cab to the airport",
+                             details={"pickup": "Home", "drop": "Airport", "confirmed_total": "₹548", "choice": "Mini ₹548"})
+    t.status, t.phase, t.result = "done", "place", {"booked": True, "ride_id": "CRN-8"}
+    await aftercare.open_followup(db, t)
+    await db.commit()
+    assert await boundaries.month_spent(db, FAM) == 548
+    # her son says he cancelled it in the Ola app: recorded, and she hears who cancelled it
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=S, members=[E, S])
+    out, err = await tools.run(ctx, "done_in_app", {"task_id": str(t.id), "what": "cancelled"})
+    await db.commit()
+    r = json.loads(out)
+    assert not err and r["result"].startswith("Recorded: they cancelled the Ola ride themselves in the Ola app")
+    assert f"Tell person {ELDER}" in r["tell"] and "Ravi cancelled this ride themselves in the Ola app" in r["tell"]
+    await db.refresh(t)
+    assert t.status == "cancelled" and t.details["cancel_ask"]["state"] == "cancelled_in_app"
+    assert await boundaries.month_spent(db, FAM) == 0, "it left the month's spend"
+    loop = (await db.execute(select_loop(OpenLoop, t))).scalar_one()
+    assert loop.status != "open", "no 'did the cab come?' question"
+    assert "cancelled it themselves in the Ola app" in runtime.describe(t)
+    # a change made in the app is recorded too, and the order stays
+    o = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=SON, service="zepto", kind="order", goal="milk",
+                             details={"items": [{"name": "milk"}]})
+    o.status, o.phase, o.result = "done", "place", {"placed": True, "order_id": "Z-1"}
+    await db.commit()
+    out, _ = await tools.run(ctx, "done_in_app", {"task_id": str(o.id), "what": "changed", "detail": "removed the bread"})
+    await db.refresh(o)
+    assert o.status == "done" and "removed the bread" in runtime.describe(o)
+    # one Saheli never placed: nothing to record
+    q = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=SON, service="blinkit", kind="order", goal="eggs",
+                             details={"items": [{"name": "eggs"}]})
+    await db.commit()
+    out, _ = await tools.run(ctx, "done_in_app", {"task_id": str(q.id), "what": "cancelled"})
+    assert "nothing to record" in json.loads(out)["result"]
+
+
+def select_loop(OpenLoop, t):
+    from sqlalchemy import select
+
+    return select(OpenLoop).where(OpenLoop.dedupe_key == f"delivery:{t.id}")

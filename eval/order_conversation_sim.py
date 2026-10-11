@@ -61,7 +61,9 @@ CATALOGUE = {
               P("z4", "Britannia Marie Gold Biscuits", 33, "250 g")],
     # pharmacies: the strength asked, another strength and another brand (a medicine is offered only exactly as asked)
     "apollo": [P("a1", "Dolo 650 Tablet", 33, "15 tablets"), P("a2", "Dolo 500 Tablet", 30, "15 tablets")],
-    "1mg": [P("m1", "Dolo 650 Tablet", 31, "15 tablets"), P("m2", "Calpol 650 Tablet", 28, "15 tablets")],
+    # no magnesium citrate here: the closest is another supplement (a live 1mg order, 2026-10-12)
+    "1mg": [P("m3", "Calcium and Vitamin D3 Veg Tablets with Zinc, Magnesium & Alfalfa", 369, "60 tablets"),
+            P("m1", "Dolo 650 Tablet", 31, "15 tablets"), P("m2", "Calpol 650 Tablet", 28, "15 tablets")],
     "pharmeasy": [P("e1", "Crocin Advance 500 Tablet", 25, "15 tablets")],
 }
 F = lambda pid, name, price, rest, eta: {**P(pid, name, price, "1 plate"), "restaurant": rest, "restaurantId": rest.lower().replace(" ", "-"),  # noqa: E731
@@ -88,8 +90,11 @@ class Store:
         self.broken: set[str] = set()  # stores whose saved look-up fails (the browser agent looks instead)
         self.away: set[str] = set()  # stores that do not deliver to the family's place
         self.needs_code: set[str] = set()  # stores whose account is not logged in: a login code comes first
+        self.cancel_mode: dict[str, str] = {}  # how a store answers a cancel: ok (default), fee0, fee25, refuse
+        self.cancelled: list[str] = []
         self.logged_in: set[str] = set()
         self.rides: list[dict] = []  # rides booked
+        self.city_pickup: str | None = None  # the ride app sets the pickup to this city once (live 2026-10-12)
 
     async def search(self, service, cdp, q, *, lat=None, lon=None, pincode=None, limit=8):
         self.searched.append((service, lat, lon))
@@ -132,7 +137,7 @@ class Browser:
     how many polls (10 s each) its agent takes."""
 
     def __init__(self, shop: "Store | None" = None):
-        self.shop, self.agent_runs, self.slow = shop, [], {}
+        self.shop, self.agent_runs, self.slow, self.goals = shop, [], {}, []
         self._runs: dict[str, dict] = {}
 
     async def open_session(self, profile):
@@ -149,6 +154,7 @@ class Browser:
 
         service, phase = metadata.get("service"), metadata.get("phase")
         self.agent_runs.append(f"{service}:{phase}")
+        self.goals.append((f"{service}:{phase}", goal))
         async with SessionLocal() as s:
             task = await s.get(Task, uuid.UUID(str(metadata["task"])))
             out = await self._report(task, service, phase, goal)
@@ -160,15 +166,30 @@ class Browser:
         base = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": ""}
         d = task.details or {}
         if task.kind == "ride":
+            from app.specialists.agents import ride_end
+
             fares = [dict(o) for o in RIDES.get(service, [])]
+            ends = {"pickup_used": ride_end(d, "pickup"), "drop_used": ride_end(d, "drop")}  # the app shows what it was given
+            if phase == "prepare" and self.shop.city_pickup:
+                # the app chose the city for the pickup (live 2026-10-12): its fares are for another route
+                ends["pickup_used"], self.shop.city_pickup = self.shop.city_pickup, None
+                return {**base, **ends, "options": [{**o, "fare": f"₹{int(o['fare'][1:]) + 50}"} for o in fares]}
             if phase == "browse":  # guest fares
-                return {**base, "logged_in": False, "options": fares, **({} if fares else {"problem": "no rides near the pickup"})}
+                return {**base, **ends, "logged_in": False, "options": fares, **({} if fares else {"problem": "no rides near the pickup"})}
             if phase == "prepare":  # logged in: the fares a few rupees up
-                return {**base, "options": [{**o, "fare": f"₹{int(o['fare'][1:]) + 3}"} for o in fares]}
+                return {**base, **ends, "options": [{**o, "fare": f"₹{int(o['fare'][1:]) + 3}"} for o in fares]}
             if phase == "place":
-                self.shop.rides.append({"service": service, "choice": d.get("choice")})
-                return {**base, "booked": True, "ride_id": f"R{len(self.shop.rides)}", "driver": "Suresh, CG04 AB 1234",
-                        "status": "driver assigned"}
+                self.shop.rides.append({"service": service, "choice": d.get("choice"), "pickup": ends["pickup_used"]})
+                return {**base, **ends, "booked": True, "ride_id": f"R{len(self.shop.rides)}", "driver": "Suresh", "vehicle": "White Dzire",
+                        "plate": "CG04 AB 1234", "pickup_eta": "4 min", "ride_pin": "4931", "status": "driver assigned"}
+        if phase == "cancel":
+            mode = self.shop.cancel_mode.get(service, "ok")
+            if mode in ("fee0", "fee25") and not d.get("fee_ok"):
+                return {**base, "cancelled": False, "cancel_fee": "₹0" if mode == "fee0" else "₹25"}
+            if mode == "refuse":
+                return {**base, "cancelled": False, "problem": "the order is already packed and cannot be cancelled"}
+            self.shop.cancelled.append(service)
+            return {**base, "cancelled": True}
         if phase in ("prepare", "otp") and service in self.shop.needs_code and service not in self.shop.logged_in:
             if "Enter this code" not in goal:  # the store sends a login code to the family's phone
                 self.code_sent_at = getattr(self, "polls_total", 0)
@@ -337,7 +358,7 @@ class Conversation:
         before = len(self.messages_to(requested_by))
         self.log.append(f"  <update to {'Maa' if requested_by == ELDER['id'] else requested_by}> {prompt[:150]}")
         await system_turn(SessionLocal, self.host, family_id,
-                          f"{prompt} (Requested by {requested_by}: tell them with send_message to {requested_by}, in their language, then reply none.)",
+                          f"{prompt} (For person {requested_by}, who asked: send it to them now with send_message (to {requested_by}), in their language. After that send, reply none.)",
                           f"task:{uuid.uuid4().hex[:12]}", deliver_to=requested_by, still_true=check)
         new = self.messages_to(requested_by)[before:]
         if not new and check is not None:
@@ -705,9 +726,8 @@ async def mumbai_marathi_self_care_named_store_lacks_it(c: Conversation):
         c.check(len(c.shop.placed) == 1, f"not placed once ({len(c.shop.placed)})")
         # self care: asking to cancel a placed order → she cancels it in the store's app (nobody else to tell)
         await c.say("रद्द करा ना, चुकून झाली ऑर्डर")
-        t = await c.task()
-        c.check(t.status == "done" and (t.details or {}).get("cancel_ask") and not (t.details or {}).get("cancel_ask", {}).get("elder"),
-                f"self care cancel after placing: {t.status} {(t.details or {}).get('cancel_ask')}")
+        t = await c.ticks(lambda t: t.status == "cancelled", most=4)
+        c.check(t.status == "cancelled" and c.shop.cancelled == ["blinkit"], f"her own cancel was not done on Blinkit: {t.status} {c.shop.cancelled}")
 
 
 async def chennai_tamil_no_point_browser_agent_looks(c: Conversation):
@@ -796,6 +816,61 @@ async def delhi_ride_cheapest_then_cancel_after_booking(c: Conversation):
     c.check(not any(r.endswith(":cancel") for r in c.browser.agent_runs), "a cancel was run on the ride app")
 
 
+async def chennai_ride_from_home_the_app_set_the_city_first(c: Conversation):
+    """Live 2026-10-12 (another family): the pickup went to the ride app as words, the app set the city, the ride was booked
+    there, and Saheli said it was their address. A Tamil elder books an auto on Uber from home: the app gets the saved
+    address; the first logged-in look sets the city, so it is set again (its fares never reach her); booked from home; she
+    asks whether it comes to her house and hears where the app set it."""
+    await c.setup()
+    c.shop.city_pickup = "Chennai, Tamil Nadu"
+    await c.say("வீட்டிலிருந்து அப்பல்லோ ஆஸ்பத்திரிக்கு ஊபர்ல ஆட்டோ புக் பண்ணுங்க")
+    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    uber = next((t for t in ts if t.service == "uber"), None)
+    full = c.family.place["full"]
+    c.check(uber is not None and ((uber.details or {}).get("pickup_place") or {}).get("full") == full,
+            f"the pickup is not the saved home: {(uber.details or {}).get('pickup_place') if uber else None}")
+    await c.say("ஆட்டோ")
+    ts = await c.ticks_any(lambda ts: any(t.service == "uber" and t.input_needed == "choice" for t in ts), most=10)
+    prepares = [g for k, g in c.browser.goals if k == "uber:prepare"]
+    c.check(len(prepares) == 2 and "The last run set the pickup to 'Chennai, Tamil Nadu'" in (prepares[-1] if prepares else ""),
+            f"the pickup was not set again after the app chose the city: {len(prepares)} looks")
+    c.check(not any("192" in _digits(m.get("text")) for m in c.maa_messages()), "a fare from the wrong pickup reached her")
+    await c.say("சரி, புக் பண்ணுங்க")
+    await c.ticks_any(lambda ts: any(t.service == "uber" and t.status == "done" for t in ts), most=8)
+    c.check([r["pickup"] for r in c.shop.rides] == [full], f"not booked once from home: {c.shop.rides}")
+    booked = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
+    # founder 2026-10-12: the booking details never reached him; every one goes out (the PIN, the plate, the driver)
+    c.check("4931" in _digits(booked) and "1234" in _digits(booked), f"the booked message lacks the ride PIN or the plate: {booked}")
+    reply = await c.say("வண்டி என் வீட்டுக்கே வருமா? எந்த அட்ரஸ் போட்டிருக்கீங்க?")
+    c.check(any(w in reply for w in ("Nagar", "நகர்", "Flat 9", "600017")), f"she did not hear the address the app set: {reply}")
+
+
+async def bangalore_ride_he_cancelled_it_himself_in_the_app(c: Conversation):
+    """Live 2026-10-12: he cancelled a booked ride in the app himself and said so; the task still read booked (counted in the
+    month's spend; "did the cab come?" due next morning). A Bangalore son books an Ola cab for himself, then says he cancelled
+    it in the Ola app: it is recorded, nothing is run on the app, and nothing more is asked."""
+    await c.setup()
+    await c.say("Book me an Ola mini from home to Bangalore airport")
+    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    await c.say("the mini")
+    await c.ticks_any(lambda ts: any(t.service == "ola" and t.input_needed == "choice" for t in ts), most=10)
+    await c.say("yes book it")
+    ts = await c.ticks_any(lambda ts: any(t.service == "ola" and t.status == "done" for t in ts), most=8)
+    c.check([r["service"] for r in c.shop.rides] == ["ola"], f"not booked once on Ola: {c.shop.rides}")
+    booked = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
+    c.check("4931" in _digits(booked), f"the booked message lacks the ride PIN: {booked}")
+    await c.say("I just cancelled it myself in the Ola app, plans changed")
+    ola = next(t for t in await c.tasks() if t.service == "ola")
+    c.check(ola.status == "cancelled" and ((ola.details or {}).get("in_app") or {}).get("what") == "cancelled",
+            f"his own cancel in the app was not recorded: {ola.status} {(ola.details or {}).get('in_app')}")
+    c.check(not any(r.endswith(":cancel") for r in c.browser.agent_runs), "a cancel was run on the app he already cancelled in")
+    before = len(c.host.world.sent)
+    await c.ticks_any(lambda ts: True, most=2)
+    clock.set_now(clock.now() + timedelta(hours=3))  # past the "did the cab come?" time
+    await c.wake()
+    c.check(len(c.host.world.sent) == before, f"something more was said about it: {c.host.world.sent[before:]}")
+
+
 async def bangalore_food_two_apps_named_caregiver_cancels_in_app(c: Conversation):
     """Food and a caregiver: the two apps he named are both reported (dishes from restaurants as options); he picks the
     Zomato one; after it is placed he asks to cancel: he is pointed to the Zomato app and nobody else is messaged."""
@@ -812,12 +887,14 @@ async def bangalore_food_two_apps_named_caregiver_cancels_in_app(c: Conversation
     t = await c.ticks(lambda t: t.status == "done", most=8)
     c.check(len(c.shop.placed) == 1 and t.status == "done", f"not placed once ({len(c.shop.placed)}, {t.status})")
     before = len(c.prompts)
+    c.shop.cancel_mode["zomato"] = "refuse"
     await c.say("Actually cancel it, she already ate")
-    await c.ticks(lambda t: True, most=1)
+    await c.ticks(lambda t: (t.details or {}).get("cancel_ask", {}).get("state") not in ("cancelling", None), most=4)
     t = await c.task()
-    c.check(t.status == "done" and (t.details or {}).get("cancel_ask") and not t.details["cancel_ask"].get("elder"),
-            f"a caregiver's cancel after placing: {t.status} {(t.details or {}).get('cancel_ask')}")
-    c.check(not [p for p in c.prompts[before:] if p.startswith("[Order needs you]")], "someone was messaged although he can cancel it himself")
+    c.check(t.status == "done" and (t.details or {}).get("cancel_ask", {}).get("state") == "refused",
+            f"his cancel after placing went to Zomato, which refused: {t.status} {(t.details or {}).get('cancel_ask')}")
+    c.check(any(r == "zomato:cancel" for r in c.browser.agent_runs), "Zomato was not asked to cancel it")
+    c.check(not [p for p in c.prompts[before:] if p.startswith("[Order needs you]")], "someone else was messaged about his own cancel")
 
 
 async def chennai_tamil_medicine_exact_strength_only(c: Conversation):
@@ -898,7 +975,45 @@ async def raipur_approval_at_once_then_cancel_while_placing(c: Conversation):
     after = c.maa_messages()[before_her:]
     c.check(len(after) == 1, f"{len(after)} updates to her after her cancel, not one: {[m.get('text') for m in after]}")
     son = c.messages_to(SON["id"])[before_son:]
-    c.check(len(son) == 1, f"her son got {len(son)} messages to cancel it in the app, not one")
+    c.check(len(son) == 1, f"her son got {len(son)} messages about her cancel, not one")
+    c.shop.cancel_mode["zepto"] = "fee25"
+    await c.say("haan cancel kar do", who=SON)
+    t = await c.ticks(lambda t: t.input_needed == "fee", most=4)
+    c.check(t.input_needed == "fee", f"the ₹25 fee was not asked: {t.status}/{t.input_needed}")
+    fee_asks = [m for m in c.messages_to(SON["id"]) if re.search(r"(?<![\d.])25(?![\d])", _digits(m.get("text")))]
+    c.check(len(fee_asks) == 1, f"the fee was asked {len(fee_asks)} times, not once")
+    await c.say("haan theek hai, 25 de denge", who=SON)
+    t = await c.ticks(lambda t: t.status == "cancelled", most=4)
+    c.check(t.status == "cancelled" and c.shop.cancelled == ["zepto"], f"not cancelled on Zepto with the fee: {t.status} {c.shop.cancelled}")
+
+
+async def bangalore_1mg_closest_named_then_free_cancel(c: Conversation):
+    """A live 1mg order (2026-10-12), played for a made-up family: no exact product, so the closest is offered marked as not
+    exactly it; the confirm and the "placed" message name what was bought, never his words; then he asks to cancel and 1mg
+    shows a ₹0 fee: it goes through without a second question, and the one result follows."""
+    await c.setup()
+    c.shop.cancel_mode["1mg"] = "fee0"
+    await c.say("Order magnesium citrate tablets from Tata 1mg for Amma")
+    await c.say("yes, home")
+    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=8)
+    c.check(bool(_offered(ts)), "no options offered")
+    await c.say("ok the first one")
+    await c.ticks(lambda t: t.status == "awaiting_confirm" and t.input_needed == "confirm", most=8)
+    ids = confirm_buttons(c)
+    c.check(len(ids) == 3, f"confirm buttons missing: {ids}")
+    if not ids:
+        return
+    await c.say(ids[0])
+    t = await c.ticks(lambda t: t.status == "done", most=8)
+    placed = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
+    c.check("calcium" in placed.lower(), f"the placed message does not name what was bought: {placed}")
+    before = len(c.maa_messages())
+    await c.say("Please cancel that 1mg order")
+    t = await c.ticks(lambda t: t.status in ("cancelled", "done") and (t.details or {}).get("cancel_ask", {}).get("state") in ("cancelled", "refused"), most=6)
+    c.check(t.status == "cancelled" and c.shop.cancelled == ["1mg"], f"not cancelled on 1mg: {t.status} {c.shop.cancelled}")
+    after = c.maa_messages()[before:]
+    c.check(len(after) == 1, f"{len(after)} messages after his cancel, not one result: {[m.get('text') for m in after]}")
+    c.check(not any("₹0" in str(m.get("text")) or "fee" in str(m.get("text")).lower() for m in after), "a free cancel was asked about")
 
 
 async def mumbai_marathi_cancel_while_the_cart_is_built(c: Conversation):
@@ -929,7 +1044,8 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
               RAIPUR, ()),
              ("Bangalore: RiteBite x4, no store named, place without a point", bangalore_ritebite_no_store_named, BANGALORE, ("zepto:prepare", "zepto:place")),
              ("Delhi: Hindi, no store named, then no", delhi_hindi_no_store_then_no, DELHI, ("zepto:prepare",)),
-             ("Mumbai: Marathi, self-care, the named store lacks it", mumbai_marathi_self_care_named_store_lacks_it, MUMBAI, ()),
+             ("Mumbai: Marathi, self-care, the named store lacks it", mumbai_marathi_self_care_named_store_lacks_it, MUMBAI,
+              ("blinkit:cancel",)),
              ("Chennai: Tamil, no point anywhere: the agent looks", chennai_tamil_no_point_browser_agent_looks, CHENNAI,
               # no store ids from the agent's look-up: the agent also builds the cart and places, on whichever store is picked
               tuple(f"{s}:{p}" for s in ("blinkit", "instamart", "zepto") for p in ("browse", "prepare", "place"))),
@@ -937,14 +1053,21 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
              # the founder's rules everywhere: one regression per root cause, across services, store mixes and people
              ("Delhi: Hindi ride, cheapest app, cancel after booking", delhi_ride_cheapest_then_cancel_after_booking, DELHI,
               ("uber:browse", "ola:browse", "rapido:browse", "ola:prepare", "ola:place", "uber:prepare", "uber:place")),
-             ("Bangalore: food on the two apps he named, he cancels in the app", bangalore_food_two_apps_named_caregiver_cancels_in_app,
-              BANGALORE, ("zomato:prepare", "zomato:place", "swiggy:prepare", "swiggy:place")),
+             ("Bangalore: food on the two apps he named, Zomato will not cancel: he is sent to its app",
+              bangalore_food_two_apps_named_caregiver_cancels_in_app, BANGALORE,
+              ("zomato:prepare", "zomato:place", "zomato:cancel", "swiggy:prepare", "swiggy:place", "swiggy:cancel")),
+             ("Bangalore: 1mg, the closest named as bought, a free cancel not asked again", bangalore_1mg_closest_named_then_free_cancel,
+              BANGALORE, ("1mg:prepare", "1mg:place", "1mg:cancel")),
+             ("Chennai: Tamil ride from home, the app set the city first", chennai_ride_from_home_the_app_set_the_city_first, CHENNAI,
+              ("uber:browse", "uber:prepare", "uber:place")),
+             ("Bangalore: his Ola ride, then he cancelled it himself in the app", bangalore_ride_he_cancelled_it_himself_in_the_app,
+              BANGALORE, ("ola:browse", "ola:prepare", "ola:place")),
              ("Chennai: Tamil medicine, exact strength only", chennai_tamil_medicine_exact_strength_only, CHENNAI,
               tuple(f"{s}:{p}" for s in ("apollo", "1mg", "pharmeasy") for p in ("prepare", "place"))),
              ("Kolkata: Bengali, two of three named, login code at once", kolkata_two_of_three_named_login_code_asked_at_once, KOLKATA,
               ("zepto:prepare", "zepto:place")),
-             ("Raipur: approval at once, cancel while placing", raipur_approval_at_once_then_cancel_while_placing, RAIPUR,
-              ("zepto:prepare", "zepto:place")),
+             ("Raipur: approval at once, cancel while placing, her son's cancel with a fee", raipur_approval_at_once_then_cancel_while_placing,
+              RAIPUR, ("zepto:prepare", "zepto:place", "zepto:cancel")),
              ("Mumbai: Marathi, cancel while the cart is built", mumbai_marathi_cancel_while_the_cart_is_built, MUMBAI, ())]
 
 

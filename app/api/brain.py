@@ -258,7 +258,7 @@ async def tasks_job() -> dict:
         try:
             # Name the send explicitly: twice live the brain wrote the update as its final reply (which reaches no one).
             await system_turn(SessionLocal, host_for(family_id), family_id,
-                              f"{prompt} (Requested by {requested_by}: tell them with send_message to {requested_by}, in their language, then reply none.)",
+                              f"{prompt} (For person {requested_by}, who asked: send it to them now with send_message (to {requested_by}), in their language. After that send, reply none.)",
                               f"task:{_uuid.uuid4().hex[:12]}", deliver_to=requested_by, still_true=_runtime.delivery_check())
         except Exception:  # noqa: BLE001
             logger.exception("task notify failed family=%s", family_id)

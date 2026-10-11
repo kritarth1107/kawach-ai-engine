@@ -110,7 +110,9 @@ async def _status(task: Task, host, agent, profile_for) -> dict | None:
 
 
 def _say(task: Task, label: str, state: str, minutes: int | None, words: str, ask_arrival: bool = False) -> str:
-    what = f"{label} order ({task.goal[:80]})"
+    from app.tasks.runtime import bought
+
+    what = f"{label} order of {bought(task)[:200]} (name these products, never the words they asked with)"
     if state == "on_the_way":
         when = f", arriving in about {minutes} min" if minutes else ""
         return f"[Task update] {what}: the store says it is on the way{when}. Tell them in one short line; ask nothing."

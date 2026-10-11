@@ -89,7 +89,7 @@ def tag(*, text: str, role: str, tools: list[str], prompt: str = "") -> str:
         return "caregiver_stressed"
     if LOW_MOOD.search(t):
         return "low_mood"
-    if used & {"start_task", "task_input", "cancel_task", "past_orders"} or ORDER.search(t):
+    if used & {"start_task", "task_input", "cancel_task", "done_in_app", "past_orders"} or ORDER.search(t):
         return "order"
     if "log_vital" in used or VITAL.search(t):
         return "vital_report"

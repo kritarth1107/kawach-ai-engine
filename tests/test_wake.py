@@ -160,7 +160,8 @@ async def test_task_update_written_as_plain_reply_still_reaches_the_asker(db, at
 
 
 class SilentFirstBrain:
-    """Answers a task update with 'none' the first time (as live 2026-10-10 20:29), with the message when asked again."""
+    """Answers a task update with 'none' the first time (as live 2026-10-10 20:29 and 2026-10-12 02:03), with the message
+    when asked again."""
 
     def __init__(self):
         self.calls = 0
@@ -174,7 +175,9 @@ class SilentFirstBrain:
         return LLMReply(text="none", tool_calls=[], model="fake")
 
 
-async def test_an_update_needing_an_answer_that_sent_nothing_is_asked_again_but_a_done_notice_is_not(db, at, monkeypatch):
+async def test_an_update_that_sent_nothing_is_asked_again_even_right_after_saheli_wrote(db, at, monkeypatch):
+    """Live 2026-10-12 02:03: the login-code ask got "none" and was not asked again because Saheli had written 26 s before.
+    A time window never decides; what the person was told does (tests/test_updates_reach.py has the task-data cases)."""
     brain = SilentFirstBrain()
     router.register_provider("fake", brain)
     monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
@@ -183,15 +186,12 @@ async def test_an_update_needing_an_answer_that_sent_nothing_is_asked_again_but_
         sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
         at("2026-10-10 20:29")
         await store.save_roster(db, FAM, ELDER, [ELDER, DAUGHTER])
+        await store.add_turn(db, family_id=FAM, thread_id=ELDER["id"], role="assistant", text="Ji, dekh rahi hoon.")
         await db.commit()
         host = SimHost()
         await wake.system_turn(sessions, host, FAM, "[Task update] [t-9] Instamart order: khakhra, waiting for confirm, total ₹175.", "task:a1",
                                deliver_to=ELDER["id"])
-        assert [m["text"] for m in host.world.sent] == ["Kamla ji, cart ₹175 ready hai. Order karun?"] and brain.calls == 2
-        # live 20:45: the 'placed' notice she had already told Maa in her reply went out again; a done notice is not re-asked
-        at("2026-10-10 20:45")
-        await wake.system_turn(sessions, host, FAM, "[Task update] [t-9] Instamart order: khakhra, status done/place, id 1. Placed.", "task:a2",
-                               deliver_to=ELDER["id"])
-        assert len(host.world.sent) == 1 and brain.calls == 3
+        # mid-conversation: no name opener
+        assert [m["text"] for m in host.world.sent] == ["Cart ₹175 ready hai. Order karun?"] and brain.calls == 2
     finally:
         router._providers.pop("fake", None)

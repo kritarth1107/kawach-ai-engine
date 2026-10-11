@@ -27,7 +27,25 @@ PHARMACY_RULES = """PHARMACY AGENT RULES
 RIDES_AGENT_RULES = """RIDES AGENT RULES
 - Pickup and drop exactly as given. Payment must be Cash. Never book without being told this is the booking step.
 - Report each vehicle option with fare and pickup time, and say plainly if surge pricing applies.
-- Cancelling: if any fee is shown, do not confirm the cancel; report the fee."""
+- Cancelling: confirm a cancellation that costs nothing (₹0 / free). If it shows a real charge, do not confirm unless the goal
+  says the family agreed to it: report cancel_fee with the amount."""
+
+
+def ride_end(d: dict, end: str) -> str:
+    """A ride's pickup or drop as the app must be given it: the saved place's full address when the person meant one (an AI
+    decision at the start), else their words (a landmark the app finds)."""
+    place = d.get(f"{end}_place") or {}
+    return str(place.get("full") or d.get(end) or "")
+
+
+def cancel_terms(d: dict) -> str:
+    """How a cancel run treats a cancellation fee (founder 2026-10-12: a free cancel is never asked about again)."""
+    if d.get("fee_ok"):
+        return (f"The family agreed to the cancellation fee of {d.get('cancel_fee') or 'the amount shown'}: confirm the cancellation "
+                "and report cancelled=true and cancel_fee. If the fee is now higher, do NOT confirm: report cancel_fee.")
+    return ("If the store asks to confirm a cancellation that costs nothing (no fee, ₹0, free), confirm it and report "
+            "cancelled=true. If it shows a charge for cancelling, do NOT confirm: report cancel_fee with the amount in rupees. "
+            "If it no longer lets you cancel, report cancelled=false and problem with the store's words.")
 
 
 @dataclass(frozen=True)
@@ -61,17 +79,29 @@ class Specialist:
         d = task.details or {}
         label = SKILLS[task.service]["label"]
         if task.kind == "ride":
-            what = f"from {d.get('pickup')} to {d.get('drop')}" + (f", vehicle {d['vehicle']}" if d.get("vehicle") else "")
+            pick, drop = ride_end(d, "pickup"), ride_end(d, "drop")
+            what = f"from '{pick}' to '{drop}'" + (f", vehicle {d['vehicle']}" if d.get("vehicle") else "")
+            # Live 2026-10-12: a saved home went to the app as words, the app set the city and the ride was booked there.
+            ends = (f" Set the pickup to exactly '{pick}' and the drop to exactly '{drop}': type the full address and choose the "
+                    "suggestion that matches it (never a city or area alone). Report pickup_used and drop_used exactly as the app "
+                    "shows them.")
+            if d.get("ends_fix"):
+                ends += f" The last run set {d['ends_fix']}, which is wrong: set it again carefully."
             if task.phase == "browse":
                 return (f"On {label}, without logging in and without booking: enter the pickup and drop {what} and report the ride options "
-                        f"with fares and pickup times. If the site needs a login before it shows fares, stop and report login_required=true.")
+                        f"with fares and pickup times.{ends} If the site needs a login before it shows fares, stop and report login_required=true.")
             if task.phase == "prepare":
-                return f"On {label}, find the ride options {what} with cash payment. Do NOT book. Report the options with fares, surge, and whether you are logged in."
+                return (f"On {label}, find the ride options {what} with cash payment. Do NOT book.{ends} Report the options with fares, "
+                        "surge, and whether you are logged in.")
             if task.phase == "place":
                 choice = d.get("choice") or "the option the family confirmed"
-                return f"On {label}, book the ride {what}: {choice}, payment Cash. Report booked, ride_id, driver and status."
+                return (f"On {label}, book the ride {what}: {choice}, payment Cash.{ends} Before you book, look at the pickup the app "
+                        f"shows: if it is only a city or an area, or another place than '{pick}', do NOT book: report "
+                        "pickup_mismatch=true and pickup_used. After booking, wait for the driver to be assigned and report booked, "
+                        "ride_id, driver (name), vehicle (model and colour), plate, pickup_eta, ride_pin (the PIN / OTP shown for "
+                        "starting the trip, if any), status, pickup_used and drop_used, all exactly as the app shows them.")
             if task.phase == "cancel":
-                return f"On {label}, cancel the current ride {(task.result or {}).get('ride_id', '')}. If a cancellation fee is shown, do NOT confirm: report cancel_fee. Otherwise cancel and report cancelled."
+                return f"On {label}, cancel the current ride {(task.result or {}).get('ride_id', '')}. " + cancel_terms(d)
             return task.goal
         items = "; ".join(f"{i.get('qty', 1)} x {i.get('name')}" for i in d.get("items") or []) or task.goal
         place = (d.get("limits") or {}).get("place") or {}
@@ -116,8 +146,7 @@ class Specialist:
                     "once you pressed the final place-order / pay button (also when no confirmation page came; then wait for it and "
                     "report what the page shows).")
         if task.phase == "cancel":
-            return (f"On {label}, open the order {(task.result or {}).get('order_id', 'just placed')} and cancel it. If a cancellation "
-                    f"fee is shown, do NOT confirm: report cancel_fee. Otherwise cancel and report cancelled.")
+            return f"On {label}, open the order {(task.result or {}).get('order_id', 'just placed')} and cancel it. " + cancel_terms(d)
         return task.goal
 
 

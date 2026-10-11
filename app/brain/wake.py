@@ -111,7 +111,39 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     )
 
 
-MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]")  # updates that must reach the person
+MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]", "[Approval needed]")  # updates that must reach the person
+
+IN_THEIR_WORDS = """Rewrite this WhatsApp message from Saheli (a caring assistant) for the person, in the same language and script
+they write in (their recent messages are below; English if there are none). Keep every number, amount, id, code, name,
+store and place exactly as they are, keep the line breaks of a numbered list, add nothing and leave nothing out. Only the
+message."""
+
+
+def _silent(text: str) -> bool:
+    return not text or text.lower().strip(" .\"'") == "none"
+
+
+def _sent_to(result, person: str | None) -> bool:
+    return bool(result) and any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == person
+                                for a in result.actions)
+
+
+async def in_their_words(sessions: async_sessionmaker, family_id: str, person: str, text: str) -> str:
+    """A message written by code, put in the language the person writes in (an AI rewrite; their own recent messages
+    show the language). The text as it is when no model answers."""
+    from app.llm import router
+
+    try:
+        async with sessions() as session:
+            mine = [t.text for t in await store.recent_turns(session, family_id, person, limit=12) if t.role == "user" and t.text][-4:]
+        reply = await router.complete("worker", system_stable=IN_THEIR_WORDS, effort="low", max_tokens=900, timeout_s=25, messages=[
+            {"role": "user", "content": [{"type": "text", "text": "THEIR RECENT MESSAGES:\n" + ("\n".join(f"- {m[:200]}" for m in mine) or "(none)")
+                                          + f"\n\nMESSAGE:\n{text}"}]}])
+        out = (reply.text or "").strip()
+        return out if out and len(out) < 4 * len(text) + 200 else text
+    except Exception as exc:  # noqa: BLE001 — the plain text still goes
+        logger.warning("in_their_words failed: %s", exc)
+        return text
 
 
 async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None,
@@ -119,68 +151,121 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     """Let the brain act on something that happened without a person writing (a due loop, a task update).
 
     deliver_to: the person this update is for (who asked for the order or ride). If the brain wrote its message as the
-    final reply instead of sending it with send_message (that reply goes to no one), it is sent to them here, so an
-    update can never vanish (live 2026-10-08 21:41: the Blinkit price and go-ahead question reached no one).
+    final reply instead of sending it with send_message (that reply goes to no one), it is sent to them here (live
+    2026-10-08 21:41: the Blinkit price and go-ahead question reached no one).
 
-    still_true: for an update about a task (app.tasks.runtime.delivery_check): checked once the family's turn is held; an
-    update whose task moved on meanwhile is dropped, so the person never hears two contradicting things."""
+    still_true: for an update about a task (app.tasks.runtime.TaskUpdate): checked once the family's turn is held; an
+    update whose task moved on meanwhile is dropped, so the person never hears two contradicting things.
+
+    An update that must reach the person (MUST_REACH) does (founder 2026-10-12: the login-code ask and the booked ride never
+    reached him: the brain answered "none" and the retry was skipped because Saheli had spoken to him in the last two
+    minutes). It is skipped only when they were already told this exact state; if the brain sends nothing it is asked
+    again; if it still sends nothing (or no model answers), the news written from the task data goes. Only when the person
+    wrote after the update was written, and was answered, may the brain decide on the retry that they already heard it."""
     async with sessions() as session:
         roster = await store.roster(session, family_id)
     if not roster:
         logger.warning("system turn skipped, no roster family=%s", family_id)
         return
-    async with sessions() as session:
-        result = await run_turn(
-            session, host,
-            TurnRequest(family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt, message_ref=ref, channel="scheduler",
-                        still_true=still_true),
-        )
-    if result.stale:
-        return
-    text = (result.reply or "").strip()
     known = {m.get("id") for m in [roster.elder, *roster.members]}
-    sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
-    async with sessions() as session:
-        recent = await store.recent_turns(session, family_id, deliver_to, limit=6) if deliver_to else []
-    just_told = any(t.role == "assistant" and (t.text or "").strip().lower() != "none" and t.at and clock.now() - t.at < timedelta(seconds=120)
-                    for t in recent)
-    needs_answer = "waiting for " in prompt or prompt.startswith(("[Login code needed]", "[Order needs you]"))
-    if (deliver_to and deliver_to in known and not sent and not result.duplicate and prompt.startswith(MUST_REACH)
-            and needs_answer and not just_told and (not text or text.lower().strip(" .\"'") == "none")):
-        # (Live 2026-10-10 20:45: a "placed" update she had already told Maa in her reply was sent a second time.)
-        # Live 2026-10-10 20:29: an order's cart update came, the brain answered "none" and sent nothing; Maa heard nothing.
-        # Once more, firmly; its message is then delivered below even if it writes it as the reply.
-        logger.error("task update sent nothing; asking again family=%s ref=%s", family_id, ref)
+    update = still_true if hasattr(still_true, "already_told") else None
+    must = bool(deliver_to and deliver_to in known and prompt.startswith(MUST_REACH))
+    if must and update is not None:
         async with sessions() as session:
-            result = await run_turn(session, host, TurnRequest(
-                family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, channel="scheduler",
-                message_ref=f"{ref}:again", text=(f"{prompt}\n\nYour last turn on this update sent NOTHING, so person {deliver_to} heard "
-                                                  f"nothing. Write the message for person {deliver_to} now, in their language, as your final "
-                                                  "reply (only the message, no notes).")))
-        text = (result.reply or "").strip()
-        sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)
-    if not deliver_to or deliver_to not in known or sent or result.duplicate or not text or text.lower().strip(" .\"'") == "none":
+            if await update.already_told(session, deliver_to):
+                logger.info("task update not sent again: person %s was told this state family=%s ref=%s", deliver_to, family_id, ref)
+                return
+
+    async def turn(text: str, ref_: str):
+        try:
+            async with sessions() as session:
+                return await run_turn(session, host, TurnRequest(
+                    family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=text, message_ref=ref_,
+                    channel="scheduler", still_true=still_true))
+        except Exception:
+            if not must:
+                raise
+            logger.exception("task update turn failed family=%s ref=%s", family_id, ref_)  # the news still goes below
+            return None
+
+    result = await turn(prompt, ref)
+    if result is not None and (result.stale or result.duplicate):
         return
-    if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
-        logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
-        return
+    text = (result.reply or "").strip() if result else ""
+    sent = _sent_to(result, deliver_to)
+    soft = False
+    if must and not sent and _silent(text):
+        if update is not None:
+            async with sessions() as session:
+                soft = await update.wrote_since(session, family_id, deliver_to)
+        logger.error("task update sent nothing; asking again family=%s ref=%s soft=%s", family_id, ref, soft)
+        again = (f"If person {deliver_to} has not heard this yet, write the message for them now, in their language, as your final "
+                 "reply (only the message, no notes); if your last answer to them already told them exactly this, reply none."
+                 if soft else
+                 f"Person {deliver_to} has NOT heard this. Write the message for them now, in their language, as your final reply "
+                 "(only the message, no notes).")
+        retry = await turn(f"{prompt}\n\nYour last turn on this update sent NOTHING, so person {deliver_to} heard nothing from it. {again}",
+                           f"{ref}:again")
+        if retry is not None and retry.stale:
+            return
+        if retry is not None:
+            text, sent = (retry.reply or "").strip(), _sent_to(retry, deliver_to)
+    delivered = "brain" if sent else ""
+    if not delivered and deliver_to in known and not _silent(text):
+        if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
+            logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
+        elif await _send(sessions, host, roster, family_id, deliver_to, text, ref):
+            delivered = "reply"
+    if must and not delivered and not soft and update is not None:
+        # The last resort: the news written from the task data, in their language when a model answers.
+        async with sessions() as session:
+            if not await update(session):
+                return  # it moved on meanwhile: the next update tells the truth
+            names = {m.get("id"): m.get("name") for m in [roster.elder, *roster.members] if m.get("id")}
+            news = await update.news(session, deliver_to, names)
+        if news:
+            plain, buttons = news
+            logger.error("task update written from the task data (the brain sent nothing twice) family=%s ref=%s", family_id, ref)
+            words = await in_their_words(sessions, family_id, deliver_to, plain)
+            if await _send(sessions, host, roster, family_id, deliver_to, words, f"{ref}:news", buttons=buttons):
+                delivered = "composed"
+    elif must and not delivered and not soft:
+        logger.error("an update for person %s reached nobody (no task to write it from) family=%s ref=%s", deliver_to, family_id, ref)
+    if delivered and update is not None:
+        async with sessions() as session:
+            await update.told(session, deliver_to, delivered)
+
+
+async def _send(sessions: async_sessionmaker, host: ToolHost, roster, family_id: str, person: str, text: str, ref: str,
+                buttons: tuple[str, str] | None = None) -> bool:
+    """Send a message to a person directly (a system turn's reply the brain did not send itself, or news from a task)."""
     from app.brain import guards
 
     async with sessions() as session:
-        greeted, mid = guards.opening_state(await store.recent_turns(session, family_id, deliver_to, limit=12), clock.now(), day_of=clock.ist_day)
+        greeted, mid = guards.opening_state(await store.recent_turns(session, family_id, person, limit=12), clock.now(), day_of=clock.ist_day)
     text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
+    payload: dict = {"to": person, "text": text}
+    if buttons:
+        from app.brain.loop import writing_profiles
+        from app.care import outcomes
+
+        async with sessions() as session:
+            profile = (await writing_profiles(session, family_id, [{"id": person}])).get(person)
+        payload["buttons"] = outcomes.buttons(buttons[0], buttons[1], profile, text)
     try:
         # The backend only accepts a family member as the actor (as TurnCtx.actor_id does on system turns): "saheli" was
         # refused, the request hung and the update never went out (live 2026-10-09 15:05, Maa's Blinkit price).
-        res = await host.call("send_whatsapp", {"to": deliver_to, "text": text}, family_id=family_id.removeprefix("shadow:"),
+        res = await host.call("send_whatsapp", payload, family_id=family_id.removeprefix("shadow:"),
                               subject_id=roster.elder["id"], actor_id=roster.elder["id"])
         async with sessions() as session:
-            await store.add_turn(session, family_id=family_id, thread_id=deliver_to, role="assistant", text=text,
+            await store.add_turn(session, family_id=family_id, thread_id=person, role="assistant", text=text,
                                  meta={"proactive": True, "delivered": res.get("delivered"), "fallback_delivery": ref})
             await session.commit()
-        logger.warning("system turn reply delivered by fallback family=%s ref=%s", family_id, ref)
+        logger.warning("system turn message delivered directly family=%s ref=%s", family_id, ref)
+        return True
     except Exception:  # noqa: BLE001
-        logger.exception("fallback delivery failed family=%s ref=%s", family_id, ref)
+        logger.exception("direct delivery failed family=%s ref=%s", family_id, ref)
+        return False
 
 
 async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolHost], *, limit: int = 50) -> dict:

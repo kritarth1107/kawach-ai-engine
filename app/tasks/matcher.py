@@ -114,6 +114,35 @@ async def same_place(saved_full: str, pincode: str, shown: str) -> bool | None:
     return data.get("same") if isinstance(data.get("same"), bool) else None
 
 
+RIDE_END_PROMPT = """A ride app in India set the pickup or the drop of a ride. ASKED is the place the person meant: a saved address of
+the family, or their own words for a place (a landmark, a station, an address). SHOWN is what the app set. Is SHOWN that
+place?
+- A saved address: the same house, flat or building in the same area and city. Spelling, a missing pincode, a label or a
+  name before the address do not matter.
+- Their own words: SHOWN is that landmark, station or address (any spelling, script or language).
+- SHOWN must be as exact as ASKED: when ASKED is a house, building, landmark or station, a city, district, state or area
+  alone is not it, and neither is another place. When ASKED is itself only a city or an area, that city or area is it.
+JSON only: {"same": true | false, "why": "<a few words>"}"""
+
+
+async def same_ride_end(asked: str, shown: str, *, saved: bool) -> bool | None:
+    """Is the ride app's pickup or drop the place the person meant? None when the model could not answer. Live 2026-10-12: a
+    ride for a family's saved home was booked from the city after the agent typed the home's words."""
+    if not asked or not shown:
+        return None
+    try:
+        reply = await router.complete("classify", system_stable=RIDE_END_PROMPT, effort="low", max_tokens=300, timeout_s=20,
+                                      messages=[{"role": "user", "content": [{"type": "text", "text":
+                                                 f"ASKED ({'a saved address' if saved else 'their words'}): {asked}\nSHOWN: {shown}"}]}])
+        from app.care.extract import parse_json
+
+        data = parse_json(reply.text)
+    except Exception as exc:  # noqa: BLE001 — not checked; the agent's own check before booking still stands
+        logger.warning("same_ride_end failed: %s", exc)
+        return None
+    return data.get("same") if isinstance(data.get("same"), bool) else None
+
+
 WHICH_PLACE_PROMPT = """A person in India named a delivery place in their own words (any language or script). SAVED lists the family's
 saved places, numbered: each one's name, address, and "(default)" for the person's usual place. Which saved place do the
 words mean?

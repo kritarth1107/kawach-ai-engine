@@ -202,6 +202,10 @@ async def handle_order_button(session: AsyncSession, *, family_id: str, speaker_
         if out.startswith("stopped"):
             return t["cancel"], None
         return None, f"(tapped Cancel on order {tid}: {out[:600]})"
+    if code == "yes" and ((task.result or {}).get("placed") or (task.phase == "place" and task.status in ("queued", "running"))):
+        # A second Yes (an older confirm, or one re-sent while it was waiting): never "could not be placed"; where it stands.
+        return (t["yes"], None) if task.status in ("queued", "running") else (
+            None, f"(tapped Yes again on order {tid}, which is already placed: say so in one short line with what was bought and the order id)")
     if task.status not in runtime.LIVE:
         return t["done"], None
     if code == "yes":

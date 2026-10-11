@@ -23,7 +23,8 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.care import store
@@ -33,7 +34,7 @@ from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
 from app.tasks import fastpath, practice, sandbox, tracking
-from app.tasks.models import SkillNote, Task
+from app.tasks.models import SkillNote, Task, TaskTold
 from app.tasks.skills import SKILLS
 
 logger = logging.getLogger(__name__)
@@ -183,9 +184,19 @@ def _ride_opts(task: Task) -> list[dict]:
     return [o for o in ((task.result or {}).get("options") or []) if isinstance(o, dict) and o.get("type")]
 
 
+def _end_name(task: Task, end: str) -> str:
+    """A ride's pickup or drop in words: the saved place meant (its name and address), else their words; and where the app
+    set it when it showed it (founder 2026-10-12: never "your exact address" from memory)."""
+    d, r = task.details or {}, task.result or {}
+    place = d.get(f"{end}_place") or {}
+    meant = (f"{place['nickname']} ({place['full']})" if place.get("nickname") and place.get("full") else
+             place.get("full") or d.get(end) or f"the {end}")
+    used = str(r.get(f"{end}_used") or "").strip()
+    return meant + (f" [the app set: {used}]" if used else "")
+
+
 def _trip(task: Task) -> str:
-    d = task.details or {}
-    return f"from {d.get('pickup') or 'the pickup'} to {d.get('drop') or 'the drop'}"
+    return f"from {_end_name(task, 'pickup')} to {_end_name(task, 'drop')}"
 
 
 def _ride_offers(task: Task) -> list[dict]:
@@ -197,7 +208,8 @@ def _ride_offers(task: Task) -> list[dict]:
     fares = [_rupee_value(o.get("fare")) or float("inf") for o in opts]
     sugg = next((i for i, o in enumerate(opts) if picked and o.get("type") == picked), min(range(len(opts)), key=fares.__getitem__))
     return [{"oids": [str(i)], "item": "", "items": [], "find": [], "suggested": i == sugg,
-             "text": f"{o['type']} {o.get('fare') or ''}".strip() + (f" (pickup in {o['eta']})" if o.get("eta") else "")}
+             "text": f"{o['type']} {o.get('fare') or ''}".strip() + ((f" (pickup in {o['eta']})" if any(ch.isdigit() for ch in str(o["eta"]))
+                                                                       else f" ({o['eta']})") if o.get("eta") else "")}
             for i, o in enumerate(opts)]
 
 
@@ -484,7 +496,7 @@ async def _fall_back_to_other_stores(session: AsyncSession, task: Task, why: str
             continue
         try:
             await create(session, family_id=task.family_id, subject_id=task.subject_id, requested_by=task.requested_by, service=service,
-                         kind=task.kind, goal=task.goal, details={**{k: d[k] for k in ("items", "area", "pickup", "drop", "vehicle") if d.get(k)},
+                         kind=task.kind, goal=task.goal, details={**{k: d[k] for k in ("items", "area", "pickup", "drop", "vehicle", "pickup_place", "drop_place") if d.get(k)},
                                                                  "compare": gid, "fallback_from": task.service, "fallback_why": why or None},
                          limits=Limits.from_dict(d.get("limits")))
             started.append(SKILLS[service]["label"])
@@ -611,6 +623,8 @@ def _stage(task: Task) -> str:
         s = {"place": "placing", "cancel": "cancelling"}.get(task.phase, "working")
     elif task.status in ("needs_input", "awaiting_confirm"):
         s = f"asking:{task.input_needed}"
+        if task.input_needed == "otp":
+            s += f":{int(d.get('codes_sent') or 0)}"  # each new code the store sends is news
         if task.input_needed in ("confirm", "choice", "approve"):
             s += ":" + str(d.get("cart_fp") or "")[:8]
         if task.input_needed in ("go", "choice"):
@@ -630,23 +644,170 @@ async def _notify_about(notify: Notify, tasks: list[Task], family_id: str, perso
         _UPDATE_FOR.reset(token)
 
 
-def delivery_check() -> Callable[[AsyncSession], Awaitable[bool]] | None:
-    """For the host's notify: whether the update being sent is still true, checked once the family's turn is held (the
-    turn that delivers it calls this first). None when the update is not about a task."""
-    expect = _UPDATE_FOR.get()
-    if not expect:
-        return None
+class TaskUpdate:
+    """An update about tasks, as they were when it was written. The turn that delivers it (wake.system_turn):
+    - calls it once the family's turn is held: a task that moved on meanwhile drops it (founder 2026-10-11: one true
+      status);
+    - skips it when this person was already told this exact state by an update (already_told);
+    - otherwise it must reach them (founder 2026-10-12: the login-code ask and the booked ride never reached him because
+      the brain answered "none"): only when the person wrote after it was written, and was answered, may the brain decide
+      they already heard it (wrote_since: that answer saw the task as it is now);
+    - records who was told which state (told), and as the last resort sends the news written from the task data (news)."""
 
-    async def still_true(session: AsyncSession) -> bool:
-        rows = (await session.execute(select(Task).where(Task.id.in_([uuid.UUID(k) for k in expect]))
-                                      .execution_options(populate_existing=True))).scalars()
-        now = {str(t.id): _stage(t) for t in rows}
-        moved = {k: f"{v} → {now.get(k)}" for k, v in expect.items() if now.get(k) != v}
+    def __init__(self, expect: dict[str, str]):
+        self.expect = dict(expect)
+        self.written_at = clock.now()
+
+    async def _tasks(self, session: AsyncSession) -> list[Task]:
+        return list((await session.execute(select(Task).where(Task.id.in_([uuid.UUID(k) for k in self.expect]))
+                                           .execution_options(populate_existing=True))).scalars())
+
+    async def __call__(self, session: AsyncSession) -> bool:
+        now = {str(t.id): _stage(t) for t in await self._tasks(session)}
+        moved = {k: f"{v} → {now.get(k)}" for k, v in self.expect.items() if now.get(k) != v}
         if moved:
             logger.info("task update dropped, the task moved on before delivery: %s", moved)
         return not moved
 
-    return still_true
+    async def already_told(self, session: AsyncSession, person: str) -> bool:
+        rows = (await session.execute(select(TaskTold.task_id, TaskTold.stage).where(
+            TaskTold.task_id.in_([uuid.UUID(k) for k in self.expect]), TaskTold.person == person))).all()
+        told = {(str(t), st) for t, st in rows}
+        return all((k, v[:240]) in told for k, v in self.expect.items())
+
+    async def wrote_since(self, session: AsyncSession, family_id: str, person: str) -> bool:
+        from app.care.models import Turn
+
+        return bool(await session.scalar(select(func.count()).select_from(Turn).where(
+            Turn.family_id == family_id, Turn.thread_id == person, Turn.role == "user", Turn.at >= self.written_at)))
+
+    async def told(self, session: AsyncSession, person: str, how: str) -> None:
+        for k, v in self.expect.items():
+            await session.execute(pg_insert(TaskTold).values(task_id=uuid.UUID(k), person=person, stage=v[:240], how=how, at=clock.now())
+                                  .on_conflict_do_nothing(index_elements=["task_id", "person", "stage"]))
+        await session.commit()
+
+    async def news(self, session: AsyncSession, person: str, names: dict[str, str] | None = None) -> tuple[str, tuple[str, str] | None] | None:
+        tasks = await self._tasks(session)
+        tasks.sort(key=lambda t: list(self.expect).index(str(t.id)))
+        return plain_news(tasks, person, names or {}) if tasks else None
+
+
+def delivery_check() -> TaskUpdate | None:
+    """For the host's notify: the update being sent, as its tasks were when it was written (TaskUpdate). None when the
+    update is not about a task."""
+    expect = _UPDATE_FOR.get()
+    return TaskUpdate(expect) if expect else None
+
+
+def _end_plain(task: Task, end: str) -> str:
+    """A ride's end for the person: where the app set it, else the place they meant."""
+    d, r = task.details or {}, task.result or {}
+    place = d.get(f"{end}_place") or {}
+    return str(r.get(f"{end}_used") or place.get("full") or d.get(end) or f"the {end}").strip()
+
+
+def ride_details(task: Task) -> list[str]:
+    """What a booked ride's person needs (founder 2026-10-12: the booking details never reached him): the ride id, the
+    driver, the car and its plate, when the driver comes, and the ride PIN the app shows for starting the trip."""
+    r = task.result or {}
+    car = " ".join(str(r.get(k) or "").strip() for k in ("vehicle", "plate")).strip()
+    return [x for x in (
+        f"ride id {r['ride_id']}" if r.get("ride_id") else "",
+        f"driver {r['driver']}" if r.get("driver") else "",
+        f"car {car}" if car else "",
+        f"pickup in about {r['pickup_eta']}" if r.get("pickup_eta") else "",
+        f"ride PIN {r['ride_pin']} (tell the driver at pickup)" if r.get("ride_pin") else "",
+    ) if x]
+
+
+def order_details(task: Task) -> list[str]:
+    r, d = task.result or {}, task.details or {}
+    total = r.get("total") or d.get("confirmed_total")
+    return [x for x in (
+        f"order id {r['order_id']}" if r.get("order_id") else "",
+        f"total {total}, cash on delivery" if total else "",
+        f"delivery in about {r['eta']}" if r.get("eta") else "",
+    ) if x]
+
+
+def plain_news(tasks: list[Task], person: str, names: dict[str, str]) -> tuple[str, tuple[str, str] | None]:
+    """An update written by code from the tasks as they are now: the last resort when the brain sent nothing twice (founder
+    2026-10-12). Plain English; the deliverer puts it in the person's own words when a model answers. Returns (text,
+    buttons as (kind, key) or None). Never an id of a person: names, else "your family"."""
+    who = lambda pid: names.get(pid) or "your family"  # noqa: E731
+    lead = tasks[0]
+    d, r = lead.details or {}, lead.result or {}
+    label = SKILLS[lead.service]["label"]
+    done, thing, ordered = _words(lead)
+    ride = lead.kind == "ride"
+    trip = f"from {_end_plain(lead, 'pickup')} to {_end_plain(lead, 'drop')}" if ride else ""
+    many = len(tasks) > 1
+    offered = [t for t in tasks if t.status == "awaiting_confirm" and t.input_needed in ("go", "choice") and (t.details or {}).get("offer")]
+    if offered:
+        rows = sorted(((int(n), o, t) for t in offered for n, o in ((t.details or {}).get("offer") or {}).items() if str(n).isdigit()),
+                      key=lambda x: x[0])
+        lines = [f"{n}. {o.get('text')}" + (f" ({SKILLS[t.service]['label']})" if many else "") + (" - my suggestion" if o.get("s") else "")
+                 for n, o, t in rows]
+        login = [f"{SKILLS[t.service]['label']}: shows its {'fares' if ride else 'prices'} only after a login" for t in tasks
+                 if t not in offered and t.status == "awaiting_confirm" and t.input_needed == "go"]
+        none = [f"{SKILLS[t.service]['label']}: {_store_reason(t)}" for t in tasks if t.status not in ("awaiting_confirm", "needs_input")]
+        head = ("Fares" if ride else "What I found") + ("" if many else f" on {label}") + (f", {trip}" if ride else "") + f" (nothing is {done} yet):"
+        return "\n".join([head, *lines, *login, *none, f"Which one shall I {'book' if ride else 'get'}? Reply with its number."]), None
+    ask = d.get("cancel_ask") or {}
+    if lead.status == "needs_input" and lead.input_needed == "otp":
+        mine = "your phone" if d.get("code_from") == person else _code_to(lead)
+        return (f"{label} has sent a login code to {mine} for the {thing} ({lead.goal}). Please send me that code; nothing is "
+                f"{ordered} yet."), None
+    if lead.status == "awaiting_confirm" and lead.input_needed == "go":
+        return (f"{label} shows its {'fares' if ride else 'prices'} only after a login (a code would come to {_code_to(lead)}). "
+                f"Shall I log in and look? Nothing is {ordered} yet."), None
+    if lead.status == "awaiting_confirm" and lead.input_needed == "confirm":
+        where = ((d.get("limits") or {}).get("place") or {}).get("nickname") or "your saved place"
+        eta = f", delivery in about {r['eta']}" if r.get("eta") else ""
+        return (f"{label} cart: {bought(lead)}. Total {r.get('total')} with fees, to {where}, cash on delivery{eta}. Shall I place "
+                "the order?"), ("order", f"{lead.id}:{str(d.get('cart_fp') or '')[:8]}")
+    if lead.status == "awaiting_confirm" and lead.input_needed == "approve":
+        ap = d.get("approval_needed") or {}
+        what = (ap.get("choice") or {}).get("choice") if ride else r.get("total")
+        return (f"{who(lead.requested_by)} asked for this {thing} on {label}: {bought(lead)}" + (f" ({what})" if what else "")
+                + ". It needs your approval: approve or decline?"), None
+    if lead.status == "needs_input" and lead.input_needed == "fee":
+        return (f"{label} will cancel the {thing} ({bought(lead)}), but cancelling costs {d.get('cancel_fee')}. Shall I cancel it with "
+                "that fee?"), None
+    if lead.status == "needs_input" and lead.input_needed == "swap":
+        alts = "; ".join(f"{a.get('name')} {a.get('price') or ''}".strip() for a in d.get("alternatives") or [] if isinstance(a, dict))
+        return f"{label} does not have it; it has instead: {alts}. Shall I get one of these?", None
+    if ask.get("elder") and person in (ask.get("carers") or []) and ask.get("state") in ("told_carers", "unclear"):
+        maybe = "may already be" if ask["state"] == "unclear" else "is already"
+        return (f"{who(ask.get('by'))} asked to cancel the {label} {thing} ({_placed_line(lead).split(': ', 1)[-1]}), but it {maybe} "
+                f"{done}. Shall I ask {label} to cancel it? You can also cancel it in the {label} app."), None
+    if lead.status == "cancelled" or ask.get("state") == "cancelled":
+        if ask.get("state") == "cancelled":
+            return f"Cancelled on {label}: {bought(lead)}.", None
+        return f"Stopped: nothing was {ordered} on {label}.", None
+    if ask.get("state") == "refused":
+        return (f"{label} would not cancel it ({ask.get('store_said') or 'too late'}); it stays {done}. You can cancel it in the "
+                f"{label} app."), None
+    if ask.get("state") == "told_carers" and person == ask.get("by"):
+        carers = " and ".join(who(c) for c in ask.get("carers") or []) or "your family"
+        return f"It is already {done} on {label}, so I cannot cancel it from here; I have told {carers}.", None
+    if lead.status == "done" and (r.get("placed") or r.get("booked")):
+        if ride:
+            return ". ".join([f"Booked on {label}: {d.get('choice') or 'your ride'}, {trip}", *ride_details(lead)]) + ".", None
+        return ". ".join([f"Ordered on {label}: {bought(lead)}", *order_details(lead)]) + ".", None
+    if lead.status == "failed" and d.get("place_unclear"):
+        return (f"It is not clear whether the {thing} went through on {label}. Please check the {label} app before "
+                f"{'booking' if ride else 'ordering'} again."), None
+    if lead.status == "failed":
+        why = re.sub(r"\s+", " ", str(d.get("compare_reason") or r.get("problem") or "")).strip().rstrip(".")[:140]
+        return f"Nothing was {ordered} on {label}" + (f" ({why})" if why else "") + ".", None
+    if lead.phase == "place" and lead.status in ("queued", "running"):
+        return f"{'Booking' if ride else 'Placing'} it on {label} now; I will tell you as soon as it is done.", None
+    if lead.phase == "cancel" and lead.status in ("queued", "running"):
+        return f"Asking {label} to cancel it now; I will tell you what it says.", None
+    stores = ", ".join(SKILLS[t.service]["label"] for t in tasks)
+    return f"Still working on it on {stores}; I will tell you as soon as there is news. Nothing is {ordered} yet.", None
 
 
 class TaskRefused(ValueError):
@@ -699,10 +860,39 @@ async def live_tasks(session: AsyncSession, family_id: str) -> list[Task]:
     return list((await session.execute(q)).scalars())
 
 
+def bought(task: Task) -> str:
+    """What was actually bought (the cart as the store showed it, else what was picked), and when it is not exactly what
+    was asked, which ask it stands for (founder 2026-10-12: confirms, outcomes, tracking and after-order questions name what
+    was bought, never the words of the request; live, a 1mg order was announced as "Magnesium Citrate tablets" though the
+    cart held "Calcium and Vitamin D3 … Magnesium & Alfalfa")."""
+    r, d = task.result or {}, task.details or {}
+    if task.kind == "ride":
+        return f"{d.get('choice') or 'a ride'} {_trip(task)}"
+    lines = [i for i in r.get("items") or [] if isinstance(i, dict) and i.get("name")] if (d.get("cart_fp") or r.get("placed")) else []
+    asked = d.get("items") or []
+    rows = (["{} x {}".format(i.get("qty", 1), _label(i)) for i in lines[:12]] or
+            ["{} x {}".format(channels._qty_for(asked, c), _label(c)) for c in (d.get("chosen") or [])[:12] if isinstance(c, dict)])
+    one = str(asked[0].get("name") or "") if len(asked) == 1 and isinstance(asked[0], dict) else ""
+    near = [f"{_label(c)} is not exactly '{c.get('for_item') or one or 'what was asked'}'" for c in d.get("chosen") or []
+            if isinstance(c, dict) and c.get("exact_match") is False]
+    return "; ".join(rows) + (f" (NOT exactly what was asked: {'; '.join(near)})" if near else "") if rows else task.goal
+
+
 def describe(task: Task) -> str:
     r = task.result or {}
     d = task.details or {}
-    bits = [f"[{task.id}] {SKILLS[task.service]['label']} {task.kind}: {task.goal}", f"status {task.status}/{task.phase}"]
+    label = SKILLS[task.service]["label"]
+    placed = bool(r.get("placed") or r.get("booked"))
+    if task.kind == "order" and (placed or (task.phase != "browse" and (d.get("cart_fp") or r.get("total")))):
+        # Name what was bought (or is in the cart), never the words of the request (founder 2026-10-12)
+        head = (f"[{task.id}] {label} order: {'BOUGHT' if placed else 'in the cart'}: {bought(task)} (their ask, in their words: "
+                f"{task.goal}; name the products above, never the ask)")
+    else:
+        head = f"[{task.id}] {label} {task.kind}: {task.goal}" + (f", booked: {d.get('choice')}" if task.kind == "ride" and placed and d.get("choice") else "")
+        if task.kind == "ride":
+            # where the app set the ends, if it showed them (nothing else may be claimed about the address)
+            head += f"; {_trip(task)}" + ("" if (r.get("pickup_used") or not placed) else " [the app has not shown the pickup it set]")
+    bits = [head, f"status {task.status}/{task.phase}"]
     if d.get("channel"):
         bits.append(f"via {d['channel']}")
     if task.input_needed:
@@ -737,10 +927,23 @@ def describe(task: Task) -> str:
         bits.append(f"id {r.get('order_id') or r.get('ride_id')}")
     ask = d.get("cancel_ask") or {}
     if ask:
-        # Founder 2026-10-11: a placed order is never "cancelled" by Saheli; one true status.
-        bits.append("they asked to cancel it after it was placed: NOT cancelled (Saheli cannot cancel a placed order; "
-                    + ("the caregiver was told to cancel it in the store's app)" if ask.get("elder") else
-                       "it can be cancelled only in the store's own app)"))
+        # One true status: what is true about a cancel they asked for after it was placed (founder 2026-10-11 and -12).
+        label = SKILLS[task.service]["label"]
+        app = "the caregiver is told to cancel it in the app" if ask.get("elder") else "they can cancel it in the app"
+        bits.append({"pending": f"they asked to cancel it while it was being placed: {label} is asked to cancel it once placed (NOT cancelled yet)",
+                     "cancelling": f"they asked to cancel it: asking {label} to cancel it now (NOT cancelled yet)",
+                     "fee": f"{label} wants {d.get('cancel_fee')} to cancel it: waiting for their yes or no (NOT cancelled)",
+                     "cancelled": f"cancelled on {label} at their request",
+                     "kept": "they kept it (no cancellation fee paid)",
+                     "refused": f"{label} would not cancel it: NOT cancelled; they can cancel it in the {label} app",
+                     "told_carers": "the care recipient asked to cancel it after it was placed: NOT cancelled; the caregiver was "
+                                    "told (a caregiver's own cancel ask goes to the store)",
+                     "unclear": f"it may have gone through unconfirmed: NOT cancelled; {app}",
+                     "not_placed": "they asked to cancel while it was being placed: it did not go through",
+                     "cancelled_in_app": f"they cancelled it themselves in the {label} app (nothing more to say about it)"}
+                    .get(ask.get("state"), "cancel asked"))
+    if (d.get("in_app") or {}).get("what") == "changed":
+        bits.append(f"they changed it themselves in the {label} app: {(d['in_app'].get('detail') or 'no details')}")
     elif task.cancel_requested:
         bits.append("cancel requested")
     return ", ".join(bits)
@@ -1427,14 +1630,16 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         return "code received; continuing"
     if kind == "fee":
         if _is_yes(value):
-            task.details = {**d, "fee_ok": True}
-            task.phase, task.status = "cancel", "queued"
+            task.details = {**d, "fee_ok": True, "cancel_ask": {**(d.get("cancel_ask") or {}), "state": "cancelling"}}
+            task.phase, task.status, task.input_needed = "cancel", "queued", None
             task.deadline_at = clock.now() + TASK_LIFETIME
-            note(task, f"cancel fee approved by {by}")
-            return "cancelling with the fee"
-        task.status = "done"
-        note(task, f"cancel fee declined by {by}; order stays")
-        return "kept the order; not cancelled"
+            note(task, f"cancel fee {d.get('cancel_fee') or ''} agreed by {by}")
+            return (f"asking {SKILLS[task.service]['label']} to cancel it with the fee of {d.get('cancel_fee') or 'shown'} (NOT cancelled "
+                    "yet); the result comes in a task update. Say only that")
+        task.status, task.input_needed = "done", None
+        task.details = {**d, "cancel_ask": {**(d.get("cancel_ask") or {}), "state": "kept"}}
+        note(task, f"cancel fee declined by {by}; it stays")
+        return f"kept: not cancelled; it stays {_words(task)[0]} (no fee paid)"
     if kind == "swap":
         if d.get("agent") == "pharmacy":
             return "medicines are never swapped for another; ask the caregiver or doctor which medicine to order"
@@ -1516,69 +1721,115 @@ def _placed_line(task: Task) -> str:
     if task.kind == "ride":
         return (f"BOOKED on {label}" + (f" (ride {r['ride_id']})" if r.get("ride_id") else "")
                 + (f", driver {r['driver']}" if r.get("driver") else "") + (f", {r['status']}" if r.get("status") else ""))
-    return (f"PLACED on {label}" + (f" (order {r['order_id']})" if r.get("order_id") else "")
+    return (f"PLACED on {label}: {bought(task)}" + (f" (order {r['order_id']})" if r.get("order_id") else "")
             + (f", arriving in about {r['eta']}" if r.get("eta") else ""))
 
 
-def _cancel_tell(task: Task, ask: dict) -> str:
-    """What the person who asked to cancel a placed order or a booked ride hears (the founder's words, 2026-10-11)."""
+def _cancel_tell(task: Task, ask: dict, why: str = "") -> str:
+    """What the person who asked to cancel hears when it cannot be cancelled from here (the store would not, or it may have
+    gone through without a confirmation): the founder's words, 2026-10-11."""
     label = SKILLS[task.service]["label"]
     done, thing, _ = _words(task)
+    because = f"{label} would not cancel it ({why})" if why else f"it is already {done}, so it cannot be cancelled from here"
     if ask.get("elder"):
         who = " and ".join(f"person {c}" for c in ask.get("carers") or [])
-        return (f"Tell them kindly in one or two short lines: it is already {done}, so it cannot be cancelled from here, and you "
-                f"are telling {who} right now so they can cancel it in the {label} app. Do not message {who} yourself: the "
-                f"{thing} system tells them now, with the {thing}. Never say cancelled or that cancelling is in process.")
+        return (f"Tell them kindly in one or two short lines: {because}; you are telling {who} right now so they can get it "
+                f"cancelled. Do not message {who} yourself: the {thing} system tells them now, with the {thing}. Never say "
+                "cancelled or that cancelling is in process.")
     where = ("its rides page; the app may charge a cancellation fee" if task.kind == "ride" else
              "its orders page, while the store still allows it")
-    return (f"Tell them plainly in one or two short lines: it is already {done}, so it cannot be cancelled from here; they can "
-            f"cancel it in the {label} app ({where}). Never say cancelled or that cancelling is in process.")
+    return (f"Tell them plainly in one or two short lines: {because}; they can cancel it in the {label} app ({where}). Never "
+            "say cancelled or that cancelling is in process.")
+
+
+def _start_store_cancel(task: Task) -> None:
+    """Ask the store (or the ride app) to cancel a placed order or a booked ride: a cancel run. A cancel that costs
+    nothing goes through without asking again; a real fee is asked once, with its amount (_outcome, phase cancel)."""
+    task.phase, task.status, task.input_needed = "cancel", "queued", None
+    task.deadline_at = clock.now() + TASK_LIFETIME
+    task.details = {**(task.details or {}), "fee_ok": None, "cancel_fee": None}
 
 
 async def _cancel_after_placed(session: AsyncSession, task: Task, *, by: str, reason: str, placing: bool, unclear: bool = False) -> str:
-    """A cancel asked for an order that is placed (or a ride that is booked), or being placed or booked right now. Saheli
-    cannot cancel it: the care recipient hears that the caregiver is told, and every caregiver is told at once
-    (tell_carers); a caregiver, or someone ordering for themselves, cancels it in the store's or ride's own app. A second
-    ask gets the same truth."""
+    """A cancel asked for an order that is placed (or a ride that is booked), or being placed or booked right now
+    (founder 2026-10-12, 02:35 IST, replacing part of the 2026-10-11 rule):
+    - a caregiver, or someone ordering for themselves: Saheli asks the store to cancel it; a free cancel goes through
+      without asking again, a real fee is asked once with its amount, the result comes in ONE update; only if the store
+      will not cancel it are they told so plainly and sent to the store's app;
+    - the care recipient (with caregivers in the family): it cannot be cancelled from here; they hear that the caregiver is
+      told right away, and every caregiver is told at once (tell_carers), who can then ask Saheli to cancel it on the store.
+    A second ask gets the same truth."""
     d = task.details or {}
     done, thing, _ = _words(task)
     label = SKILLS[task.service]["label"]
     ask = dict(d.get("cancel_ask") or {})
-    if not ask:
-        carers = [c for c in await _carers(session, task) if c != by]
-        # the person it is for asking, with caregivers in the family: the caregivers are told (founder 2026-10-11)
-        elder = by == task.subject_id and bool(carers)
-        ask = {"by": by, "at": clock.now().isoformat(), "reason": reason[:160], "elder": elder, "carers": carers if elder else []}
-    ask["state"] = ask.get("state") or ("pending" if placing else "unclear" if unclear else "placed")
-    if not placing and ask["state"] == "pending":
-        ask["state"] = "unclear" if unclear else "placed"
-    if ask["state"] != "pending":
-        ask["told_by"] = ask.get("told_by") or "reply"
-    task.details = {**d, "cancel_ask": ask}
+    carers = [c for c in await _carers(session, task) if c != by]
+    elder = by == task.subject_id and bool(carers)
+    if ask.get("state") in ("cancelling", "fee") or (ask.get("state") == "pending" and not ask.get("elder")):
+        return (f"NOT cancelled yet: {label} is " + ("asked to cancel it the moment it is placed" if ask.get("state") == "pending" else
+                "already being asked to cancel it") + (" (it is waiting for their yes or no to the cancellation fee of "
+                f"{d.get('cancel_fee')}: task_input fee)" if ask.get("state") == "fee" else "") + ". The result comes in a task update; "
+                "tell them only that, in one short line.")
+    if ask.get("state") == "pending" and elder:
+        return (f"NOT cancelled yet: it is being {done} on {label} right now and that cannot be stopped; if it goes through, the "
+                "caregiver is told at once. Tell them only that, in one short line.")
+    if ask.get("state") == "refused":
+        return (f"NOT cancelled: {label} would not cancel it ({ask.get('store_said') or 'too late'}); it stays {done}. "
+                + _cancel_tell(task, ask, why=ask.get("store_said") or "too late"))
+    if ask.get("state") in ("told_carers", "unclear") and elder:
+        return (f"NOT cancelled: it is already {_placed_line(task)}, so it cannot be cancelled from here; the caregiver was told. "
+                + _cancel_tell(task, ask))
+    first = dict(ask) if ask else {}
+    ask = {"by": by, "at": clock.now().isoformat(), "reason": reason[:160], "elder": elder, "carers": carers if elder else [],
+           **({"first_by": first.get("by")} if first.get("by") and first.get("by") != by else {}),
+           **({"carers_told": first["carers_told"]} if first.get("carers_told") else {})}
     if placing:
+        ask["state"] = "pending"
+        task.details = {**d, "cancel_ask": ask}
         note(task, f"cancel asked by {by} while it is being {done}")
-        return (f"NOT cancelled: the {thing} is being {done} on {label} right now and cannot be stopped. A task update comes "
-                "within a minute or two with whether it went through" + (" (if it did, the caregiver is told at once)" if ask.get("elder") else "")
-                + ". Tell them only that, in one short line; never say cancelled or cancelling.")
-    note(task, f"cancel asked by {by} after it was {done}: not cancelled; " + ("caregivers told" if ask.get("elder") else f"they can cancel in the {label} app"))
-    if ask["state"] == "unclear":
-        return (f"NOT cancelled: it is not clear whether it went through on {label} (its confirmation did not come). If it did, "
-                "Saheli cannot cancel it. " + _cancel_tell(task, ask).replace(f"it is already {done}", f"it may already be {done}"))
-    return f"NOT cancelled: it is ALREADY {_placed_line(task)}, and Saheli cannot cancel a {done} {thing}. " + _cancel_tell(task, ask)
+        after = ("the caregiver is told at once" if elder else f"{label} is asked to cancel it, and ONE task update comes with the result")
+        return (f"NOT cancelled yet: the {thing} is being {done} on {label} right now and that cannot be stopped; if it goes "
+                f"through, {after}. Tell them only that, in one short line; never say cancelled.")
+    if unclear:
+        ask.update(state="unclear", told_by="reply")
+        task.details = {**d, "cancel_ask": ask}
+        note(task, f"cancel asked by {by}; it may have gone through unconfirmed: " + ("caregivers told" if elder else "the app"))
+        return (f"NOT cancelled: it is not clear whether it went through on {label} (its confirmation did not come), so it cannot be "
+                "cancelled from here. " + _cancel_tell(task, ask).replace(f"it is already {done}", f"it may already be {done}"))
+    if elder:
+        ask.update(state="told_carers", told_by="reply")
+        task.details = {**d, "cancel_ask": ask}
+        note(task, f"cancel asked by {by} (the care recipient) after it was {done}: not cancelled; caregivers told")
+        return f"NOT cancelled: it is ALREADY {_placed_line(task)}, so it cannot be cancelled from here. " + _cancel_tell(task, ask)
+    ask["state"] = "cancelling"
+    task.details = {**d, "cancel_ask": ask}
+    _start_store_cancel(task)
+    note(task, f"cancel asked by {by} after it was {done}: asking {label} to cancel it")
+    return (f"NOT cancelled yet: it is already {_placed_line(task)}; asking {label} to cancel it now. A free cancel goes through "
+            "without asking them again; if the store wants a fee they are asked once, with the amount; if it will not cancel, they "
+            "hear what to do instead. ONE task update comes with the result in a minute or two. Tell them only that, in one "
+            "short line; never say it is cancelled before that update.")
 
 
 def _after_cancel_ask(task: Task, status: str, message: str | None) -> str | None:
-    """The place or booking step finished after they asked to cancel it: ONE message with the true outcome (placed or
-    booked: it cannot be cancelled here, the caregiver is told or they cancel in the app; not: nothing was ordered)."""
+    """The place or booking step finished after they asked to cancel it. Placed or booked: a caregiver's (or a self-care
+    person's) ask goes to the store now (its one result comes after that); the care recipient's ask: ONE message, it cannot
+    be cancelled from here and the caregiver is told. Not placed: one message, nothing was ordered."""
     ask = dict((task.details or {}).get("cancel_ask") or {})
     if ask.get("state") != "pending":
         return message
     done, thing, ordered = _words(task)
-    if status == "done":
-        ask.update(state="placed", told_by="update")
+    if status == "done" and not ask.get("elder"):
+        ask.update(state="cancelling")
         task.details = {**(task.details or {}), "cancel_ask": ask}
-        return (f"They had asked to cancel while it was being {done}, and it went through: it is {_placed_line(task)}. Saheli "
-                f"cannot cancel a {done} {thing}. " + _cancel_tell(task, ask) + f" Give the {thing} id.")
+        _start_store_cancel(task)
+        note(task, f"{done} just after the cancel was asked: asking {SKILLS[task.service]['label']} to cancel it")
+        return None
+    if status == "done":
+        ask.update(state="told_carers", told_by="update")
+        task.details = {**(task.details or {}), "cancel_ask": ask}
+        return (f"They had asked to cancel while it was being {done}, and it went through: it is {_placed_line(task)}, so it cannot "
+                "be cancelled from here. " + _cancel_tell(task, ask) + f" Give the {thing} id.")
     if (task.details or {}).get("place_unclear"):
         ask.update(state="unclear", told_by="update")
         task.details = {**(task.details or {}), "cancel_ask": ask}
@@ -1593,7 +1844,7 @@ def _after_cancel_ask(task: Task, status: str, message: str | None) -> str | Non
 async def tell_carers(sessions: async_sessionmaker, notify: Notify) -> int:
     """The care recipient asked to cancel an order that was already placed (or a ride already booked): every caregiver is
     told at once, with the order and the store, to cancel it in that app (founder 2026-10-11: tell the caregiver, and do)."""
-    sends: list[tuple[str, str, str]] = []
+    sends: list[tuple[Task, str, str]] = []
     async with sessions() as session:
         rows = list((await session.execute(
             select(Task).where(Task.kind.in_(("order", "ride")), Task.status.in_(("done", "failed")), Task.updated_at >= clock.now() - timedelta(hours=6))
@@ -1601,7 +1852,7 @@ async def tell_carers(sessions: async_sessionmaker, notify: Notify) -> int:
         )).scalars())
         for t in rows:
             ask = (t.details or {}).get("cancel_ask") or {}
-            if not ask.get("elder") or ask.get("carers_told") or ask.get("state") not in ("placed", "unclear"):
+            if not ask.get("elder") or ask.get("carers_told") or ask.get("state") not in ("told_carers", "unclear"):
                 continue
             t.details = {**(t.details or {}), "cancel_ask": {**ask, "carers_told": clock.now().isoformat()}}
             note(t, "caregivers told to cancel it in the store's app: " + ", ".join(ask.get("carers") or []))
@@ -1611,18 +1862,53 @@ async def tell_carers(sessions: async_sessionmaker, notify: Notify) -> int:
             soon = ("rides can be cancelled in the app, maybe with a fee" if t.kind == "ride" else
                     "stores allow that only for a short while")
             for c in ask.get("carers") or []:
-                sends.append((t.family_id, c, (
+                sends.append((t, c, (
                     f"[Order needs you] {describe(t)}. Person {ask.get('by')} asked to cancel this {thing} ({ask.get('reason') or 'no reason given'}), "
-                    f"but it {maybe} on {label}, and Saheli cannot cancel a {done} {thing}. Tell person {c} now, in one or two short "
-                    f"lines with what was {ordered}, the {thing} id and the app: please cancel it in the {label} app if it is not "
-                    f"wanted ({soon}). Do not call cancel_task; never say it is cancelled.")))
+                    f"but it {maybe} on {label}. Tell person {c} now, in one or two short lines with what was {ordered}, the "
+                    f"{thing} id and the app, and ask whether to cancel it: if they say cancel, call cancel_task on task {t.id} "
+                    f"(the store is then asked to cancel it; you get the result), or they can cancel it in the {label} app "
+                    f"themselves ({soon}). Never say it is cancelled.")))
         await session.commit()
-    for family_id, person, text in sends:
+    for t, person, text in sends:
         try:
-            await notify(family_id, person, text)
+            await _notify_about(notify, [t], t.family_id, person, text)
         except Exception:  # noqa: BLE001 — one failed message must not stop the rest
-            logger.exception("telling a caregiver failed family=%s", family_id)
+            logger.exception("telling a caregiver failed family=%s", t.family_id)
     return len(sends)
+
+
+async def done_in_app(session: AsyncSession, task: Task, *, what: str, by: str, detail: str = "") -> str:
+    """They cancelled or changed an order or ride themselves in the store's or ride's app (founder 2026-10-12: he cancelled
+    a booked ride in the Ola app himself; the task still read booked, counted in the month's spend, and the "did the cab
+    come?" question was due in the morning). Recorded on the task; nothing is run on the store. A cancel takes it out of
+    the spend total and stops tracking and the after-order questions; nothing more is said about it."""
+    from app.tasks import aftercare
+
+    label = SKILLS[task.service]["label"]
+    done, thing, ordered = _words(task)
+    d = task.details or {}
+    r = task.result or {}
+    if not (r.get("placed") or r.get("booked")) and task.status not in ("done",):
+        return (f"Saheli did not {('book' if task.kind == 'ride' else 'place')} this {thing} (it is {task.status}): nothing to record. If it "
+                "is still running and they want it stopped, call cancel_task.")
+    now = clock.now().isoformat()
+    record = {"what": what, "by": by, "at": now, **({"detail": detail[:200]} if detail else {})}
+    if what == "changed":
+        task.details = {**d, "in_app": record}
+        note(task, f"{by} changed it themselves in the {label} app: {detail[:120] or 'no details'}")
+        return (f"Recorded on the {thing}: they changed it themselves in the {label} app ({detail or 'no details given'}). Nothing is "
+                "run on the store. Thank them in one short line; say nothing else about it.")
+    loop = await aftercare.loop_for(session, task)
+    if loop is not None:
+        await store.close_loop(session, loop.id, status="cancelled", note=f"they cancelled it themselves in the {label} app")
+    ask = dict(d.get("cancel_ask") or {})
+    task.status, task.cancel_requested, task.input_needed = "cancelled", True, None
+    task.details = {**d, "in_app": record, "cancel_ask": {**ask, "by": ask.get("by") or by, "state": "cancelled_in_app", "told_by": "reply"},
+                    **({"tracking": {**d["tracking"], "done": True}} if d.get("tracking") else {})}
+    note(task, f"{by} cancelled it themselves in the {label} app")
+    metrics.on_milestone(task, "cancelled")
+    return (f"Recorded: they cancelled the {label} {thing} themselves in the {label} app. It is no longer counted as {ordered}; its "
+            "tracking and after-order questions stop. Thank them in one short line; say nothing else about it.")
 
 
 async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
@@ -1646,17 +1932,20 @@ async def _request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task
     _, _, ordered = _words(task)
     # an order the agent may have placed although nobody heard "placed": never "nothing to cancel"
     maybe_placed = bool(d.get("place_unclear") or d.get("unauthorized_place") or d.get("practice_accident"))
+    if ((d.get("cancel_ask") or {}).get("state") == "cancelled" or (task.status == "cancelled" and task.phase == "cancel")
+            and ((task.result or {}).get("placed") or (task.result or {}).get("booked"))):
+        return f"already cancelled on {SKILLS[task.service]['label']}; nothing more to do"
     if task.status in ("failed", "cancelled") and not maybe_placed:
         return f"nothing to cancel: it had already stopped ({task.status}) and nothing was {ordered}"
     if task.phase == "cancel" and task.status in LIVE:
-        return "cancelling is already in progress; you will get a task update"  # (older tasks: no cancel runs any more)
+        return await _cancel_after_placed(session, task, by=by, reason=reason, placing=False)
     task.cancel_requested = True
     note(task, f"cancel requested by {by}: {reason}")
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
     unclear = task.status == "failed" and maybe_placed
     if placed or unclear or (task.phase == "place" and (task.status == "running" or d.get("place_started"))):
-        # Founder 2026-10-11: a placed order or a booked ride is never "cancelled" by Saheli (live: "cancelled", then
-        # "cancelling is in progress", then "placed, 14 minutes", then a failed cancel run on the store). One true status.
+        # One true status (live 2026-10-11: "cancelled", then "cancelling is in progress", then "placed, 14 minutes", then
+        # a failed cancel run): the store is asked to cancel it and the one result comes in an update (founder 2026-10-12).
         return await _cancel_after_placed(session, task, by=by, reason=reason, placing=not placed and not unclear, unclear=unclear)
     if compare_group(task) and not placed and task.phase in ("prepare", "browse"):
         for t in await siblings(session, task):  # the whole look-up stops, not just one store of it
@@ -1696,6 +1985,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         out = {**out, "needs_otp": False, "problem": "login needed"}
     if out.get("needs_otp"):
         task.input_needed = "otp"
+        task.details = d = {**d, "codes_sent": int(d.get("codes_sent") or 0) + 1}
         to = f"the phone ending {login}" if login else (out.get("otp_sent_to") or "the family phone")
         if d.get("code_lost"):
             task.details = {**(task.details or {}), "code_lost": False}
@@ -1734,7 +2024,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             task.result = {**(task.result or {}), "options": out["options"]}
             task.input_needed = "choice"
             metrics.on_milestone(task, "ready")
-            return "awaiting_confirm", _ride_choice_message(task, " ".join(v.warn + v.approval))
+            return "awaiting_confirm", _ride_choice_message(task, " ".join(v.warn) + _approval_note(v))
         if out.get("needs_prescription") and not guard.rx_covers(d.get("items") or [], limits.rx_on_file, cart=out.get("items")):
             return "failed", "This medicine needs a prescription upload; ask the family to upload the prescription on the dashboard, then try again."
         dead = [i for i in out.get("items") or [] if i.get("available") is False or str(i.get("qty", 1)).strip() in ("0", "0.0")]
@@ -1821,8 +2111,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         task.details = {**task.details, "replace_confirmed": None}
         task.input_needed = "confirm"
         metrics.on_milestone(task, "ready")
-        extra = " ".join(v.warn + v.approval)
-        return "awaiting_confirm", _confirm_ask(task, out) + (f" {extra}" if extra else "")
+        extra = " ".join(v.warn) + _approval_note(v)
+        return "awaiting_confirm", _confirm_ask(task, out) + (f" {extra.strip()}" if extra.strip() else "")
     if task.phase == "place":
         if practice.on(task) and (out.get("placed") or out.get("booked") or out.get("order_id")):
             # A practice must never place: whatever the agent did, the family checks the app at once.
@@ -1848,16 +2138,21 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             metrics.on_milestone(task, "placed")
             if v.warn:
                 return "done", "Placed, but: " + "; ".join(v.warn)
+            details = "; ".join(ride_details(task) if task.kind == "ride" else order_details(task))
+            if task.kind == "ride" and d.get("ends_wrong"):
+                return "done", (f"Booked, BUT {SKILLS[task.service]['label']} set {d['ends_wrong']}: the driver will go there. Tell "
+                                f"them this first, plainly: {bought(task)}; {details}. They can call the driver with the right "
+                                "address, or ask to cancel it. Never say it is from the place they meant.")
             if task.kind == "ride":
-                return "done", ("Booked. Tell the person the ride id, the driver and their number plate as given"
-                                + (f" ({out.get('driver')})" if out.get("driver") else "") + ", and that the driver is on the way; "
-                                "do not guess a pickup time the app did not give.")
-            eta = str(out.get("eta") or "").strip()
-            if eta:
-                return "done", f"Placed. Tell the person the order/ride id and the delivery time: {eta}."
+                # founder 2026-10-12: the booking details never reached him
+                return "done", (f"Booked: {bought(task)}; {details}. Tell the person all of these details as given, in one message; "
+                                "never add a pickup time, PIN or detail the app did not give.")
+            what = (f"Placed: {bought(task)}; {details}. Tell the person what was bought by these names (never the words they asked "
+                    "with; say so plainly when it is not exactly what they asked), the order id, the total and the delivery time")
+            if str(out.get("eta") or "").strip():
+                return "done", f"{what}."
             # Live 2026-10-10: connector and Blinkit orders came back without a time and the brain was told to give one.
-            return "done", ("Placed. Tell the person the order/ride id. The store gave no delivery time: do not guess one; "
-                            "say you will check on it.")
+            return "done", f"{what}. The store gave no delivery time: do not guess one; say you will check on it."
         if out.get("unclear") or (task.kind == "order" and out.get("pressed_place") is not False):
             # Live 2026-10-11: the agent pressed Pay Now (cash), ran out of steps on the confirmation page, reported "not
             # placed", and the person heard "nothing was charged" while the order was being packed. Only a report that the
@@ -1868,14 +2163,79 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
                               "order again and do not say it failed; tell them to check the store's app, and the caregiver too.")
         return "failed", f"Placing did not go through ({out.get('problem') or 'unknown'}); the final button was never pressed. Nothing was charged."
     if task.phase == "cancel":
-        if out.get("cancel_fee") and not d.get("fee_ok"):
-            task.input_needed = "fee"
-            return "needs_input", f"Cancelling now costs {out['cancel_fee']}; ask whether to cancel anyway."
+        label = SKILLS[task.service]["label"]
+        done, thing, _ = _words(task)
+        ask = dict(d.get("cancel_ask") or {})
+        fee = out.get("cancel_fee")
+        if fee in (None, "", False) and d.get("fee_ok"):
+            fee = d.get("cancel_fee")  # the fee they agreed to (or the free one) on the run before
+        amount = rupees(fee) if fee not in (None, "", False) else None
         if out.get("cancelled"):
             metrics.on_milestone(task, "cancelled")
-            return "cancelled", "Cancelled on the service. Tell the person."
-        return "failed", f"Could not cancel ({out.get('problem') or 'unknown'}); tell the caregiver to cancel from the app."
+            ask.update(state="cancelled", told_by="update")
+            task.details = {**d, "cancel_ask": ask}
+            paid = f" (a cancellation fee of {fee}, as they agreed)" if amount else ""
+            also = (f" Also tell person {ask['first_by']} in one short line with send_message that it is cancelled (they had asked "
+                    "for it first)." if ask.get("first_by") else "")
+            return "cancelled", (f"Cancelled on {label}: {label} confirmed the cancellation of the {thing}{paid}. Tell them in one short "
+                                 "line that it is cancelled" + ("; nothing is to be paid" if not amount else "") + "." + also)
+        if out.get("cancel_fee") not in (None, "", False) and not d.get("fee_ok"):
+            if amount == 0:
+                # Free: no second ask (founder 2026-10-12: "after cancellation it asked me to confirm" for a ₹0 fee).
+                task.details = {**d, "fee_ok": True, "cancel_fee": fee}
+                note(task, f"{label} shows a cancellation fee of {fee}: it is free, so the cancel goes ahead without asking again")
+                return "queued", ""
+            task.input_needed = "fee"
+            ask.update(state="fee")
+            task.details = {**d, "cancel_ask": ask, "cancel_fee": fee}
+            return "needs_input", (f"{label} will cancel it, but cancelling costs {fee}. Ask ONE short question with that amount: cancel "
+                                   f"it anyway for {fee}? Yes → task_input fee yes; no → task_input fee no (it stays {done}). Nothing is "
+                                   "cancelled before they say yes.")
+        # The store would not cancel it (too late, or its page did not let it): it stays placed, and what to do instead.
+        why = str(out.get("problem") or "it did not allow cancelling now")[:160]
+        ask.update(state="refused", told_by="update", store_said=why)
+        task.details = {**d, "cancel_ask": ask}
+        return "done", (f"NOT cancelled: {label} would not cancel it ({why}); it stays {_placed_line(task)}. "
+                        + _cancel_tell(task, ask, why=why))
     return "failed", "Unexpected state."
+
+
+async def _ride_ends_check(task: Task, out: dict) -> tuple[str, str] | None:
+    """A ride's pickup and drop as the app set them must be the places the person meant (an AI check; live 2026-10-12: a
+    saved home became the city in the app, the ride was booked from there, and Saheli said it was their
+    address). Another place before booking: that step is done again once, told what was wrong; still another: nothing is
+    booked and they hear it plainly. Booked from another place: they hear it first (_outcome). None: the report goes on."""
+    d = task.details or {}
+    if task.kind != "ride" or task.phase not in ("browse", "prepare", "place") or out.get("blocked") or out.get("needs_otp"):
+        return None
+    from app.specialists.agents import ride_end
+    from app.tasks import matcher
+
+    ends = [e for e in ("pickup", "drop") if str(out.get(f"{e}_used") or "").strip() and ride_end(d, e)]
+    verdicts = await asyncio.gather(*(matcher.same_ride_end(ride_end(d, e), str(out[f"{e}_used"]).strip(),
+                                                            saved=bool((d.get(f"{e}_place") or {}).get("full"))) for e in ends))
+    wrong = {e: str(out[f"{e}_used"]).strip()[:120] for e, same in zip(ends, verdicts) if same is False}
+    booked = bool(out.get("booked") or out.get("ride_id"))
+    if out.get("pickup_mismatch") and not booked:
+        wrong.setdefault("pickup", str(out.get("pickup_used") or "another place").strip()[:120])
+    if not wrong:
+        if d.get("ends_fix"):
+            task.details = {**d, "ends_fix": None}
+        return None
+    label = SKILLS[task.service]["label"]
+    said = " and ".join(f"the {e} to '{used}' instead of '{ride_end(d, e)[:120]}'" for e, used in wrong.items())
+    if booked:
+        task.details = {**d, "ends_wrong": said}
+        return None
+    task.result = {**(task.result or {}), "options": None}  # fares for another route: never offered
+    if d.get("ends_retry") != task.phase:
+        task.details = {**d, "ends_retry": task.phase, "ends_fix": said, "place_started": None}
+        task.input_needed = None
+        note(task, f"{label} set {said}; doing this step again")
+        return "queued", ""
+    task.details = {**d, "ends_fix": None, "compare_reason": f"it kept setting {said}, so nothing from it"}
+    return "failed", (f"Nothing was booked: {label} kept setting {said}. Tell them plainly in one or two short lines; they can "
+                      "give a landmark near it, or book it in the app themselves.")
 
 
 async def _check_address(task: Task, out: dict, status: str, message: str | None) -> tuple[str, str | None]:
@@ -1917,6 +2277,13 @@ def _practice_message(task: Task, out: dict) -> str:
     return (f"Practice order (the family turned on practice orders for testing): it stopped before the last step "
             f"({out.get('problem') or 'unknown'}); nothing was placed. Tell them in one short line that it was a practice order and "
             "nothing was ordered.")
+
+
+def _approval_note(v) -> str:
+    """The cart or fare needs a caregiver's OK as well: the person who asked is still asked first (sim 2026-10-12: told
+    "I have asked Mohan to approve" with no question and no buttons, before anyone was asked)."""
+    return (f" It also needs an approver's OK ({'; '.join(v.approval)}): still ask THEM this question now, with the buttons, and "
+            "add that after their yes the approver is asked; nobody has been asked yet." if v.approval else "")
 
 
 def _confirm_ask(task: Task, out: dict) -> str:
@@ -2314,7 +2681,11 @@ async def _ride_ends(host, task: Task) -> tuple[dict, dict] | None:
     from app.brain.tools import saved_place_args
 
     fam = task.family_id.removeprefix("shadow:")
-    for words in (d["pickup"], d["drop"]):
+    for end, words in (("pickup", d["pickup"]), ("drop", d["drop"])):
+        place = d.get(f"{end}_place") or {}
+        if place.get("lat") is not None and place.get("lng") is not None:  # the saved place meant, found at the start
+            ends.append({"lat": place["lat"], "lng": place["lng"], "label": f"{place.get('nickname') or words}, {place.get('full') or ''}".strip(", ")})
+            continue
         # a saved place by its exact name when the words mean one (an AI decision), else the words to look up on the map
         args = await saved_place_args(host, words, family_id=fam, subject_id=task.subject_id, actor_id=task.requested_by)
         got = await host.call("ride_place", args, family_id=fam, subject_id=task.subject_id, actor_id=task.requested_by)
@@ -2742,6 +3113,8 @@ def _waiting_for(task: Task) -> str:
         return "the family approver's yes"
     if task.input_needed == "go":
         return "their pick from the options found"
+    if task.input_needed == "fee":
+        return f"their yes or no to the cancellation fee of {d.get('cancel_fee')}"
     return f"an answer ({task.input_needed or 'from the family'})"
 
 
@@ -2847,7 +3220,7 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
                 note(t, "no answer in 5 minutes: emailing too")
                 for c in d.get("ladder_carers") or []:
                     sends.append(("email", t.family_id, c, t.subject_id, f"Saheli: {label} order waiting for you",
-                                  f"An order for your family on {label} ({t.goal}) is not placed yet. It is waiting for {_waiting_for(t)}. "
+                                  f"An order for your family on {label} ({bought(t) if (t.details or {}).get('cart_fp') else t.goal}) is not placed yet. It is waiting for {_waiting_for(t)}. "
                                   "Please reply to Saheli on WhatsApp: keep trying, or cancel. If nobody answers in 5 minutes it will be "
                                   "cancelled and nothing will be ordered."))
             elif now - emailed >= LADDER_CANCEL:
@@ -3138,7 +3511,7 @@ async def tick(
                         if task.phase == "browse":
                             await _ai_pick(task, task.result, session)
                             out = task.result
-                        status, message = _outcome(task, out)
+                        status, message = await _ride_ends_check(task, out) or _outcome(task, out)
                         status, message = await _check_address(task, out, status, message)
                         if task.phase == "place" and status == "failed" and (task.details or {}).get("place_unclear") and not practice.on(task):
                             found = await _order_on_store_list(task, agent, host_for(task.family_id) if host_for else None)
@@ -3147,7 +3520,7 @@ async def tick(
                                 task.details = {**(task.details or {}), "place_unclear": False}
                                 note(task, f"the store's order list shows it placed: {found.get('order_id')}")
                                 metrics.on_milestone(task, "placed")
-                                status, message = "done", ("Placed (the store's order list shows it; its confirmation page was slow). Tell the "
+                                status, message = "done", (f"Placed: {bought(task)} (the store's order list shows it; its confirmation page was slow). Tell the "
                                                            "person the order id; the store gave no delivery time here: say you will check on it.")
                         task.status = status
                         note(task, f"{task.phase} → {status}: {message}")
@@ -3248,14 +3621,16 @@ async def tick(
             if task.status == "needs_input" and task.input_needed == "otp" and code_from and code_from != task.requested_by:
                 # The family set someone else to give login codes for this person's orders: ask them, with the order.
                 login = (task.details or {}).get("login")
-                await notify(task.family_id, code_from, (
+                await _notify_about(notify, [task], task.family_id, code_from, (
                     f"[Login code needed] {describe(task)}. The order is for person {task.subject_id}, asked by person "
                     f"{task.requested_by}. The store sent a login code to the phone of person {code_from}"
                     + (f" (ending {login})" if login and login != "none" else "") + ". Ask them for it in one short line with what the "
                     f"order is and from which store; when they send it, task_input otp on task {task.id}. If they say cancel, cancel_task "
                     f"it and tell person {task.requested_by} kindly in one line that person {code_from} asked to cancel it."))
                 return
-            await _notify_about(notify, [task], task.family_id, task.requested_by,
+            ask = (task.details or {}).get("cancel_ask") or {}
+            person = ask.get("by") if task.phase == "cancel" and ask.get("by") else task.requested_by  # a cancel's result: whoever asked for it
+            await _notify_about(notify, [task], task.family_id, person,
                                 f"[Task update] {message}" if summary else f"[Task update] {describe(task)}. {message}")
 
     try:

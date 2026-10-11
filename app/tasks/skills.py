@@ -103,10 +103,19 @@ def schema_for(kind: str, phase: str) -> dict:
             "surge": {"type": "boolean"},
             "booked": {"type": "boolean"},
             "ride_id": {"type": "string"},
-            "driver": {"type": "string"},
+            "driver": {"type": "string", "description": "The driver's name as the app shows it"},
+            # everything the person needs once it is booked (founder 2026-10-12: the booking details never reached him)
+            "vehicle": {"type": "string", "description": "The car or bike: model and colour as the app shows it"},
+            "plate": {"type": "string", "description": "The vehicle's number plate as the app shows it"},
+            "pickup_eta": {"type": "string", "description": "When the driver reaches the pickup, as the app shows it (e.g. '4 min')"},
+            "ride_pin": {"type": "string", "description": "The PIN / OTP the app shows for starting the trip, if it shows one"},
             "cancelled": {"type": "boolean"},
-            "cancel_fee": {"type": "string"},
+            "cancel_fee": {"type": "string", "description": "The cancellation charge in rupees as the app shows it; '₹0' when it is free"},
             "status": {"type": "string"},
+            # what the app actually set (live 2026-10-12: a saved home became the city and the ride was booked there)
+            "pickup_used": {"type": "string", "description": "The pickup exactly as the app shows it after you set it"},
+            "drop_used": {"type": "string", "description": "The drop exactly as the app shows it after you set it"},
+            "pickup_mismatch": {"type": "boolean", "description": "Booking step: true if you did NOT book because the pickup shown was not the address given"},
         }
     else:
         extra = {

@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +54,9 @@ class TurnCtx:
     confirmed: bool = False
     # The message was a voice note the speech engine was not sure about: health changes from it wait for a confirmation.
     voice_unsure: bool = False
+    # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
+    messaged: set = field(default_factory=set)
+    told_by_tasks: set = field(default_factory=set)
 
     @property
     def elder_id(self) -> str:
@@ -848,6 +851,21 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     return problems
 
 
+async def _approval_just_asked(ctx: TurnCtx, person: str) -> bool:
+    """An order or ride of this family started waiting for this person's approval a moment ago (the task system asks them)."""
+    from app.tasks import runtime
+
+    for t in await runtime.live_tasks(ctx.session, ctx.family_id):
+        ap = (t.details or {}).get("approval_needed") or {}
+        if t.input_needed == "approve" and person in (ap.get("approvers") or []) and ap.get("asked_at"):
+            try:
+                if clock.now() - datetime.fromisoformat(ap["asked_at"]) < timedelta(minutes=3):
+                    return True
+            except ValueError:
+                continue
+    return False
+
+
 @tool(
     "send_message",
     "Send a WhatsApp message to someone in the family other than the person you are replying to: pass a message "
@@ -867,6 +885,13 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         raise ToolRefused("Send only to people in HOUSEHOLD, by id.")
     if a["to"] == ctx.speaker.get("id"):
         raise ToolRefused("Your reply already goes to the speaker.")
+    if a["to"] in ctx.told_by_tasks:
+        raise ToolRefused("Not sent: the task system is telling this person about the order and the cancel right now, with what "
+                          "to do. Do not message them about it.")
+    if not ctx.is_system and await _approval_just_asked(ctx, a["to"]):
+        # sim 2026-10-12: Maa tapped Yes, the order needed her son's OK, and he got two requests (the brain's and the task's)
+        raise ToolRefused("Not sent: the approval request goes to this person from the task system right now, with the order and "
+                          "the amount. Do not message them about it; tell the person you are talking to that it was sent.")
     problems = await send_problems(ctx, a["to"], a["text"])
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
@@ -882,6 +907,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
+    ctx.messaged.add(a["to"])
     turn_id = await store.add_turn(
         ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
         meta={"proactive": True, "delivered": res.get("delivered"), **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {})},
@@ -936,6 +962,9 @@ async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
     ["reason", "issue", "message", "confidence"],
 )
 async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.told_by_tasks and a["reason"] != "red_flag":
+        # cancel_task in this turn: the task system tells the caregivers about the order (one message each)
+        raise ToolRefused("Not sent: the task system is telling the caregivers about this order right now, with what to do.")
     if a["reason"] == "red_flag" and ctx.user_text:
         why = guards.red_flag_unsupported(ctx.user_text)
         if why:
@@ -1091,7 +1120,7 @@ async def _task(ctx: TurnCtx, task_id: str):
                     "description": "Only when they named one store or ride app (or for 'the usual')"},
         "services": {"type": "array", "items": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"]},
                      "description": "Several stores or ride apps they named to look on ('Blinkit aur Zepto dono pe dekho', 'Uber and Ola'): every one of them is searched and reported"},
-        "category": {"type": "string", "enum": ["grocery", "medicine", "food", "ride"], "description": "No store or app named (or 'all' / 'the cheapest'): compare the usual ones of that kind"},
+        "category": {"type": "string", "enum": ["grocery", "medicine", "food", "ride"], "description": "No store or app named (or 'all' / 'the cheapest'): compare the usual ones of that kind. medicine = any medicine, tablet, strip, syrup, ointment or supplement (never grocery)"},
         "kind": {"type": "string", "enum": ["order", "ride"]},
         "goal": {"type": "string", "description": "One line, e.g. 'Atta and toor dal for Amma' or 'Cab to Dr Iyer's clinic'"},
         "items": {"type": "array", "items": {"type": "object", "properties": {
@@ -1130,6 +1159,12 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
                 a = {**a, "services": got}
             elif got:
                 a = {**a, "service": got if isinstance(got, str) else got[0]}
+    if a["kind"] == "ride":
+        # The ride's ends as places: a saved place they meant (an AI decision) goes to the app as its full address (live
+        # 2026-10-12: a saved home went to the app as words, the app set the city and the ride was booked from there).
+        ends = [e for e in ("pickup", "drop") if a.get(e) and not a.get(f"{e}_place")]
+        found = await asyncio.gather(*(_ride_end_place(ctx, str(a[e])) for e in ends))
+        a = {**a, **{f"{e}_place": f for e, f in zip(ends, found) if f}}
     place = None
     if a["kind"] == "order" and a.get("area"):
         # Also after the address was confirmed: a place they name now must be a saved one (it went to the default place).
@@ -1262,10 +1297,27 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         return await runtime.create(
             ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
             service=service, kind=a["kind"], goal=a["goal"],
-            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area") if a.get(k)}, **(extra or {})}, limits=limits,
+            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place") if a.get(k)},
+                     **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
+
+
+async def _ride_end_place(ctx: TurnCtx, words: str) -> dict | None:
+    """A ride's pickup or drop: the family's saved place when the words mean one (an AI decision), with its full address and
+    map point; None for a landmark or an address they spelt out (the app finds it)."""
+    who = ctx.speaker.get("id") or ctx.elder_id
+    try:
+        args = await saved_place_args(ctx.host, words, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+        if not args.get("exact"):
+            return None  # no saved places, or the AI could not answer: the words go to the app as they are
+        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+    except Exception:  # noqa: BLE001 — the words go to the app as they are
+        return None
+    if not got or not got.get("matched") or not got.get("full"):
+        return None
+    return {k: got.get(k) for k in ("nickname", "full", "pincode", "lat", "lng") if got.get(k) is not None}
 
 
 async def saved_place_args(ctx_host, words: str, *, family_id: str, subject_id: str, actor_id: str) -> dict:
@@ -1577,9 +1629,12 @@ async def set_boundaries(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "cancel_task",
     "Cancel a task: an order or ride not placed or booked yet is stopped (nothing is ordered). A PLACED order or a BOOKED "
-    "ride cannot be cancelled by Saheli, nor one being placed right now: the result says so and what to tell them (the care "
-    "recipient: the caregiver is told now; a caregiver or someone ordering for themselves: cancel it in that app). Say "
-    "exactly what the result says; never say cancelled unless it says stopped.",
+    "ride (or one being placed right now): when a caregiver, or someone ordering for themselves, asks, the store or ride app "
+    "is asked to cancel it (a free cancel goes through without asking again, a fee is asked once with its amount, the result "
+    "comes in a task update, and if the store will not cancel it they are sent to its app); when the care recipient asks, "
+    "it cannot be cancelled from here: the caregiver is told right away by the task system. Always call this when they say "
+    "cancel (never decide the answer yourself, never alert or message the caregiver about it yourself). Say exactly what the "
+    "result says; never say cancelled unless the result or an update says it is cancelled.",
     {"task_id": {"type": "string"}, "reason": {"type": "string"}},
     ["task_id", "reason"],
 )
@@ -1588,7 +1643,39 @@ async def cancel_task(ctx: TurnCtx, a: dict) -> dict:
 
     task = await _task(ctx, a["task_id"])
     out = {"result": await runtime.request_cancel(ctx.session, task_agent(), task, by=ctx.speaker.get("id") or "", reason=a["reason"])}
+    ask = (task.details or {}).get("cancel_ask") or {}
+    if ask.get("elder") and ask.get("state") in ("told_carers", "unclear", "pending"):
+        # The task system tells the caregivers (one "[Order needs you]" each, with what to do): not a second message from
+        # this turn (sim 2026-10-12: the brain also messaged the son, who got two). Messaged already in this turn: that was it.
+        carers = set(ask.get("carers") or [])
+        ctx.told_by_tasks |= carers
+        if carers and carers <= ctx.messaged and ask.get("state") != "pending" and not ask.get("carers_told"):
+            task.details = {**(task.details or {}), "cancel_ask": {**ask, "carers_told": clock.now().isoformat()}}
     return {**out, **_tell_who_cancelled(ctx, task)}
+
+
+@tool(
+    "done_in_app",
+    "They cancelled or changed one of the family's orders or rides THEMSELVES in the store's or ride's app (not through you): "
+    "record it on the task. what: cancelled | changed; detail: what they changed. Nothing is run on the store; a cancel takes "
+    "it out of the month's spend and stops its tracking and after-order questions. Use this, not cancel_task, when they say "
+    "they already did it in the app.",
+    {"task_id": {"type": "string"}, "what": {"type": "string", "enum": ["cancelled", "changed"]}, "detail": {"type": "string"}},
+    ["task_id", "what"],
+)
+async def done_in_app(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import runtime
+    from app.tasks.skills import SKILLS
+
+    task = await _task(ctx, a["task_id"])
+    me = ctx.speaker.get("id") or ""
+    out = {"result": await runtime.done_in_app(ctx.session, task, what=a["what"], by=me, detail=a.get("detail") or "")}
+    if task.status == "cancelled" and me and me != task.requested_by and not ctx.is_system:
+        # as when a caregiver cancels through Saheli (founder 2026-10-10): the person who asked for it hears who cancelled it
+        who = next((m.get("name") for m in [ctx.elder, *ctx.members] if m.get("id") == me), "a family member")
+        out["tell"] = (f"Tell person {task.requested_by} kindly in one line with send_message that {who} cancelled this "
+                       f"{task.kind} themselves in the {SKILLS[task.service]['label']} app.")
+    return out
 
 
 def _tell_who_cancelled(ctx: TurnCtx, task) -> dict:
@@ -1954,7 +2041,18 @@ async def log_outcome(ctx: TurnCtx, a: dict) -> dict:
 )
 async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
     from app.care import outcomes
+    from app.tasks import runtime
 
+    if a["kind"] == "order":
+        # A confirm is offered only while the order waits for that very confirm (founder 2026-10-12: "after success it
+        # asked me whether to place"): never for an order already being placed, placed, or changed since.
+        tid = str(a["key"]).partition(":")[0]
+        task = await _task(ctx, tid)
+        fp = str((task.details or {}).get("cart_fp") or "")
+        if task.status != "awaiting_confirm" or task.input_needed != "confirm" or not fp:
+            raise ToolRefused(f"This order is not waiting for a yes any more ({runtime.describe(task)}). Do not ask to confirm "
+                              "it; say where it stands.")
+        a = {**a, "key": f"{task.id}:{fp[:8]}"}  # the buttons carry the cart check, so a tap never places another cart
     ctx.buttons = outcomes.buttons(a["kind"], a["key"], ctx.profiles.get(ctx.speaker.get("id")))
     ctx.buttons_spec = (a["kind"], a["key"])  # titled again in the reply's own script when it is final (loop)
     return {"attached": [b["title"] for b in ctx.buttons]}

@@ -93,6 +93,29 @@ PLACE_CASES = [("ghar pe hi", "Home"), ("घर", "Home"), ("வீட்டு�
                ("Bhopal medical plaza", "Clinic"), ("railway station", None), ("Mumbai mein meri behen ke yahan", None)]
 
 
+# is the ride app's pickup or drop the place meant? (live 2026-10-12: a saved home became the city in the app)
+RIDE_END_CASES = [
+    ("12 Civil Lines, Raipur 492001", True, "Raipur, Chhattisgarh", False),
+    ("12 Civil Lines, Raipur 492001", True, "Home, 12, Civil Lines, Raipur, Chhattisgarh 492001", True),
+    ("Flat 3B, Lake View Apartments, Salt Lake Sector 1, Kolkata 700064", True, "Lake View Apartments, Sector 1, Salt Lake City, Kolkata", True),
+    ("Flat 3B, Lake View Apartments, Salt Lake Sector 1, Kolkata 700064", True, "Salt Lake City, Kolkata, West Bengal", False),
+    ("B-14, Lajpat Nagar 2, New Delhi 110024", True, "B-14, Lajpat Nagar 4, New Delhi", False),
+    ("Chennai Central station", False, "Puratchi Thalaivar Dr. M.G. Ramachandran Central Railway Station, Chennai", True),
+    ("Hitech City metro station", False, "Hyderabad, Telangana", False),
+    ("Pune", False, "Pune, Maharashtra, India", True),
+    ("एम्स अस्पताल", False, "All India Institute of Medical Sciences, Ansari Nagar, New Delhi", True),
+    ("எழும்பூர் ரயில் நிலையம்", False, "Chennai Egmore Railway Station, Egmore, Chennai", True),
+]
+
+
+async def ride_end_case(asked: str, saved: bool, shown: str, want: bool) -> list[str]:
+    got = await matcher.same_ride_end(asked, shown, saved=saved)
+    if got is None:  # the model did not answer (a quota error on the shared eval project): once more
+        await asyncio.sleep(20)
+        got = await matcher.same_ride_end(asked, shown, saved=saved)
+    return [] if got is want else [f"{asked!r} vs {shown!r} → {got!r}, expected {want!r}"]
+
+
 async def place_case(words: str, want: str | None) -> list[str]:
     got = await matcher.which_place(words, SAVED)
     return [] if got == want else [f"{words!r} → {got!r}, expected {want!r}"]
@@ -179,6 +202,20 @@ async def match_case(item: dict, listings: list[dict], medicine: bool, want_exac
     return problems
 
 
+async def _case(fn, *args) -> list[str]:
+    """One case; a model quota error (shared eval project) waits and tries again instead of ending the whole run."""
+    from app.llm.router import AllModelsFailed
+
+    for wait in (20, 60, 0):
+        try:
+            return await fn(*args)
+        except AllModelsFailed as exc:
+            if not wait:
+                return [f"no model answered: {str(exc)[:120]}"]
+            await asyncio.sleep(wait)
+    return []
+
+
 async def main() -> int:
     async with engine.begin() as conn:
         from app.care import baselines, memory_index, models, why  # noqa: F401  (why: the trace_turns table)
@@ -196,27 +233,32 @@ async def main() -> int:
     only = set(sys.argv[1:])
     if not only or "brain" in only:
         for lang, msg, exp in BRAIN_CASES:
-            probs = await brain_case(lang, msg, exp)
+            probs = await _case(brain_case, lang, msg, exp)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"brain/{lang}: {msg}", *(f"\n    - {p}" for p in probs))
     if not only or "stores" in only:
         for lang, msg, want in STORE_CASES:
-            probs = await store_case(lang, msg, want)
+            probs = await _case(store_case, lang, msg, want)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"stores/{lang}: {msg}", *(f"\n    - {p}" for p in probs))
     if not only or "match" in only:
         for name, item, ls, med, want, closest in MATCH_CASES:
-            probs = await match_case(item, ls, med, want, closest)
+            probs = await _case(match_case, item, ls, med, want, closest)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"match/{name}", *(f"\n    - {p}" for p in probs))
     if not only or "place" in only:
         for words, want in PLACE_CASES:
-            probs = await place_case(words, want)
+            probs = await _case(place_case, words, want)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"place/{words}", *(f"\n    - {p}" for p in probs))
+    if not only or "ride" in only:
+        for asked, saved, shown, want in RIDE_END_CASES:
+            probs = await _case(ride_end_case, asked, saved, shown, want)
+            failed += bool(probs)
+            print(("PASS" if not probs else "FAIL"), f"ride/{asked} vs {shown}", *(f"\n    - {p}" for p in probs))
     total = ((len(BRAIN_CASES) if not only or "brain" in only else 0) + (len(MATCH_CASES) if not only or "match" in only else 0)
              + (len(STORE_CASES) if not only or "stores" in only else 0)
-             + (len(PLACE_CASES) if not only or "place" in only else 0))
+             + (len(PLACE_CASES) if not only or "place" in only else 0) + (len(RIDE_END_CASES) if not only or "ride" in only else 0))
     print(f"\n{total - failed}/{total} passed")
     return 1 if failed else 0
 

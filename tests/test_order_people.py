@@ -224,16 +224,20 @@ async def test_an_order_the_store_may_be_taking_is_never_cancelled_by_the_ladder
     assert t.status == "queued" and not t.details.get("ladder_asked_at")
 
 
-# ── a cancel after the order is placed (founder 2026-10-11): never "cancelled" by Saheli; one true status ──
+# ── a cancel after the order is placed (founder 2026-10-11, and 2026-10-12 02:35 IST): one true status; the care recipient →
+# the caregiver is told; a caregiver or a self-care person → the store cancels it (free: no second ask; a fee: one ask) ──
 PLACED_IM = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "placed": True, "order_id": "IM-55821",
              "payment_method": "Cash on Delivery", "eta": "17 min", "total": "₹318"}
 
 
-async def _confirmed_order(db, sessions, monkeypatch, *, members=(E, S), place=PLACED_IM, polls=1):
+CANCELLED_OK = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "cancelled": True}
+
+
+async def _confirmed_order(db, sessions, monkeypatch, *, members=(E, S), place=PLACED_IM, polls=1, cancel=(CANCELLED_OK,)):
     """An order Shanti asked for, with its cart confirmed: the next tick starts placing it."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "off")
     await store.save_roster(db, FAM, E, list(members))
-    agent = FakeAgent(script={"prepare": [CART], "place": [place]}, finish_after_polls=polls)
+    agent = FakeAgent(script={"prepare": [CART], "place": [place], "cancel": list(cancel)}, finish_after_polls=polls)
     told = []
 
     async def notify(f, person, prompt):
@@ -259,8 +263,8 @@ async def _confirmed_order(db, sessions, monkeypatch, *, members=(E, S), place=P
 
 async def test_the_care_recipient_asking_to_cancel_a_placed_order_hears_the_caregiver_is_told_and_he_is(db, at, sessions, monkeypatch):
     """Live 2026-10-11: Maa asked to cancel a placed order and heard 'cancelled', then 'cancelling is in progress', then
-    'placed, arriving in 14 minutes', and a cancel run on the store failed. Now: it is already placed and cannot be
-    cancelled from here; her caregiver is being told, and he is, once, with the order, to cancel it in the store's app."""
+    'placed, arriving in 14 minutes', and a cancel run on the store failed. Now (founder 2026-10-12): it is already placed and
+    cannot be cancelled from here; her caregiver is being told, and he is, once, with the order; he can have it cancelled."""
     at("2026-10-11 21:15")
     t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch)
     await tick(); await tick()
@@ -271,43 +275,148 @@ async def test_the_care_recipient_asking_to_cancel_a_placed_order_hears_the_care
     runtime._UPDATE_FOR.reset(token)
     said = await runtime.request_cancel(db, agent, t, by=ELDER, reason="galti se order hua")
     await db.commit()
-    assert said.startswith("NOT cancelled: it is ALREADY PLACED on Swiggy Instamart (order IM-55821), arriving in about 17 min")
+    assert said.startswith("NOT cancelled: it is ALREADY PLACED on Swiggy Instamart: 1 x Aashirvaad Atta 5kg (order IM-55821)")
     assert f"you are telling person {SON} right now" in said and "Never say cancelled" in said
     await db.refresh(t)
     assert t.status == "done" and t.phase == "place" and t.details["cancel_ask"]["elder"] is True
     assert not await placed_update_still_true(db), "the plain 'placed' update is dropped at delivery: her reply told the truth"
-    assert "NOT cancelled (Saheli cannot cancel a placed order" in runtime.describe(t)
+    assert "NOT cancelled; the caregiver was told" in runtime.describe(t)
     before = len(told)
     await tick()
     to_son = [p for who, p in told[before:] if who == SON]
-    assert len(to_son) == 1 and to_son[0].startswith("[Order needs you]") and "cancel it in the Swiggy Instamart app" in to_son[0]
-    assert "IM-55821" in to_son[0] and "Do not call cancel_task" in to_son[0]
+    assert len(to_son) == 1 and to_son[0].startswith("[Order needs you]") and "if they say cancel, call cancel_task" in to_son[0]
+    assert "IM-55821" in to_son[0] and "cancel it in the Swiggy Instamart app" in to_son[0]
     again = await runtime.request_cancel(db, agent, t, by=ELDER, reason="galti se order hua")
     await db.commit()
     assert again.startswith("NOT cancelled") and f"person {SON}" in again, "asked again: the same truth"
     await tick()
     assert len([p for who, p in told if who == SON]) == 1, "the caregiver is told once"
-    assert not [r for r in agent.runs if r["phase"] == "cancel"], "no cancel is run on the store"
+    assert not [r for r in agent.runs if r["phase"] == "cancel"], "her own ask runs no cancel on the store"
+    # her son then asks Saheli to cancel it: the store is asked and cancels it; she hears too
+    await db.refresh(t)
+    said = await runtime.request_cancel(db, agent, t, by=SON, reason="Maa does not want it")
+    await db.commit()
+    assert said.startswith("NOT cancelled yet: it is already PLACED") and "asking Swiggy Instamart to cancel it now" in said
+    await tick(); await tick()
+    await db.refresh(t)
+    assert t.status == "cancelled" and [r for r in agent.runs if r["phase"] == "cancel"]
+    to_son = [p for who, p in told if who == SON]
+    assert "Cancelled on Swiggy Instamart" in to_son[-1] and f"Also tell person {ELDER}" in to_son[-1]
 
 
-async def test_a_caregiver_or_someone_ordering_for_themselves_is_told_to_cancel_in_the_store_app(db, at, sessions, monkeypatch):
-    at("2026-10-11 21:20")
+async def test_the_caregiver_hears_of_the_care_recipients_cancel_once_whatever_the_brain_also_calls(db, at, sessions, monkeypatch):
+    """Sims 2026-10-12: Maa asked to cancel a placed order; the brain called cancel_task and also messaged her son, who got
+    two messages (and in another, it messaged him instead of calling cancel_task). The task system's "[Order needs you]"
+    is the one message: a message or a non-emergency alert to him in that turn is refused; one sent before the cancel
+    in the same turn counts as telling him."""
+    from app.sim.world import SimHost
+
+    at("2026-10-12 09:10")
     t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch)
+    await tick(); await tick()
+    await db.refresh(t)
+    assert t.status == "done"
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    out, err = await tools.run(ctx, "cancel_task", {"task_id": str(t.id), "reason": "galti se"})
+    assert not err and json.loads(out)["result"].startswith("NOT cancelled") and ctx.told_by_tasks == {SON}
+    out, err = await tools.run(ctx, "send_message", {"to": SON, "text": "Maa wants to cancel the atta order"})
+    assert err and "task system is telling this person" in json.loads(out)["refused"]
+    out, err = await tools.run(ctx, "alert_caregiver", {"reason": "safety", "issue": "order-cancel", "message": "cancel it", "confidence": 0.9})
+    assert err and "telling the caregivers" in json.loads(out)["refused"]
+    await db.commit()
+    before = len(told)
+    await tick()
+    assert len([p for who, p in told[before:] if who == SON]) == 1, "the one [Order needs you]"
+
+    # the other order of calls: a message to him first, then cancel_task: that message was the one
+    t.details = {**t.details, "cancel_ask": None}
+    await db.commit()
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    out, err = await tools.run(ctx, "send_message", {"to": SON, "text": "Maa wants to cancel the atta order (IM-55821)"})
+    assert not err, out
+    await tools.run(ctx, "cancel_task", {"task_id": str(t.id), "reason": "galti se"})
+    await db.commit()
+    await db.refresh(t)
+    assert t.details["cancel_ask"]["state"] == "told_carers" and t.details["cancel_ask"].get("carers_told")
+    before = len(told)
+    await tick()
+    assert not [p for who, p in told[before:] if who == SON], "no second message to him"
+
+
+async def test_a_self_care_persons_cancel_after_placing_goes_to_the_store(db, at, sessions, monkeypatch):
+    """Sim 2026-10-12 (Mumbai, self-care): she asked to cancel her own placed order and heard 'cannot be cancelled from
+    here; I told the family'. Someone ordering for themselves (no caregiver) has the store cancel it."""
+    at("2026-10-12 09:20")
+    t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch, members=(E,))
+    await tick(); await tick()
+    await db.refresh(t)
+    said = await runtime.request_cancel(db, agent, t, by=ELDER, reason="chukun zali")
+    await db.commit()
+    assert "asking Swiggy Instamart to cancel it now" in said
+    await tick(); await tick()
+    await db.refresh(t)
+    assert t.status == "cancelled" and [r for r in agent.runs if r["phase"] == "cancel"]
+    assert told[-1][0] == ELDER and "Cancelled on Swiggy Instamart" in told[-1][1]
+
+
+async def test_a_caregiver_asking_has_the_store_cancel_it_and_a_free_cancel_is_not_asked_again(db, at, sessions, monkeypatch):
+    """Founder 2026-10-12 (Tata 1mg): 'after cancellation it asked me to confirm' for a ₹0 fee. A caregiver's cancel goes to the
+    store; a free one goes through without a second question, and the one result follows."""
+    at("2026-10-11 21:20")
+    t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch, cancel=({**CANCELLED_OK, "cancelled": False, "cancel_fee": "₹0"}, CANCELLED_OK))
     await tick(); await tick()
     await db.refresh(t)
     said = await runtime.request_cancel(db, agent, t, by=SON, reason="not needed")
     await db.commit()
-    assert said.startswith("NOT cancelled: it is ALREADY PLACED") and "they can cancel it in the Swiggy Instamart app" in said
-    assert "telling person" not in said
-    await tick()
-    assert not [p for who, p in told if p.startswith("[Order needs you]")]
-    # self care: nobody else to tell, so the person cancels it in the app
+    assert said.startswith("NOT cancelled yet") and "telling person" not in said
+    before = len(told)
+    for _ in range(4):
+        await tick()
     await db.refresh(t)
-    t.details = {**t.details, "cancel_ask": None}
-    await store.save_roster(db, FAM, E, [E])
+    assert t.status == "cancelled" and len([r for r in agent.runs if r["phase"] == "cancel"]) == 2
+    after = [p for who, p in told[before:]]
+    assert len(after) == 1 and "Cancelled on Swiggy Instamart" in after[0] and "costs" not in after[0], "one result, no fee question"
+    assert not [p for _, p in told if p.startswith("[Order needs you]")]
+
+
+async def test_a_real_cancellation_fee_is_asked_once_with_its_amount(db, at, sessions, monkeypatch):
+    at("2026-10-11 21:22")
+    t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch, cancel=({**CANCELLED_OK, "cancelled": False, "cancel_fee": "₹25"}, CANCELLED_OK))
+    await tick(); await tick()
+    await db.refresh(t)
+    await runtime.request_cancel(db, agent, t, by=SON, reason="not needed")
     await db.commit()
-    said = await runtime.request_cancel(db, agent, t, by=ELDER, reason="not needed")
-    assert "they can cancel it in the Swiggy Instamart app" in said and "telling person" not in said
+    await tick(); await tick()
+    await db.refresh(t)
+    assert (t.status, t.input_needed) == ("needs_input", "fee") and "cancelling costs ₹25" in told[-1][1]
+    assert told[-1][0] == SON, "the one who asked to cancel is asked"
+    assert "asking Swiggy Instamart to cancel it with the fee of ₹25" in await runtime.provide_input(db, t, kind="fee", value="yes", by=SON, by_is_elder=False)
+    await db.commit()
+    await tick(); await tick()
+    await db.refresh(t)
+    assert t.status == "cancelled" and "a cancellation fee of ₹25, as they agreed" in told[-1][1]
+
+
+async def test_a_store_that_will_not_cancel_sends_a_caregiver_or_self_care_person_to_its_app(db, at, sessions, monkeypatch):
+    at("2026-10-11 21:24")
+    t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch, cancel=({**CANCELLED_OK, "cancelled": False, "problem": "the order is already packed"},))
+    await tick(); await tick()
+    await db.refresh(t)
+    await runtime.request_cancel(db, agent, t, by=SON, reason="not needed")
+    await db.commit()
+    await tick(); await tick()
+    await db.refresh(t)
+    assert t.status == "done" and t.details["cancel_ask"]["state"] == "refused"
+    assert "Swiggy Instamart would not cancel it (the order is already packed)" in told[-1][1] and "cancel it in the Swiggy Instamart app" in told[-1][1]
+    assert not [p for _, p in told if p.startswith("[Order needs you]")]
+    again = await runtime.request_cancel(db, agent, t, by=SON, reason="please")
+    assert again.startswith("NOT cancelled: Swiggy Instamart would not cancel it"), "asked again: the same truth, no new run"
+    # self care: the person's own ask goes to the store too (nobody else to tell)
+    t2, agent2, told2, tick2 = await _confirmed_order(db, sessions, monkeypatch, members=(E,))
+    await tick2(); await tick2()
+    await db.refresh(t2)
+    said = await runtime.request_cancel(db, agent2, t2, by=ELDER, reason="not needed")
+    assert said.startswith("NOT cancelled yet") and "asking Swiggy Instamart to cancel it now" in said
 
 
 async def test_a_cancel_while_it_is_being_placed_gets_one_true_outcome(db, at, sessions, monkeypatch):
@@ -318,14 +427,30 @@ async def test_a_cancel_while_it_is_being_placed_gets_one_true_outcome(db, at, s
     assert t.status == "running" and t.phase == "place"
     said = await runtime.request_cancel(db, agent, t, by=ELDER, reason="ruko")
     await db.commit()
-    assert said.startswith("NOT cancelled: the order is being placed on Swiggy Instamart right now and cannot be stopped")
-    assert "never say cancelled" in said
+    assert said.startswith("NOT cancelled yet: the order is being placed on Swiggy Instamart right now and that cannot be stopped")
+    assert "never say cancelled" in said and "the caregiver is told at once" in said
     await tick(); await tick()
     await db.refresh(t)
     to_maa = [p for who, p in told if who == ELDER]
-    assert t.status == "done" and "it went through: it is PLACED on Swiggy Instamart (order IM-55821" in to_maa[-1]
-    assert f"you are telling person {SON} right now" in to_maa[-1] and "cancelling it on the service" not in " ".join(to_maa)
+    assert t.status == "done" and "it went through: it is PLACED on Swiggy Instamart: 1 x Aashirvaad Atta 5kg (order IM-55821" in to_maa[-1]
+    assert f"you are telling person {SON} right now" in to_maa[-1]
     assert len([p for who, p in told if who == SON]) == 1 and not [r for r in agent.runs if r["phase"] == "cancel"]
+
+
+async def test_a_caregivers_cancel_while_it_is_being_placed_has_the_store_cancel_it_once_placed(db, at, sessions, monkeypatch):
+    at("2026-10-11 21:27")
+    t, agent, told, tick = await _confirmed_order(db, sessions, monkeypatch, polls=2)
+    await tick()
+    await db.refresh(t)
+    said = await runtime.request_cancel(db, agent, t, by=SON, reason="ruko")
+    await db.commit()
+    assert "Swiggy Instamart is asked to cancel it, and ONE task update comes with the result" in said
+    before = len(told)
+    for _ in range(6):
+        await tick()
+    await db.refresh(t)
+    after = [p for who, p in told[before:]]
+    assert t.status == "cancelled" and len(after) == 1 and "Cancelled on Swiggy Instamart" in after[0], "no 'placed' update in between"
 
 
 async def test_a_cancel_while_placing_that_did_not_go_through_says_nothing_was_ordered(db, at, sessions, monkeypatch):

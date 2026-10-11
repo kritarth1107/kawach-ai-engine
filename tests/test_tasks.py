@@ -98,11 +98,12 @@ async def test_cancel_before_placing_stops_agent(db, at, sessions):
     assert msg == "stopped; nothing was placed" and t.status == "cancelled" and agent.stopped
 
 
-async def test_a_booked_ride_is_never_cancelled_by_saheli_the_app_cancels_it(db, at, sessions):
-    """Founder 2026-10-11: cancel at every stage, for every service, says only what is true. A booked ride stays booked:
-    no cancel run on the service; whoever booked it is pointed to the ride's app (self care here: nobody else to tell)."""
+async def test_a_self_care_ride_cancel_is_done_on_the_app_and_a_free_one_is_not_asked_again(db, at, sessions):
+    """Founder 2026-10-12: someone ordering for themselves asks to cancel a booked ride: the ride app is asked to cancel it; a
+    ₹0 fee is not asked about again; the one result says it is cancelled."""
     at("2026-10-02 10:00")
-    h = Harness(sessions, FakeAgent(script={"prepare": [FARES], "place": [BOOKED], "cancel": [CANCELLED]}))
+    free = {**CANCELLED, "cancelled": False, "cancel_fee": "₹0"}
+    h = Harness(sessions, FakeAgent(script={"prepare": [FARES], "place": [BOOKED], "cancel": [free, CANCELLED]}))
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="uber", kind="ride", goal="Cab to clinic",
                              details={"pickup": "Home", "drop": "Dr Iyer clinic"})
     await db.commit()
@@ -116,11 +117,13 @@ async def test_a_booked_ride_is_never_cancelled_by_saheli_the_app_cancels_it(db,
     assert t.status == "done" and "Auto ₹142" in h.agent.runs[-1]["goal"]
     said = await runtime.request_cancel(db, h.agent, t, by=ELDER, reason="not needed")
     await db.commit()
-    assert said.startswith("NOT cancelled: it is ALREADY BOOKED on Uber (ride UB-9921), driver Ramesh")
-    assert "cancel it in the Uber app (its rides page; the app may charge a cancellation fee)" in said
-    await h.tick(); await h.tick()
+    assert said.startswith("NOT cancelled yet: it is already BOOKED on Uber (ride UB-9921), driver Ramesh") and "asking Uber to cancel it" in said
+    told = len(h.told)
+    for _ in range(4):
+        await h.tick()
     await db.refresh(t)
-    assert t.status == "done" and not [r for r in h.agent.runs if r["phase"] == "cancel"]
+    assert t.status == "cancelled" and len([r for r in h.agent.runs if r["phase"] == "cancel"]) == 2
+    assert len(h.told) == told + 1 and "Cancelled on Uber" in h.told[-1] and "costs" not in h.told[-1]
 
 
 async def test_elder_over_limit_needs_caregiver(db, at, sessions):

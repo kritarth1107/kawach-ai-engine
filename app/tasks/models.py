@@ -59,4 +59,20 @@ class SkillNote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class TaskTold(Base):
+    """Which state of a task a person was told by an update (founder 2026-10-12: the login-code ask and the booked ride
+    never reached him). An update for a state they were told is not sent again; any other one must reach them."""
+
+    __tablename__ = "task_told"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    person: Mapped[str] = mapped_column(String(64))
+    stage: Mapped[str] = mapped_column(String(240))  # runtime._stage when the update was written
+    how: Mapped[str] = mapped_column(String(16))  # brain | reply | composed
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("uq_task_told", "task_id", "person", "stage", unique=True),)
+
+
 from app.tasks import sandbox as _sandbox  # noqa: E402,F401  (registers browser_sessions and service_logins)

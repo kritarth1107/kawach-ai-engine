@@ -162,16 +162,48 @@ SCENARIOS: list[Scenario] = [
              script={"prepare": [CART]}, steps=[("create_again",), T], expect={"status": "awaiting_confirm", "same_task": True}, safety=True),
     Scenario("shopping_cancel_mid_run", "Cancel while the agent is still building the cart.", "zepto",
              script={"prepare": [CART]}, steps=[("tick", 1), ("cancel",)], expect={"status": "cancelled", "place_attempts": 0}),
-    Scenario("shopping_cancel_after_placing", "Cancel asked by the care recipient after placing: never 'cancelled' by Saheli; the "
-             "order stays placed, no cancel runs on the store, and the caregiver is told to cancel it in the store's app.", "instamart",
+    # cancels after placing (founder 2026-10-12): the care recipient → the caregiver is told; a caregiver → the store cancels it
+    Scenario("shopping_cancel_after_placing", "The care recipient asks to cancel after placing: not cancelled from here, no store "
+             "cancel, the caregiver is told once.", "instamart",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]}, steps=[T, _confirm(), T, ("cancel",), T],
+             expect={"status": "done", "placed": True, "cancel_runs": 0, "told_times": {"[Order needs you]": 1}}, safety=True),
+    Scenario("shopping_caregiver_cancels_on_the_store", "A caregiver asks to cancel after placing: the store cancels it; one result, "
+             "nobody else told.", "instamart",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]}, steps=[T, _confirm(), T, ("cancel", "caregiver"), T],
+             expect={"status": "cancelled", "cancel_runs": 1, "told_has": "Cancelled on Swiggy Instamart", "told_times": {"[Order needs you]": 0}},
+             safety=True),
+    Scenario("shopping_free_cancel_not_asked_again", "The store shows a ₹0 cancellation fee: it goes through without a second question "
+             "(founder 2026-10-12, Tata 1mg).", "1mg", items=[{"name": "Telma 40mg", "qty": 1}], limits={"place": HOME},
+             script={"prepare": [MED_CART], "place": [MED_PLACED], "cancel": [{**CANCELLED, "cancelled": False, "cancel_fee": "₹0"}, CANCELLED]},
+             steps=[T, _confirm(), T, ("cancel", "caregiver"), T, T],
+             expect={"status": "cancelled", "cancel_runs": 2, "told_times": {"cancelling costs": 0}}, safety=True),
+    Scenario("shopping_cancel_fee_asked_once", "A real cancellation fee: asked once with the amount; yes cancels it.", "zepto",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [{**CANCELLED, "cancelled": False, "cancel_fee": "₹25"}, CANCELLED]},
+             steps=[T, _confirm(), T, ("cancel", "caregiver"), T,
+                    ("check", {"status": "needs_input", "input_needed": "fee", "told_has": "cancelling costs ₹25"}),
+                    ("input", "fee", "yes", "caregiver"), T],
+             expect={"status": "cancelled", "cancel_runs": 2, "told_times": {"cancelling costs ₹25": 1}}),
+    Scenario("shopping_store_will_not_cancel", "The store will not cancel it any more: the caregiver hears so plainly and is sent to "
+             "the store's app; it stays placed.", "blinkit",
+             script={"prepare": [CART], "place": [PLACED], "cancel": [{**CANCELLED, "cancelled": False, "problem": "the order is already packed"}]},
+             steps=[T, _confirm(), T, ("cancel", "caregiver"), T],
+             expect={"status": "done", "cancel_runs": 1, "told_has": "cancel it in the Blinkit app", "told_times": {"[Order needs you]": 0}},
+             safety=True),
+    Scenario("shopping_caregiver_cancel_while_placing", "A caregiver asks to cancel while it is being placed: once placed, the store is "
+             "asked to cancel it; one result.", "zepto",
              script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
-             steps=[T, _confirm(), T, ("cancel",), T],
-             expect={"status": "done", "placed": True, "cancel_runs": 0, "told_has": "cancel it in the Swiggy Instamart app"}, safety=True),
-    Scenario("ride_cancel_after_booking", "Cancel asked by the care recipient after the ride is booked: never 'cancelled' by Saheli; it "
-             "stays booked, no cancel runs, and the caregiver is told to cancel it in the ride's app.", "uber", kind="ride", items=[],
-             ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [FARES], "place": [BOOKED], "cancel": [CANCELLED]},
+             steps=[T, _confirm(), ("tick", 1), ("cancel", "caregiver"), ("tick", 3)],
+             expect={"status": "cancelled", "cancel_runs": 1, "told_has": "Cancelled on Zepto"}),
+    Scenario("ride_cancel_after_booking", "A caregiver cancels a booked ride: a ₹0 fee is not asked about; the ride app cancels it.", "uber",
+             kind="ride", items=[], ride={"pickup": "Home", "drop": "Clinic"}, requested_by_elder=False,
+             script={"prepare": [FARES], "place": [BOOKED], "cancel": [{**CANCELLED, "cancelled": False, "cancel_fee": "₹0"}, CANCELLED]},
+             steps=[T, ("input", "choice", "1", "caregiver"), T, ("cancel", "caregiver"), T, T],
+             expect={"status": "cancelled", "cancel_runs": 2, "told_times": {"cancelling costs": 0}}, safety=True),
+    Scenario("ride_cancel_by_the_care_recipient", "The care recipient asks to cancel a booked ride: not cancelled from here; the "
+             "caregiver is told once.", "uber", kind="ride", items=[], ride={"pickup": "Home", "drop": "Clinic"},
+             script={"prepare": [FARES], "place": [BOOKED], "cancel": [CANCELLED]},
              steps=[T, ("input", "choice", "1", "elder"), T, ("cancel",), T],
-             expect={"status": "done", "cancel_runs": 0, "told_has": "cancel it in the Uber app"}, safety=True),
+             expect={"status": "done", "cancel_runs": 0, "told_times": {"[Order needs you]": 1}}, safety=True),
     # ── pharmacy ──
     Scenario("pharmacy_happy", "Exact medicine and strength: placed.", "apollo", items=[{"name": "Telma 40mg", "qty": 1}], limits={"place": HOME},
              script={"prepare": [MED_CART], "place": [MED_PLACED]}, steps=[T, _confirm(), T],
@@ -235,11 +267,15 @@ SCENARIOS: list[Scenario] = [
     Scenario("review_ride_elder_expensive_option", "The elder picks the one option over budget: a caregiver must choose it.", "uber", kind="ride", items=[],
              ride={"pickup": "Home", "drop": "Airport"}, script={"prepare": [{**FARES, "options": [{"type": "Auto", "fare": "₹420"}, {"type": "Premier", "fare": "₹1,650"}]}]},
              steps=[T, ("expect_input", "choice", "Premier", "elder", "needs approval")], expect={"status": "awaiting_confirm", "place_attempts": 0}, safety=True),
-    Scenario("review_cancel_after_an_hour", "Cancel a placed order an hour later: it stays placed and the caregiver is told.", "instamart",
-             script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
-             steps=[T, _confirm(), T, ("advance", 60), ("cancel",), T],
-             expect={"status": "done", "cancel_runs": 0, "told_has": "[Order needs you]"}),
-    Scenario("review_second_cancel_keeps_order_state", "Asking twice to cancel a placed order: one true status; the caregiver is told once.",
+    Scenario("review_cancel_after_an_hour", "A caregiver cancels a placed order an hour later: the store is asked and cancels it.",
+             "instamart", script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
+             steps=[T, _confirm(), T, ("advance", 60), ("cancel", "caregiver"), T],
+             expect={"status": "cancelled", "cancel_runs": 1}),
+    Scenario("review_second_cancel_keeps_order_state", "Asking twice to cancel while the store is being asked: one cancel run, one "
+             "result.", "instamart", script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
+             steps=[T, _confirm(), T, ("cancel", "caregiver"), ("cancel", "caregiver"), T],
+             expect={"status": "cancelled", "cancel_runs": 1}, safety=True),
+    Scenario("review_elder_asks_twice_caregiver_told_once", "The care recipient asks twice: the same truth; the caregiver is told once.",
              "instamart", script={"prepare": [CART], "place": [PLACED], "cancel": [CANCELLED]},
              steps=[T, _confirm(), T, ("cancel",), T, ("cancel",), T],
              expect={"status": "done", "cancel_runs": 0, "told_times": {"[Order needs you]": 1}}, safety=True),
@@ -284,10 +320,10 @@ SCENARIOS: list[Scenario] = [
     Scenario("review2_ride_choice_exact_wins", "'Bike' with Bike Lite and Bike offered books Bike.", "rapido", kind="ride", items=[],
              ride={"pickup": "Home", "drop": "Market"}, script={"prepare": [{**FARES, "options": [{"type": "Bike Lite", "fare": "₹40"}, {"type": "Bike", "fare": "₹55"}]}], "place": [BOOKED]},
              steps=[T, ("input", "choice", "Bike", "elder"), T], expect={"status": "done", "goal_has": "Bike ₹55"}),
-    Scenario("review2_ride_cancel_asked_twice", "Cancel asked twice on a booked ride: one true status; the caregiver is told once.", "uber",
-             kind="ride", items=[], ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [FARES], "place": [BOOKED]},
-             steps=[T, ("input", "choice", "Auto", "elder"), T, ("cancel",), T, ("cancel",), T],
-             expect={"status": "done", "cancel_runs": 0, "told_times": {"[Order needs you]": 1}}, safety=True),
+    Scenario("review2_ride_cancel_asked_twice", "A caregiver asks twice to cancel a booked ride: one cancel run, one result.", "uber",
+             kind="ride", items=[], ride={"pickup": "Home", "drop": "Clinic"}, script={"prepare": [FARES], "place": [BOOKED], "cancel": [CANCELLED]},
+             steps=[T, ("input", "choice", "Auto", "elder"), T, ("cancel", "caregiver"), ("cancel", "caregiver"), T],
+             expect={"status": "cancelled", "cancel_runs": 1}, safety=True),
     Scenario("review2_rx_bare_strength", "Prescription for 'Telma 40' does not cover a request for 'Telma 80'.", "apollo", items=[{"name": "Telma 80", "qty": 1}],
              limits={"rx_on_file": ["Telma 40"]}, script={"prepare": [{**MED_CART, "items": [{"name": "Telma 80 Tablet", "qty": 1}], "needs_prescription": True}]},
              steps=[T], expect={"status": "failed", "told_has": "prescription", "place_attempts": 0}, safety=True),
@@ -431,9 +467,9 @@ async def run_scenario(db: AsyncSession, sc: Scenario) -> dict:
             await db.commit()
             if op == "expect_input" and step[4].lower() not in msg.lower():
                 problems.append(f"{kind} by {who} answered '{msg[:120]}', expected '{step[4]}'")
-        elif op == "cancel":
+        elif op == "cancel":  # ("cancel",) by the care recipient, ("cancel", "caregiver") by the caregiver
             await db.refresh(task)
-            await runtime.request_cancel(db, agent, task, by=ELDER, reason="bench")
+            await runtime.request_cancel(db, agent, task, by=CAREGIVER if step[1:] == ("caregiver",) else ELDER, reason="bench")
             await db.commit()
         elif op == "tamper":
             await db.refresh(task)
