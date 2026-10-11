@@ -11,7 +11,7 @@ FAM, MAA = "fam-lang", "maa-lang"
 
 async def test_switching_language_drops_the_old_dialect(db, at):
     at("2026-10-09 23:58")
-    elder = {"id": MAA, "name": "Vasundara", "role": "elder"}
+    elder = {"id": MAA, "name": "Sarla", "role": "elder"}
     await store.save_roster(db, FAM, elder, [elder])
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=elder, speaker=elder, members=[elder])
 
@@ -34,7 +34,7 @@ async def test_a_switch_applies_to_this_turns_checks(db, at):
     from app.brain import guards
 
     at("2026-10-10 00:40")
-    elder = {"id": MAA, "name": "Vasundara", "role": "elder"}
+    elder = {"id": MAA, "name": "Sarla", "role": "elder"}
     await store.save_roster(db, FAM, elder, [elder])
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=elder, speaker=elder, members=[elder],
                       profiles={MAA: {"script": "latin", "saved": {"language": "gu"}, "now": "latin"}})

@@ -7,7 +7,7 @@ from app.care import checkins, store
 from app.core import clock
 
 FAM = "fam-ck"
-MAA = {"id": "maa-ck", "name": "Vasundara", "role": "elder"}
+MAA = {"id": "maa-ck", "name": "Sarla", "role": "elder"}
 SELF = {"id": "self-ck", "name": "Asha", "role": "primary caregiver"}
 
 

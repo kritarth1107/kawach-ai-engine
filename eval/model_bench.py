@@ -32,13 +32,13 @@ DEFAULT_MODELS = ["gemini:gemini-3.5-flash@asia-south1", "gemini:gemini-3.8-flas
 JUDGE_ROUTE = "gemini:gemini-3.1-pro-preview"
 DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 
-MAA = {"id": "elder-vasu", "name": "Vasundara", "role": "elder"}
-SON = {"id": "cg-kritarth", "name": "Kritarth", "role": "primary caregiver"}
+MAA = {"id": "elder-sarla", "name": "Sarla", "role": "elder"}
+SON = {"id": "cg-rohan", "name": "Rohan", "role": "primary caregiver"}
 FAMILY = [MAA, SON]
 MAA_SETUP = (
-    "Medical record for my mother Vasundara, 68, Raipur. She speaks Marwari. Medicines: BP 1 tablet at 8 am, Folvite 5mg half "
+    "Medical record for my mother Sarla, 71, Jodhpur. She speaks Marwari. Medicines: BP 1 tablet at 8 am, Folvite 5mg half "
     "tablet at 1 pm, Shelcal 500mg 1 tablet at 2 pm, Vitamin D3 60000 IU one capsule only on Sundays at 10 am. Call her "
-    "Vasundara ji. Family doctor Dr Anil Sharma."
+    "Sarla ji. Family doctor Dr Mehta."
 )
 
 

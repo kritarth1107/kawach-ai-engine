@@ -1253,6 +1253,9 @@ async def find_doctor(ctx: TurnCtx, a: dict) -> dict:
 
     place = await _care_place(ctx)
     city = a.get("city") or care_search.city_of(place)
+    if not city:
+        return {"error": "no_city", "next": "No home place is saved. Ask which city or area to look in (one short question), "
+                                             "then call find_doctor again with city."}
     rows = await _with_browser(lambda cdp: care_search.doctors(cdp, a["need"], city=city, lat=place.get("lat"), lon=place.get("lng")))
     return {"city": city, "sites": rows,
             "next": "To book, the family picks a doctor and a slot; booking needs their login on that site. Offer to note the "

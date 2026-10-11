@@ -28,7 +28,7 @@ INSERT INTO care_facts (family_id, body, embedding)
 SQL
 docker exec "$NET-mongo" mongosh --quiet kavach --eval '
   db.users.insertMany(Array.from({length: 300}, (_, i) => ({phone: "+9190000" + String(i).padStart(5, "0"), name: "User " + i})));
-  db.families.insertOne({name: "Kritarth’s Family", members: 3});' >/dev/null
+  db.families.insertOne({name: "Roundtrip Family", members: 3});' >/dev/null
 
 docker run --rm --user "$(id -u):$(id -g)" -v "$WORK:/keys" --entrypoint age-keygen "$IMG" -o /keys/id.txt 2>/dev/null
 RECIPIENT=$(grep -o 'age1[0-9a-z]*' "$WORK/id.txt")
@@ -64,7 +64,7 @@ B=$(psql -d scratch -c "SELECT count(*), md5(string_agg(body || embedding::text,
 docker exec "$NET-mongo" mongosh --quiet kavach --eval 'db.dropDatabase()' >/dev/null
 run restore "$DAY" --mongo-uri "mongodb://$NET-mongo:27017" --target-prod --yes >/dev/null
 M=$(docker exec "$NET-mongo" mongosh --quiet kavach --eval 'db.users.countDocuments() + "," + db.families.findOne().name')
-[ "$M" = "300,Kritarth’s Family" ] || { echo "FAIL: mongo mismatch $M"; exit 1; }
+[ "$M" = "300,Roundtrip Family" ] || { echo "FAIL: mongo mismatch $M"; exit 1; }
 # and Mongo that has data is refused without the flags
 if run restore "$DAY" --mongo-uri "mongodb://$NET-mongo:27017/?directConnection=true" >/dev/null 2>&1; then echo "FAIL: restore over live mongo allowed"; exit 1; fi
 

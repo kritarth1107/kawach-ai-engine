@@ -161,7 +161,8 @@ async def doctors(cdp_url: str, need: str, *, city: str, lat=None, lon=None, per
 
 
 def city_of(place: dict | None) -> str:
-    """The family's city from the saved place ('…, Labhandih, Raipur, Chhattisgarh 492001' → Raipur)."""
+    """The family's city from the saved place ('…, Kothrud, Pune, Maharashtra 411038' → Pune); "" when there is no place
+    (never a guess: a default city sent every family without a place to one city's doctors until 2026-10-11)."""
     p = place or {}
     if p.get("city"):
         return str(p["city"])
@@ -172,4 +173,4 @@ def city_of(place: dict | None) -> str:
     for x in reversed(parts):
         if x and x.lower() not in states:
             return x
-    return "Raipur"
+    return ""

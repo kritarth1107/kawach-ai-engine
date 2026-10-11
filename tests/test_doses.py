@@ -15,8 +15,8 @@ MEDS = (("BP", "1", ["08:00"]), ("Folvite 5mg", "½ tablet", ["13:00"]), ("Shelc
 
 
 def ctx(db, host):
-    return tools.TurnCtx(session=db, host=host, family_id=FAM, elder={"id": MAA, "name": "Vasundara"},
-                         speaker={"id": MAA, "name": "Vasundara", "role": "elder"}, members=[{"id": MAA, "name": "Vasundara"}],
+    return tools.TurnCtx(session=db, host=host, family_id=FAM, elder={"id": MAA, "name": "Sarla"},
+                         speaker={"id": MAA, "name": "Sarla", "role": "elder"}, members=[{"id": MAA, "name": "Sarla"}],
                          message_ref=None)
 
 
@@ -119,7 +119,7 @@ async def test_a_dashboard_tick_for_yesterday_replaces_saheli_s_answer(db, at):
     try:
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
             r = await client.post("/v2/events", json={
-                "family_id": FAM, "subject_id": MAA, "kind": "dose_missed", "summary": "Folvite 5mg ½ tablet (1:00 PM): missed (marked by Kritarth)",
+                "family_id": FAM, "subject_id": MAA, "kind": "dose_missed", "summary": "Folvite 5mg ½ tablet (1:00 PM): missed (marked by Rohan)",
                 "payload": {"scheduleId": "s2", "dateKey": "2026-10-08", "time": "1:00 PM", "status": "missed", "medicine": "Folvite 5mg"},
                 "ref": "completion:s2:2026-10-08:missed:1"})
             assert r.status_code == 200 and r.json()["recorded"]

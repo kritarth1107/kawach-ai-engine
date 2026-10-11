@@ -11,6 +11,6 @@ def test_test_words_and_matching():
 
 
 def test_city_of_the_saved_place():
-    assert care_search.city_of({"full": "Sunita Park, Labhandih, Raipur, Chhattisgarh 492001"}) == "Raipur"
+    assert care_search.city_of({"full": "12 Lake View, Kothrud, Pune, Maharashtra 411038"}) == "Pune"
     assert care_search.city_of({"city": "Pune"}) == "Pune"
-    assert care_search.city_of({}) == "Raipur"
+    assert care_search.city_of({}) == "", "no place: no guessed city"

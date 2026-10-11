@@ -12,8 +12,8 @@ FAM, MAA = "fam-fresh", "maa-fresh"
 
 
 def ctx(db, host=None):
-    return tools.TurnCtx(session=db, host=host or SimHost(), family_id=FAM, elder={"id": MAA, "name": "Vasundara"},
-                         speaker={"id": MAA, "name": "Vasundara", "role": "elder"}, members=[{"id": MAA, "name": "Vasundara"}])
+    return tools.TurnCtx(session=db, host=host or SimHost(), family_id=FAM, elder={"id": MAA, "name": "Sarla"},
+                         speaker={"id": MAA, "name": "Sarla", "role": "elder"}, members=[{"id": MAA, "name": "Sarla"}])
 
 
 async def call(c, name, args, ok=True):
@@ -57,7 +57,7 @@ async def test_old_facts_are_marked_and_confirming_refreshes_them(db, at):
     facts = await store.facts(db, FAM, MAA)
     stale = await freshness.stale_facts(db, FAM, MAA, facts)
     assert set(stale) == {"medicine:thyronorm"} and stale["medicine:thyronorm"] == "over 4 months ago", "allergies never go stale"
-    record = digest.care_record("Vasundara", facts, stale)
+    record = digest.care_record("Sarla", facts, stale)
     assert "Thyronorm 50 at 7 (elder said, unconfirmed; last confirmed over 4 months ago, check it is still right" in record
     # the check-in asks about it (one gentle question in the health window)
     got = await checkins.plan(db, _Host(), FAM, MAA, now=now)

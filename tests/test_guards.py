@@ -268,20 +268,20 @@ async def test_message_to_hindi_writer_must_be_in_hindi(db, at, brain):
 
 
 def test_no_greeting_or_name_opener_in_a_running_conversation():
-    """Live 2026-10-09 19:14: "राम राम सा वसुंधरा जी, घबराओ मत सा…" a minute after her last message (founder: no one greets
+    """Live 2026-10-09 19:14: "राम राम सा सरला जी, घबराओ मत सा…" a minute after her last message (founder: no one greets
     again in an active conversation)."""
-    live = "राम राम सा वसुंधरा जी, घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
+    live = "राम राम सा सरला जी, घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
     assert g.tidy_opening(live, greeted_today=True, mid_conversation=True) == "घबराओ मत सा। थारे छाती में दर्द तो कोनी?"
-    assert g.tidy_opening("वसुंधरा जी, आज कोई दवाई लिखी कोनी है।", greeted_today=True, mid_conversation=True) == "आज कोई दवाई लिखी कोनी है।"
+    assert g.tidy_opening("सरला जी, आज कोई दवाई लिखी कोनी है।", greeted_today=True, mid_conversation=True) == "आज कोई दवाई लिखी कोनी है।"
     # live run 2026-10-11: two honorifics, and after a short "ठीक है"
-    assert g.tidy_opening("वसुंधरा जी सा, पनीर बटर मसाला मँगाऊँ कांई?", greeted_today=True, mid_conversation=True) == "पनीर बटर मसाला मँगाऊँ कांई?"
-    assert g.tidy_opening("ठीक है वसुंधरा जी सा, मैं खोज रही हूँ।", greeted_today=True, mid_conversation=True) == "ठीक है, मैं खोज रही हूँ।"
+    assert g.tidy_opening("सरला जी सा, पनीर बटर मसाला मँगाऊँ कांई?", greeted_today=True, mid_conversation=True) == "पनीर बटर मसाला मँगाऊँ कांई?"
+    assert g.tidy_opening("ठीक है सरला जी सा, मैं खोज रही हूँ।", greeted_today=True, mid_conversation=True) == "ठीक है, मैं खोज रही हूँ।"
     assert g.tidy_opening("हाँ जी, ले ली।", greeted_today=True, mid_conversation=True) == "हाँ जी, ले ली।"
     assert g.tidy_opening("Namaste Asha ji! Maa took her BP tablet.", greeted_today=True, mid_conversation=True) == "Maa took her BP tablet."
     # hours later the same day: no second greeting, but calling her by name is fine
-    assert g.tidy_opening("राम राम सा! वसुंधरा जी, दवाई ले ली?", greeted_today=True, mid_conversation=False) == "वसुंधरा जी, दवाई ले ली?"
+    assert g.tidy_opening("राम राम सा! सरला जी, दवाई ले ली?", greeted_today=True, mid_conversation=False) == "सरला जी, दवाई ले ली?"
     # the first message of the day keeps its greeting; "हाँ जी," is not a name; a bare greeting is left alone
-    assert g.tidy_opening("राम राम सा वसुंधरा जी! दवाई ले ली?", greeted_today=False, mid_conversation=False).startswith("राम राम सा")
+    assert g.tidy_opening("राम राम सा सरला जी! दवाई ले ली?", greeted_today=False, mid_conversation=False).startswith("राम राम सा")
     assert g.tidy_opening("हाँ जी, लिख लिया।", greeted_today=True, mid_conversation=True) == "हाँ जी, लिख लिया।"
     assert g.tidy_opening("राम राम सा", greeted_today=True, mid_conversation=True) == "राम राम सा"
     # "Hindi" is not "hi"

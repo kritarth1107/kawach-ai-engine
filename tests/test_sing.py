@@ -9,8 +9,8 @@ from app.care import store
 from app.sim.world import SimHost
 
 FAM = "fam-sing"
-ELDER = {"id": "e-sing", "name": "Vasundara", "role": "elder"}
-SON = {"id": "c-sing", "name": "Kritarth", "role": "primary caregiver"}
+ELDER = {"id": "e-sing", "name": "Sarla", "role": "elder"}
+SON = {"id": "c-sing", "name": "Rohan", "role": "primary caregiver"}
 BHAJAN = "पायो जी म्हें तो राम रतन धन पायो।\nवस्तु अमोलक दी म्हारे सतगुरु, किरपा कर अपणायो॥"
 
 
