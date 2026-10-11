@@ -553,3 +553,47 @@ async def test_the_saved_place_is_asked_twice_and_a_disagreement_means_asking_th
     answers[:] = [RuntimeError("down"), RuntimeError("down")]
     with pytest.raises(RuntimeError):
         await matcher.which_place("ghar", places)
+
+
+async def test_a_task_another_runner_is_in_the_middle_of_is_left_alone(db, at, sessions, monkeypatch):
+    """Live 2026-10-11 13:08: a fast step committed (its new browser recorded), which let the scheduler's runner take the
+    same still-queued task; both started a browser run on one browser and the second got 400 "Agent session already has a
+    running task". The first runner now claims the task for that time."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.core import clock
+    from app.tasks.models import Task
+
+    monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
+    at("2026-10-11 18:40")
+    seen = []
+
+    async def search(service, cdp, q, **k):
+        row = (await db.execute(select(Task.details).where(Task.id == t.id).execution_options(populate_existing=True))).scalar_one()
+        seen.append((row or {}).get("claim"))
+        return {"deliverable": True, "eta": "10 min", "items": [BAR_50]}
+
+    monkeypatch.setattr(fastpath, "search", search)
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="bars",
+                             details={"items": [{"name": RITEBITE, "qty": 4}]},
+                             limits=Limits(place={**BANGALORE, "lat": 12.9299, "lng": 77.5826, "geoPrecision": "address"}))
+    await db.commit()
+    await _fast_tick(sessions, FastAgent(script={}), PlaceHost({}))
+    await db.refresh(t)
+    assert seen and seen[0], "claimed while the fast step works (after its commit)"
+    assert t.details.get("claim") is None and t.status == "queued" and t.phase == "prepare", "and released when the runner is done"
+
+    # another runner's fresh claim: left alone; a claim older than CLAIM_FOR (a crashed runner): taken
+    t.details = {**t.details, "claim": clock.now().isoformat()}
+    await db.commit()
+    agent = FastAgent(script={"prepare": [OTP]})
+    await _fast_tick(sessions, agent, PlaceHost({}))
+    await db.refresh(t)
+    assert agent.runs == [] and t.status == "queued", "left alone"
+    at("2026-10-11 18:44")
+    await _fast_tick(sessions, agent, PlaceHost({}))
+    await db.refresh(t)
+    assert len(agent.runs) == 1 and t.status == "running" and t.details.get("claim") is None
+    assert runtime.CLAIM_FOR == timedelta(minutes=3)

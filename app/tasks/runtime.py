@@ -1693,6 +1693,7 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
             task.agent_session = sid
             await sandbox.started(session, session_id=sid, task_id=str(task.id), family_id=task.family_id, service=task.service,
                                   profile_id=profile_id)
+            _claim(task)
             await session.commit()  # the browser bills: record it before anything else can fail
         cdp = await agent.cdp_url(task.agent_session)
         if not cdp:
@@ -1756,6 +1757,7 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             task.agent_session = await agent.open_session(profile_id)
             await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
                                   service=task.service, profile_id=profile_id)
+            _claim(task)
             await session.commit()
         cdp = await agent.cdp_url(task.agent_session)
         if not cdp:
@@ -1850,6 +1852,7 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
             task.agent_session = await agent.open_session(profile_id)
             await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
                                   service=task.service, profile_id=profile_id)
+            _claim(task)
             await session.commit()
             cdp = await agent.cdp_url(task.agent_session)
         if not cdp:
@@ -2176,6 +2179,23 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
 
 
 MAX_TICK_ERRORS = 3
+# A runner that commits in the middle of its work (a fast step records the browser it opened) releases the task's row
+# lock; for this long no other runner takes the still-queued task (live 2026-10-11: the scheduler's tick and the one a
+# message kicked off both started a browser run on the same browser, which refused the second: "Agent session already
+# has a running task"). A runner that crashed leaves the claim; it simply runs out.
+CLAIM_FOR = timedelta(minutes=3)
+
+
+def _claim(task: Task) -> None:
+    task.details = {**(task.details or {}), "claim": clock.now().isoformat()}
+
+
+def _claimed(task: Task) -> bool:
+    at = (task.details or {}).get("claim")
+    try:
+        return bool(at) and task.status == "queued" and clock.now() - datetime.fromisoformat(at) < CLAIM_FOR
+    except ValueError:
+        return False
 
 
 async def _count_tick_error(session: AsyncSession, task_id, final: str | None = None) -> tuple[Task, str] | None:
@@ -2237,8 +2257,8 @@ async def tick(
         message, summary = None, False
         async with sessions() as session:
             task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update(skip_locked=True))).scalar_one_or_none()
-            if not task:
-                return None
+            if not task or _claimed(task):
+                return None  # locked, or another runner is in the middle of it
             was_browse, expired = task.phase == "browse", False
             try:
                 if task.deadline_at < clock.now() and task.status != "running":
@@ -2477,6 +2497,8 @@ async def tick(
                 if task.status == "done" and ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
                     await delivery_followup(session, task)
                     tracking.start(task)
+                if (task.details or {}).get("claim"):
+                    task.details = {**task.details, "claim": None}  # this runner is done with it
                 await session.commit()
             except Exception as exc:  # noqa: BLE001 — one task's failure must not stop the others
                 logger.exception("task tick failed task=%s", task_id)
