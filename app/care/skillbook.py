@@ -34,7 +34,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core import clock
+from app.core import clock, trace
 from app.db.session import Base
 
 MAX_BODY = 600
@@ -284,6 +284,8 @@ async def save_family(session: AsyncSession, family_id: str, subject_id: str, bo
     if bad:
         return {"saved": False, "problems": bad}
     now = clock.now()
+    if tid := trace.current():  # why it was learned: the message, dashboard action or night that taught it (D-13)
+        evidence = [*(evidence or []), {"trace": tid, "at": now.isoformat()}]
     rows = list((await session.execute(select(Skill).where(
         Skill.scope == "family", Skill.family_id == family_id, Skill.subject_id == subject_id))).scalars())
     same = next((r for r in rows if _norm(r.body) == _norm(body)), None)
@@ -582,7 +584,7 @@ async def record_store_success(session: AsyncSession, service: str, phase: str, 
     rows = list((await session.execute(select(Skill).where(Skill.scope == "store", Skill.service == service, Skill.title == f"{phase} path",
                                                            Skill.status.in_(("active", "stale", "proposed"))))).scalars())
     same = next((r for r in rows if r.body == body), None)
-    ev = {"task": task_id, "steps": n_steps, "at": now.isoformat()}
+    ev = {"task": task_id, "steps": n_steps, "at": now.isoformat(), **({"trace": trace.current()} if trace.current() else {})}
     if same:
         same.evidence = ((same.evidence or []) + [ev])[-20:]
         if same.id not in (used or []):

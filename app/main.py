@@ -15,6 +15,7 @@ from app.llm import spend as llm_spend
 from app.care import baselines as care_baselines  # noqa: F401
 from app.learn import models as learn_models  # noqa: F401
 from app.care import memory_index as care_memory_index  # noqa: F401
+from app.care import why as care_why  # noqa: F401  (registers trace_turns)
 from app.models import entities  # noqa: F401
 
 

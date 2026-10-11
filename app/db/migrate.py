@@ -129,6 +129,16 @@ V2_ALTERS = [
     "ALTER TABLE playbook_versions ADD COLUMN IF NOT EXISTS scope JSONB DEFAULT '[]'::jsonb",
     "CREATE INDEX IF NOT EXISTS ix_turns_thread_id ON turns (family_id, thread_id, id)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_logins_profile ON service_logins (profile_id) WHERE profile_id IS NOT NULL",
+    # D-13 why-trail: the trace of the work that wrote each row
+    "ALTER TABLE care_events ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
+    "ALTER TABLE memory_versions ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
+    "ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
+    "ALTER TABLE care_tasks ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
+    "CREATE INDEX IF NOT EXISTS ix_care_events_trace ON care_events (trace_id) WHERE trace_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_memory_versions_trace ON memory_versions (trace_id) WHERE trace_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_open_loops_trace ON open_loops (trace_id) WHERE trace_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_care_tasks_trace ON care_tasks (trace_id) WHERE trace_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS ix_care_events_task ON care_events ((payload->>'task_id')) WHERE (payload->>'task_id') IS NOT NULL",
 ]
 
 

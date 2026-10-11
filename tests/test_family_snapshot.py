@@ -73,7 +73,7 @@ async def test_restore_dry_run_then_apply(db, at):
     assert len(p["skills"]) == 1
 
     out = await restore_family.apply(db, snap, by=CG)
-    assert out["done"] == {"notes": 1, "facts_pending": 2, "skills": 1, "skipped": []}
+    assert out["done"] == {"notes": 1, "facts_pending": 2, "links": 0, "links_pending": 0, "skills": 1, "skipped": []}
     # notes and skills are back, each as an undoable version
     n = (await store.notes(db, FAM, [ELDER]))
     assert next(x for x in n if x.slug == "family").body_md == "- son Ankit in Pune\n- loves bhajans"

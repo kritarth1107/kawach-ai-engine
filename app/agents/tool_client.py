@@ -56,12 +56,16 @@ async def execute_backend_tool(
     base = (settings.kavach_backend_url or "http://localhost:5000").rstrip("/")
     url = f"{base}/internal/v1/saheli/tools/execute"
     headers = {"X-Kavach-Secret": settings.kawach_api_secret}
+    from app.core import trace
+
     payload = {
         "tool": tool,
         "args": args,
         "family_id": family_id,
         "recipient_user_id": elder_id,
         "actor_user_id": actor_user_id,
+        # the why-trail (D-13): the backend keeps it on what it writes (a reminder change, an alert)
+        **({"trace_id": trace.current()} if trace.current() else {}),
     }
     # A write (send a WhatsApp, mark a dose, notify caregivers) that timed out may already have happened:
     # retrying it could send twice. Writes retry only when the backend surely did nothing.

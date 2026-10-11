@@ -66,9 +66,31 @@ TITLES = {
 }
 
 
-def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = None) -> str:
-    """stale: {key: "over 4 months ago"} from app.care.freshness, marked so old facts are re-checked before acting."""
+def link_text(links: list | None) -> str:
+    """What an item's links add to its line: ' — for diabetes; prescribed by Dr Sharma; from the 3 Sep prescription', and
+    a link still waiting for a caregiver said so."""
+    from app.care import links as care_links
+
+    if not links:
+        return ""
+    on = [care_links.phrase(ln) for ln in links if ln.status == "active"]
+    waiting = [care_links.phrase(ln) for ln in links if ln.status == "pending" and not (ln.detail or {}).get("end")]
+    going = [care_links.phrase(ln) for ln in links if ln.status == "pending" and (ln.detail or {}).get("end")]
+    bits = ["; ".join(on)] if on else []
+    if waiting:
+        bits.append("PENDING link, not in effect until a caregiver confirms: " + "; ".join(waiting))
+    if going:
+        bits.append("removal waiting for a caregiver: " + "; ".join(going))
+    return (" — " + " | ".join(bits)) if bits else ""
+
+
+def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = None, links: list | None = None) -> str:
+    """stale: {key: "over 4 months ago"} from app.care.freshness, marked so old facts are re-checked before acting.
+    links: the person's care links (app.care.links), each shown on the line of the item it starts from."""
+    from app.care import links as care_links
+
     stale = stale or {}
+    linked = care_links.by_from(list(links or []))
     by_domain: dict[str, list[CareFact]] = defaultdict(list)
     for f in rows:
         by_domain[f.domain].append(f)
@@ -87,7 +109,13 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
             else:
                 confirmed = "" if f.confirmed_by or f.source_kind != "elder_said" else ", unconfirmed"
                 old = f"; last confirmed {stale[f.key]}, check it is still right before acting on it" if f.key in stale else ""
-                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed}{old})")
+                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed}{old}){link_text(linked.get(f.key))}")
+    shown = {f.key for f in rows if f.status == "active"}
+    people = [(ref, ls) for ref, ls in linked.items() if ref not in shown and care_links.domain_of(ref) in care_links.PEOPLE]
+    if people:
+        lines.append("People and how they are related:")
+        for ref, ls in people:
+            lines.append(f"  - {care_links.name_of(ref) if not ref.startswith('person:') else '[' + ref + ']'}{link_text(ls)}")
     missing = [TITLES[d] for d in ("allergy", "medicine", "diet") if d not in by_domain]
     if missing and rows:
         lines.append(f"Not on file: {', '.join(missing)}. Never guess these.")

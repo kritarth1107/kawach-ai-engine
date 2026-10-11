@@ -9,24 +9,30 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brain import tools
 from app.brain.host import LiveHost
-from app.care import store
+from app.care import links, store
 from app.care.domains import DOMAINS
 from app.care.models import CareEvent, CareFact, OpenLoop
-from app.core import clock
+from app.core import clock, trace
 from app.core.security import verify_api_secret
 from app.db.session import get_db
 from app.tasks import runtime, sandbox
 from app.tasks.models import Task
 from app.tasks.skills import SKILLS
 
-router = APIRouter(prefix="/v2/dash", tags=["dashboard"], dependencies=[Depends(verify_api_secret)])
+async def dash_trace(request: Request) -> None:
+    """Every dashboard request is one trace (D-13): what it changes, starts or confirms says it came from here. Async on
+    purpose: it runs in the request's own context (a sync dependency would set it in a worker thread)."""
+    trace.start(trace.new("dash"), family_id=request.path_params.get("family_id"))
+
+
+router = APIRouter(prefix="/v2/dash", tags=["dashboard"], dependencies=[Depends(verify_api_secret), Depends(dash_trace)])
 DB = Annotated[AsyncSession, Depends(get_db)]
 
 
@@ -46,6 +52,12 @@ def fact_json(f: CareFact) -> dict:
         "confidence": f.confidence, "validFrom": f.valid_from.isoformat(), "validTo": f.valid_to.isoformat() if f.valid_to else None,
         "recordedAt": f.recorded_at.isoformat(), "note": f.note,
     }
+
+
+def links_json(rows: list | None) -> list[dict]:
+    """A fact's links for the medicine card (read-only): 'for diabetes', 'Dr Sharma', 'from the 3 Sep prescription'."""
+    return [{"relation": ln.relation, "to": ln.to_ref, "label": links.label_of(ln), "text": links.short(ln), "phrase": links.phrase(ln),
+             "status": ln.status, "source": ln.source_kind} for ln in rows or [] if not (ln.detail or {}).get("end")]
 
 
 def event_json(e: CareEvent) -> dict:
@@ -90,11 +102,12 @@ async def overview(family_id: str, elder_id: str, session: DB, day: str | None =
     )
     notes = await store.notes(session, family_id, [elder_id, "family"])
     meds = [f for f in facts if f.domain == "medicine" and f.status == "active"]
+    linked = links.by_from(await links.links_for(session, family_id, elder_id))
     return {
         "day": day,
         "doses": _day_doses(meds, list(events), day),
         "domains": DOMAINS,
-        "facts": [fact_json(f) for f in facts],
+        "facts": [{**fact_json(f), "links": links_json(linked.get(f.key))} for f in facts],
         "pending": [fact_json(f) for f in facts if f.status == "pending"],
         "loops": [loop_json(o) for o in loops],
         "events": [event_json(e) for e in events],
@@ -125,16 +138,29 @@ def _ctx(session: AsyncSession, family_id: str, elder_id: str, actor: Actor, *, 
 async def _run(session: AsyncSession, ctx: tools.TurnCtx, name: str, args: dict) -> dict:
     import json
 
-    out, is_error = await tools.run(ctx, name, args)
-    if is_error:
-        await session.rollback()
-        raise HTTPException(status_code=400, detail=json.loads(out).get("refused") or json.loads(out).get("detail") or "failed")
-    await store.record_event(
-        session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="dashboard_edit", summary=f"{name}: {args.get('sentence') or args.get('name') or ''}",
-        actor_id=ctx.actor_id, payload={"key": json.loads(out).get("key")} if isinstance(json.loads(out), dict) else {},
-    )
+    from app.care import why
+
+    tid = trace.current() or trace.new("dash")
+    with trace.use(tid, family_id=ctx.family_id), trace.collect_spend() as calls:
+        out, is_error = await tools.run(ctx, name, args)
+        if is_error:
+            await session.rollback()
+            raise HTTPException(status_code=400, detail=json.loads(out).get("refused") or json.loads(out).get("detail") or "failed")
+        await store.record_event(
+            session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="dashboard_edit", summary=f"{name}: {args.get('sentence') or args.get('name') or ''}",
+            actor_id=ctx.actor_id, payload={"key": json.loads(out).get("key")} if isinstance(json.loads(out), dict) else {},
+        )
+        await why.record_turn_safely(session, trace_id=tid, family_id=ctx.family_id, thread_id=ctx.actor_id, kind="dashboard", channel="dashboard",
+                                     text=f"{name} on the dashboard", actions=ctx.actions, calls=calls)
     await session.commit()
     return json.loads(out)
+
+
+class LinkIn(BaseModel):
+    relation: str = Field(pattern="^(for|prescribed_by|from_record|with_doctor|related_to)$")
+    to_domain: str = Field(max_length=24)
+    to_name: str = Field(min_length=1, max_length=160)
+    label: str = Field(default="", max_length=160)
 
 
 class FactIn(BaseModel):
@@ -143,6 +169,32 @@ class FactIn(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     details: dict = Field(default_factory=dict)
     sentence: str = Field(min_length=1, max_length=500)
+    # how it connects (D-13), e.g. from a reviewed prescription: from_record (the record) and prescribed_by (its doctor)
+    links: list[LinkIn] = Field(default_factory=list, max_length=6)
+    source: str | None = Field(default=None, pattern="^(prescription|lab)$")  # a health record a caregiver reviewed
+
+
+class LinksIn(BaseModel):
+    actor: Actor
+    domain: str
+    name: str = Field(min_length=1, max_length=120)
+    links: list[LinkIn] = Field(min_length=1, max_length=6)
+    source: str | None = Field(default=None, pattern="^(prescription|lab)$")
+
+
+async def _save_links(session: AsyncSession, family_id: str, elder_id: str, key: str, body, *, pending_fact=None) -> dict:
+    """Links a caregiver gave (on the dashboard or by approving a health record): the link rules apply as for Saheli's own."""
+    from app.care import versions
+
+    src = body.source or "dashboard"
+    with trace.use(trace.current() or trace.new("dash"), family_id=family_id), versions.attribution(
+            actor_id=body.actor.id, source="prescription" if body.source else "dashboard",
+            reason="from a health record a caregiver reviewed" if body.source else "linked on the dashboard"):
+        saved = await links.save_many(session, family_id=family_id, subject_id=elder_id, from_ref=key, items=[x.model_dump() for x in body.links],
+                                      source_kind=src, stated_by=body.actor.id, source_ref=None, allowed=tuple(links.RELATIONS),
+                                      confirmed_by=body.actor.id, with_fact=pending_fact)
+    await session.commit()
+    return saved
 
 
 @router.post("/{family_id}/{elder_id}/facts")
@@ -150,7 +202,27 @@ async def save_fact(family_id: str, elder_id: str, body: FactIn, session: DB) ->
     if body.domain not in DOMAINS:
         raise HTTPException(status_code=400, detail="unknown domain")
     ctx = _ctx(session, family_id, elder_id, body.actor)
-    return await _run(session, ctx, "remember", {"domain": body.domain, "name": body.name, "details": body.details, "sentence": body.sentence})
+    out = await _run(session, ctx, "remember", {"domain": body.domain, "name": body.name, "details": body.details, "sentence": body.sentence})
+    if body.links and out.get("key"):
+        pending = None
+        if out.get("result") == "pending":
+            pending = next((f.id for f in reversed(await store.facts(session, family_id, elder_id, statuses=("pending",))) if f.key == out["key"]), None)
+        saved = await _save_links(session, family_id, elder_id, out["key"], body, pending_fact=pending)
+        out["links"], out["linksNotSaved"] = saved["links"], saved["skipped"]
+    return out
+
+
+@router.post("/{family_id}/{elder_id}/links")
+async def save_links(family_id: str, elder_id: str, body: LinksIn, session: DB) -> dict:
+    """Link something already on the record (a medicine already on the schedule that a reviewed prescription lists)."""
+    if body.domain not in DOMAINS:
+        raise HTTPException(status_code=400, detail="unknown domain")
+    from app.care.domains import fact_key
+
+    f = await store.active_fact(session, family_id, elder_id, fact_key(body.domain, body.name))
+    if not f:
+        raise HTTPException(status_code=404, detail="not on the care record")
+    return {"key": f.key, **await _save_links(session, family_id, elder_id, f.key, body)}
 
 
 class StopIn(BaseModel):

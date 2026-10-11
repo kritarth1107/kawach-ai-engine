@@ -6,8 +6,8 @@
     python backup.py latest                    # newest manifest as JSON (for verify.sh)
     python backup.py family FAMILY_ID [DATE] [--out FILE]   # one family's memory snapshot, decrypted (JSON)
 
-Besides the full dumps, every night writes one small encrypted JSON snapshot per family (care record with its history,
-memory notes, family skills, baselines, open loops) under families/<id>/YYYY/MM/DD.json.age, kept longer (24 monthly).
+Besides the full dumps, every night writes one small encrypted JSON snapshot per family (care record with its history
+and its links, memory notes, family skills, baselines, open loops) under families/<id>/YYYY/MM/DD.json.age, kept longer (24 monthly).
 The engine brings one back with `python -m app.jobs.restore_family FILE` (dry run first; changes are undoable and
 care-record changes wait for a caregiver).
 
@@ -207,7 +207,7 @@ def encrypt_bytes(data: bytes, recipient: str) -> bytes:
 
 # ── per-family memory snapshots ──────────────────────────────────────────────
 
-FAMILY_TABLES = ("care_facts", "memory_notes", "skills", "person_baselines", "open_loops")
+FAMILY_TABLES = ("care_facts", "memory_notes", "skills", "person_baselines", "open_loops", "care_links")
 
 
 def family_sql(have: set[str]) -> str:
@@ -220,6 +220,8 @@ def family_sql(have: set[str]) -> str:
     fields = ["'family_id', f.family_id", "'taken_at', now()"]
     if "care_facts" in have:
         fields.append("'facts', COALESCE((SELECT json_agg(c) FROM care_facts c WHERE c.family_id = f.family_id), '[]'::json)")
+    if "care_links" in have:
+        fields.append("'links', COALESCE((SELECT json_agg(l) FROM care_links l WHERE l.family_id = f.family_id), '[]'::json)")
     if "memory_notes" in have:
         fields.append("'notes', COALESCE((SELECT json_agg(json_build_object('subject_id', n.subject_id, 'slug', n.slug, 'title', n.title,"
                       " 'body_md', n.body_md, 'version', n.version, 'updated_at', n.updated_at)) FROM memory_notes n"

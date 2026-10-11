@@ -6,6 +6,8 @@ to do if nobody answered (alert_rule). The decision itself is the brain's, on a 
 
 from __future__ import annotations
 
+import contextlib
+
 import logging
 from datetime import datetime, timedelta
 from typing import Callable
@@ -230,19 +232,24 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 loop.wake_at = datetime.fromisoformat(d["expire_at"]) if d.get("expire_at") else None
             else:
                 loop.wake_at = clock.now() + timedelta(minutes=int(d.get("rewake_minutes") or 60))
+            loop_trace = loop.trace_id  # a follow-up continues the trail it was opened in (an order's "has it come?")
             await session.commit()
         try:
-            async with sessions() as session:
-                await run_turn(
-                    session,
-                    host_for(family_id),
-                    TurnRequest(
-                        family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt,
-                        # an order's follow-up answers their own order: like a task update, it is not held back as a nudge
-                        # (sim 2026-10-11: "has it come?" was blocked because they had not answered "placed")
-                        message_ref=f"{'task:' if kind == 'delivery' else ''}wake:{loop_id}:{runs}", channel="scheduler",
-                    ),
-                )
+            from app.core import trace
+
+            with trace.use(loop_trace, task_id=(d.get("task_id") if isinstance(d, dict) else None), family_id=family_id) if loop_trace \
+                    else contextlib.nullcontext():
+                async with sessions() as session:
+                    await run_turn(
+                        session,
+                        host_for(family_id),
+                        TurnRequest(
+                            family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt,
+                            # an order's follow-up answers their own order: like a task update, it is not held back as a nudge
+                            # (sim 2026-10-11: "has it come?" was blocked because they had not answered "placed")
+                            message_ref=f"{'task:' if kind == 'delivery' else ''}wake:{loop_id}:{runs}", channel="scheduler",
+                        ),
+                    )
             stats["ran"] += 1
         except Exception:  # noqa: BLE001 — one family's failure must not stop the others
             logger.exception("wake failed loop=%s family=%s", loop_id, family_id)

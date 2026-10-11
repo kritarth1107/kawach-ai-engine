@@ -98,11 +98,15 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
             uniq.append(p)
     report: dict = {"family": fid, "day": day, "facts": 0, "diary": 0, "baselines": 0, "patterns": 0, "notes": 0, "errors": []}
 
+    from app.core import trace
+
+    night = f"job:night:{day}:{fid}"  # one trace per family per night: what it changed, asked and spent (D-13)
+
     async def step(name, fn):
         from app.care import versions
 
         try:
-            with versions.attribution(actor_id="saheli", source="nightly", reason=f"nightly review of {day}"):
+            with versions.attribution(actor_id="saheli", source="nightly", reason=f"nightly review of {day}"), trace.use(night, family_id=fid):
                 async with sessions() as session:
                     result = await fn(session)
                     await session.commit()
@@ -184,6 +188,9 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
 
         out["skills"] = await skillbook.curate(session)
         out["versions_pruned"] = await versions.prune(session)
+        from app.care import why
+
+        out["trail_pruned"] = await why.prune(session)
         await session.commit()
     return out
 

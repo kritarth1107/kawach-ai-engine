@@ -25,6 +25,7 @@ async def db():
     from app.learn import models as learn_models  # noqa: F401
     from eval.lab import queue as lab_queue  # noqa: F401
     from app.care import memory_index  # noqa: F401
+    from app.care import why  # noqa: F401
     from app.db.session import Base
     from app.models import entities  # noqa: F401
 

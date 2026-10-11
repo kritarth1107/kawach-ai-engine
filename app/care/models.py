@@ -8,8 +8,11 @@ so the backend and the brain share one identity without the ai-tenant mapping.
 - care_events: append-only ledger of everything that happened (reminders sent, doses,
   vitals, alerts, messages). "Why was there no reminder" is answered from here.
 - memory_notes: narrative markdown per person and per family (stories, dishes, people).
+- care_links: how record items connect (a medicine is for a condition, prescribed by a doctor, from a health record).
 - open_loops: what is unfinished: questions waiting for an answer, follow-ups, tasks.
 - turns / thread_summaries: working context of each conversation thread.
+
+Ledger events, memory versions, open loops and tasks carry the trace id of the work that wrote them (app.core.trace).
 """
 
 from __future__ import annotations
@@ -78,6 +81,7 @@ class CareEvent(Base):
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
     ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
     tsv = mapped_column(TSVECTOR, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(160), nullable=True)  # index: app.db.migrate (added after the table)
 
     __table_args__ = (
         Index("ix_care_events_subject_at", "family_id", "subject_id", "at"),
@@ -126,6 +130,7 @@ class OpenLoop(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     closed_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
     __table_args__ = (
         Index("ix_open_loops_live", "family_id", "subject_id", "status"),
@@ -137,6 +142,45 @@ class OpenLoop(Base):
             unique=True,
             postgresql_where=sql("status = 'open' AND dedupe_key IS NOT NULL"),
         ),
+    )
+
+
+class CareLink(Base):
+    """How two things in one person's care record connect (D-13): a medicine is *for* a condition, *prescribed by* a
+    doctor, *from* a health record; an appointment is *with* a doctor; two people are related.
+
+    Links point at fact keys (medicine:metformin, condition:diabetes, doctor:dr_sharma), at a household member
+    (person:<id>) or at a health record (record:<document id>), never at fact rows, so a dose change keeps them. Like
+    facts they are never deleted: a link ends (valid_to, with why in note), a weaker source's health link waits as
+    pending for a caregiver, and every change is a memory version (undo, restore)."""
+
+    __tablename__ = "care_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[str] = mapped_column(String(64))
+    subject_id: Mapped[str] = mapped_column(String(64))
+    from_ref: Mapped[str] = mapped_column(String(200))
+    relation: Mapped[str] = mapped_column(String(24))  # for | prescribed_by | from_record | with_doctor | related_to
+    to_ref: Mapped[str] = mapped_column(String(200))
+    label: Mapped[str] = mapped_column(String(200), default="")  # how the other end reads: "diabetes", "Dr Sharma"
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)  # e.g. {"as": "son"}, {"date": "2026-09-03"}
+    # active | pending | ended | rejected
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    source_kind: Mapped[str] = mapped_column(String(24))
+    stated_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    confirmed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_ref: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+    __table_args__ = (
+        Index("ix_care_links_from", "family_id", "subject_id", "from_ref"),
+        Index("ix_care_links_to", "family_id", "subject_id", "to_ref"),
+        Index("uq_care_links_active", "family_id", "subject_id", "from_ref", "relation", "to_ref", unique=True,
+              postgresql_where=sql("status = 'active'")),
     )
 
 

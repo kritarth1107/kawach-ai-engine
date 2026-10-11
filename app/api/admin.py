@@ -15,7 +15,7 @@ import os
 import time
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,14 +211,49 @@ async def admin_conversation(family_id: str, thread: str, session: DB, limit: in
 
 @router.get("/families/{family_id}/care-record")
 async def admin_care_record(family_id: str, subject: str, session: DB) -> dict:
+    from app.care import links
     from app.care.models import CareFact
+    from app.care.versions import MemoryVersion
 
     rows = (await session.execute(
         select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject).order_by(CareFact.recorded_at.desc()).limit(400)
     )).scalars().all()
+    # the change that made each row, for the "Why?" link
+    made = dict((await session.execute(select(MemoryVersion.ref, func.min(MemoryVersion.id)).where(
+        MemoryVersion.family_id == family_id, MemoryVersion.subject_id == subject, MemoryVersion.kind == "fact",
+        MemoryVersion.ref.in_([str(f.id) for f in rows])).group_by(MemoryVersion.ref))).all()) if rows else {}
+    linked = links.by_from(await links.links_for(session, family_id, subject, statuses=("active", "pending")))
     return {"facts": [{"domain": f.domain, "key": f.key, "text": f.text, "status": f.status, "source": f.source_kind,
                        "confidence": f.confidence, "recordedAt": f.recorded_at.isoformat(),
-                       "validTo": f.valid_to.isoformat() if f.valid_to else None} for f in rows]}
+                       "validTo": f.valid_to.isoformat() if f.valid_to else None, "versionId": made.get(str(f.id)),
+                       "links": [{"text": links.phrase(ln), "status": ln.status} for ln in linked.get(f.key, [])] if f.status == "active" else []}
+                      for f in rows]}
+
+
+@router.get("/why")
+async def admin_why(session: DB, family: str, task: str | None = None, version: int | None = None, loop: str | None = None,
+                    event: int | None = None, trace_id: Annotated[str | None, Query(alias="trace")] = None) -> dict:
+    """The why-trail (D-13) of a task, a care-record change, an alert or question (open loop), a ledger event or a trace,
+    within one family: the message, model, role and cost, tool calls, confirms, outcome and what was learned."""
+    from app.care import why
+
+    if not any((task, version, loop, event, trace_id)):
+        raise HTTPException(status_code=400, detail="give task, version, loop, event or trace")
+    try:
+        out = await why.chain(session, family_id=family, task_id=task, version_id=version, loop_id=loop, event_id=event, trace_id=trace_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad id") from None
+    if out is None:
+        raise HTTPException(status_code=404, detail="nothing like that in this family")
+    return out
+
+
+@router.get("/families/{family_id}/why")
+async def admin_why_recent(family_id: str, session: DB, days: int = 14) -> dict:
+    """What can be asked "why?" about in this family: recent tasks, care-record and link changes, alerts and questions."""
+    from app.care import why
+
+    return await why.recent(session, family_id, days=days)
 
 
 @router.get("/families/{family_id}/export")
@@ -226,11 +261,16 @@ async def admin_export(family_id: str, subject: str, session: DB) -> dict:
     """Everything Saheli holds about one person in one family, for that person's own data request."""
     from app.care.models import CareFact, Turn
 
+    from app.care.models import CareLink
+
     facts = (await session.execute(select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject))).scalars().all()
     turns = (await session.execute(select(Turn).where(Turn.family_id == family_id, Turn.thread_id == subject).order_by(Turn.id))).scalars().all()
+    rows = (await session.execute(select(CareLink).where(CareLink.family_id == family_id, CareLink.subject_id == subject))).scalars().all()
     return {
         "careRecord": [{"domain": f.domain, "key": f.key, "value": f.value, "text": f.text, "status": f.status, "source": f.source_kind,
                         "recordedAt": f.recorded_at.isoformat(), "validFrom": f.valid_from.isoformat(),
                         "validTo": f.valid_to.isoformat() if f.valid_to else None} for f in facts],
+        "links": [{"from": ln.from_ref, "relation": ln.relation, "to": ln.to_ref, "label": ln.label, "status": ln.status, "source": ln.source_kind,
+                   "validFrom": ln.valid_from.isoformat(), "validTo": ln.valid_to.isoformat() if ln.valid_to else None} for ln in rows],
         "conversation": [{"at": t.at.isoformat(), "role": t.role, "text": t.text} for t in turns],
     }

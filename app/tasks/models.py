@@ -39,6 +39,8 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # the trace of the message that started it: its runs, confirm, outcome and model spend are filed under it (D-13)
+    trace_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
 
     __table_args__ = (
         Index("ix_care_tasks_family_live", "family_id", "status"),

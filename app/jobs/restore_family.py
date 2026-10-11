@@ -7,7 +7,9 @@ Nothing is overwritten without a trace:
 - memory notes and family skills come back as new versions, so each can be undone from WhatsApp or the dashboard;
 - care-record facts that differ come back only as pending changes a caregiver confirms, so a medicine, an allergy or a
   dose never changes silently (and reminders change only once confirmed);
-- notes and facts that exist now but not in the snapshot are only reported, never removed.
+- links between record items come back the same way: a health link (what a medicine is for, who prescribed it, which
+  record it is from) waits for a caregiver, any other link comes back as a new version;
+- notes, facts and links that exist now but not in the snapshot are only reported, never removed.
 """
 
 from __future__ import annotations
@@ -20,8 +22,8 @@ import sys
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.care import skillbook, store, versions
-from app.care.models import CareFact, MemoryNote
+from app.care import links, skillbook, store, versions
+from app.care.models import CareFact, CareLink, MemoryNote
 from app.core import clock
 
 
@@ -30,9 +32,10 @@ def _clean(v: dict | None) -> dict:
 
 
 async def plan(session: AsyncSession, snap: dict) -> dict:
-    """What a restore would change: {notes: [...], facts: [...], skills: [...], only_now: {...}}."""
+    """What a restore would change: {notes: [...], facts: [...], links: [...], skills: [...], only_now: {...}}."""
     fid = snap["family_id"]
-    out: dict = {"family": fid, "taken_at": snap.get("taken_at"), "notes": [], "facts": [], "skills": [], "only_now": {"notes": [], "facts": []}}
+    out: dict = {"family": fid, "taken_at": snap.get("taken_at"), "notes": [], "facts": [], "links": [], "skills": [],
+                 "only_now": {"notes": [], "facts": [], "links": []}}
     now_notes = {(n.subject_id, n.slug): n for n in (await session.execute(select(MemoryNote).where(MemoryNote.family_id == fid))).scalars()}
     snap_notes = {(n["subject_id"], n["slug"]): n for n in snap.get("notes") or []}
     for k, n in snap_notes.items():
@@ -51,6 +54,18 @@ async def plan(session: AsyncSession, snap: dict) -> dict:
                                  "now": cur.text if cur else None, "change": "missing now" if not cur else "differs"})
     out["only_now"]["facts"] = [f"{s}/{key}" for (s, key) in now_facts if (s, key) not in snap_facts]
 
+    def lkey(x) -> tuple:
+        return (x["subject_id"], x["from_ref"], x["relation"], x["to_ref"]) if isinstance(x, dict) else (x.subject_id, x.from_ref, x.relation, x.to_ref)
+
+    now_links = {lkey(ln): ln for ln in (await session.execute(select(CareLink).where(CareLink.family_id == fid, CareLink.status == "active"))).scalars()}
+    snap_links = {lkey(ln): ln for ln in snap.get("links") or [] if ln.get("status") == "active"}
+    for k, ln in snap_links.items():
+        cur = now_links.get(k)
+        if not cur or (cur.label or "") != (ln.get("label") or ""):
+            out["links"].append({"subject": k[0], "from": k[1], "relation": k[2], "to": k[3], "label": ln.get("label") or "",
+                                 "health": links.domain_of(k[1]) in links.HEALTH_DOMAINS, "change": "missing now" if not cur else "differs"})
+    out["only_now"]["links"] = [f"{k[0]}/{k[1]}|{k[2]}|{k[3]}" for k in now_links if k not in snap_links]
+
     for sk in snap.get("skills") or []:
         cur = await session.get(skillbook.Skill, sk["id"])
         if not cur or cur.family_id != fid or cur.scope != "family":
@@ -65,7 +80,7 @@ async def apply(session: AsyncSession, snap: dict, *, by: str = "restore") -> di
     fid = snap["family_id"]
     taken = str(snap.get("taken_at") or "")[:10]
     reason = f"restored from the {taken} snapshot"
-    done = {"notes": 0, "facts_pending": 0, "skills": 0, "skipped": []}
+    done = {"notes": 0, "facts_pending": 0, "links": 0, "links_pending": 0, "skills": 0, "skipped": []}
     with versions.attribution(actor_id=by, source="snapshot", reason=reason):
         snap_notes = {(n["subject_id"], n["slug"]): n for n in snap.get("notes") or []}
         for item in p["notes"]:
@@ -80,6 +95,18 @@ async def apply(session: AsyncSession, snap: dict, *, by: str = "restore") -> di
                                        value=_clean(f.get("value")), text=f.get("text") or f["key"], source_kind="import",
                                        source_ref=f"undo:snapshot:{taken}", stated_by=by, replace=True, force_confirm=True)
             done["facts_pending"] += 1 if w.result == "pending" else 0
+        snap_links = {(x["subject_id"], x["from_ref"], x["relation"], x["to_ref"]): x for x in snap.get("links") or [] if x.get("status") == "active"}
+        for item in p["links"]:
+            x = snap_links[(item["subject"], item["from"], item["relation"], item["to"])]
+            try:
+                w = await links.write_link(session, family_id=fid, subject_id=x["subject_id"], from_ref=x["from_ref"], relation=x["relation"],
+                                           to_ref=x["to_ref"], label=x.get("label") or "", detail={k: v for k, v in (x.get("detail") or {}).items()
+                                                                                                   if k not in ("with_fact", "end")},
+                                           source_kind="import", stated_by=by, source_ref=f"undo:snapshot:{taken}", force_confirm=item["health"])
+            except links.BadLink as exc:
+                done["skipped"].append(f"link {item['from']} {item['relation']} {item['to']}: {exc}")
+                continue
+            done["links_pending" if w.result == "pending" else "links"] += 1
         for item in p["skills"]:
             sk = next(s for s in snap.get("skills") or [] if s["id"] == item["id"])
             if sk["status"] in ("active", "proposed") and await skillbook.family_problems(session, fid, sk.get("subject_id") or "", sk["body"]):

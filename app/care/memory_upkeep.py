@@ -4,12 +4,14 @@
   the month), and the months become "life so far". Each lives as a memory note, so recall and context find it; old
   diary lines can then go without losing anything.
 - health: contradictions and loose ends in the care record (the same medicine twice, a medicine with no time, a
-  medicine against an allergy, pending changes nobody confirmed for a week, the same person saved twice). Each
-  becomes one gentle question to a caregiver, asked once.
+  medicine against an allergy, pending changes nobody confirmed for a week, the same person saved twice, a medicine
+  linked to a condition the record does not have or to a doctor who is not in the contacts). Each becomes one gentle
+  question to a caregiver, asked once.
 - profile card: who this person is, in a few lines (name to use, language, conditions, medicines, allergies, what
   matters to them, how they like to be spoken to), rebuilt nightly from the record, notes and baselines, so every
   reply starts from a clean summary.
-- forget / restore: what someone asks Saheli to forget is hidden from memory (with a record to undo it).
+- forget / restore: what someone asks Saheli to forget is hidden from memory, matching links end (with a record to
+  undo it all).
 """
 
 from __future__ import annotations
@@ -154,6 +156,10 @@ async def health(session: AsyncSession, family_id: str, subject_id: str) -> list
         if len(fs) > 1 and len({x.key for x in fs}) > 1:
             issues.append({"kind": "duplicate_person", "key": f"person:{name}", "problem": "; ".join(x.text for x in fs),
                            "ask": f"I have {name.title()} saved {len(fs)} times. Are they the same person?"})
+    from app.care import links
+
+    # links that point at nothing on the record (D-13): a medicine for a condition not on it, a doctor not in the contacts
+    issues += await links.record_problems(session, family_id, subject_id, active)
     return issues
 
 
@@ -364,9 +370,10 @@ async def save_profile_card(session: AsyncSession, family_id: str, person: dict)
 # ── forget and restore ─────────────────────────────────────────────────────────
 
 
-async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str) -> dict:
-    """Hide memories matching `what` (notes lines, events). Care-record facts are stopped instead (with history)."""
-    from app.care import memory_index
+async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str, source_kind: str = "caregiver_said") -> dict:
+    """Hide memories matching `what` (notes lines, events) and end matching links (a health link from someone weaker than
+    who set it only waits for a caregiver). Care-record facts are stopped instead (with history)."""
+    from app.care import links, memory_index
 
     words = [w for w in re.findall(r"\w{3,}", (what or "").lower())]
     if not words:
@@ -383,9 +390,11 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
             removed_lines += [{"subject": note.subject_id, "slug": note.slug, "title": note.title, "line": d} for d in drop]
     events = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids)))).scalars()
     hide = [e for e in events if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten")]
+    ended_links, waiting_links = await links.forget_matching(session, family_id, subject_ids, words, by=by, source_kind=source_kind)
     # the record first, so each note's version can point at it (undoing any of them restores the whole forget)
     eid = await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
-                                   payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True},
+                                   payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True,
+                                            "links": ended_links},
                                    actor_id=by)
     for note, body, drop in rewrites:
         title = note.title
@@ -396,7 +405,11 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     for e in hide:
         e.payload = {**(e.payload or {}), "forgotten": True, "forgotten_by": by}
         await memory_index.unindex(session, family_id, f"event:{e.id}")
-    return {"forgotten": len(removed_lines) + len(hide)}
+    out = {"forgotten": len(removed_lines) + len(hide) + len(ended_links)}
+    if waiting_links:
+        out["links_waiting"] = len(waiting_links)
+        out["note"] = "A link between a medicine and its condition, doctor or record goes only once a caregiver confirms."
+    return out
 
 
 async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *, by: str, subjects: list[str]) -> dict:
@@ -439,6 +452,13 @@ async def restore(session: AsyncSession, family_id: str, forget_event_id: int, *
         if e and e.family_id == family_id and e.subject_id in mine and (e.payload or {}).get("forgotten"):
             e.payload = {k: v for k, v in (e.payload or {}).items() if k not in ("forgotten", "forgotten_by")}
             n += 1
+    todo = [x for x in p.get("links") or [] if x not in set(p.get("links_restored") or [])]
+    if todo:
+        from app.care import links
+
+        back = await links.bring_back(session, family_id, todo, subjects=mine, by=by)
+        n += len(back)
+        p = {**p, "links_restored": [*(p.get("links_restored") or []), *back]}
     # the forget is fully undone only when every person and note it touched is back
     done |= set(mine)
     touched = {i.get("subject") for i in p.get("note_lines") or []} | {row.subject_id}

@@ -29,8 +29,10 @@ Only include what a family member actually said or clearly confirmed. Saheli's l
 
 Domains: {", ".join(sorted(DOMAINS))}.
 
+A fact may carry links a family member said: a medicine is "for" a condition or "prescribed_by" a doctor, an appointment is "with_doctor" a doctor, a person is "related_to" another (as: son, neighbour). Give a link only when it was said, even for a fact already in the record (then repeat the fact as it is, with the link).
+
 Return only JSON:
-{{"facts": [{{"domain": "...", "name": "...", "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it"}}],
+{{"facts": [{{"domain": "...", "name": "...", "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
   "stops": [{{"domain": "...", "name": "...", "reason": "...", "evidence": "..."}}],
   "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}]}}
 Use empty lists when there is nothing."""
@@ -75,7 +77,10 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         for t in pending
         if t.thread_id != "saheli-scheduler" and not (t.role == "assistant" and (t.meta or {}).get("proactive"))
     )
-    record = digest.care_record(elder.get("name", ""), await store.facts(session, family_id, elder["id"]))
+    from app.care import links
+
+    record = digest.care_record(elder.get("name", ""), await store.facts(session, family_id, elder["id"]),
+                                links=await links.links_for(session, family_id, elder["id"]))
     people = "\n".join(f"{pid}: {n}" for pid, n in names.items())
     reply = await router.complete(
         "extract",
@@ -88,6 +93,13 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     counts = {"facts": 0, "pending": 0, "stops": 0, "notes": 0}
     member_ids = set(names)
 
+    async def save_links(f: dict, subject: str, key: str, with_fact=None) -> None:
+        # what a re-read heard about how it connects: a health link always waits for a caregiver (app.care.links)
+        if isinstance(f.get("links"), list) and f["links"]:
+            got = await links.save_many(session, family_id=family_id, subject_id=subject, from_ref=key, items=f["links"][:6],
+                                        source_kind="inferred", stated_by=None, source_ref=None, with_fact=with_fact)
+            counts["links"] = counts.get("links", 0) + len(got["links"])
+
     for f in data.get("facts") or []:
         domain = f.get("domain")
         if domain not in DOMAINS or not f.get("name") or not f.get("sentence"):
@@ -97,11 +109,13 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         existing = await store.active_fact(session, family_id, subject, key)
         details = f.get("details") or {}
         if existing and store._same(existing.value, merged_value(existing.value, details)):
+            await save_links(f, subject, existing.key)  # nothing new in the fact; a link said about it may be
             continue  # a restatement, nothing new
         if existing:
             key = existing.key
         dup = (await session.execute(select(CareFact.id).where(CareFact.family_id == family_id, CareFact.subject_id == subject, CareFact.key == key, CareFact.status == "pending"))).first()
         if domain in HEALTH_DOMAINS and dup:
+            await save_links(f, subject, key, with_fact=dup[0])
             continue  # already waiting for a caregiver
         if domain in HEALTH_DOMAINS:
             # A health fact from a re-read waits for a caregiver, new or changed.
@@ -122,6 +136,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
                 dedupe_key=f"confirm:{subject}:{key}",
             )
             counts["pending"] += 1
+            await save_links(f, subject, key, with_fact=row.id)
             continue
         w = await store.write_fact(
             session, family_id=family_id, subject_id=subject, domain=domain, key=key, value=f.get("details") or {},
@@ -129,6 +144,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         )
         counts["facts"] += w.result in ("created", "superseded")
         counts["pending"] += w.result == "pending"
+        await save_links(f, subject, w.fact.key, with_fact=w.fact.id if w.result == "pending" else None)
 
     for s in data.get("stops") or []:
         if s.get("domain") in DOMAINS and s.get("name"):

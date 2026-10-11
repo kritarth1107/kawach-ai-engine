@@ -18,8 +18,9 @@ from app.brain import guards, policy
 from app.brain.host import ToolHost
 from app.care import store
 from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, fact_key, slug
+from app.care.links import BRAIN_RELATIONS as LINK_RELATIONS
 from app.care.models import OpenLoop
-from app.core import clock
+from app.core import clock, trace
 from app.llm.router import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -149,13 +150,33 @@ ABOUT = {"type": "string", "description": "Person id this is about. Leave out fo
     "details {name, dose, times: ['HH:MM', ...], food_timing, days: [0-6, Monday=0] or omit for daily, "
     "instructions}; their reminders follow these times. For naming, use name 'address_as' with details "
     "{name: what to call them, avoid: [every word they asked never to be called]}. For an allergy, details "
-    "{allergen, reaction}. For family rules, names like 'call_first', 'payer', 'do_not_tell', 'neighbour'.",
+    "{allergen, reaction}. For family rules, names like 'call_first', 'payer', 'do_not_tell', 'neighbour'. When they say "
+    "how it connects to something else, add links: a medicine is 'for' a condition or 'prescribed_by' a doctor, an "
+    "appointment is 'with_doctor', a person is 'related_to' another (as: son, neighbour). To add a link to something "
+    "already in the record, call remember with its current details unchanged plus the links.",
     {
         "domain": {"type": "string", "enum": sorted(DOMAINS)},
         "name": {"type": "string", "description": "What it is, e.g. 'Metformin', 'milk', 'low_salt', 'address_as', 'call_first'"},
         "details": {"type": "object", "description": "Structured details"},
         "sentence": {"type": "string", "description": "One plain sentence for the record, e.g. 'Metformin 500 mg at 08:00 after breakfast'"},
         "about": ABOUT,
+        "links": {
+            "type": "array",
+            "description": "Only what they said connects it to something else, e.g. Metformin for diabetes, prescribed by Dr Sharma.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "relation": {"type": "string", "enum": list(LINK_RELATIONS)},
+                    "to_domain": {"type": "string", "enum": ["condition", "doctor", "contact", "family", "home", "person"],
+                                  "description": "condition for 'for'; doctor for 'prescribed_by' and 'with_doctor'; for 'related_to' "
+                                                 "a contact, or person with a household person id"},
+                    "to_name": {"type": "string", "description": "The other end as they said it ('diabetes', 'Dr Sharma'), or the household person id"},
+                    "as": {"type": "string", "description": "related_to only: how they are related, e.g. 'son', 'neighbour'"},
+                },
+                "required": ["relation", "to_domain", "to_name"],
+                "additionalProperties": False,
+            },
+        },
     },
     ["domain", "name", "details", "sentence"],
 )
@@ -217,6 +238,19 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         out["reminders"] = await features.appointment_loops(ctx.session, family_id=ctx.family_id, subject_id=subject, f=w.fact, owner_id=ctx.speaker.get("id"))
     if domain == "medicine" and w.result in ("created", "superseded"):
         out["reminders"] = await _sync_medicine(ctx, subject, w.fact.key, w.fact.value, active=True)
+    if a.get("links"):
+        from app.care import links
+
+        # the same rules as the fact: a weaker source's health link waits for a caregiver; with a pending fact, it waits with it
+        saved = await links.save_many(
+            ctx.session, family_id=ctx.family_id, subject_id=subject, from_ref=w.fact.key, items=a["links"], source_kind=ctx.source_kind,
+            stated_by=ctx.speaker.get("id"), source_ref=ctx.message_ref, force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,
+            with_fact=w.fact.id if w.result == "pending" else None)
+        out["links"] = saved["links"]
+        if saved["skipped"]:
+            out["links_not_saved"] = saved["skipped"]
+        if any(x["result"] == "pending" for x in saved["links"]):
+            out["links_note"] = "A link marked pending waits for a caregiver to confirm (confirm_change with link_to)."
     return out
 
 
@@ -272,7 +306,28 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
     if w.result == "stopped" and a["domain"] == "medicine":
         # the record's own key (an older record may be 'medicine:thyronorm_50' for a request about 'thyronorm')
         await _sync_medicine(ctx, subject, w.fact.key, {"name": a["name"], **(w.fact.value or {})}, active=False)
-    return {"result": w.result, "key": w.fact.key}
+    out = {"result": w.result, "key": w.fact.key}
+    if w.result == "stopped" and w.fact.domain == "condition":
+        out.update(await _after_condition_stop(ctx, subject, w.fact))
+    return out
+
+
+async def _after_condition_stop(ctx: TurnCtx, subject: str, condition) -> dict:
+    """A condition is over: the medicines linked 'for' it are asked about, never stopped on their own. A caregiver in this
+    WhatsApp chat is asked now; otherwise (the dashboard, the elder) one question goes to the caregiver."""
+    from app.care import links
+
+    meds = await links.medicines_for(ctx.session, ctx.family_id, subject, condition.key)
+    if not meds:
+        return {}
+    names = [n for n, _ in meds]
+    if ctx.channel == "whatsapp" and ctx.is_caregiver:
+        return {"linked_medicines": names,
+                "ask": "These medicines are noted as for it. Ask now, in one short line, whether each should stop too; stop only the ones they say."}
+    owner = ctx.speaker.get("id") if ctx.is_caregiver else next(
+        (m.get("id") for m in ctx.members if "primary" in str(m.get("role", "")).lower()), None)
+    await links.ask_about_linked_medicines(ctx.session, ctx.family_id, subject, condition, meds, owner_id=owner)
+    return {"linked_medicines": names, "note": "A caregiver will be asked whether these medicines should stop too."}
 
 
 @tool(
@@ -315,8 +370,10 @@ async def recall(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "confirm_change",
-    "A caregiver approves or rejects a PENDING care-record change (only caregivers may do this).",
-    {"key": {"type": "string", "description": "The fact key shown in the care record"}, "approve": {"type": "boolean"}},
+    "A caregiver approves or rejects a PENDING care-record change (only caregivers may do this). For a PENDING link under "
+    "an item (e.g. 'for diabetes'), give the item's key and link_to, the other end's key.",
+    {"key": {"type": "string", "description": "The fact key shown in the care record"}, "approve": {"type": "boolean"},
+     "link_to": {"type": "string", "description": "Only for a pending link: the key of its other end, e.g. condition:diabetes"}},
     ["key", "approve"],
 )
 async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
@@ -325,8 +382,19 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     pending = [
         f for f in await store.facts(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",)) if f.key == a["key"]
     ]
-    if not pending:
-        return {"result": "nothing_pending", "key": a["key"]}
+    if a.get("link_to") or not pending:
+        from app.care import links
+
+        waiting = [ln for ln in await links.links_for(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",), from_ref=a["key"])
+                   if not a.get("link_to") or ln.to_ref == a["link_to"]]
+        if len(waiting) > 1 and not a.get("link_to"):
+            return {"result": "several_pending_links", "links": [{"link_to": ln.to_ref, "link": links.phrase(ln)} for ln in waiting],
+                    "note": "Ask which, then call confirm_change with link_to."}
+        if waiting:
+            ln = await links.resolve_pending_link(ctx.session, link_id=waiting[0].id, approve=bool(a["approve"]), by=ctx.speaker["id"])
+            return {"result": ln.status if ln else "not_found", "key": a["key"], "link": links.phrase(waiting[0])}
+        if not pending:
+            return {"result": "nothing_pending", "key": a["key"]}
     row = await store.resolve_pending(ctx.session, fact_id=pending[-1].id, approve=bool(a["approve"]), by=ctx.speaker["id"])
     if row and a["approve"] and row.status in ("active", "stopped"):
         from app.care import outcomes
@@ -337,7 +405,10 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     # reminders change only when a change was approved; a rejected proposal leaves the medicine (and its reminders) as they were
     if row and row.domain == "medicine" and a["approve"] and row.status in ("active", "stopped"):
         await _sync_medicine(ctx, ctx.elder_id, row.key, row.value, active=row.status == "active")
-    return {"result": row.status if row else "not_found", "key": a["key"]}
+    out = {"result": row.status if row else "not_found", "key": a["key"]}
+    if row and a["approve"] and row.status == "stopped" and row.domain == "condition":
+        out.update(await _after_condition_stop(ctx, ctx.elder_id, row))
+    return out
 
 
 # ── the day's care ─────────────────────────────────────────────────────────────
@@ -1740,7 +1811,8 @@ async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
     subjects = [ctx.subject(a.get("about"))]
     if not ctx.speaker_is_elder and subjects[0] == ctx.elder_id:
         subjects.append("family")
-    return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "")
+    return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "",
+                                      source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind)
 
 
 # ── memory history: what changed, and undo ─────────────────────────────────────
@@ -1838,6 +1910,14 @@ async def undo_change(ctx: TurnCtx, a: dict) -> dict:
         elif v.kind == "skill":
             fn = versions.undo_skill if mode == "undo" else versions.restore_skill
             out = await fn(ctx.session, v, by=by, reason=reason)
+        elif v.kind == "link":
+            from app.care import links
+
+            try:
+                out = await links.undo_or_restore(ctx.session, v, mode, caregiver=ctx.is_caregiver, by=by,
+                                                  source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind, reason=reason)
+            except links.Refused as exc:
+                raise versions.Refused(str(exc)) from exc
         else:
             caregiver = ctx.is_caregiver
             if mode == "undo":

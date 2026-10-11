@@ -12,6 +12,7 @@ from where, and why. Writers don't pass that along by hand: tools, the dashboard
   source can only propose a health change, reminders follow the record, and an undo never silently ends or restarts a
   medicine, allergy or condition; it waits for a caregiver's OK unless a caregiver confirmed it on the dashboard.
 - Style is relearned every night, so it has history but no undo (a family skill overrides it).
+- Links between record items (app.care.links) have versions too, and undo/restore through the link rules.
 - Versions older than a year are pruned (the newest of each item is always kept); the nightly per-family snapshot in
   the backup bucket keeps the long tail.
 """
@@ -30,10 +31,10 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core import clock
+from app.core import clock, trace
 from app.db.session import Base
 
-KINDS = ("note", "fact", "skill", "style")
+KINDS = ("note", "fact", "skill", "style", "link")
 KEEP_FOR = timedelta(days=365)
 HEALTH_DOMAINS = ("medicine", "allergy", "condition", "vital_target")
 LIST_LINES = 5
@@ -45,8 +46,8 @@ class MemoryVersion(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     family_id: Mapped[str] = mapped_column(String(64))
     subject_id: Mapped[str] = mapped_column(String(64))
-    kind: Mapped[str] = mapped_column(String(8))  # note | fact | skill | style
-    target: Mapped[str] = mapped_column(String(200))  # note slug | fact key | skill id | "style"
+    kind: Mapped[str] = mapped_column(String(8))  # note | fact | skill | style | link
+    target: Mapped[str] = mapped_column(String(200))  # note slug | fact key | skill id | "style" | "from|relation|to"
     version: Mapped[int] = mapped_column(Integer, default=1)
     # write | baseline | forget | restore | undo | snapshot (notes, skills) — write | pending | stop | approve | reject (facts)
     op: Mapped[str] = mapped_column(String(16))
@@ -54,12 +55,13 @@ class MemoryVersion(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     value: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    ref: Mapped[str | None] = mapped_column(String(64), nullable=True)  # care_facts row id
+    ref: Mapped[str | None] = mapped_column(String(64), nullable=True)  # care_facts (or care_links) row id
     actor_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(String(24), default="system")  # whatsapp | dashboard | nightly | saheli | snapshot | system
     reason: Mapped[str] = mapped_column(Text, default="")
     undoes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    trace_id: Mapped[str | None] = mapped_column(String(160), nullable=True)  # the work that made this change (app.core.trace)
 
     __table_args__ = (
         Index("ix_memory_versions_target", "family_id", "subject_id", "kind", "target", "id"),
@@ -127,7 +129,7 @@ async def add(session: AsyncSession, *, family_id: str, subject_id: str, kind: s
         version=await _next_version(session, family_id, subject_id, kind, target[:200]), op=op, title=(title or "")[:255],
         body=body or "", value=value, status=status, ref=ref, actor_id=actor_id if actor_id is not None else a.actor_id,
         source=(source or a.source or "system")[:24], reason=(reason if reason is not None else a.reason or "")[:500],
-        undoes=undoes if undoes is not None else a.undoes, at=at or clock.now(),
+        undoes=undoes if undoes is not None else a.undoes, at=at or clock.now(), trace_id=trace.current(),
     )
     session.add(row)
     await session.flush()
@@ -331,14 +333,19 @@ async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str]
         out.update(label=f"{v.title}: {label}", body=v.body, value=v.value, summary=f"{word}: {v.body[:140]}")
     elif v.kind == "skill":
         out.update(label=f"How they like things: {v.title[:80]}", body=v.body, summary=f"{v.op} ({v.status}): {v.body[:140]}")
+    elif v.kind == "link":
+        from app.care import links
+
+        out.update(**links.view_bits(v))
     else:
         out.update(label="Reply style (learned nightly)", body=v.body, summary=f"now: {v.body[:140]}")
     can = v.op != "baseline" and v.kind != "style"
-    if can and v.kind in ("fact", "skill"):  # these undo only from the newest change
+    if can and v.kind in ("fact", "skill", "link"):  # these undo only from the newest change
         last = await (last_effective(session, v) if v.kind == "fact" else latest(session, v.family_id, v.subject_id, v.kind, v.target))
         can = not last or last.id == v.id
     out["canUndo"] = can
-    out["canRestore"] = v.kind in ("note", "skill") or (v.kind == "fact" and v.status in ("active", "stopped"))
+    out["canRestore"] = v.kind in ("note", "skill") or (v.kind == "fact" and v.status in ("active", "stopped")) or (
+        v.kind == "link" and v.status in ("active", "ended"))
     return out
 
 
@@ -576,6 +583,10 @@ async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiv
     try:
         if v.kind == "style":
             raise Refused("Reply style is relearned every night; add a 'How they like things' skill instead.")
+        if v.kind == "link":
+            from app.care import links
+
+            return await links.preview(session, v, mode, caregiver=caregiver)
         if v.kind == "fact":
             plan = await (plan_fact_undo(session, v, caregiver=caregiver, actor_id="", confirmed=confirmed) if mode == "undo"
                           else plan_fact_restore(session, v, caregiver=caregiver, confirmed=confirmed))

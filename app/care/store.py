@@ -15,7 +15,7 @@ from app.care import versions
 from app.care.domains import medicine_slug, merged_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
-from app.core import clock
+from app.core import clock, trace
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +262,9 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     await session.flush()
     await versions.record_fact(session, row, "approve" if approve else "reject")
     await _keep_index(session, row.family_id, row.subject_id)
+    from app.care import links
+
+    await links.resolve_with_fact(session, row, approve=approve, by=by)  # links proposed with it go the same way
     return row
 
 
@@ -304,8 +307,10 @@ async def record_event(
     actor_id: str | None = None,
     ref: str | None = None,
     at: datetime | None = None,
+    trace_id: str | None = None,
 ) -> int | None:
-    """Append to the ledger. A repeated ref (webhook retry, scheduler re-run) is ignored."""
+    """Append to the ledger. A repeated ref (webhook retry, scheduler re-run) is ignored. The event carries the trace of
+    the work that wrote it (app.core.trace) unless one is given."""
     when = at or clock.now()
     stmt = (
         insert(CareEvent)
@@ -320,6 +325,7 @@ async def record_event(
             payload=payload or {},
             ref=ref,
             tsv=func.to_tsvector("simple", summary),
+            trace_id=trace.clip(trace_id) or trace.current(),
         )
         .on_conflict_do_nothing()
         .returning(CareEvent.id)
@@ -465,6 +471,7 @@ async def open_loop(
         dedupe_key=dedupe_key,
         created_at=now,
         updated_at=now,
+        trace_id=trace.current(),
     )
     session.add(loop)
     await session.flush()

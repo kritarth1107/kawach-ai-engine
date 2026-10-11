@@ -19,7 +19,7 @@ from app.brain.persona import PERSONA, REPLY_FORMAT
 from app.care import digest, freshness, importer, store
 from app.care.domains import SLOTS
 from app.care.models import Turn
-from app.core import clock
+from app.core import clock, trace
 from app.llm import router
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,8 @@ class TurnResult:
     shadow_writes: list[dict] = field(default_factory=list)
     ms: int = 0
     buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp answers sent with the reply
+    trace_id: str | None = None  # the why-trail this turn is filed under (app.core.trace)
+    turn_id: int | None = None  # Saheli's reply turn
 
 
 async def _lock_family(session: AsyncSession, family_id: str) -> None:
@@ -143,7 +145,10 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
     rows = await data.facts(req.elder["id"]) if data else await store.facts(session, req.family_id, req.elder["id"])
     note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
     stale = await freshness.stale_facts(session, req.family_id, req.elder["id"], rows)
-    record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale)
+    from app.care import links
+
+    record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale,
+                                await links.links_for(session, req.family_id, req.elder["id"]))
     block = "\n\n".join(
         p for p in (digest.household(req.elder, req.members, req.speaker["id"]), record, digest.notes_block(note_rows)) if p
     )
@@ -230,7 +235,8 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             parts.append(
                 f"YOUR OWN CARE (the speaker's self care; use about={req.speaker['id']} for anything about them):\n"
                 + digest.care_record(req.speaker.get("name") or "the speaker", own,
-                                     await freshness.stale_facts(session, req.family_id, req.speaker["id"], own))
+                                     await freshness.stale_facts(session, req.family_id, req.speaker["id"], own),
+                                     await links.links_for(session, req.family_id, req.speaker["id"]))
                 + ("\n" + digest.ledger(own_today) if own_today else "")
             )
     if req.speaker["id"] != req.elder["id"]:
@@ -448,6 +454,29 @@ def partial_reply(p: dict | None) -> str:
 
 
 async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
+    """One turn, filed under its trace (D-13): a person's message under its own message id; a turn about a task (an
+    update the task runtime asked Saheli to pass on) under the task's trace, with the turn's ref as `via`; anything
+    else under a new id. Afterwards one trace_turns row records it (scrubbed), for the admin console's "Why?"."""
+    outer = trace.current()
+    tid = outer or req.message_ref or trace.new("turn")
+    via = (req.message_ref if req.message_ref != outer else None) if outer else None
+    at = clock.now()
+    from app.care import why
+
+    with trace.use(tid, task_id=trace.task_id(), via=via or trace.via(), family_id=req.family_id), trace.collect_spend() as calls:
+        result = await _run_turn(session, host, req)
+        result.trace_id = tid
+        if not result.duplicate and not req.family_id.startswith("shadow:"):
+            await why.record_turn_safely(
+                session, trace_id=tid, family_id=req.family_id, thread_id=req.speaker.get("id") or "",
+                kind="system" if req.speaker.get("role") == "system" else "message", channel=req.channel, message_ref=req.message_ref,
+                task_id=trace.task_id(), turn_id=result.turn_id, at=at, ms=result.ms, text=req.text, reply=result.reply,
+                actions=result.actions, calls=calls)
+            await session.commit()
+    return result
+
+
+async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
     started = time.monotonic()
     await _lock_family(session, req.family_id)
 
@@ -686,6 +715,7 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
         shadow_writes=getattr(host, "would_have", []),
         ms=int((time.monotonic() - started) * 1000),
         buttons=ctx.buttons if final and final != "none" else [],
+        turn_id=turn_id,
     )
 
 
@@ -693,19 +723,24 @@ TRACE_RESULT_CHARS = 1500
 
 
 def turn_trace(msgs: list[dict], start: int, final: str) -> list[dict]:
-    """This turn as the model saw it, from the person's message on: tool calls, trimmed results, the final reply."""
+    """This turn as the model saw it, from the person's message on: tool calls, trimmed results, the final reply. Login
+    codes and secrets never enter it (app.core.trace.scrub: a code passed to a task is masked everywhere it appears)."""
+    known: set[str] = set()
+    for m in msgs[start:]:
+        for c in m.get("tool_calls") or [] if m.get("role") == "assistant" else []:
+            known |= trace.secrets_in(c.args)
     out: list[dict] = []
     for m in msgs[start:]:
         if m.get("role") == "user":
-            out.append({"role": "user", "text": _msg_text(m)[:2000]})
+            out.append({"role": "user", "text": trace.scrub(_msg_text(m)[:2000], known)})
         elif m.get("role") == "assistant":
-            calls = [{"name": c.name, "args": c.args} for c in m.get("tool_calls") or []]
+            calls = [{"name": c.name, "args": trace.mask(c.args, known)} for c in m.get("tool_calls") or []]
             if calls:
-                out.append({"role": "model", "calls": calls, **({"text": m.get("text")} if m.get("text") else {})})
+                out.append({"role": "model", "calls": calls, **({"text": trace.scrub(m.get("text"), known)} if m.get("text") else {})})
         elif m.get("role") == "tool":
-            out.append({"role": "tool", "results": [{"name": r.get("name"), "content": str(r.get("content"))[:TRACE_RESULT_CHARS],
+            out.append({"role": "tool", "results": [{"name": r.get("name"), "content": trace.scrub(str(r.get("content"))[:TRACE_RESULT_CHARS], known),
                                                      "error": bool(r.get("is_error"))} for r in m.get("results") or []]})
-    out.append({"role": "model", "text": final})
+    out.append({"role": "model", "text": trace.scrub(final, known)})
     return out
 
 

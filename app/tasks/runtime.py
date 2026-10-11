@@ -24,7 +24,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.care import store
-from app.core import clock
+from app.core import clock, trace
 from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
@@ -391,6 +391,7 @@ async def create(
         id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, requested_by=requested_by, service=service, kind=kind,
         goal=goal, details={**details, "contract": CONTRACT_VERSION, "agent": agent.name, "limits": limits.to_dict()},
         status="queued", phase="prepare", created_at=now, updated_at=now, deadline_at=now + TASK_LIFETIME, history=[], result={},
+        trace_id=trace.current(),  # the message that asked for it: everything the task does is filed under it (D-13)
     )
     metrics.on_create(task, agent.name)
     session.add(task)
@@ -760,6 +761,25 @@ async def ask_approvers(sessions: async_sessionmaker, notify) -> int:
 
 async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str = "", by: str, by_is_elder: bool,
                         items: list[dict] | None = None, target: int | str | None = None) -> str:
+    """provide_input under the task's own trace (the turn that answered is kept as `via`), with an audit event for a
+    confirm or an approval: who, when and for what total (D-13 why-trail, F4 audit of confirm / place / cancel)."""
+    with trace.for_task(task):
+        before = (task.details or {}).get("confirm_token"), (task.details or {}).get("approved_by")
+        out = await _provide_input(session, task, kind=kind, value=value, by=by, by_is_elder=by_is_elder, items=items, target=target)
+        d = task.details or {}
+        if d.get("confirm_token") and d.get("confirm_token") != before[0]:
+            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_confirmed", actor_id=by,
+                                     summary=f"{SKILLS[task.service]['label']}: confirmed by {by}" + (f" for {d.get('confirmed_total')}" if d.get("confirmed_total") else ""),
+                                     payload={"task_id": str(task.id), "by": by, "total": d.get("confirmed_total"), "via": trace.via(), "input": kind})
+        elif d.get("approved_by") and d.get("approved_by") != before[1]:
+            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_approved", actor_id=by,
+                                     summary=f"{SKILLS[task.service]['label']}: approved by {by}",
+                                     payload={"task_id": str(task.id), "by": by, "via": trace.via()})
+        return out
+
+
+async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value: str = "", by: str, by_is_elder: bool,
+                         items: list[dict] | None = None, target: int | str | None = None) -> str:
     """The person answered: an OTP, a confirm, a fee approval, a ride choice or a swap. Returns what happens next.
 
     The answer must be the one the task is waiting for (task.input_needed); anything else is refused, so a
@@ -1008,6 +1028,20 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
 
 
 async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
+    """request_cancel under the task's own trace, with an audit event: who cancelled, when and why (D-13, F4)."""
+    with trace.for_task(task):
+        before = (task.status, task.phase)
+        out = await _request_cancel(session, agent, task, by=by, reason=reason)
+        if (task.status, task.phase) != before:
+            now_cancelled = task.status == "cancelled"
+            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id,
+                                     kind="task_cancelled" if now_cancelled else "task_cancel_requested", actor_id=by,
+                                     summary=f"{SKILLS[task.service]['label']}: {'cancelled' if now_cancelled else 'cancel asked'} by {by}: {reason}"[:300],
+                                     payload={"task_id": str(task.id), "by": by, "via": trace.via(), "reason": reason[:200]})
+        return out
+
+
+async def _request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
     if task.status in ("failed", "cancelled"):
         return f"already {task.status}"
     if task.phase == "cancel" and task.status in LIVE:
@@ -2254,11 +2288,16 @@ async def tick(
             ).scalars()
         )
     async def process(task_id):
+        with trace.scope():  # the task's trace is bound below, and undone when it is done
+            return await _process(task_id)
+
+    async def _process(task_id):
         message, summary = None, False
         async with sessions() as session:
             task = (await session.execute(select(Task).where(Task.id == task_id).with_for_update(skip_locked=True))).scalar_one_or_none()
             if not task or _claimed(task):
                 return None  # locked, or another runner is in the middle of it
+            trace.bind_task(task)  # its model calls, events and outcome are filed under the trace that started it (D-13)
             was_browse, expired = task.phase == "browse", False
             try:
                 if task.deadline_at < clock.now() and task.status != "running":
@@ -2517,6 +2556,11 @@ async def tick(
         return (task, message, summary) if message else None
 
     async def notify_one(r) -> None:
+        if r:
+            with trace.for_task(r[0]):  # the update Saheli sends about it belongs to the task's trail too
+                await _notify_one(r)
+
+    async def _notify_one(r) -> None:
         if r:
             task, message, summary = r
             code_from = (task.details or {}).get("code_from")

@@ -208,7 +208,14 @@ def kick_tasks() -> None:
     global _kicked
     if _kicked is not None and not _kicked.done():
         return
-    _kicked = asyncio.get_running_loop().create_task(tasks_job())
+    import contextvars
+
+    from app.core import trace
+
+    # every family's tasks move in this run: none of it belongs to the turn that kicked it (each task files its own trace)
+    ctx = contextvars.copy_context()
+    ctx.run(trace.detach)
+    _kicked = asyncio.get_running_loop().create_task(tasks_job(), context=ctx)
 
 
 @router.post("/jobs/tasks")

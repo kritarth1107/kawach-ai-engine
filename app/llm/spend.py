@@ -24,11 +24,11 @@ import time
 from collections import defaultdict
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Date, Float, Integer, String, func, select
+from sqlalchemy import BigInteger, Date, DateTime, Float, Index, Integer, String, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core import clock
+from app.core import clock, trace
 from app.db.session import Base
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,27 @@ class LlmSpend(Base):
     tokens_in: Mapped[int] = mapped_column(BigInteger, default=0)
     tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
     cost_inr: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class LlmTraceSpend(Base):
+    """What each trace's model calls cost (D-13, E5): an order's ₹ is the sum over its trace; task_id splits a message
+    that started two tasks. Written in the same batched flush as llm_spend."""
+
+    __tablename__ = "llm_trace_spend"
+
+    trace_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    role: Mapped[str] = mapped_column(String(24), primary_key=True)
+    model: Mapped[str] = mapped_column(String(80), primary_key=True)
+    family_id: Mapped[str] = mapped_column(String(80), default="")
+    calls: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(BigInteger, default=0)
+    tokens_out: Mapped[int] = mapped_column(BigInteger, default=0)
+    cost_inr: Mapped[float] = mapped_column(Float, default=0.0)
+    first_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (Index("ix_llm_trace_spend_family", "family_id", "last_at"),)
 
 
 def soft_cap() -> float:
@@ -124,6 +145,7 @@ def reset() -> None:
     _mem.clear()
     _cache.clear()
     _unsaved.clear()
+    _trace_unsaved.clear()
     if _flusher is not None and not _flusher.done():
         _flusher.cancel()
     _flusher = None
@@ -157,6 +179,7 @@ async def record(role: str, model: str, usage: dict) -> float:
     if day in _cache:
         total, at = _cache[day]
         _cache[day] = (total + inr, at)
+    trace.note_spend(role, model, inr, int(usage.get("in") or 0), tokens_out)
     if _sessions is not None:
         # Batched: model calls add to a pending row; one write every few seconds carries them all.
         p = _unsaved[(day, role, model)]
@@ -164,12 +187,24 @@ async def record(role: str, model: str, usage: dict) -> float:
         p[1] += int(usage.get("in") or 0)
         p[2] += tokens_out
         p[3] += inr
+        if tid := trace.current():
+            t = _trace_unsaved[(tid, trace.task_id() or "", role, model)]
+            t[0] += 1
+            t[1] += int(usage.get("in") or 0)
+            t[2] += tokens_out
+            t[3] += inr
+            t[4] = t[4] or trace.family_id() or ""
+            now = clock.now()
+            t[5] = t[5] or now
+            t[6] = now
         if _flusher is None or _flusher.done():
             _flusher = asyncio.create_task(_flush_later())
     return inr
 
 
 _unsaved: dict[tuple[str, str, str], list[float]] = defaultdict(lambda: [0, 0, 0, 0.0])
+# (trace, task, role, model) -> calls, in, out, inr, family, first at, last at
+_trace_unsaved: dict[tuple[str, str, str, str], list] = defaultdict(lambda: [0, 0, 0, 0.0, "", None, None])
 _flusher: asyncio.Task | None = None
 FLUSH_EVERY = 3.0  # seconds
 
@@ -188,10 +223,12 @@ async def _flush_later() -> None:
 
 
 async def _write_unsaved() -> None:
-    if not _unsaved or _sessions is None:
+    if (not _unsaved and not _trace_unsaved) or _sessions is None:
         return
     batch = {k: list(v) for k, v in _unsaved.items()}
+    traced = {k: list(v) for k, v in _trace_unsaved.items()}
     _unsaved.clear()
+    _trace_unsaved.clear()
     try:
         async with asyncio.timeout(LEDGER_TIMEOUT * 3), _sessions() as s:
             for (day, role, model), (calls, tin, tout, inr) in batch.items():
@@ -203,6 +240,16 @@ async def _write_unsaved() -> None:
                           "tokens_out": LlmSpend.tokens_out + stmt.excluded.tokens_out, "cost_inr": LlmSpend.cost_inr + stmt.excluded.cost_inr},
                 )
                 await s.execute(stmt)
+            for (tid, task, role, model), (calls, tin, tout, inr, fam, first, last) in traced.items():
+                stmt = insert(LlmTraceSpend).values(trace_id=tid, task_id=task, role=role, model=model, family_id=fam, calls=int(calls),
+                                                    tokens_in=int(tin), tokens_out=int(tout), cost_inr=inr, first_at=first, last_at=last)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[LlmTraceSpend.trace_id, LlmTraceSpend.task_id, LlmTraceSpend.role, LlmTraceSpend.model],
+                    set_={"calls": LlmTraceSpend.calls + stmt.excluded.calls, "tokens_in": LlmTraceSpend.tokens_in + stmt.excluded.tokens_in,
+                          "tokens_out": LlmTraceSpend.tokens_out + stmt.excluded.tokens_out,
+                          "cost_inr": LlmTraceSpend.cost_inr + stmt.excluded.cost_inr, "last_at": stmt.excluded.last_at},
+                )
+                await s.execute(stmt)
             await s.commit()
     except Exception:  # noqa: BLE001 — accounting must never cost a person their reply; keep it for the next flush
         logger.exception("llm spend ledger write failed")
@@ -210,6 +257,13 @@ async def _write_unsaved() -> None:
             p = _unsaved[k]
             for i in range(4):
                 p[i] += v[i]
+        for k, v in traced.items():
+            t = _trace_unsaved[k]
+            for i in range(4):
+                t[i] += v[i]
+            t[4] = t[4] or v[4]
+            t[5] = v[5] if not t[5] or (v[5] and v[5] < t[5]) else t[5]
+            t[6] = t[6] or v[6]
 
 
 async def flush() -> None:
@@ -263,6 +317,16 @@ async def gate(role: str, essential: bool | None = None) -> str:
 def cheapest(routes: list) -> list:
     """The role's routes, cheapest first. All are kept as fallbacks: a capped day must not also lose failover."""
     return sorted(routes, key=lambda r: price_inr(r.model)[1])
+
+
+async def for_traces(session, trace_ids: list[str]) -> list[dict]:
+    """The model spend of these traces, per trace, task, role and model."""
+    if not trace_ids:
+        return []
+    rows = (await session.execute(select(LlmTraceSpend).where(LlmTraceSpend.trace_id.in_(trace_ids))
+                                  .order_by(LlmTraceSpend.first_at))).scalars()
+    return [{"trace": r.trace_id, "taskId": r.task_id or None, "role": r.role, "model": r.model, "calls": r.calls, "tokensIn": r.tokens_in,
+             "tokensOut": r.tokens_out, "costInr": round(r.cost_inr, 4), "at": r.first_at.isoformat() if r.first_at else None} for r in rows]
 
 
 async def summary(sessions, days: int = 7) -> list[dict]:
