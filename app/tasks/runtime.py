@@ -764,17 +764,26 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
     """provide_input under the task's own trace (the turn that answered is kept as `via`), with an audit event for a
     confirm or an approval: who, when and for what total (D-13 why-trail, F4 audit of confirm / place / cancel)."""
     with trace.for_task(task):
-        before = (task.details or {}).get("confirm_token"), (task.details or {}).get("approved_by")
+        d0 = dict(task.details or {})
         out = await _provide_input(session, task, kind=kind, value=value, by=by, by_is_elder=by_is_elder, items=items, target=target)
         d = task.details or {}
-        if d.get("confirm_token") and d.get("confirm_token") != before[0]:
-            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_confirmed", actor_id=by,
-                                     summary=f"{SKILLS[task.service]['label']}: confirmed by {by}" + (f" for {d.get('confirmed_total')}" if d.get("confirmed_total") else ""),
-                                     payload={"task_id": str(task.id), "by": by, "total": d.get("confirmed_total"), "via": trace.via(), "input": kind})
-        elif d.get("approved_by") and d.get("approved_by") != before[1]:
-            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="task_approved", actor_id=by,
-                                     summary=f"{SKILLS[task.service]['label']}: approved by {by}",
-                                     payload={"task_id": str(task.id), "by": by, "via": trace.via()})
+        label = SKILLS[task.service]["label"]
+        total = d.get("confirmed_total") or (d.get("approval_needed") or {}).get("amount") or (task.result or {}).get("total")
+
+        async def audit(kind_: str, summary: str, **extra) -> None:
+            await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind=kind_, actor_id=by,
+                                     summary=summary[:300], payload={"task_id": str(task.id), "by": by, "total": total, "via": trace.via(),
+                                                                     "input": kind, **extra})
+
+        # an approval comes first: it also starts placing (a new confirm token), and the approver did not confirm the cart
+        if d.get("approved_by") and d.get("approved_by") != d0.get("approved_by"):
+            await audit("task_approved", f"{label}: approved by {by}" + (f" for {total}" if total else ""))
+        elif d.get("approval_needed") and not d0.get("approval_needed"):
+            # the person's yes that hit the family's approval rule: recorded now, placed only after the approver's yes
+            await audit("task_confirmed", f"{label}: confirmed by {by}, waiting for approval" + (f" ({total})" if total else ""),
+                        awaiting_approval=True)
+        elif d.get("confirm_token") and d.get("confirm_token") != d0.get("confirm_token"):
+            await audit("task_confirmed", f"{label}: confirmed by {by}" + (f" for {total}" if total else ""))
         return out
 
 
@@ -1030,14 +1039,15 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
 async def request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task, *, by: str, reason: str) -> str:
     """request_cancel under the task's own trace, with an audit event: who cancelled, when and why (D-13, F4)."""
     with trace.for_task(task):
-        before = (task.status, task.phase)
+        before = (task.status, task.phase, task.cancel_requested)
         out = await _request_cancel(session, agent, task, by=by, reason=reason)
-        if (task.status, task.phase) != before:
+        if (task.status, task.phase, task.cancel_requested) != before:
+            # cancelled now, or asked while placing / after placing (it is cancelled on the store next, if it can be)
             now_cancelled = task.status == "cancelled"
             await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id,
                                      kind="task_cancelled" if now_cancelled else "task_cancel_requested", actor_id=by,
                                      summary=f"{SKILLS[task.service]['label']}: {'cancelled' if now_cancelled else 'cancel asked'} by {by}: {reason}"[:300],
-                                     payload={"task_id": str(task.id), "by": by, "via": trace.via(), "reason": reason[:200]})
+                                     payload={"task_id": str(task.id), "by": by, "via": trace.via(), "reason": reason[:200], "outcome": out[:200]})
         return out
 
 

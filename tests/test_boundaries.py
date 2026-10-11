@@ -131,3 +131,42 @@ async def test_only_an_approver_changes_the_limits_on_whatsapp(db, at):
     # every change is a version with who changed it
     rows = await store.events(db, "fam-bd", "family", kinds=["boundary_changed"])
     assert rows and rows[-1].actor_id == SON
+
+
+async def test_the_audit_names_who_confirmed_and_who_approved(db, at, sessions):
+    """D-13 review: the approver's yes was filed as a confirm by the approver, and the requester's yes left no record."""
+    from sqlalchemy import select
+
+    from app.care.models import CareEvent
+
+    at("2026-10-09 10:00")
+    await _family(db, elder_order_limit=300)
+    h = Harness(sessions, FakeAgent(script={"prepare": [CART], "place": [PLACED]}))
+    t = await _order(db)
+    await _ready(db, h, t)
+    await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
+    await runtime.provide_input(db, t, kind="approve", value="yes", by=SON, by_is_elder=False)
+    evs = (await db.execute(select(CareEvent).where(CareEvent.family_id == FAM, CareEvent.kind.in_(("task_confirmed", "task_approved")))
+                            .order_by(CareEvent.id))).scalars().all()
+    assert [(e.kind, e.payload["by"], bool(e.payload.get("awaiting_approval"))) for e in evs] == [
+        ("task_confirmed", ELDER, True), ("task_approved", SON, False)]
+    assert evs[0].payload["total"] and evs[1].payload["total"] == "₹318"
+
+
+async def test_a_cancel_while_placing_is_on_the_record(db, at, sessions):
+    """D-13 review: a cancel asked while the store was placing changed only cancel_requested, so no audit event was kept."""
+    from sqlalchemy import select
+
+    from app.care.models import CareEvent
+
+    at("2026-10-09 10:00")
+    await _family(db)
+    h = Harness(sessions, FakeAgent(script={"prepare": [CART]}))
+    t = await _order(db, by=SON)
+    await _ready(db, h, t)
+    await runtime.provide_input(db, t, kind="confirm", value="yes", by=SON, by_is_elder=False)
+    t.status = "running"  # the place step is on the store right now
+    out = await runtime.request_cancel(db, h.agent, t, by=SON, reason="ordered by mistake")
+    assert t.cancel_requested and t.status == "running"
+    ev = (await db.execute(select(CareEvent).where(CareEvent.family_id == FAM, CareEvent.kind == "task_cancel_requested"))).scalar_one()
+    assert ev.payload["by"] == SON and ev.payload["reason"] == "ordered by mistake" and ev.payload["outcome"] == out[:200]

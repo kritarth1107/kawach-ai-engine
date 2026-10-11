@@ -6,8 +6,8 @@ from sqlalchemy import text
 
 from app.api import admin, brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory
 from app.core.config import get_settings
-from app.db.migrate import run_instinct_migrations
-from app.db.session import Base, engine
+from app.db.migrate import ensure_indexes, ensure_schema
+from app.db.session import engine
 from app.care import models as care_models  # noqa: F401
 from app.tasks import models as task_models  # noqa: F401
 from app.specialists import channels as specialist_channels  # noqa: F401
@@ -20,12 +20,7 @@ from app.models import entities  # noqa: F401
 
 
 async def ensure_database_schema() -> None:
-    async with engine.begin() as conn:
-        await run_instinct_migrations(conn)
-        await conn.run_sync(Base.metadata.create_all)
-        from app.db.migrate import run_v2_migrations
-
-        await run_v2_migrations(conn)  # columns/indexes added after tables first shipped
+    await ensure_schema(engine)  # tables and columns; raises (the start fails) if a needed column cannot be added
 
 
 async def cleanup_memory_index(sessions) -> None:
@@ -45,12 +40,17 @@ async def cleanup_memory_index(sessions) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
     await ensure_database_schema()
+    indexes = asyncio.create_task(ensure_indexes(engine))  # built concurrently while the engine serves
     from app.db.session import SessionLocal
 
     llm_spend.configure(SessionLocal)
     await cleanup_memory_index(SessionLocal)
     yield
+    if not indexes.done():
+        indexes.cancel()
     await llm_spend.flush()  # write the last ledger rows before the instance stops
     from app.agents.tool_client import close_clients
 

@@ -13,7 +13,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionLocal, engine
-from app.db.migrate import run_instinct_migrations
 from app.llm.provider import chat_invoke
 from app.models.entities import Elder, EntityStatus, FamilyMemory, MemoryEntity
 from app.rag.embeddings import embed_text, embeddings_available
@@ -48,21 +47,20 @@ Return ONLY JSON:
 async def _ensure_v2_schema() -> None:
     from app.care import baselines, models  # noqa: F401
     from app.learn import models as learn_models  # noqa: F401
-    from app.db.session import Base
     from app.llm import spend  # noqa: F401
     from app.specialists import channels  # noqa: F401
     from app.tasks import models as task_models  # noqa: F401
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        from app.db.migrate import run_v2_migrations
+    from app.db.migrate import ensure_indexes, ensure_schema
 
-        await run_v2_migrations(conn)
+    await ensure_schema(engine)
+    await ensure_indexes(engine)
 
 
 async def _ensure_schema() -> None:
-    async with engine.begin() as conn:
-        await run_instinct_migrations(conn)
+    from app.db.migrate import ensure_schema
+
+    await ensure_schema(engine)
 
 
 async def _resolve_entity_for_fact(

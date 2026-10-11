@@ -53,7 +53,7 @@ class ServiceLogin(Base):
     profile_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     state: Mapped[str] = mapped_column(String(10), default="unknown")  # ok | expired | unknown
 
-    # one family + store per profile, even if two ticks bind at the same moment (also added by migrate.V2_ALTERS)
+    # one family + store per profile, even if two ticks bind at the same moment (also added by migrate.INDEXES)
     __table_args__ = (Index("uq_service_logins_profile", "profile_id", unique=True, postgresql_where=sql("profile_id IS NOT NULL")),)
     last_login_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

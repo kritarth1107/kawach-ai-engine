@@ -161,6 +161,15 @@ async def _active(session: AsyncSession, family_id: str, subject_id: str, from_r
     return list((await session.execute(q.with_for_update())).scalars())
 
 
+async def _waiting(session: AsyncSession, family_id: str, subject_id: str, from_ref: str, relation: str, to_ref: str | None) -> list[CareLink]:
+    """Proposals still waiting to add this link (to_ref None: to any value, for a one-value relation)."""
+    q = select(CareLink).where(CareLink.family_id == family_id, CareLink.subject_id == subject_id, CareLink.from_ref == from_ref,
+                               CareLink.relation == relation, CareLink.status == "pending")
+    if to_ref is not None:
+        q = q.where(CareLink.to_ref == to_ref)
+    return [r for r in (await session.execute(q.with_for_update())).scalars() if not (r.detail or {}).get("end")]
+
+
 async def _fact_source(session: AsyncSession, family_id: str, subject_id: str, from_ref: str) -> str | None:
     if domain_of(from_ref) not in DOMAINS:
         return None
@@ -211,6 +220,26 @@ async def _ask_to_confirm(session: AsyncSession, link: CareLink) -> None:
     )
 
 
+async def _close_question(session: AsyncSession, link: CareLink, note: str) -> None:
+    await session.execute(
+        update(OpenLoop).where(OpenLoop.family_id == link.family_id, OpenLoop.kind == "confirm_link", OpenLoop.status == "open")
+        .where(OpenLoop.detail["link_id"].astext == str(link.id))
+        .values(status="done", updated_at=clock.now(), closed_note=note)
+    )
+
+
+async def _settle_waiting(session: AsyncSession, rows: list[CareLink], why: str) -> list[str]:
+    """Older proposals for the same link (any value of a one-value relation) end when a newer proposal, a stronger
+    source or an approval settles it: the caregiver is asked once, and a stale proposal can never be approved later."""
+    now = clock.now()
+    for r in rows:
+        r.status, r.valid_to, r.note = "ended", now, why
+        await _close_question(session, r, "superseded")
+    if rows:
+        await session.flush()
+    return [str(r.id) for r in rows]
+
+
 def _row(*, family_id, subject_id, from_ref, relation, to_ref, label, detail, status, source_kind, stated_by, confirmed_by,
          source_ref, note=None) -> CareLink:
     now = clock.now()
@@ -229,7 +258,8 @@ async def write_link(
 ) -> LinkWrite:
     """Save a link. The same link again changes nothing; a new label, or a new value of a one-value relation, replaces
     the old one; a weaker source's health link waits as pending (with_fact: it waits with that pending fact and is
-    decided with it)."""
+    decided with it). The same proposal again is the one already waiting; a different one, or a link that is saved
+    straight away, settles the older proposals for it."""
     check(relation, from_ref, to_ref)
     detail = {k: v for k, v in (detail or {}).items() if v not in (None, "", [])}
     same = await _active(session, family_id, subject_id, from_ref, relation, to_ref)
@@ -247,16 +277,23 @@ async def write_link(
                                                                        **({"with_fact": str(with_fact)} if with_fact else {})},
                status="pending" if pending else "active", source_kind=source_kind, stated_by=stated_by,
                confirmed_by=None if pending else (confirmed_by or (stated_by if source_kind in STRONG else None)), source_ref=source_ref)
+    waiting = await _waiting(session, family_id, subject_id, from_ref, relation, None if relation in SINGLE else to_ref)
     if pending:
+        for w in waiting:
+            if (w.to_ref, w.label or "", dict(w.detail or {})) == (row.to_ref, row.label or "", dict(row.detail or {})):
+                return LinkWrite("pending", w, olds[0] if olds else None)  # already asked: one question, never two
+        settled = await _settle_waiting(session, waiting, "replaced by a newer proposal")
         session.add(row)
         await session.flush()
         await _ask_to_confirm(session, row)
-        await _version(session, row, "pending")
+        await _version(session, row, "pending", extra={"supersedes": settled} if settled else None)
         return LinkWrite("pending", row, olds[0] if olds else None)
+    settled = await _settle_waiting(session, waiting, f"settled: {readable(row)}")
     await _take_place_of(session, olds, row)
     session.add(row)
     await session.flush()
-    await _version(session, row, "write", extra={"replaced": [str(o.id) for o in olds]} if olds else None)
+    extra = {**({"replaced": [str(o.id) for o in olds]} if olds else {}), **({"supersedes": settled} if settled else {})}
+    await _version(session, row, "write", extra=extra or None)
     return LinkWrite("replaced" if olds else "created", row, olds[0] if olds else None)
 
 
@@ -295,6 +332,7 @@ async def resolve_pending_link(session: AsyncSession, *, link_id: uuid.UUID | st
         return None
     now = clock.now()
     ending = bool((row.detail or {}).get("end"))
+    extra: dict = {}
     if approve and ending:
         for cur in await _active(session, row.family_id, row.subject_id, row.from_ref, row.relation, row.to_ref):
             cur.status, cur.valid_to, cur.note = "ended", now, row.note or "ended"
@@ -305,18 +343,20 @@ async def resolve_pending_link(session: AsyncSession, *, link_id: uuid.UUID | st
         olds = await _active(session, row.family_id, row.subject_id, row.from_ref, row.relation, row.to_ref)
         if not olds and row.relation in SINGLE:
             olds = await _active(session, row.family_id, row.subject_id, row.from_ref, row.relation)
+        others = [w for w in await _waiting(session, row.family_id, row.subject_id, row.from_ref, row.relation,
+                                            None if row.relation in SINGLE else row.to_ref) if w.id != row.id]
+        if settled := await _settle_waiting(session, others, f"settled: {readable(row)} was approved"):
+            extra["supersedes"] = settled
         await _take_place_of(session, olds, row)
+        if olds:
+            extra["replaced"] = [str(o.id) for o in olds]
         row.status, row.confirmed_by = "active", by
         row.detail = {k: v for k, v in (row.detail or {}).items() if k != "with_fact"}
     else:
         row.status, row.valid_to, row.confirmed_by = "rejected", now, by
-    await session.execute(
-        update(OpenLoop).where(OpenLoop.family_id == row.family_id, OpenLoop.kind == "confirm_link", OpenLoop.status == "open")
-        .where(OpenLoop.detail["link_id"].astext == str(row.id))
-        .values(status="done", updated_at=now, closed_note="approved" if approve else "rejected")
-    )
+    await _close_question(session, row, "approved" if approve else "rejected")
     await session.flush()
-    await _version(session, row, "approve" if approve else "reject")
+    await _version(session, row, "approve" if approve else "reject", extra=extra or None)
     return row
 
 
@@ -421,8 +461,26 @@ def _parts(v) -> dict:
             "detail": {k: x for k, x in (val.get("detail") or {}).items() if k not in ("with_fact", "end")}}
 
 
+def _link_parts(link: CareLink) -> dict:
+    return {"from_ref": link.from_ref, "relation": link.relation, "to_ref": link.to_ref, "label": link.label or "",
+            "detail": {k: x for k, x in (link.detail or {}).items() if k not in ("with_fact", "end")}}
+
+
+async def _replaced_by(session: AsyncSession, v) -> CareLink | None:
+    """The earlier link this change replaced (a new doctor for 'prescribed by', a new label), if it is still ended."""
+    for x in (v.value or {}).get("replaced") or []:
+        try:
+            old = await session.get(CareLink, uuid.UUID(str(x)))
+        except ValueError:
+            continue
+        if old is not None and old.status == "ended":
+            return old
+    return None
+
+
 async def plan(session: AsyncSession, v, mode: str) -> tuple[str, dict]:
-    """What undo/restore of link version v would do: (effect, parts) with effect activate | end | retract | repropose | nothing."""
+    """What undo/restore of link version v would do: (effect, parts) with effect activate | end | revert (put back the
+    link it replaced) | retract | repropose | nothing."""
     p = _parts(v)
     if not p["from_ref"] or not p["to_ref"]:
         raise Refused("That change no longer says what it linked.")
@@ -447,6 +505,8 @@ async def plan(session: AsyncSession, v, mode: str) -> tuple[str, dict]:
         return "repropose", p
     if v.op == "end" or (v.op == "approve" and v.status == "ended"):
         return ("nothing" if now else "activate"), p
+    if now and await _replaced_by(session, v) is not None:
+        return "revert", p
     return ("end" if now else "nothing"), p  # write / approve / undo / restore that left it active
 
 
@@ -468,6 +528,13 @@ async def undo_or_restore(session: AsyncSession, v, mode: str, *, caregiver: boo
                 raise Refused("Only a caregiver, or the person who proposed it, can take back this proposed link.")
             await resolve_pending_link(session, link_id=row.id, approve=False, by=by)
             return {"result": "retracted"}
+        if effect == "revert":  # the earlier link comes back and takes this one's place (a caregiver's OK for others' health links)
+            cur = (await _active(session, v.family_id, v.subject_id, p["from_ref"], p["relation"], p["to_ref"]))[0]
+            old = await _replaced_by(session, v)
+            w = await write_link(session, family_id=v.family_id, subject_id=v.subject_id, source_kind=source_kind, stated_by=by,
+                                 source_ref=f"undo:{v.id}", force_confirm=wait, confirmed_by=by if caregiver else None,
+                                 **_link_parts(old))
+            return {"result": w.result, "link": readable(w.link), "instead_of": readable(cur)}
         if effect == "end":
             cur = (await _active(session, v.family_id, v.subject_id, p["from_ref"], p["relation"], p["to_ref"]))[0]
             w = await end_link(session, cur, reason=why, source_kind=source_kind, stated_by=by, force_confirm=wait)
@@ -476,13 +543,9 @@ async def undo_or_restore(session: AsyncSession, v, mode: str, *, caregiver: boo
             w = await write_link(session, family_id=v.family_id, subject_id=v.subject_id, source_kind=source_kind, stated_by=by,
                                  source_ref=f"undo:{v.id}", force_confirm=True, **p)
             return {"result": w.result, "link": readable(w.link)}
-        replaced = [str(x) for x in (v.value or {}).get("replaced") or []]
         w = await write_link(session, family_id=v.family_id, subject_id=v.subject_id, source_kind=source_kind, stated_by=by,
                              source_ref=f"undo:{v.id}", force_confirm=wait, confirmed_by=by if caregiver else None, **p)
-        out = {"result": w.result, "link": readable(w.link)}
-        if mode == "undo" and replaced and w.result in ("created", "replaced"):
-            out["note"] = "the link it had replaced stays ended"
-        return out
+        return {"result": w.result, "link": readable(w.link)}
 
 
 async def preview(session: AsyncSession, v, mode: str, *, caregiver: bool = True) -> dict:
@@ -496,6 +559,12 @@ async def preview(session: AsyncSession, v, mode: str, *, caregiver: bool = True
         return {"effect": "nothing", "text": "Nothing would change: the links already say that.", "button": ""}
     if effect == "retract":
         return {"effect": "retract", "text": f"This takes back the proposed link: {words}.", "button": "Yes, take it back"}
+    if effect == "revert":
+        back = readable(await _replaced_by(session, v))
+        if wait:
+            return {"effect": "pending", "text": f"This proposes putting back {back} (instead of {words}). It waits for a caregiver "
+                                                 "to confirm.", "button": "Yes, propose it"}
+        return {"effect": "change", "text": f"This puts back the earlier link: {back} (instead of {words}).", "button": "Yes, put it back"}
     if effect == "repropose" or wait:
         return {"effect": "pending", "text": f"This proposes again: {words}. It waits for a caregiver to confirm.", "button": "Yes, propose it"}
     if effect == "end":

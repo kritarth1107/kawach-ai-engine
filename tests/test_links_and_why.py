@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.brain import tools
+from app.brain import loop, tools
 from app.brain.loop import TurnRequest, run_turn
 from app.care import digest, links, memory_upkeep, store, versions, why
 from app.care.models import CareEvent, CareLink, OpenLoop
@@ -171,6 +171,91 @@ async def test_undo_and_restore_cover_links(db, at):
     out, err = await tools.run(ctx(db, E), "undo_change", {"id": newest.id, "mode": "undo"})
     assert not err and json.loads(out)["result"] == "pending"
     assert [ln.to_ref for ln in await active_links(db)] == ["doctor:dr_sharma"]
+
+
+async def test_the_same_link_proposal_is_asked_once(db, at):
+    """Review: a repeated or changed proposal added a second pending row, the question moved to it, and the first waited
+    for ever (a later yes could still apply a stale value)."""
+    at("2026-10-11 10:00")
+    await record_basics(db)
+    await remember(db)  # the caregiver set the medicine
+    bp = [{"relation": "for", "to_domain": "condition", "to_name": "blood pressure"}]
+    await remember(db, E, links_=bp)
+    await remember(db, E, links_=bp)
+
+    async def open_questions():
+        rows = (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "confirm_link",
+                                                        OpenLoop.status == "open"))).scalars().all()
+        return {lp.detail["link_id"] for lp in rows}
+
+    first = await links.links_for(db, FAM, ELDER, statuses=("pending",))
+    assert len(first) == 1 and await open_questions() == {str(first[0].id)}
+    # a one-value relation: a newer proposal settles the older one, so the caregiver is asked once
+    w1 = await links.write_link(db, family_id=FAM, subject_id=ELDER, from_ref="medicine:metformin", relation="prescribed_by",
+                                to_ref="doctor:dr_rao", label="Dr Rao", source_kind="inferred")
+    w2 = await links.write_link(db, family_id=FAM, subject_id=ELDER, from_ref="medicine:metformin", relation="prescribed_by",
+                                to_ref="doctor:dr_gupta", label="Dr Gupta", source_kind="inferred")
+    assert w1.result == w2.result == "pending"
+    assert (await db.get(CareLink, w1.link.id)).status == "ended"
+    assert await open_questions() == {str(first[0].id), str(w2.link.id)}
+    # the caregiver saying the link straight away settles the waiting proposal and its question
+    await remember(db, links_=bp)
+    assert "condition:blood_pressure" in {ln.to_ref for ln in await active_links(db)}
+    assert [ln.to_ref for ln in await links.links_for(db, FAM, ELDER, statuses=("pending",))] == ["doctor:dr_gupta"]
+    assert await open_questions() == {str(w2.link.id)}
+    # approving one value of a one-value relation settles any other proposal for it
+    w3 = await links.write_link(db, family_id=FAM, subject_id=ELDER, from_ref="medicine:metformin", relation="prescribed_by",
+                                to_ref="doctor:dr_sen", label="Dr Sen", source_kind="inferred")
+    await links.resolve_pending_link(db, link_id=w3.link.id, approve=True, by=CG)
+    assert not await links.links_for(db, FAM, ELDER, statuses=("pending",)) and not await open_questions()
+
+
+async def test_undoing_a_replacing_link_change_puts_the_earlier_link_back(db, at):
+    """Review: undoing 'prescribed by Dr Rao' (which had replaced Dr Sharma) left the medicine with no doctor at all."""
+    at("2026-10-11 10:00")
+    await remember(db, links_=[{"relation": "prescribed_by", "to_domain": "doctor", "to_name": "Dr Sharma"}])
+    await remember(db, links_=[{"relation": "prescribed_by", "to_domain": "doctor", "to_name": "Dr Rao"}])
+    v = (await versions.changes(db, FAM, [ELDER], kinds=("link",)))[0]
+    assert v.op == "write" and v.value["replaced"]
+    pv = await versions.preview(db, v, "undo")
+    assert pv["effect"] == "change" and "Dr Sharma" in pv["text"] and "instead of" in pv["text"], pv
+    out, err = await tools.run(ctx(db), "undo_change", {"id": v.id, "mode": "undo", "reason": "Dr Rao was a mistake"})
+    assert not err and json.loads(out)["result"] == "replaced", out
+    assert [ln.to_ref for ln in await active_links(db)] == ["doctor:dr_sharma"]
+    # the elder's undo of such a change only proposes putting the earlier link back
+    await remember(db, links_=[{"relation": "prescribed_by", "to_domain": "doctor", "to_name": "Dr Rao"}])
+    v = (await versions.changes(db, FAM, [ELDER], kinds=("link",)))[0]
+    out, err = await tools.run(ctx(db, E), "undo_change", {"id": v.id, "mode": "undo"})
+    assert not err and json.loads(out)["result"] == "pending", out
+    assert [ln.to_ref for ln in await active_links(db)] == ["doctor:dr_rao"]
+    assert [ln.to_ref for ln in await links.links_for(db, FAM, ELDER, statuses=("pending",))] == ["doctor:dr_sharma"]
+
+
+async def test_a_decision_about_a_fact_never_decides_a_link(db, at):
+    """Review: the dashboard's approve of a fact (or a repeated one) fell through to the only waiting link and decided it."""
+    at("2026-10-11 10:00")
+    await record_basics(db)
+    await remember(db)
+    await remember(db, E, links_=[{"relation": "for", "to_domain": "condition", "to_name": "blood pressure"}])
+    out, err = await tools.run(ctx(db), "confirm_change", {"key": "medicine:metformin", "approve": True})
+    got = json.loads(out)
+    assert not err and got["result"] == "nothing_pending", got
+    assert got["pending_links"] == [{"link_to": "condition:blood_pressure", "link": "for blood pressure"}]
+    assert [ln.to_ref for ln in await links.links_for(db, FAM, ELDER, statuses=("pending",))] == ["condition:blood_pressure"]
+
+
+async def test_a_caregivers_own_record_reaches_their_turn(db, at):
+    """Review: a caregiver with their own care record could not be answered at all (the turn read links without
+    importing them)."""
+    at("2026-10-11 10:00")
+    out, err = await tools.run(ctx(db), "remember", {
+        "domain": "medicine", "name": "Vitamin D", "about": CG, "sentence": "My vitamin D at 9",
+        "details": {"name": "Vitamin D", "dose": "1 tab", "times": ["09:00"]},
+        "links": [{"relation": "prescribed_by", "to_domain": "doctor", "to_name": "Dr Rao"}]})
+    assert not err, out
+    dynamic, _ = await loop.turn_context(db, turn("kal ka plan?", "wamid.OWN1", speaker=C))
+    own = dynamic.split("YOUR OWN CARE", 1)[1]
+    assert "[medicine:vitamin_d]" in own and "prescribed by Dr Rao" in own
 
 
 async def test_one_value_relations_replace_the_old_link(db, at):
@@ -505,7 +590,12 @@ def test_background_task_runs_are_not_filed_under_the_turn():
 def test_scrubbing_keeps_amounts_and_doses():
     assert trace.scrub("482913") == "••••"
     assert trace.scrub("the code from the store is 482913") == "the code from the store is ••••"
-    assert trace.scrub("Total ₹1250, Metformin 1000 mg") == "Total ₹1250, Metformin 1000 mg"
+    assert trace.scrub("482913 go ahead") == "•••• go ahead", "'g' of 'go' is not a unit"
+    assert trace.scrub("482913 ghar pe") == "•••• ghar pe"
+    assert trace.scrub("Swiggy ka message aaya hai 482913 wala dekh lo") == "Swiggy ka message aaya hai •••• wala dekh lo"
+    assert trace.scrub("Total ₹1250, Metformin 1000 mg, 2500 rupees") == "Total ₹1250, Metformin 1000 mg, 2500 rupees"
+    assert trace.scrub('{"date": "2026-10-15", "until": "15/10/2026"}') == '{"date": "2026-10-15", "until": "15/10/2026"}'
+    assert trace.scrub("code 4829 and 2026-10-15") == "code •••• and 2026-10-15"
     assert trace.summarize({"task_id": "t1", "kind": "otp", "value": "4829"}) == "task_id=t1, kind=otp, value=••••"
     assert trace.mask({"password": "x", "items": [{"name": "milk"}]}) == {"password": "••••", "items": [{"name": "milk"}]}
 

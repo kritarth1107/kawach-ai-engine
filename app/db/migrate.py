@@ -1,152 +1,303 @@
-"""Incremental schema migrations for Instinct memory layer."""
+"""Schema changes applied at every start: the engine, the night and restore jobs, tests and sims.
+
+Safe while live traffic uses the tables and when several processes start at once. (D-13 review: one transaction that
+ALTERed every table at each start queued behind live queries, could deadlock with another start, and swallowed the
+error, so a missing column only showed later as every query on its table failing.)
+- The catalog is read first: a table, column, index or constraint that is already there takes no lock at all.
+- A missing one is added in its own short transaction with a lock timeout and retried, so a start never holds one
+  table's lock while waiting for another, and live queries never queue behind it for long.
+- On the live database, indexes are built CONCURRENTLY after start (reads and writes go on); a half-built one is rebuilt.
+- A column the code needs that is still missing after the retries stops the start, so the old revision keeps serving.
+  An index or constraint that could not be made is logged and tried again at the next start.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import random
+from dataclasses import dataclass
+
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+log = logging.getLogger(__name__)
 
-async def run_instinct_migrations(conn: AsyncConnection) -> None:
-    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-    await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+LOCK_TIMEOUT = "3s"  # DDL that blocks traffic while it waits for its lock
+INDEX_LOCK_TIMEOUT = "60s"  # a concurrent index build blocks nobody while it waits
+TRIES = 5
 
-    alters = [
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64)",
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS source_role VARCHAR(32) DEFAULT 'elder'",
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS superseded_by UUID",
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS forgotten_at TIMESTAMPTZ",
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS forgotten_by VARCHAR(128)",
-        "ALTER TABLE family_memories ADD COLUMN IF NOT EXISTS entity_id UUID",
-    ]
-    for stmt in alters:
-        await conn.execute(text(stmt))
+EXTENSIONS = ("vector", "pg_trgm")
 
-    await conn.execute(
-        text(
-            """
-            CREATE UNIQUE INDEX IF NOT EXISTS uq_family_memories_content_hash
-            ON family_memories (elder_id, content_hash)
-            WHERE forgotten_at IS NULL AND content_hash IS NOT NULL
-            """
-        )
-    )
+# ── v1 memory layer (family_memories and its entity tables) ──
 
-    await conn.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS memory_entities (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-                elder_id UUID NOT NULL REFERENCES elders(id) ON DELETE CASCADE,
-                slug VARCHAR(128) NOT NULL,
-                kind VARCHAR(32) NOT NULL,
-                title VARCHAR(255) NOT NULL,
-                aliases TEXT[],
-                status VARCHAR(32) DEFAULT 'active',
-                owner_user_id VARCHAR(128),
-                review_by DATE,
-                body_md TEXT DEFAULT '',
-                body_embedding vector(768),
-                sources JSONB DEFAULT '[]',
-                version INTEGER DEFAULT 1,
-                dirty BOOLEAN DEFAULT FALSE,
-                updated_at TIMESTAMPTZ DEFAULT NOW(),
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (elder_id, slug)
-            )
-            """
-        )
-    )
-
-    await conn.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS memory_entity_links (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                from_entity_id UUID NOT NULL REFERENCES memory_entities(id) ON DELETE CASCADE,
-                to_entity_id UUID NOT NULL REFERENCES memory_entities(id) ON DELETE CASCADE,
-                relation VARCHAR(64) DEFAULT 'related',
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-            """
-        )
-    )
-
-    await conn.execute(
-        text(
-            """
-            CREATE TABLE IF NOT EXISTS memory_profiles (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
-                elder_id UUID NOT NULL REFERENCES elders(id) ON DELETE CASCADE,
-                body_md TEXT DEFAULT '',
-                token_estimate INTEGER DEFAULT 0,
-                rendered_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ DEFAULT NOW(),
-                UNIQUE (family_id, elder_id)
-            )
-            """
-        )
-    )
-
-    await conn.execute(
-        text(
-            """
-            DO $$ BEGIN
-                ALTER TABLE family_memories
-                ADD CONSTRAINT fk_family_memories_entity
-                FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE SET NULL;
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$
-            """
-        )
-    )
-
-    await conn.execute(
-        text(
-            """
-            DO $$ BEGIN
-                ALTER TABLE family_memories
-                ADD CONSTRAINT fk_family_memories_superseded
-                FOREIGN KEY (superseded_by) REFERENCES family_memories(id) ON DELETE SET NULL;
-            EXCEPTION WHEN duplicate_object THEN NULL;
-            END $$
-            """
-        )
-    )
-
-    await conn.execute(
-        text(
-            "CREATE INDEX IF NOT EXISTS ix_memory_entities_aliases ON memory_entities USING GIN (aliases)"
-        )
-    )
-
-
-# Columns and indexes added to Saheli v2 tables after they first shipped. create_all() makes new tables but never
-# changes existing ones, so every startup (and the test, sim and job setups) runs these idempotent statements.
-V2_ALTERS = [
-    "ALTER TABLE reply_log ADD COLUMN IF NOT EXISTS trace JSONB",
-    "ALTER TABLE playbook_versions ADD COLUMN IF NOT EXISTS scope JSONB DEFAULT '[]'::jsonb",
-    "CREATE INDEX IF NOT EXISTS ix_turns_thread_id ON turns (family_id, thread_id, id)",
-    "CREATE UNIQUE INDEX IF NOT EXISTS uq_service_logins_profile ON service_logins (profile_id) WHERE profile_id IS NOT NULL",
-    # D-13 why-trail: the trace of the work that wrote each row
-    "ALTER TABLE care_events ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
-    "ALTER TABLE memory_versions ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
-    "ALTER TABLE open_loops ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
-    "ALTER TABLE care_tasks ADD COLUMN IF NOT EXISTS trace_id VARCHAR(160)",
-    "CREATE INDEX IF NOT EXISTS ix_care_events_trace ON care_events (trace_id) WHERE trace_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS ix_memory_versions_trace ON memory_versions (trace_id) WHERE trace_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS ix_open_loops_trace ON open_loops (trace_id) WHERE trace_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS ix_care_tasks_trace ON care_tasks (trace_id) WHERE trace_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS ix_care_events_task ON care_events ((payload->>'task_id')) WHERE (payload->>'task_id') IS NOT NULL",
+INSTINCT_COLUMNS = [
+    ("family_memories", "content_hash", "VARCHAR(64)"),
+    ("family_memories", "source_role", "VARCHAR(32) DEFAULT 'elder'"),
+    ("family_memories", "superseded_by", "UUID"),
+    ("family_memories", "forgotten_at", "TIMESTAMPTZ"),
+    ("family_memories", "forgotten_by", "VARCHAR(128)"),
+    ("family_memories", "entity_id", "UUID"),
 ]
+
+INSTINCT_TABLES = [
+    ("memory_entities", """
+        CREATE TABLE IF NOT EXISTS memory_entities (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+            elder_id UUID NOT NULL REFERENCES elders(id) ON DELETE CASCADE,
+            slug VARCHAR(128) NOT NULL,
+            kind VARCHAR(32) NOT NULL,
+            title VARCHAR(255) NOT NULL,
+            aliases TEXT[],
+            status VARCHAR(32) DEFAULT 'active',
+            owner_user_id VARCHAR(128),
+            review_by DATE,
+            body_md TEXT DEFAULT '',
+            body_embedding vector(768),
+            sources JSONB DEFAULT '[]',
+            version INTEGER DEFAULT 1,
+            dirty BOOLEAN DEFAULT FALSE,
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (elder_id, slug)
+        )"""),
+    ("memory_entity_links", """
+        CREATE TABLE IF NOT EXISTS memory_entity_links (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            from_entity_id UUID NOT NULL REFERENCES memory_entities(id) ON DELETE CASCADE,
+            to_entity_id UUID NOT NULL REFERENCES memory_entities(id) ON DELETE CASCADE,
+            relation VARCHAR(64) DEFAULT 'related',
+            created_at TIMESTAMPTZ DEFAULT NOW()
+        )"""),
+    ("memory_profiles", """
+        CREATE TABLE IF NOT EXISTS memory_profiles (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            family_id UUID NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+            elder_id UUID NOT NULL REFERENCES elders(id) ON DELETE CASCADE,
+            body_md TEXT DEFAULT '',
+            token_estimate INTEGER DEFAULT 0,
+            rendered_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE (family_id, elder_id)
+        )"""),
+]
+
+# (name, table, "UNIQUE" or "", what follows "ON table")
+INSTINCT_INDEXES = [
+    ("uq_family_memories_content_hash", "family_memories", "UNIQUE",
+     "(elder_id, content_hash) WHERE forgotten_at IS NULL AND content_hash IS NOT NULL"),
+    ("ix_memory_entities_aliases", "memory_entities", "", "USING GIN (aliases)"),
+]
+
+INSTINCT_CONSTRAINTS = [
+    ("fk_family_memories_entity", "family_memories",
+     "FOREIGN KEY (entity_id) REFERENCES memory_entities(id) ON DELETE SET NULL"),
+    ("fk_family_memories_superseded", "family_memories",
+     "FOREIGN KEY (superseded_by) REFERENCES family_memories(id) ON DELETE SET NULL"),
+]
+
+# ── Saheli v2: added after their tables first shipped (create_all makes new tables, never changes existing ones) ──
+
+COLUMNS = [  # every one is required: the models select it
+    ("reply_log", "trace", "JSONB"),
+    ("playbook_versions", "scope", "JSONB DEFAULT '[]'::jsonb"),
+    # D-13 why-trail: the trace of the work that wrote each row
+    ("care_events", "trace_id", "VARCHAR(160)"),
+    ("memory_versions", "trace_id", "VARCHAR(160)"),
+    ("open_loops", "trace_id", "VARCHAR(160)"),
+    ("care_tasks", "trace_id", "VARCHAR(160)"),
+]
+
+INDEXES = [
+    ("ix_turns_thread_id", "turns", "", "(family_id, thread_id, id)"),
+    ("uq_service_logins_profile", "service_logins", "UNIQUE", "(profile_id) WHERE profile_id IS NOT NULL"),
+    ("ix_care_events_trace", "care_events", "", "(trace_id) WHERE trace_id IS NOT NULL"),
+    ("ix_memory_versions_trace", "memory_versions", "", "(trace_id) WHERE trace_id IS NOT NULL"),
+    ("ix_open_loops_trace", "open_loops", "", "(trace_id) WHERE trace_id IS NOT NULL"),
+    ("ix_care_tasks_trace", "care_tasks", "", "(trace_id) WHERE trace_id IS NOT NULL"),
+    ("ix_care_events_task", "care_events", "", "((payload->>'task_id')) WHERE (payload->>'task_id') IS NOT NULL"),
+]
+
+COLUMN_THERE = ("SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = current_schema() AND table_name = :t AND column_name = :c")
+CONSTRAINT_THERE = ("SELECT 1 FROM pg_constraint k JOIN pg_namespace n ON n.oid = k.connamespace "
+                    "WHERE n.nspname = current_schema() AND k.conname = :n")
+INDEX_STATE = ("SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+               "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema() AND c.relname = :n")
+
+
+@dataclass
+class Catalog:
+    extensions: set[str]
+    tables: set[str]
+    columns: set[tuple[str, str]]
+    indexes: dict[str, bool]  # name → valid (False: left half-built by a failed concurrent build)
+    constraints: set[str]
+
+
+async def read_catalog(conn: AsyncConnection) -> Catalog:
+    async def rows(sql: str) -> list:
+        return list((await conn.execute(text(sql))).all())
+
+    return Catalog(
+        extensions={r[0] for r in await rows("SELECT extname FROM pg_extension")},
+        tables={r[0] for r in await rows("SELECT tablename FROM pg_tables WHERE schemaname = current_schema()")},
+        columns={(r[0], r[1]) for r in await rows(
+            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()")},
+        indexes={r[0]: bool(r[1]) for r in await rows(
+            "SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = current_schema()")},
+        constraints={r[0] for r in await rows(
+            "SELECT k.conname FROM pg_constraint k JOIN pg_namespace n ON n.oid = k.connamespace "
+            "WHERE n.nspname = current_schema()")},
+    )
+
+
+def _index_sql(name: str, table: str, unique: str, body: str, *, concurrently: bool = False) -> str:
+    return " ".join(p for p in ("CREATE", unique, "INDEX", "CONCURRENTLY" if concurrently else "",
+                                f"IF NOT EXISTS {name} ON {table} {body}") if p)
+
+
+def _short(e: BaseException | None) -> str:
+    return " ".join(str(getattr(e, "orig", None) or e).split())[:300]
+
+
+async def _retry(what: str, run, done=None) -> BaseException | None:
+    """Run a schema step up to TRIES times (a lock timeout, a deadlock, or another start that made it first). Returns
+    the last error, or None once it ran or done() says the thing is there."""
+    err: BaseException | None = None
+    for i in range(TRIES):
+        try:
+            await run()
+            return None
+        except Exception as e:  # noqa: BLE001
+            err = e
+            if done is not None:
+                try:
+                    if await done():
+                        return None
+                except Exception:  # noqa: BLE001
+                    pass
+            if i + 1 < TRIES:
+                log.warning("schema: %s failed (try %d of %d): %s", what, i + 1, TRIES, _short(e))
+                await asyncio.sleep(min(0.5 * 2 ** i, 4) + random.random() * 0.3)
+    log.error("schema: %s failed after %d tries: %s", what, TRIES, _short(err))
+    return err
+
+
+async def _alter(engine: AsyncEngine, what: str, ddl: str, there: str, params: dict, *, required: bool) -> None:
+    async def run() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+            await conn.execute(text(ddl))
+        log.info("schema: added %s", what)
+
+    async def done() -> bool:
+        async with engine.connect() as conn:
+            return (await conn.execute(text(there), params)).first() is not None
+
+    err = await _retry(what, run, done)
+    if err is not None and required:
+        raise RuntimeError(f"schema: {what} is missing and could not be added: {_short(err)}") from err
+
+
+async def ensure_columns(engine: AsyncEngine, columns: list[tuple[str, str, str]], cat: Catalog) -> None:
+    """Add the missing ones (required: a start without them would fail every query on the table)."""
+    for table, column, kind in columns:
+        if table in cat.tables and (table, column) not in cat.columns:
+            await _alter(engine, f"column {table}.{column}", f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {kind}",
+                         COLUMN_THERE, {"t": table, "c": column}, required=True)
+
+
+async def ensure_schema(engine: AsyncEngine) -> None:
+    """The live path (engine start, night and restore jobs): tables, columns and constraints now. Indexes come from
+    ensure_indexes(), which the engine runs after it starts serving."""
+    from app.db.session import Base
+
+    async def tables() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+            cat = await read_catalog(conn)
+            for ext in EXTENSIONS:
+                if ext not in cat.extensions:
+                    await conn.execute(text(f"CREATE EXTENSION IF NOT EXISTS {ext}"))
+            await conn.run_sync(Base.metadata.create_all)  # checks first: an existing table is never touched
+            for name, ddl in INSTINCT_TABLES:
+                if name not in cat.tables:
+                    await conn.execute(text(ddl))
+
+    err = await _retry("tables", tables)
+    if err is not None:
+        raise RuntimeError(f"schema: tables could not be created: {_short(err)}") from err
+    async with engine.connect() as conn:
+        cat = await read_catalog(conn)
+    await ensure_columns(engine, INSTINCT_COLUMNS + COLUMNS, cat)
+    for name, table, ddl in INSTINCT_CONSTRAINTS:
+        if table in cat.tables and name not in cat.constraints:
+            await _alter(engine, f"constraint {name}", f"ALTER TABLE {table} ADD CONSTRAINT {name} {ddl}",
+                         CONSTRAINT_THERE, {"n": name}, required=False)
+
+
+async def build_index(engine: AsyncEngine, name: str, table: str, unique: str, body: str) -> None:
+    """CREATE INDEX CONCURRENTLY outside a transaction (reads and writes go on); a half-built one is dropped first."""
+    async with engine.connect() as conn:
+        await conn.execution_options(isolation_level="AUTOCOMMIT")
+        await conn.execute(text(f"SET lock_timeout = '{INDEX_LOCK_TIMEOUT}'"))
+        try:
+            if (await conn.execute(text(INDEX_STATE), {"n": name})).scalar() is False:
+                await conn.execute(text(f"DROP INDEX CONCURRENTLY IF EXISTS {name}"))
+            await conn.execute(text(_index_sql(name, table, unique, body, concurrently=True)))
+        finally:
+            await conn.execute(text("RESET lock_timeout"))
+    log.info("schema: built index %s", name)
+
+
+async def ensure_indexes(engine: AsyncEngine, indexes: list[tuple[str, str, str, str]] | None = None) -> None:
+    """Build missing or half-built indexes. Never raises: a missing index only slows queries, and the next start tries
+    again."""
+    try:
+        async with engine.connect() as conn:
+            cat = await read_catalog(conn)
+        for name, table, unique, body in (INSTINCT_INDEXES + INDEXES if indexes is None else indexes):
+            if table not in cat.tables or cat.indexes.get(name) is True:
+                continue
+
+            async def valid(n: str = name) -> bool:
+                async with engine.connect() as c:
+                    return (await c.execute(text(INDEX_STATE), {"n": n})).scalar() is True
+
+            await _retry(f"index {name}", lambda n=name, t=table, u=unique, b=body: build_index(engine, n, t, u, b), valid)
+    except Exception:  # noqa: BLE001
+        log.exception("schema: index check failed; the next start tries again")
+
+
+# ── tests, sims and evals: a fresh or private database without live traffic, inside the caller's transaction ──
+
+
+async def _apply(conn: AsyncConnection, columns, indexes, constraints=()) -> None:
+    cat = await read_catalog(conn)
+    for table, column, kind in columns:
+        if table in cat.tables and (table, column) not in cat.columns:
+            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {kind}"))
+    for name, table, unique, body in indexes:
+        if table in cat.tables and name not in cat.indexes:
+            await conn.execute(text(_index_sql(name, table, unique, body)))
+    for name, table, ddl in constraints:
+        if table in cat.tables and name not in cat.constraints:
+            await conn.execute(text(f"ALTER TABLE {table} ADD CONSTRAINT {name} {ddl}"))
 
 
 async def run_v2_migrations(conn: AsyncConnection) -> None:
-    for stmt in V2_ALTERS:
-        try:
-            await conn.execute(text(f"SAVEPOINT v2m"))
-            await conn.execute(text(stmt))
-            await conn.execute(text("RELEASE SAVEPOINT v2m"))
-        except Exception:  # noqa: BLE001 — a table that does not exist yet is created by create_all with the column
-            await conn.execute(text("ROLLBACK TO SAVEPOINT v2m"))
+    await _apply(conn, COLUMNS, INDEXES)
+
+
+async def run_instinct_migrations(conn: AsyncConnection) -> None:
+    cat = await read_catalog(conn)
+    for ext in EXTENSIONS:
+        if ext not in cat.extensions:
+            await conn.execute(text(f"CREATE EXTENSION IF NOT EXISTS {ext}"))
+    for name, ddl in INSTINCT_TABLES:
+        if name not in cat.tables:
+            await conn.execute(text(ddl))
+    await _apply(conn, INSTINCT_COLUMNS, INSTINCT_INDEXES, INSTINCT_CONSTRAINTS)

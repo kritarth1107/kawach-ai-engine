@@ -138,22 +138,23 @@ def note_spend(role: str, model: str, cost: float, tokens_in: int, tokens_out: i
 # ── nothing secret is ever stored in a trace ─────────────────────────────────
 
 SECRET_KEYS = {"otp", "code", "password", "passcode", "pin", "cvv", "token", "secret", "card", "card_number", "upi_pin"}
-# A login code sent on its own ("482913", "here 482913"). Not a number with a unit or a currency (a dose, an amount).
-BARE_CODE = re.compile(r"(?<![\d.,₹])(?<!rs )(?<!rs\.)(?<!inr )\b\d{4,8}\b(?![.,]\d)(?!\s?(?:mg|mcg|ml|gm|g|iu|units?|kcal|rs|/-|%))", re.I)
-SHORT_WORDS = 4
-CODE_WORD = re.compile(r"(?i)\b(otp|code|pin|password|passcode|cvv)\b")  # the existing scrubber's own words
+# Any bare 4–8 digit run could be a login code ("482913 go ahead", "message aaya hai 482913 wala"), so a trace's copy
+# masks them all, except a number with a currency before it or a unit right after it (an amount, a dose) and the year of
+# a written date (2026-10-15, 15/10/2026). Over-masking a pincode or a year in prose is the safe side.
+BARE_CODE = re.compile(
+    r"(?<![\d.,₹$])(?<!rs )(?<!rs\.)(?<!inr )(?<!₹ )(?<!\d[-/])\b\d{4,8}\b(?![.,]\d)(?![-/]\d{1,2}[-/]\d{1,2})"
+    r"(?!\s?(?:mg|mcg|ml|gm|g|kg|iu|units?|kcal|rs|rupees?|rupaye|inr|/-|%)\b)(?!\s?(?:/-|%))", re.I)
 
 
 def scrub(text: str | None, known: set[str] | tuple = ()) -> str:
     """A stored trace's copy of a message, reply or argument: the existing scrubber (codes next to 'otp', 'code', 'pin'
-    …), every secret value seen in this turn (a code passed to a task), and a bare 4–8 digit run in a short message or
-    in one that speaks of a code anywhere (a login code sent on its own, or 'the code from the store is …')."""
+    …), every secret value seen in this turn (a code passed to a task), and every other bare 4–8 digit run."""
     from app.care.redact import scrub_secrets
 
     out = scrub_secrets(text or "")
     for s in sorted({str(k) for k in known if k and len(str(k)) >= 4}, key=len, reverse=True):
         out = out.replace(s, "••••")
-    return BARE_CODE.sub("••••", out) if len(out.split()) <= SHORT_WORDS or CODE_WORD.search(out) else out
+    return BARE_CODE.sub("••••", out)
 
 
 def mask(value, known: set[str] | tuple = ()):

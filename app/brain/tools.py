@@ -20,7 +20,7 @@ from app.care import store
 from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, fact_key, slug
 from app.care.links import BRAIN_RELATIONS as LINK_RELATIONS
 from app.care.models import OpenLoop
-from app.core import clock, trace
+from app.core import clock
 from app.llm.router import ToolSpec
 
 logger = logging.getLogger(__name__)
@@ -387,14 +387,17 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
 
         waiting = [ln for ln in await links.links_for(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",), from_ref=a["key"])
                    if not a.get("link_to") or ln.to_ref == a["link_to"]]
-        if len(waiting) > 1 and not a.get("link_to"):
-            return {"result": "several_pending_links", "links": [{"link_to": ln.to_ref, "link": links.phrase(ln)} for ln in waiting],
-                    "note": "Ask which, then call confirm_change with link_to."}
+        if not a.get("link_to"):
+            # a decision about a fact never decides a link (a stale or repeated approve on the dashboard): say what waits
+            out: dict = {"result": "nothing_pending", "key": a["key"]}
+            if waiting:
+                out["pending_links"] = [{"link_to": ln.to_ref, "link": links.phrase(ln)} for ln in waiting]
+                out["note"] = "To decide a pending link, call confirm_change with link_to."
+            return out
         if waiting:
             ln = await links.resolve_pending_link(ctx.session, link_id=waiting[0].id, approve=bool(a["approve"]), by=ctx.speaker["id"])
             return {"result": ln.status if ln else "not_found", "key": a["key"], "link": links.phrase(waiting[0])}
-        if not pending:
-            return {"result": "nothing_pending", "key": a["key"]}
+        return {"result": "nothing_pending", "key": a["key"], "link_to": a["link_to"]}
     row = await store.resolve_pending(ctx.session, fact_id=pending[-1].id, approve=bool(a["approve"]), by=ctx.speaker["id"])
     if row and a["approve"] and row.status in ("active", "stopped"):
         from app.care import outcomes

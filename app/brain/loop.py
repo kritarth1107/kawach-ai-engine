@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain import guards, policy, tools
 from app.brain.host import ToolHost
 from app.brain.persona import PERSONA, REPLY_FORMAT
-from app.care import digest, freshness, importer, store
+from app.care import digest, freshness, importer, links, store
 from app.care.domains import SLOTS
 from app.care.models import Turn
 from app.core import clock, trace
@@ -145,8 +145,6 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
     rows = await data.facts(req.elder["id"]) if data else await store.facts(session, req.family_id, req.elder["id"])
     note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
     stale = await freshness.stale_facts(session, req.family_id, req.elder["id"], rows)
-    from app.care import links
-
     record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale,
                                 await links.links_for(session, req.family_id, req.elder["id"]))
     block = "\n\n".join(
