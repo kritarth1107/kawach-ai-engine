@@ -169,6 +169,14 @@ async def _compare_update(session: AsyncSession, task: Task, own: str) -> tuple[
     return None, False
 
 
+def _plain_amount(v) -> bool:
+    """A total as a checkout shows it: a number, or "₹1,234" / "Rs 320.50", nothing else. An agent's words around a number
+    ("₹320 (estimated …)") mean it did not see the bill. A data check on the store's report, not on anyone's words."""
+    if isinstance(v, (int, float)):
+        return v > 0
+    return bool(re.fullmatch(r"\s*(?:₹|rs\.?|inr)?\s*\d[\d,]*(?:\.\d{1,2})?\s*", str(v or ""), re.I))
+
+
 def _rupee_value(v) -> float:
     m = re.search(r"\d+(?:\.\d+)?", str(v or "").replace(",", ""))
     return float(m.group(0)) if m else 0.0
@@ -341,6 +349,7 @@ STILL_WORKING = timedelta(minutes=5)  # one "still working" line after this long
 
 
 MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
+MAX_CODE_RESENDS = 2  # new login codes asked for one order when the person says the code did not come
 MAX_SKILL_NOTES = 12
 
 
@@ -408,8 +417,14 @@ def describe(task: Task) -> str:
         bits.append(f"waiting for {task.input_needed}")
     if d.get("items") and task.kind == "order":
         bits.append("asked: " + "; ".join(f"{n}. {i.get('name')} x{i.get('qty', 1)}" for n, i in enumerate(d["items"], 1) if isinstance(i, dict)))
-    if r.get("items"):
-        in_cart = task.phase != "browse" and bool(d.get("cart_fp") or r.get("total"))
+    in_cart = task.phase != "browse" and bool(d.get("cart_fp") or r.get("total"))
+    if d.get("chosen") and not in_cart and task.kind == "order":
+        # Saheli's own pick, and only that (live 2026-10-11: with every product found listed here, the brain read them out
+        # as options to choose from although the order had picked one). The one confirm names it; they can change it there.
+        asked = d.get("items") or []
+        bits.append("picked by Saheli (not in a cart yet; do not offer other products): " + "; ".join(
+            f"{channels._qty_for(asked, c)} x {_label(c)} {c.get('price') or ''}".strip() for c in d["chosen"][:8]))
+    elif r.get("items"):
         bits.append(("cart: " if in_cart else "found (not in a cart yet): ") + "; ".join(f"{i.get('qty', 1)} x {i.get('name')} {i.get('price', '')}".strip() for i in r["items"][:12]))
     if r.get("alternatives"):
         bits.append("alternatives: " + "; ".join(map(str, r["alternatives"][:5])))
@@ -466,8 +481,11 @@ def _goal(task: Task) -> str:
     if task.phase == "prepare" and (task.details or {}).get("login_only"):
         # The cart is built through the store's own request once logged in: the agent only has to log in.
         label = SKILLS[task.service]["label"]
-        return (f"On {label}, only log in to the account; do not search, add to the cart or open checkout. When the site shows "
-                f"you are logged in, stop and report logged_in=true.")
+        again = (" A login code was asked for before and never arrived: open the login again (the Login button), enter the "
+                 "number and ask for a new code (press Resend or Get OTP if it is shown); report needs_otp=true only once the site "
+                 "shows the code was sent.") if (task.details or {}).get("resend_code") else ""
+        return (f"On {label}, only log in to the account; do not search, add to the cart or open checkout.{again} When the site "
+                f"shows you are logged in, stop and report logged_in=true.")
     return specialist_for(task.service).goal(task)
 
 
@@ -643,7 +661,7 @@ RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": N
 
 
 APPROVAL_WAIT = timedelta(minutes=90)
-MORE_LIMIT = 20  # products looked up for an item they asked to see more of (12 otherwise)
+MORE_LIMIT = 40  # products looked up for an item they asked to see more of (24 otherwise)
 
 
 def _eta_wait(task: Task) -> timedelta:
@@ -756,6 +774,22 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.deadline_at = max(task.deadline_at, clock.now() + TASK_LIFETIME)
         note(task, f"keep trying, said {by}")
         return "keeping at it; the next update comes when it needs someone or is placed"
+    if kind == "only":
+        # They named one store of a running comparison (live 2026-10-11: "Zepto" — Saheli said "checking only on Zepto"
+        # and all three stores went on). That store goes on alone, as an order on the store they named.
+        d = task.details or {}
+        if not compare_group(task) or task.status not in LIVE or task.phase not in ("prepare", "browse"):
+            return "this is not a store of a running comparison; for another store, cancel_task it and start_task with that service"
+        label = SKILLS[task.service]["label"]
+        _drop_others(await siblings(session, task), task, f"{by} wants {label} only")
+        task.details = {**d, "compare": None, "compare_seen": None, "compare_note": None}
+        if task.status == "awaiting_confirm" and task.input_needed == "go":
+            # it has looked already: its own pick goes on to the cart and the one confirm, else it looks again on its own
+            task.details = {**task.details, **({} if d.get("chosen") else {"browsed": False})}
+            task.phase, task.status, task.input_needed = "prepare", "queued", None
+            task.deadline_at = clock.now() + TASK_LIFETIME
+        note(task, f"only {label}, said {by}; the other stores are dropped")
+        return f"only {label} now; the other stores are dropped. The one confirm with the total comes in a task update"
     if task.status not in ("needs_input", "awaiting_confirm"):
         return f"not waiting for input (status {task.status})"
     from app.care.boundaries import may_approve
@@ -767,6 +801,21 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
         task.details = {**(task.details or {}), **LADDER_RESET, "ladder_from": clock.now().isoformat()}
     d = task.details or {}
     placed = bool((task.result or {}).get("placed") or (task.result or {}).get("booked"))
+    if kind == "resend":
+        # The login code did not come. Live 2026-10-11: Saheli promised to ask for a new one, nothing could, and the order
+        # sat until it was cancelled. The store is asked again with a fresh login run (at most twice).
+        if task.input_needed != "otp":
+            return "not waiting for a login code right now"
+        n = int(d.get("code_resends") or 0)
+        if n >= MAX_CODE_RESENDS:
+            return (f"a new code was already asked for {n} times; ask whether the number ending {d.get('login') or '?'} is right "
+                    "and whether to keep trying or cancel")
+        task.details = {**d, "code_resends": n + 1, "login_only": True, "resend_code": True, "otp_entered": False, "code_lost": False}
+        task.phase, task.status, task.input_needed = "prepare", "queued", None
+        task.deadline_at = clock.now() + TASK_LIFETIME
+        note(task, f"login code did not come (said {by}): asking the store for a new one")
+        return ("asking the store for a new login code now (NOT ordered); a task update comes when it is sent. Say only that a "
+                "new code is coming to the same phone in a minute")
     if kind in ("confirm", "choice", "swap", "go", "approve") and _is_no(value) and not placed:
         if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id):
             return "only the family's approver can decline this"
@@ -1017,10 +1066,14 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             task.details = {**(task.details or {}), "code_lost": False}
             return "needs_input", (f"The store's login page closed before the code could be used, so it sent a new code to {to}. "
                                    "Say sorry briefly and ask for the new code (the earlier one will not work).")
-        return "needs_input", f"The service sent a login code to {to}; ask the person who has that phone for it."
+        if d.get("resend_code"):
+            return "needs_input", (f"The store sent a NEW login code to {to} (the earlier one never came); ask the person who has that "
+                                   "phone for it. If this one does not come either, task_input kind resend asks once more.")
+        return "needs_input", (f"The service sent a login code to {to}; ask the person who has that phone for it. If it does not "
+                               "come, task_input kind resend asks the store for a new one.")
     if task.phase in ("prepare", "otp") and d.get("login_only") and out.get("logged_in") and not out.get("blocked"):
         # Logged in: back to the fast cart (once more), then the cart comes back for a confirm.
-        task.details = {**d, "login_only": False, "login_done": True, "fast_cart_tried": False}
+        task.details = {**d, "login_only": False, "login_done": True, "fast_cart_tried": False, "resend_code": False}
         return "queued", ""
     if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
         task.details = {**(task.details or {}), "login_missing": True}  # true on every store: no next store is tried
@@ -1104,11 +1157,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             if v.family_rule:  # the care record or a prescription: the next store would be stopped the same way
                 task.details = {**(task.details or {}), "rule_block": True}
             return "failed", "Stopped before placing: " + "; ".join(v.block) + ". Nothing was placed."
-        if rupees(out.get("total")) is None and not d.get("total_relook"):
-            # Live 2026-10-11: the cart came back without a total and Maa was asked to confirm with no amount. One short look
-            # at the cart and checkout for the total, changing nothing (founder: one confirm WITH the amount).
+        if not _plain_amount(out.get("total")) and not d.get("total_relook"):
+            # Live 2026-10-11: the cart came back without a total and Maa was asked to confirm with no amount; later the same
+            # day a Blinkit agent reported "₹320 (estimated based on ₹80 per item; full bill summary hidden)". A total must be
+            # an amount read off the checkout: else one short look at the checkout for it, changing nothing (founder: one
+            # confirm WITH the amount).
             task.details = {**d, "total_relook": True, "total_only": True}
-            note(task, "cart reported without a total: looking at the checkout for it")
+            note(task, f"cart reported without a checkout total ({str(out.get('total') or 'none')[:60]}): looking at the checkout for it")
             return "queued", ""
         d = {**d, "total_only": False}
         task.details = {**d, "approval": v.approval, "cart_fp": guard.cart_fingerprint(out), "confirm_token": None}
@@ -1161,9 +1216,15 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             # Live 2026-10-10: connector and Blinkit orders came back without a time and the brain was told to give one.
             return "done", ("Placed. Tell the person the order/ride id. The store gave no delivery time: do not guess one; "
                             "say you will check on it.")
-        if out.get("unclear"):
-            return "failed", f"It is not clear whether the order went through ({out.get('problem')}). Do not order again; tell the caregiver to check the app."
-        return "failed", f"Placing did not go through ({out.get('problem') or 'unknown'}). Nothing was charged."
+        if out.get("unclear") or (task.kind == "order" and out.get("pressed_place") is not False):
+            # Live 2026-10-11: the agent pressed Pay Now (cash), ran out of steps on the confirmation page, reported "not
+            # placed", and the person heard "nothing was charged" while the order was being packed. Only a report that the
+            # final button was never pressed is "not placed"; anything else is unclear and the store's order list is read
+            # next (_order_on_store_list) before anyone hears anything.
+            task.details = {**(task.details or {}), "place_unclear": True}
+            return "failed", (f"It is not clear whether the order went through ({out.get('problem') or 'no confirmation came'}). Do not "
+                              "order again and do not say it failed; tell them to check the store's app, and the caregiver too.")
+        return "failed", f"Placing did not go through ({out.get('problem') or 'unknown'}); the final button was never pressed. Nothing was charged."
     if task.phase == "cancel":
         if out.get("cancel_fee") and not d.get("fee_ok"):
             task.input_needed = "fee"
@@ -1575,9 +1636,13 @@ async def _ride_ends(host, task: Task) -> tuple[dict, dict] | None:
     if host is None or not d.get("pickup") or not d.get("drop"):
         return None
     ends = []
+    from app.brain.tools import saved_place_args
+
+    fam = task.family_id.removeprefix("shadow:")
     for words in (d["pickup"], d["drop"]):
-        got = await host.call("ride_place", {"words": words}, family_id=task.family_id.removeprefix("shadow:"),
-                              subject_id=task.subject_id, actor_id=task.requested_by)
+        # a saved place by its exact name when the words mean one (an AI decision), else the words to look up on the map
+        args = await saved_place_args(host, words, family_id=fam, subject_id=task.subject_id, actor_id=task.requested_by)
+        got = await host.call("ride_place", args, family_id=fam, subject_id=task.subject_id, actor_id=task.requested_by)
         if not got or got.get("lat") is None or got.get("lng") is None:
             return None
         ends.append({"lat": got["lat"], "lng": got["lng"], "label": got.get("label") or words})
@@ -1711,7 +1776,8 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             note(task, "not logged in yet: the browser agent logs in, then the cart is built fast")
         else:
             note(task, f"fast cart not possible ({str(exc)[:100]}); the browser agent builds it")
-            if not any(w in str(exc) for w in ("address_missing", "not_serviceable", "out_of_stock")):
+            if not any(w in str(exc) for w in ("address_missing", "not_serviceable", "out_of_stock", "no request to copy headers")):
+                # (a page too slow to make its own requests twice is not a broken step: no alert; live 2026-10-11)
                 await _ops_alert(host, task, "cart", str(exc))
         return None
     note(task, f"fast cart on {SKILLS[task.service]['label']}: total {cart.get('total')}")
@@ -1853,6 +1919,30 @@ async def _ops_alert(host, task: Task, step: str, error: str) -> None:
                         family_id=task.family_id, subject_id=task.subject_id, actor_id=task.requested_by)
     except Exception:  # noqa: BLE001 — an alert must never break the order
         logger.warning("ops alert failed for %s", key)
+
+
+async def _order_on_store_list(task: Task, agent: BrowserAgent, host=None) -> dict | None:
+    """After a place run with no clear answer: the order as the store's own order list shows it (logged-in profile), else
+    None. Never places anything; an order found here is reported placed, so nobody orders twice."""
+    d, r = task.details or {}, task.result or {}
+    total = d.get("confirmed_total") or r.get("total")
+    names = [str(c.get("name")) for c in d.get("chosen") or [] if c.get("name")]
+    try:
+        if task.service == "blinkit" and task.agent_session:
+            cdp = await agent.cdp_url(task.agent_session)
+            found = await fastpath.blinkit_recent_order(cdp, total, names=names) if cdp else None
+            if found:
+                return {"placed": True, "order_id": found, "payment_method": "Cash on Delivery"}
+        if task.service == "instamart" and host is not None and rupees(total):
+            sent = datetime.fromisoformat(str(d.get("run_started") or clock.now().isoformat()))
+            got = await host.call("connector_recent_order", {"store": "instamart", "total": rupees(total),
+                                                            "since_ms": int(sent.timestamp() * 1000)},
+                                  family_id=task.family_id.removeprefix("shadow:"), subject_id=task.subject_id, actor_id=task.requested_by)
+            if got and got.get("orderId"):
+                return {"placed": True, "order_id": got["orderId"], "payment_method": "Cash on Delivery", "eta": got.get("eta")}
+    except Exception as exc:  # noqa: BLE001 — stays unclear: the person checks the app, nothing is placed again
+        logger.warning("order list check failed task=%s: %s", task.id, exc)
+    return None
 
 
 def _confirm_still_valid(task: Task) -> bool:
@@ -2310,6 +2400,15 @@ async def tick(
                             out = task.result
                         status, message = _outcome(task, out)
                         status, message = await _check_address(task, out, status, message)
+                        if task.phase == "place" and status == "failed" and (task.details or {}).get("place_unclear") and not practice.on(task):
+                            found = await _order_on_store_list(task, agent, host_for(task.family_id) if host_for else None)
+                            if found:
+                                task.result = {**(task.result or {}), **found}
+                                task.details = {**(task.details or {}), "place_unclear": False}
+                                note(task, f"the store's order list shows it placed: {found.get('order_id')}")
+                                metrics.on_milestone(task, "placed")
+                                status, message = "done", ("Placed (the store's order list shows it; its confirmation page was slow). Tell the "
+                                                           "person the order id; the store gave no delivery time here: say you will check on it.")
                         task.status = status
                         note(task, f"{task.phase} → {status}: {message}")
                         if status == "failed":

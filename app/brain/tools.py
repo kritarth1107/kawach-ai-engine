@@ -1013,11 +1013,35 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
 
 
+async def saved_place_args(ctx_host, words: str, *, family_id: str, subject_id: str, actor_id: str) -> dict:
+    """The place lookup's arguments for a person's words: the saved place they mean, decided by AI from the family's saved
+    places and sent by its exact name ({"words": name, "exact": true}). Words that are no saved place go as exact too, so
+    the backend answers "not saved" and the person is asked. If the AI cannot answer, the words go as before (the backend's
+    own lookup). Founder 2026-10-10: no word lists on people's words."""
+    if not words:
+        return {"words": ""}
+    try:
+        listed = (await ctx_host.call("list_places", {}, family_id=family_id, subject_id=subject_id, actor_id=actor_id)).get("places") or []
+    except Exception:  # noqa: BLE001
+        return {"words": words}
+    if not listed:
+        return {"words": words}
+    from app.tasks import matcher
+
+    try:
+        name = await matcher.which_place(words, listed)
+    except Exception:  # noqa: BLE001 — the model is down: the backend's own lookup
+        return {"words": words}
+    return {"words": name or words, "exact": True}
+
+
 async def _delivery_place(ctx: TurnCtx, a: dict, keep_miss: bool = False) -> dict:
     if a["kind"] != "order":
         return {}
     try:
-        got = await ctx.host.call("delivery_place", {"words": a.get("area") or ""}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.speaker.get("id") or ctx.elder_id)
+        who = ctx.speaker.get("id") or ctx.elder_id
+        args = await saved_place_args(ctx.host, a.get("area") or "", family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
         if keep_miss and got.get("matched") is False:
             return got
         return got if got.get("addressId") else {}
@@ -1086,11 +1110,13 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
     "approver's answer counts), or, at the confirm, a change they ask for: change (target = which asked item, items = what "
     "replaces it: another product, brand, size or quantity; several products are several entries), add (items), remove "
     "(target), more (target: they want to see that item's options; the list comes back in a task update), keep (value yes: a "
-    "caregiver says keep trying when asked about a slow order). You read their words; pass data, never their raw words. The "
-    "new cart and total come back for the one confirm.",
+    "caregiver says keep trying when asked about a slow order), resend (the login code did not come: the store is asked for "
+    "a new one; never promise a new code without calling this), only (while several stores are looked at, they named one of "
+    "them: task_id = that store's task; the others are dropped; never say you are checking one store without calling this). "
+    "You read their words; pass data, never their raw words. The new cart and total come back for the one confirm.",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep", "resend", "only"]},
         "value": {"type": "string", "description": "confirm / approve / fee / keep: exactly 'yes' or 'no' (you decide from their words, any language); go: the option id(s) as listed (e.g. 'p3' or 'p3, p7'), or 'yes' for Saheli's own pick; otp: the digits; choice / swap: the option as listed"},
         "items": {"type": "array", "items": {"type": "object", "properties": {
                     "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},

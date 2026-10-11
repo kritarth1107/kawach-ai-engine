@@ -10,6 +10,7 @@ stock, the serving store, price limit) and never puts another variant in silentl
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -111,3 +112,51 @@ async def same_place(saved_full: str, pincode: str, shown: str) -> bool | None:
         logger.warning("same_place failed: %s", exc)
         return None
     return data.get("same") if isinstance(data.get("same"), bool) else None
+
+
+WHICH_PLACE_PROMPT = """A person in India named a delivery place in their own words (any language or script). SAVED lists the family's
+saved places, numbered: each one's name, address, and "(default)" for the person's usual place. Which saved place do the
+words mean?
+- Words for one's own home in any language ("ghar", "mera ghar", "my place", "home", "घर", "veedu", "bari", "ghari") mean
+  the place named for home (Home, Ghar, …), else the default place.
+- A relation with a home word ("beta ke ghar" = the son's home, "beti ka flat", "didi ke yahan") means the place whose name
+  is for that person (Beta's flat, Beti's house, …).
+- The place's own name in any spelling or script, its area, city or pincode, or its kind ("clinic", "office") also count,
+  when only one saved place fits.
+- 0 when the words mean a place that is not saved (another address, a landmark, a station, a city with no saved place)
+  or could be more than one of them.
+JSON only: {"place": <number of the saved place, or 0>, "why": "<a few words>"}"""
+
+
+async def _which_place_once(words: str, named: list[dict]) -> str | None:
+    listed = "\n".join(f"{n}. {p.get('name')}: {p.get('address') or ''}" + (" (default)" if p.get("isDefault") or p.get("default") else "")
+                       for n, p in enumerate(named, 1))
+    reply = await router.complete("classify", system_stable=WHICH_PLACE_PROMPT, effort="low", max_tokens=200, timeout_s=15,
+                                  messages=[{"role": "user", "content": [{"type": "text", "text": f"WORDS: {words}\nSAVED:\n{listed}"}]}])
+    from app.care.extract import parse_json
+
+    got = parse_json(reply.text).get("place")
+    names = [str(p.get("name")) for p in named]
+    if isinstance(got, str) and got in names:  # the name instead of its number
+        return got
+    try:
+        n = int(got)
+    except (TypeError, ValueError):
+        return None
+    return names[n - 1] if 1 <= n <= len(names) else None
+
+
+async def which_place(words: str, places: list[dict]) -> str | None:
+    """The saved place a person's words mean, by its exact saved name; None when it is none of them or unclear. An AI
+    decision (founder 2026-10-10: no word lists on people's words; this replaces the backend's place word list), asked
+    twice at once: a place either answer names is used unless the two name different places (then the person is asked)."""
+    named = [p for p in places if p.get("name")]
+    if not words or not named:
+        return None
+    got = await asyncio.gather(_which_place_once(words, named), _which_place_once(words, named), return_exceptions=True)
+    errors = [g for g in got if isinstance(g, Exception)]
+    if len(errors) == len(got):
+        logger.warning("which_place failed: %s", errors[0])
+        raise errors[0]  # the backend's own lookup still runs on the words
+    picks = {g for g in got if isinstance(g, str)}
+    return picks.pop() if len(picks) == 1 else None

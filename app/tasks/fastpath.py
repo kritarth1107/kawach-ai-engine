@@ -182,7 +182,7 @@ def _rupees(v) -> str | None:
     return t if t.startswith("₹") else (f"₹{t}" if re.fullmatch(r"\d+(\.\d+)?", t) else t)
 
 
-async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 12) -> dict:
+async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 24) -> dict:
     """A store's own search, run in the task's cloud browser. Returns {deliverable, eta, items}; raises FastPathError when
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
@@ -360,7 +360,13 @@ async def blinkit_cart(cdp_url: str, products: list[dict], lat=None, lon=None) -
     js = _snippet("blinkit_cart", {"items": json.dumps(items), "address_id": "", "lat": lat, "lon": lon,
                                    "local": json.dumps(local if len(local) == len(items) else [])})
     url, pattern = CART_SITES["blinkit"]
-    out = await cdp_evaluate(cdp_url, url, js, settle_s=4.0, copy_headers=pattern)
+    try:
+        out = await cdp_evaluate(cdp_url, url, js, settle_s=4.0, copy_headers=pattern)
+    except FastPathError as exc:
+        if "no request to copy headers" not in str(exc):
+            raise
+        # a fresh cloud browser's first page can take longer to make its own requests (live 2026-10-11): once more, slower
+        out = await cdp_evaluate(cdp_url, url, js, settle_s=10.0, copy_headers=pattern)
     if not isinstance(out, dict) or not out.get("logged_in"):
         raise FastPathError("not logged in")
     if out.get("status") != 200 or not out.get("raw"):
@@ -421,8 +427,10 @@ def blinkit_orders_from(body, now=None) -> list[dict]:
     return found
 
 
-async def blinkit_recent_order(cdp_url: str, total, within_min: int = 15) -> str | None:
-    """The id of an order placed in the last few minutes for this total (no other order of that total then), else None."""
+async def blinkit_recent_order(cdp_url: str, total, within_min: int = 15, names: list[str] | None = None) -> str | None:
+    """The id of an order placed in the last few minutes for this total (no other order of that total then), else the one
+    recent order whose items include a picked product (the total confirmed can differ by the store's fees: live 2026-10-11
+    ₹320 confirmed, ₹334 billed), else None."""
     out = None
     for settle in (7.0, 12.0):  # a fresh browser's first page can be slow to make its own requests
         try:
@@ -433,10 +441,15 @@ async def blinkit_recent_order(cdp_url: str, total, within_min: int = 15) -> str
             continue
     if not isinstance(out, dict) or out.get("status") != 200:
         return None
-    want = round(float(re.sub(r"[^\d.]", "", str(total)) or 0))
-    hits = [o for o in blinkit_orders_from(out.get("body")) if o["amount"] == want and o["minutes_ago"] is not None
-            and 0 <= o["minutes_ago"] <= within_min and str(o.get("status") or "").upper() not in ("CANCELLED", "FAILED")]
-    return hits[0]["order_id"] if len(hits) == 1 else None
+    m = re.search(r"\d[\d,]*(?:\.\d+)?", str(total or ""))
+    want = round(float(m.group(0).replace(",", ""))) if m else None
+    recent = [o for o in blinkit_orders_from(out.get("body")) if o["minutes_ago"] is not None and 0 <= o["minutes_ago"] <= within_min
+              and str(o.get("status") or "").upper() not in ("CANCELLED", "FAILED")]
+    hits = [o for o in recent if want is not None and o["amount"] == want]
+    if len(hits) == 1:
+        return hits[0]["order_id"]
+    named = [o for o in recent if names and any(n[:25].lower() in (o.get("text") or "").lower() for n in names)]
+    return named[0]["order_id"] if len(named) == 1 else None
 
 
 async def blinkit_order_status(cdp_url: str, order_id: str) -> dict | None:

@@ -2,7 +2,13 @@
   const r = await fetch('/v1/layout/search?q=' + encodeURIComponent(%(q)s) + '&search_type=type_to_search', {
     method: 'POST', body: '{}',
     headers: {'content-type': 'application/json', 'lat': %(lat)s, 'lon': %(lon)s, 'app_client': 'consumer_web'}});
-  if (!r.ok) return {status: r.status};
+  if (!r.ok) {
+    // Blinkit answers a point it does not serve with 400 {"error":"location not serviceable"} (checked live 2026-10-11):
+    // that is "does not deliver here", not a broken step
+    const body = (await r.text().catch(() => '')).slice(0, 300);
+    if (r.status === 400 && /not serviceable/i.test(body)) return {status: 200, serviceable: false, products: []};
+    return {status: r.status, error: body};
+  }
   const j = await r.json();
   const snips = (j.response && j.response.snippets) || [];
   const t = (x) => (x && (x.text || x.title && x.title.text)) || null;

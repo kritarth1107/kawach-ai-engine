@@ -76,6 +76,20 @@ MATCH_CASES = [
 ]
 
 
+# which saved place a person's words mean (an AI decision; the backend matches the exact name it gives)
+SAVED = [{"name": "Home", "address": "74 4th Cross, Amrutnagar, Bangalore 560092", "isDefault": True},
+         {"name": "Beta's flat", "address": "B-7, Silver Oak Residency, Vijay Nagar, Indore 452010"},
+         {"name": "Clinic", "address": "Shop 3, Arera Medical Plaza, Bhopal 462016"}]
+PLACE_CASES = [("ghar pe hi", "Home"), ("घर", "Home"), ("வீட்டுக்கு", "Home"), ("বাড়িতে", "Home"), ("my place", "Home"),
+               ("beta ke ghar", "Beta's flat"), ("Indore wale flat pe", "Beta's flat"), ("clinic", "Clinic"),
+               ("Bhopal medical plaza", "Clinic"), ("railway station", None), ("Mumbai mein meri behen ke yahan", None)]
+
+
+async def place_case(words: str, want: str | None) -> list[str]:
+    got = await matcher.which_place(words, SAVED)
+    return [] if got == want else [f"{words!r} → {got!r}, expected {want!r}"]
+
+
 def _hit(item: dict, kw: list[str]) -> bool:
     text = (str(item.get("name") or "") + " " + " ".join(item.get("must_match") or [])).lower()
     return any(k in text for k in kw)
@@ -166,7 +180,13 @@ async def main() -> int:
             probs = await match_case(item, ls, med, want, closest)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"match/{name}", *(f"\n    - {p}" for p in probs))
-    total = (len(BRAIN_CASES) if not only or "brain" in only else 0) + (len(MATCH_CASES) if not only or "match" in only else 0)
+    if not only or "place" in only:
+        for words, want in PLACE_CASES:
+            probs = await place_case(words, want)
+            failed += bool(probs)
+            print(("PASS" if not probs else "FAIL"), f"place/{words}", *(f"\n    - {p}" for p in probs))
+    total = ((len(BRAIN_CASES) if not only or "brain" in only else 0) + (len(MATCH_CASES) if not only or "match" in only else 0)
+             + (len(PLACE_CASES) if not only or "place" in only else 0))
     print(f"\n{total - failed}/{total} passed")
     return 1 if failed else 0
 

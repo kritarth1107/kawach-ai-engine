@@ -26,7 +26,7 @@ CITIES = [
     {"city": "Mumbai", "lat": 19.0596, "lng": 72.8295, "pincode": "400050"},
     {"city": "Chennai", "lat": 13.0418, "lng": 80.2341, "pincode": "600017"},
     {"city": "Kolkata", "lat": 22.5726, "lng": 88.3639, "pincode": "700001"},
-    {"city": "Hyderabad", "lat": 17.4239, "lng": 78.4738, "pincode": "500034"},
+    {"city": "Hyderabad", "lat": 17.385, "lng": 78.4867, "pincode": "500001"},
     {"city": "Raipur", "lat": 21.2514, "lng": 81.6296, "pincode": "492001"},
 ]
 QUERY = {"blinkit": "milk", "instamart": "milk", "zepto": "milk", "apollo": "paracetamol", "1mg": "paracetamol",

@@ -203,7 +203,10 @@ class StoreHost(SimHost):
     async def call(self, tool, args, *, family_id, subject_id, actor_id):
         f = self.family
         if tool == "delivery_place":
-            if args.get("words") and not any(w in args["words"].lower() for w in f.home_words):  # the fake's own book
+            words = str(args.get("words") or "").lower()
+            if args.get("exact") and words and words != f.place["nickname"].lower():  # the engine's AI sent an exact name
+                return {"matched": False, "saved": [f.place["nickname"]]}
+            if words and not args.get("exact") and not any(w in words for w in f.home_words):  # the fake's own book
                 return {"matched": False, "saved": [f.place["nickname"]]}
             self.place_calls += 1
             place = dict(f.place)
@@ -211,7 +214,7 @@ class StoreHost(SimHost):
                 place.update(f.heal)
             return {**place, "matched": True}
         if tool == "list_places":
-            return {"places": [{"name": f.place["nickname"], "address": f.place["full"], "default": True}]}
+            return {"places": [{"name": f.place["nickname"], "address": f.place["full"], "isDefault": True}]}
         if tool == "browser_profile":
             return {"profileId": f"prof-{family_id}-{args.get('partner')}", "loginPhone": "9000011111"}
         return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
@@ -537,8 +540,11 @@ async def mumbai_marathi_self_care_named_store_lacks_it(c: Conversation):
     await c.setup()
     await c.say("झेप्टो वरून दोन पाकीट गोकुळ दूध पाठवा")
     await c.say("हो, घरीच")
-    t = await c.ticks(lambda t: t.service != "zepto" and t.status == "awaiting_confirm" and t.input_needed == "go", most=10)
-    c.check(t is not None and t.service == "blinkit", f"no question about Blinkit ({t.service if t else None} {t.status if t else None})")
+    await c.ticks(lambda t: False, most=8)  # the named store looks, then the other two (80 s of ticks)
+    async with SessionLocal() as s:  # the two other stores start together: look at all of them, not the latest one
+        asking = (await s.execute(select(Task).where(Task.family_id == c.fam, Task.status == "awaiting_confirm",
+                                                     Task.input_needed == "go"))).scalars().first()
+    c.check(asking is not None and asking.service == "blinkit", f"no question about Blinkit ({asking.service if asking else None})")
     for text in c.option_lists():
         c.problems.append(f"options listed to choose from: {text[:160]}")
     await c.say("हो, चालेल")
