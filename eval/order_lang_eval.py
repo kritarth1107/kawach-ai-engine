@@ -44,6 +44,14 @@ BRAIN_CASES = [
     ("Marathi", "झेप्टो वरून दोन पाकीट गोकुळ दूध पाठवा", [{"any": ["gokul"], "qty": 2}]),
 ]
 
+# the stores they named (founder 2026-10-11: every store the person named is searched and reported)
+STORE_CASES = [
+    ("Hinglish", "Karachi Bakery ke fruit biscuit chahiye, Blinkit, Instamart aur Zepto teeno pe dekh lo", {"blinkit", "instamart", "zepto"}),
+    ("Hindi", "ब्लिंकिट और ज़ेप्टो दोनों पर अमूल मक्खन देखो", {"blinkit", "zepto"}),
+    ("Tamil", "ஆவின் பால் இன்ஸ்டாமார்ட் மற்றும் ப்ளிங்கிட் இரண்டிலும் பாருங்கள்", {"instamart", "blinkit"}),
+    ("English", "get me amul butter from blinkit", {"blinkit"}),
+]
+
 L = lambda name, price, pack="", available=True: {"name": name, "price": price, "pack": pack, "available": available}  # noqa: E731
 # (case, item, listings, medicine, expected exact first listing name or None, expected closest name or None)
 MATCH_CASES = [
@@ -131,11 +139,27 @@ async def brain_case(lang: str, message: str, expected: list[dict]) -> list[str]
         # the asked flavour must reach the picker: in must_match or in the name (the picker treats both as asked)
         if e.get("must") and not any(e["must"] in str(m).lower() for m in [it.get("name"), *(it.get("must_match") or [])]):
             problems.append(f"{it.get('name')}: neither the name nor must_match {it.get('must_match')} has {e['must']}")
-        if e.get("max_price") and float(it.get("max_price") or 0) != e["max_price"]:
+        # a limit for the whole ask may be split per unit ("2 litres under 100" → 2 x 1 litre, each up to 50)
+        per_unit = e.get("max_price") and e["max_price"] / max(1, int(it.get("qty") or 1))
+        if e.get("max_price") and float(it.get("max_price") or 0) not in (e["max_price"], per_unit):
             problems.append(f"{it.get('name')}: max_price {it.get('max_price')} not {e['max_price']}")
         if e.get("cheapest") and not it.get("cheapest"):
             problems.append(f"{it.get('name')}: cheapest not set")
     return problems
+
+
+async def store_case(lang: str, message: str, want: set[str]) -> list[str]:
+    fam = f"langeval-{uuid.uuid4().hex[:8]}"
+    async with SessionLocal() as session:
+        res = await run_turn(session, PlacesHost(), TurnRequest(family_id=fam, elder=ELDER, speaker=ELDER, members=[ELDER, SON], text=message,
+                                                                message_ref=f"m-{uuid.uuid4().hex[:8]}", channel="whatsapp"))
+        await session.rollback()
+    calls = [a for a in res.actions if a.get("tool") == "start_task"]
+    if not calls:
+        return [f"no start_task (reply: {str(res.reply)[:120]})"]
+    args = calls[-1].get("args") or {}
+    got = set(args.get("services") or []) | ({args["service"]} if args.get("service") else set())
+    return [] if got == want else [f"stores {sorted(got)}, expected {sorted(want)}"]
 
 
 async def match_case(item: dict, listings: list[dict], medicine: bool, want_exact: str | None, want_closest: str | None) -> list[str]:
@@ -157,7 +181,7 @@ async def match_case(item: dict, listings: list[dict], medicine: bool, want_exac
 
 async def main() -> int:
     async with engine.begin() as conn:
-        from app.care import baselines, memory_index, models  # noqa: F401
+        from app.care import baselines, memory_index, models, why  # noqa: F401  (why: the trace_turns table)
         from app.learn import models as learn_models  # noqa: F401
         from app.llm import spend  # noqa: F401
         from app.models import entities  # noqa: F401
@@ -175,6 +199,11 @@ async def main() -> int:
             probs = await brain_case(lang, msg, exp)
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"brain/{lang}: {msg}", *(f"\n    - {p}" for p in probs))
+    if not only or "stores" in only:
+        for lang, msg, want in STORE_CASES:
+            probs = await store_case(lang, msg, want)
+            failed += bool(probs)
+            print(("PASS" if not probs else "FAIL"), f"stores/{lang}: {msg}", *(f"\n    - {p}" for p in probs))
     if not only or "match" in only:
         for name, item, ls, med, want, closest in MATCH_CASES:
             probs = await match_case(item, ls, med, want, closest)
@@ -186,6 +215,7 @@ async def main() -> int:
             failed += bool(probs)
             print(("PASS" if not probs else "FAIL"), f"place/{words}", *(f"\n    - {p}" for p in probs))
     total = ((len(BRAIN_CASES) if not only or "brain" in only else 0) + (len(MATCH_CASES) if not only or "match" in only else 0)
+             + (len(STORE_CASES) if not only or "stores" in only else 0)
              + (len(PLACE_CASES) if not only or "place" in only else 0))
     print(f"\n{total - failed}/{total} passed")
     return 1 if failed else 0

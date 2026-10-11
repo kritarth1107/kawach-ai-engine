@@ -114,12 +114,16 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
 MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]")  # updates that must reach the person
 
 
-async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None) -> None:
+async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None,
+                      still_true=None) -> None:
     """Let the brain act on something that happened without a person writing (a due loop, a task update).
 
     deliver_to: the person this update is for (who asked for the order or ride). If the brain wrote its message as the
     final reply instead of sending it with send_message (that reply goes to no one), it is sent to them here, so an
-    update can never vanish (live 2026-10-08 21:41: the Blinkit price and go-ahead question reached no one)."""
+    update can never vanish (live 2026-10-08 21:41: the Blinkit price and go-ahead question reached no one).
+
+    still_true: for an update about a task (app.tasks.runtime.delivery_check): checked once the family's turn is held; an
+    update whose task moved on meanwhile is dropped, so the person never hears two contradicting things."""
     async with sessions() as session:
         roster = await store.roster(session, family_id)
     if not roster:
@@ -128,8 +132,11 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     async with sessions() as session:
         result = await run_turn(
             session, host,
-            TurnRequest(family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt, message_ref=ref, channel="scheduler"),
+            TurnRequest(family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt, message_ref=ref, channel="scheduler",
+                        still_true=still_true),
         )
+    if result.stale:
+        return
     text = (result.reply or "").strip()
     known = {m.get("id") for m in [roster.elder, *roster.members]}
     sent = any(a.get("tool") == "send_message" and a.get("ok") and (a.get("args") or {}).get("to") == deliver_to for a in result.actions)

@@ -133,7 +133,9 @@ def _strengths(text: str) -> set[str]:
     with_unit = re.findall(r"(\d+(?:\.\d+)?)\s*(?:mg|mcg|ml|g|iu)\b", t, re.I)
     if with_unit:
         return {n.rstrip("0").rstrip(".") if "." in n else n for n in with_unit}
-    bare = re.findall(r"(?<![\d.])(\d{1,4}(?:\.\d+)?)(?![\d.]|\s*(?:'s|s\b|x\b|tab|strip|pack|kg))", t, re.I)
+    # a count is "15 tablets", "15 tabs", "15's", "2 x"; "Dolo 650 Tablet" is the strength (the sim of 2026-10-12: Apollo and
+    # 1mg list it so, and the cart check stopped a correct Dolo 650 cart as "a different strength")
+    bare = re.findall(r"(?<![\d.])(\d{1,4}(?:\.\d+)?)(?![\d.]|\s*(?:'s|s\b|x\b|tablets\b|tabs\b|capsules\b|caps\b|strips?\b|packs?\b|kg))", t, re.I)
     return {n.rstrip("0").rstrip(".") if "." in n else n for n in bare}
 
 

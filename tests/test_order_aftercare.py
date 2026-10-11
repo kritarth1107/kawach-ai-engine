@@ -416,3 +416,14 @@ async def test_a_scheduled_turn_cannot_answer_for_them(db, at):
     assert err and "Only their own answer" in out
     await db.refresh(t)
     assert "aftercare" not in t.details
+
+
+async def test_feedback_on_a_product_number_the_order_does_not_have_gets_the_orders_own_numbers(db, at):
+    """Sim 2026-10-12: the options before the order numbered the khakhra 3; feedback "3" on a two-product order was lost.
+    A number the order does not have is refused with the order's own numbers, so the brain asks again with them."""
+    at("2026-10-11 10:00")
+    t = await _placed(db)
+    out, err = await tools.run(_ctx(db), "order_feedback", {"task_id": str(t.id), "items": [{"item": 3, "liked": "yes"}]})
+    assert err and "Products are numbered by this order" in out and "1. " in out and "2. " in out
+    out, err = await tools.run(_ctx(db), "order_feedback", {"task_id": str(t.id), "items": [{"item": 2, "liked": "yes", "usual": "new"}]})
+    assert not err

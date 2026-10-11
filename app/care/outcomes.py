@@ -193,7 +193,16 @@ async def handle_order_button(session: AsyncSession, *, family_id: str, speaker_
         task = await session.get(Task, _uuid.UUID(tid), with_for_update=True, populate_existing=True)
     except ValueError:
         task = None
-    if not task or task.family_id != family_id or task.status not in runtime.LIVE:
+    if not task or task.family_id != family_id:
+        return t["done"], None
+    if code == "cancel":
+        # Founder 2026-10-11: one true status. "Cancelled, nothing was ordered" only when that is what happened; an order
+        # that is placed or being placed (or one that had already stopped) goes to the brain with what is true.
+        out = await runtime.request_cancel(session, task_agent(), task, by=speaker_id, reason="tapped cancel")
+        if out.startswith("stopped"):
+            return t["cancel"], None
+        return None, f"(tapped Cancel on order {tid}: {out[:600]})"
+    if task.status not in runtime.LIVE:
         return t["done"], None
     if code == "yes":
         if fp and fp != str((task.details or {}).get("cart_fp") or "")[:8]:
@@ -203,9 +212,6 @@ async def handle_order_button(session: AsyncSession, *, family_id: str, speaker_
         if out.startswith("confirmed"):
             return t["yes"], None
         return None, f"(tapped Yes on order {tid}; it could not be placed yet: {out[:300]}. Tell them in one short line)"
-    if code == "cancel":
-        await runtime.request_cancel(session, task_agent(), task, by=speaker_id, reason="tapped cancel")
-        return t["cancel"], None
     return None, None
 
 

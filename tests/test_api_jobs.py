@@ -171,3 +171,27 @@ async def test_dash_refill_refused_for_allergy_is_422(api, at, db):
     r = await api.post(f"/v2/dash/{FAM}/{ELDER['id']}/stock/{key.split(':', 1)[1]}/order", json={"actor": {"id": CG["id"], "name": "Asha"}, "service": "apollo"})
     assert r.status_code == 422 and "allergy" in r.json()["detail"]
     assert not list((await db.execute(Task.__table__.select())).all())
+
+
+async def test_a_tasks_call_ends_inside_its_minute_and_hands_over_while_orders_move(api, at, db, monkeypatch):
+    """Live 2026-10-11: a call that ran 58 s was followed by no call the next minute, and a login code the store had sent
+    was asked for 33 s late. A call now ends inside its window; with orders still moving, the background loop takes over."""
+    import time
+
+    at("2026-10-02 10:00")
+    agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=10_000)  # the store's page keeps loading
+    monkeypatch.setattr(tools, "task_agent", lambda: agent)
+    await runtime.create(db, family_id=FAM, subject_id=ELDER["id"], requested_by=ELDER["id"], service="zepto", kind="order",
+                         goal="Atta", details={"items": [{"name": "Aashirvaad Atta 5kg", "qty": 1}]})
+    await db.commit()
+    from app.api import brain as brain_api
+
+    kicked = []
+    monkeypatch.setattr(brain_api, "kick_tasks", lambda: kicked.append(True))
+    monkeypatch.setattr(brain_api, "TASKS_FAST_EVERY", 0.05)
+    monkeypatch.setattr(brain_api, "TASKS_FAST_WINDOW", 0.3)
+    began = time.monotonic()
+    stats = (await api.post("/v2/jobs/tasks")).json()
+    assert time.monotonic() - began < 5 and stats["polled"] >= 2, "it kept looking every few seconds inside its window"
+    assert kicked == [True], "still moving: the background loop takes over until the next minute's call"
+    assert brain_api.TASKS_FAST_WINDOW < 60

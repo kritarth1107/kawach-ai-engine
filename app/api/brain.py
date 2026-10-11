@@ -241,11 +241,13 @@ async def tasks_job() -> dict:
         )
 
     async def notify(family_id: str, requested_by: str, prompt: str) -> None:
+        from app.tasks import runtime as _runtime
+
         try:
             # Name the send explicitly: twice live the brain wrote the update as its final reply (which reaches no one).
             await system_turn(SessionLocal, host_for(family_id), family_id,
                               f"{prompt} (Requested by {requested_by}: tell them with send_message to {requested_by}, in their language, then reply none.)",
-                              f"task:{_uuid.uuid4().hex[:12]}", deliver_to=requested_by)
+                              f"task:{_uuid.uuid4().hex[:12]}", deliver_to=requested_by, still_true=_runtime.delivery_check())
         except Exception:  # noqa: BLE001
             logger.exception("task notify failed family=%s", family_id)
 
@@ -261,17 +263,23 @@ async def tasks_job() -> dict:
 
     # Cloud Scheduler calls once a minute. While an order is moving, look again every few seconds, so each step (code
     # asked, cart ready, placed) reaches the person within seconds instead of up to a minute later (live 2026-10-09: the
-    # order was placed at 16:33:35 and Saheli said so only after the next minute's tick).
+    # order was placed at 16:33:35 and Saheli said so only after the next minute's tick). Live 2026-10-11: a call that ran
+    # 58 s was followed by no call the next minute, and a login code the store sent at 15:45:29 was asked for at 15:46:02.
+    # So a call ends well inside its minute, the looks in between are light (no housekeeping), and a call that ends with
+    # orders still moving hands over to the background loop until the next minute's call.
     started, agent = time.monotonic(), task_agent()
-    stats = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for)
-    while time.monotonic() - started < TASKS_FAST_WINDOW and await moving():
+    background = asyncio.current_task() is _kicked
+    stats = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for, light=background)
+    while await moving() and time.monotonic() - started + TASKS_FAST_EVERY < TASKS_FAST_WINDOW:
         await asyncio.sleep(TASKS_FAST_EVERY)
-        more = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for)
+        more = await tick(SessionLocal, agent, profile_for=profile_for, notify=notify, host_for=host_for, light=True)
         stats = {k: stats.get(k, 0) + more.get(k, 0) for k in {*stats, *more}}
+    if not background and await moving():
+        kick_tasks()
     return stats
 
 
-TASKS_FAST_EVERY, TASKS_FAST_WINDOW = 8, 46  # seconds
+TASKS_FAST_EVERY, TASKS_FAST_WINDOW = 3, 40  # seconds
 
 
 @router.post("/jobs/browser-sweep")

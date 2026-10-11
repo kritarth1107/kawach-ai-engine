@@ -32,9 +32,15 @@ async def test_a_two_dish_food_order_goes_to_one_restaurant_and_the_agent_is_tol
     found = [{**D("p1", "Paneer Butter Masala", "Indian Bawarchi", "₹149"), "for_item": "paneer butter masala"},
              {**D("r1", "Tawa Roti", "Jassie's Kitchen", "₹20"), "for_item": "roti"}]
     t.details = {**t.details, "matched": {"paneer butter masala": {"exact": ["p1"]}, "roti": {"exact": ["r1"]}}}
-    status, _ = runtime._browse_outcome(t, {"items": found, "deliverable": True})
-    assert status == "queued" and [c["restaurant"] for c in t.details["chosen"]] == ["Indian Bawarchi"]
-    assert t.details["menu_find"] == ["roti"] and not t.details.get("missing_items")
+    status, msg = runtime._browse_outcome(t, {"items": found, "deliverable": True})
+    assert status == "awaiting_confirm" and [c["restaurant"] for c in t.details["chosen"]] == ["Indian Bawarchi"]
+    # one option per restaurant: a cart holds one restaurant
+    assert "1. Indian Bawarchi: Paneer Butter Masala ₹149 + roti from its menu (price at the cart) ← suggested" in msg
+    assert "2. Jassie's Kitchen: Tawa Roti ₹20 + paneer butter masala from its menu (price at the cart)" in msg
+    t.status = status
+    assert "one restaurant" in await runtime.provide_input(db, t, kind="go", value="1, 2", by="e", by_is_elder=True)
+    assert (await runtime.provide_input(db, t, kind="go", value="1", by="e", by_is_elder=True)).startswith("going ahead")
+    assert t.details["menu_find"] == ["roti"] and not t.details.get("missing_items") and t.phase == "prepare"
 
     class Agent:
         def __init__(self):
@@ -145,8 +151,9 @@ async def test_a_named_restaurant_without_the_dish_offers_other_places_on_the_sa
     found = [D("p1", "Paneer Butter Masala", "Indian Bawarchi", "₹149"), D("p2", "Paneer Butter Masala", "Patiala Plates", "₹318")]
     status, message = runtime._browse_outcome(t, {"items": found, "deliverable": True})
     assert status == "awaiting_confirm" and t.input_needed == "go"
-    assert message.startswith("Haldiram on Swiggy does not have it now. Other places on Swiggy have it: For paneer butter masala: [p1]")
-    assert "Indian Bawarchi" in message and not t.details.get("fell_back")
+    assert message.startswith("Haldiram on Swiggy does not have it now. Other places on Swiggy have it.")
+    assert "1. Paneer Butter Masala ₹149 from Indian Bawarchi" in message and "2. Paneer Butter Masala ₹318 from Patiala Plates" in message
+    assert not t.details.get("fell_back")
 
 
 async def test_a_cart_on_another_address_is_switched_once_then_stopped(db, at, monkeypatch):
@@ -236,4 +243,5 @@ async def test_a_named_app_without_the_dish_asks_before_ordering_on_another(db, 
     out = await runtime.choose_stores(sessions)
     await db.refresh(z)
     assert z.status == "awaiting_confirm" and z.input_needed == "go" and z.phase == "browse", "nothing is built on Zomato before a yes"
-    assert out and out[0][1].startswith("Swiggy does not have it now. Zomato has: Veg Biryani ₹249 from Behrouz")
+    assert out and out[0][1].startswith("They asked for Swiggy: it does not have it or does not deliver there. So the other stores were looked at.")
+    assert "1. Veg Biryani ₹249 from Behrouz ← suggested" in out[0][1]

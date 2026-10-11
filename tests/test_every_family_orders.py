@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.specialists.contract import Limits
 from app.tasks import fastpath, runtime
-from tests.test_tasks import CART, ELDER, FAM, FOUND, OTP, FakeAgent, LoginHarness
+from tests.test_tasks import CART, ELDER, FAM, FOUND, OTP, FakeAgent, LoginHarness, _pick
 
 RITEBITE = "RiteBite Choco Berry protein bar"
 BAR_50 = {"name": "RiteBite Max Protein Daily Choco Berry 10 g Protein Bar", "pack": "50 g", "price": "₹80", "available": True}
@@ -32,9 +32,10 @@ async def _bars(db, service="blinkit", **details):
     return t
 
 
-async def test_a_quantity_in_the_agents_tag_still_reaches_the_picker_and_saheli_picks_one(db, at, sessions, monkeypatch, fake_matcher):
-    """Live 2026-10-11: the picker was given no listings ("No listings available") and the person got two Blinkit packs to
-    choose from. The tag is read as the asked item, the AI picks one, and it goes on to the cart without a question."""
+async def test_a_quantity_in_the_agents_tag_still_reaches_the_picker_and_saheli_suggests_one(db, at, sessions, monkeypatch, fake_matcher):
+    """Live 2026-10-11: the picker was given no listings ("No listings available"). The tag is read as the asked item, the AI
+    ranks every listing, and the person gets them numbered with Saheli's suggestion marked (founder 2026-10-11: options at
+    all times)."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-11 14:52")
     h = LoginHarness(sessions, FakeAgent(script={"browse": [BLINKIT_LIVE]}), "9000012345")
@@ -42,7 +43,8 @@ async def test_a_quantity_in_the_agents_tag_still_reaches_the_picker_and_saheli_
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert fake_matcher.calls and len(fake_matcher.calls[-1][1][0]) == 3, "the picker saw every listing"
-    assert t.phase == "prepare" and t.status == "queued" and h.told == [], "no list: Saheli picked herself"
+    assert t.status == "awaiting_confirm" and t.input_needed == "go" and len(h.told) == 1
+    assert "1. RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80 each; 4 = ₹320 ← suggested" in h.told[0] and "3. " in h.told[0]
     assert t.details["chosen"][0]["name"] == BAR_50["name"] and t.details["chosen"][0]["exact_match"] is True
     browse_goal = h.agent.runs[0]["goal"]
     assert f"item 1: {RITEBITE} (4 wanted)" in browse_goal and "for_item (the item's number" in browse_goal
@@ -75,7 +77,9 @@ async def test_the_ai_down_twice_takes_the_stores_top_listing_and_the_confirm_sa
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert fake_matcher.calls.count("down") == 2, "asked twice"
-    assert t.phase == "prepare" and h.told == [] and t.details["chosen"][0]["exact_match"] is False
+    assert t.input_needed == "go" and t.details["chosen"][0]["exact_match"] is False
+    assert "1. RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80 each; 4 = ₹320 ← suggested" in h.told[0], "the store's own order"
+    await _pick(db, t)
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.status == "awaiting_confirm" and "closest match" in h.told[-1] and "ONE short question" in h.told[-1]
@@ -94,8 +98,9 @@ async def _compare(db, item=RITEBITE, qty=4):
     return _compare3(out)
 
 
-async def test_no_store_has_it_exactly_the_closest_one_is_picked_and_the_confirm_says_so(db, at, sessions, fake_matcher):
-    """Never a numbered list: with only other variants anywhere, the cheapest closest one goes to the one confirm."""
+async def test_no_store_has_it_exactly_the_closest_ones_are_offered_marked_similar(db, at, sessions, fake_matcher):
+    """With only other variants anywhere, each store's closest one is offered marked similar (the cheapest suggested), and
+    the one confirm says it is the closest match."""
     at("2026-10-11 15:00")
     fake_matcher.script = {"Amul Taaza milk 1 litre": {"exact": [], "closest": "Amul Gold Milk 1 L"}}
     gold = {"name": "Amul Gold Milk 1 L", "price": "₹68", "available": True}
@@ -108,8 +113,9 @@ async def test_no_store_has_it_exactly_the_closest_one_is_picked_and_the_confirm
     await h.tick(); await h.tick()
     for t in g.values():
         await db.refresh(t)
-    assert g["instamart"].phase == "prepare" and g["blinkit"].status == g["zepto"].status == "cancelled"
-    assert h.told == [], "no options list"
+    assert len(h.told) == 1 and "1. Amul Gold Milk 1 L ₹68 [similar: not exactly Amul Taaza milk 1 litre] ← suggested" in h.told[0]
+    assert "2. Amul Gold Milk 1 L ₹70 [similar: not exactly Amul Taaza milk 1 litre]" in h.told[0] and "- Zepto: nothing exactly this" in h.told[0]
+    await _pick(db, g["instamart"], "1")
     await h.tick(); await h.tick()
     await db.refresh(g["instamart"])
     assert g["instamart"].status == "awaiting_confirm" and "closest match" in h.told[-1] and "Amul Gold Milk 1 L" in h.told[-1]
@@ -145,17 +151,19 @@ async def test_a_slow_store_does_not_hold_up_the_others_for_long(db, at, session
     at("2026-10-11 15:01:20")
     await h.tick()
     await db.refresh(g["blinkit"])
-    assert g["blinkit"].status == "awaiting_confirm", "waits a little for the others"
-    at("2026-10-11 15:02:00")
+    assert g["blinkit"].status == "awaiting_confirm" and h.told == [], "waits a little for the others"
+    at("2026-10-11 15:03:05")
     await h.tick()
     for t in g.values():
         await db.refresh(t)
-    assert g["blinkit"].phase == "prepare" and g["instamart"].status == g["zepto"].status == "cancelled"
+    assert g["blinkit"].input_needed == "go" and g["instamart"].status == g["zepto"].status == "cancelled"
+    assert len(h.told) == 1 and "1. RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80 each; 4 = ₹320 ← suggested" in h.told[0]
+    assert "- Swiggy Instamart: its website did not answer in time" in h.told[0], "every store is reported, the slow ones too"
 
 
-async def test_the_picked_store_cannot_build_the_cart_so_the_next_best_takes_over_without_asking(db, at, sessions):
-    """Live 2026-10-11: the picked store failed after the others were dropped, and the brain read the dropped store's old
-    options out as a list. The next best store of the comparison takes over with its own pick."""
+async def test_the_picked_store_cannot_build_the_cart_so_the_other_stores_options_go_back_to_the_person(db, at, sessions):
+    """Live 2026-10-11: the picked store failed after the others were dropped. The other stores' options go back to the
+    person in one update (nothing is picked for them), and the store they pick then builds the cart."""
     at("2026-10-11 15:00")
     nothing = {**CART, "items": [], "problem": "the item could not be added", "alternatives": []}
     agent = FakeAgent(script={"browse:blinkit": [{**FOUND, "items": [BAR_50]}],
@@ -166,16 +174,20 @@ async def test_the_picked_store_cannot_build_the_cart_so_the_next_best_takes_ove
     h = LoginHarness(sessions, agent, "9000012345")
     g = await _compare(db)
     await h.tick(); await h.tick()
-    for t in g.values():
-        await db.refresh(t)
-    assert g["instamart"].phase == "prepare", "₹79 x 4 is the best"
+    assert "1. RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹79 each; 4 = ₹316 ← suggested" in h.told[0], "₹79 x 4 is the best"
+    await _pick(db, g["instamart"], "1")
     await h.tick(); await h.tick()
     for t in g.values():
         await db.refresh(t)
-    assert g["instamart"].status == "failed" and g["blinkit"].status == "queued" and g["blinkit"].phase == "prepare"
-    assert h.told == [], "nobody is asked; the next store builds the cart"
+    assert g["instamart"].status == "failed" and (g["blinkit"].status, g["blinkit"].input_needed) == ("awaiting_confirm", "go")
+    assert (g["zepto"].status, g["zepto"].input_needed) == ("awaiting_confirm", "go")
+    again = h.told[-1]
+    assert len(h.told) == 2 and "Swiggy Instamart, which they picked, could not build the cart" in again
+    assert "1. RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80 each; 4 = ₹320 ← suggested" in again and "Swiggy Instamart [task" not in again
+    await _pick(db, g["blinkit"], "1")
     await h.tick(); await h.tick()
     await db.refresh(g["blinkit"])
+    await db.refresh(g["zepto"])
     assert g["blinkit"].status == "awaiting_confirm" and "₹336" in h.told[-1] and "Blinkit" in h.told[-1]
     assert g["zepto"].status == "cancelled"
 
@@ -187,12 +199,13 @@ async def test_no_number_to_log_in_with_is_said_once_and_no_other_store_is_tried
                               "prepare": [{**CART, "items": [], "problem": "login needed", "logged_in": False}]})
     h = LoginHarness(sessions, agent, None)
     g = await _compare(db)
-    for _ in range(4):
-        await h.tick()
+    await h.tick(); await h.tick()
+    await _pick(db, g["blinkit"], "1")
+    await h.tick(); await h.tick()
     for t in g.values():
         await db.refresh(t)
     assert g["blinkit"].status == "failed" and g["zepto"].status == "cancelled"
-    assert len(h.told) == 1 and "no phone number to log in with" in h.told[0]
+    assert len(h.told) == 2 and "no phone number to log in with" in h.told[1], "said once; no other store offered"
 
 
 class FastAgent(FakeAgent):
@@ -408,7 +421,8 @@ async def test_the_ai_decides_which_saved_place_the_words_mean(monkeypatch):
 
 async def test_naming_one_store_during_a_comparison_drops_the_others(db, at, sessions):
     """Live 2026-10-11: he wrote 'Zepto' while three stores looked; Saheli said 'checking only on Zepto' and all three went
-    on. task_input only: that store goes on alone (its own pick to the cart, or a fresh look-up), the others are dropped."""
+    on. task_input only: that store goes on alone (its own options for them to pick, or a fresh look-up), the others are
+    dropped."""
     at("2026-10-11 16:49")
     agent = FakeAgent(script={"browse": [FOUND]}, finish_after_polls=99)
     h = LoginHarness(sessions, agent, "9000012345")
@@ -434,23 +448,26 @@ async def test_naming_one_store_during_a_comparison_drops_the_others(db, at, ses
     z = g2["zepto"]
     await db.refresh(z)
     assert z.status == "awaiting_confirm" and z.input_needed == "go", "Zepto looked; the comparison waits for the others"
-    await runtime.provide_input(db, z, kind="only", by=ELDER, by_is_elder=False); await db.commit()
+    said = await runtime.provide_input(db, z, kind="only", by=ELDER, by_is_elder=False); await db.commit()
     await db.refresh(z)
-    assert z.phase == "prepare" and z.status == "queued" and z.details["chosen"][0]["name"] == BAR_100["name"], "its pick goes to the cart"
+    assert (z.status, z.input_needed) == ("awaiting_confirm", "go") and runtime.compare_group(z) is None and z.details["only_store"]
+    assert "1. RiteBite Max Protein Choco Berry 30 g Protein Bar (100 g) ₹177 each; 4 = ₹708 ← suggested" in said, "its own options to pick from"
     assert "not a store of a running comparison" in await runtime.provide_input(db, await _bars(db, service="blinkit"), kind="only", by=ELDER, by_is_elder=False)
 
 
 async def test_the_brain_sees_only_sahelis_pick_while_the_cart_is_built(db, at, sessions, monkeypatch):
     """Live 2026-10-11 16:54: he wrote 'Ok' while the Blinkit cart was built; the task line listed every product found, and
-    the brain read them out as options ('Which one would you like me to add?'). It now sees only the pick."""
+    the brain read them out as options again. Once they picked, it sees only the pick."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-11 16:54")
     h = LoginHarness(sessions, FakeAgent(script={"browse": [BLINKIT_LIVE]}, finish_after_polls=99), "9000012345")
     t = await _bars(db)
     await h.tick(); h.agent.finish_after_polls = 1; await h.tick()
     await db.refresh(t)
+    assert "options sent, waiting for their pick" in runtime.describe(t) and "₹177" in runtime.describe(t)
+    await _pick(db, t, "1")
     line = runtime.describe(t)
-    assert "picked by Saheli" in line and "4 x RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80" in line
+    assert "picked (not in a cart yet" in line and "4 x RiteBite Max Protein Daily Choco Berry 10 g Protein Bar (50 g) ₹80" in line
     assert "₹177" not in line and "found (not in a cart yet)" not in line, line
 
 
@@ -583,7 +600,9 @@ async def test_a_task_another_runner_is_in_the_middle_of_is_left_alone(db, at, s
     await _fast_tick(sessions, FastAgent(script={}), PlaceHost({}))
     await db.refresh(t)
     assert seen and seen[0], "claimed while the fast step works (after its commit)"
-    assert t.details.get("claim") is None and t.status == "queued" and t.phase == "prepare", "and released when the runner is done"
+    assert t.details.get("claim") is None and t.input_needed == "go", "and released when the runner is done"
+    await _pick(db, t)
+    assert t.status == "queued" and t.phase == "prepare"
 
     # another runner's fresh claim: left alone; a claim older than CLAIM_FOR (a crashed runner): taken
     t.details = {**t.details, "claim": clock.now().isoformat()}

@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, field
 
 from datetime import timedelta
+from typing import Awaitable, Callable
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,6 +46,9 @@ class TurnRequest:
     modality: str = "text"  # text | voice (text is then the transcript of a voice note)
     voice_confidence: float | None = None  # 0..1 when the speech engine reported one
     voice_language: str | None = None
+    # A system turn about something that can move on while it waits for this family's turn (a task update): checked once
+    # the turn is held; False → nothing is said (founder 2026-10-11: one true status).
+    still_true: Callable[[AsyncSession], Awaitable[bool]] | None = None
 
     @property
     def voice(self) -> bool:
@@ -69,6 +73,7 @@ class TurnResult:
     buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp answers sent with the reply
     trace_id: str | None = None  # the why-trail this turn is filed under (app.core.trace)
     turn_id: int | None = None  # Saheli's reply turn
+    stale: bool = False  # an update that was no longer true when its turn came: nothing was said
 
 
 async def _lock_family(session: AsyncSession, family_id: str) -> None:
@@ -477,6 +482,11 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
     started = time.monotonic()
     await _lock_family(session, req.family_id)
+    if req.still_true is not None and not await req.still_true(session):
+        # The task this update is about moved on while it waited for the family's turn (the person answered, changed or
+        # cancelled it meanwhile): said now, it would contradict what they were just told.
+        await session.commit()
+        return TurnResult(reply="none", actions=[], alerts=[], model="none", stale=True)
 
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
@@ -692,7 +702,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if data.history_full:  # fewer turns than a full history cannot need folding yet
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
-    if not getattr(host, "shadow", False) and any(a["tool"] in ("start_task", "task_input") and a.get("ok") for a in ctx.actions):
+    order_tap = bool(parsed_button and parsed_button[0] == "od")  # a Cancel tap on a placed order: its caregiver is told now
+    if not getattr(host, "shadow", False) and (order_tap or any(a["tool"] in ("start_task", "task_input", "cancel_task") and a.get("ok")
+                                                                for a in ctx.actions)):
         # Move the order now instead of at the next minute's scheduler run (live 2026-10-09: 47 s wait before the look-ups).
         try:
             from app.api.brain import kick_tasks

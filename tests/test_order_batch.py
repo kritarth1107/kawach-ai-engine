@@ -227,12 +227,19 @@ async def test_change_goes_to_the_brain_and_cancel_drops_it(db, at, monkeypatch)
     assert reply is None and "what they want to change" in note
     cancelled = []
 
+    said = ["stopped; nothing was placed"]
+
     async def request_cancel(session, agent, task, *, by, reason):
         cancelled.append((task.id, by, reason))
+        return said[0]
 
     monkeypatch.setattr(runtime, "request_cancel", request_cancel)
     reply, note = await outcomes.handle_order_button(db, family_id=FAM, speaker_id=ELDER, elder_id=ELDER, code="cancel", task_id=str(t.id), profile=None)
-    assert reply and cancelled == [(t.id, ELDER, "tapped cancel")]
+    assert reply == outcomes.ORDER_TAP["english"]["cancel"] and cancelled == [(t.id, ELDER, "tapped cancel")]
+    # founder 2026-10-11: "cancelled" only when it was stopped; a placed order (or one being placed) goes to the brain with the truth
+    said[0] = "NOT cancelled: it is ALREADY PLACED on Blinkit (order 1), and Saheli cannot cancel a placed order. Tell them ..."
+    reply, note = await outcomes.handle_order_button(db, family_id=FAM, speaker_id=ELDER, elder_id=ELDER, code="cancel", task_id=str(t.id), profile=None)
+    assert reply is None and "NOT cancelled: it is ALREADY PLACED" in note
     other, _ = await outcomes.handle_order_button(db, family_id="fam-other", speaker_id=ELDER, elder_id=ELDER, code="yes", task_id=str(t.id), profile=None)
     assert other == outcomes.ORDER_TAP["english"]["done"], "another family's order is never touched"
 

@@ -1044,19 +1044,24 @@ async def _task(ctx: TurnCtx, task_id: str):
 @tool(
     "start_task",
     "Start an order or a ride on one of the family's own accounts. It runs in the background until it is placed or "
-    "cancelled: an order looks the items up, picks the product that fits what they asked (and, with no store named, the "
-    "best store), logs in if the store needs it (the login code is asked from the person the family set for codes), builds "
-    "the cart and comes back with ONE confirm: items and total. Never ask which product or which store. Rides find fares "
-    "and come back to choose. Cash on delivery only. Allergies and the never-order list are checked first. Tell the person "
-    "in a few words that you are on it; you get a task update when someone has to answer. For 'the usual' or 'same as last "
-    "time', look at past_orders first and use the exact item names and service from there. If they did not name a store "
-    "for an order, leave service out and give category (groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, "
-    "PharmEasy; food: Swiggy, Zomato). The first call for an order only returns the delivery address to confirm: ask them, "
-    "and call start_task again after they say yes (with area if they named another saved place).",
+    "cancelled: an order looks the items up (on the store they named, the stores they named, or with no store named the "
+    "usual stores of that kind) and a task update brings what every store found, numbered, with your suggestion marked, for "
+    "them to pick; then it logs in if the store needs it (the login code is asked from the person the family set for codes), "
+    "builds the cart and comes back with ONE confirm: items and total. Do not ask which product or store before the options "
+    "come. A ride is the same: the fares from the app they named (or the apps they named; with no app named, or 'the "
+    "cheapest', every ride app) come back numbered for them to pick, then after the login the one confirm with the fare. "
+    "Cash only. Allergies and the never-order list are checked first. Tell the person in a few words that you are on it; you "
+    "get a task update when someone has to answer. For 'the usual' or 'same as last time', look at past_orders first and use "
+    "the exact item names and service from there. If they did not name a store for an order, leave service out and give "
+    "category (groceries: Blinkit, Instamart, Zepto; medicines: Apollo, 1mg, PharmEasy; food: Swiggy, Zomato); if they named "
+    "several stores or apps to look on, give them as services. The first call for an order only returns the delivery address "
+    "to confirm: ask them, and call start_task again after they say yes (with area if they named another saved place).",
     {
         "service": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"],
-                    "description": "Only when they named a store (or for 'the usual'); rides always need one"},
-        "category": {"type": "string", "enum": ["grocery", "medicine", "food"], "description": "For an order with no store named: compare the usual stores"},
+                    "description": "Only when they named one store or ride app (or for 'the usual')"},
+        "services": {"type": "array", "items": {"type": "string", "enum": ["swiggy", "instamart", "zepto", "blinkit", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido"]},
+                     "description": "Several stores or ride apps they named to look on ('Blinkit aur Zepto dono pe dekho', 'Uber and Ola'): every one of them is searched and reported"},
+        "category": {"type": "string", "enum": ["grocery", "medicine", "food", "ride"], "description": "No store or app named (or 'all' / 'the cheapest'): compare the usual ones of that kind"},
         "kind": {"type": "string", "enum": ["order", "ride"]},
         "goal": {"type": "string", "description": "One line, e.g. 'Atta and toor dal for Amma' or 'Cab to Dr Iyer's clinic'"},
         "items": {"type": "array", "items": {"type": "object", "properties": {
@@ -1078,16 +1083,23 @@ async def _task(ctx: TurnCtx, task_id: str):
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
+    kind_of = {s: ("ride" if c == "ride" else "order") for c, stores in runtime.COMPARE_STORES.items() for s in stores}
+    named = list(dict.fromkeys(s for s in a.get("services") or [] if kind_of.get(s) == a["kind"]))
+    if len(named) == 1 and not a.get("service"):
+        a = {**a, "service": named[0]}
+    a = {**a, "services": named if len(named) > 1 else None}
     if a["kind"] == "order" and not ctx.is_system:
         ask = await _confirm_address_first(ctx, a)
         if ask:
             return ask
-        if not a.get("service"):
-            # The store they named stays with the order through the address question (sim 2026-10-11: "Blinkit se …", then
-            # "haan ghar" → the second call left the store out and three stores were searched).
-            named = await _store_named_with_address(ctx)
-            if named:
-                a = {**a, "service": named}
+        if not a.get("service") and not a.get("services"):
+            # The store(s) they named stay with the order through the address question (sim 2026-10-11: "Blinkit se …",
+            # then "haan ghar" → the second call left the store out and three stores were searched).
+            got = await _store_named_with_address(ctx)
+            if isinstance(got, list) and len(got) > 1:
+                a = {**a, "services": got}
+            elif got:
+                a = {**a, "service": got if isinstance(got, str) else got[0]}
     place = None
     if a["kind"] == "order" and a.get("area"):
         # Also after the address was confirmed: a place they name now must be a saved one (it went to the default place).
@@ -1095,16 +1107,24 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         problem = _named_place_problem(a, place)
         if problem:
             return problem
+    if a.get("services"):
+        # Several stores or apps they named: exactly those are searched, and every one is reported (founder 2026-10-11).
+        return await _start_compare(ctx, a, tuple(a["services"]), place=place, named=True)
     if not a.get("service"):
-        stores = runtime.COMPARE_STORES.get(a.get("category") or "") if a["kind"] == "order" else None
+        cat = "ride" if a["kind"] == "ride" else a.get("category") or ""
+        stores = runtime.COMPARE_STORES.get(cat) if (cat == "ride") == (a["kind"] == "ride") else None
         if not stores:
-            raise ToolRefused("Say which store (service). Rides always need one; for an order with no store named, give category.")
+            raise ToolRefused("Say which store (service), or give category for an order with no store named.")
         return await _start_compare(ctx, a, stores, place=place)
     for t in await runtime.live_tasks(ctx.session, ctx.family_id):
         if t.service == a["service"] and t.kind == a["kind"]:
             return {"already_running": runtime.describe(t)}
     task = await _create_task(ctx, a, a["service"], place=place)
-    return {"task_id": str(task.id), "status": "started", "next": "You will get a task update to confirm the cart or fare before anything is placed."}
+    return {"task_id": str(task.id), "status": "started",
+            "next": ("A task update brings what the store has, numbered with your suggestion, for them to pick; then the one "
+                     "confirm with the total. Nothing is ordered before that." if a["kind"] == "order" else
+                     "A task update brings the fares, numbered, for them to pick; then the one confirm with the fare. Nothing is "
+                     "booked before that.")}
 
 
 ADDRESS_OK_FOR = timedelta(minutes=10)  # one order's back-and-forth; a later order asks again (live 2026-10-09: 28 min later it skipped)
@@ -1132,21 +1152,27 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
              f"near {a['area']}" if a.get("area") else "the address saved in the store account")
     await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_address_asked",
                              summary=f"Asked to confirm the delivery address for: {a['goal']}", actor_id=speaker,
-                             payload={"speaker": speaker, "ref": ctx.message_ref, "where": where, "service": a.get("service")})
-    same = f" (service {a['service']}, the same items)" if a.get("service") else ""
+                             payload={"speaker": speaker, "ref": ctx.message_ref, "where": where, "service": a.get("service"),
+                                      "services": a.get("services")})
+    same = (f" (service {a['service']}, the same items)" if a.get("service") else
+            f" (services {', '.join(a['services'])}, the same items)" if a.get("services") else "")
     return {"status": "not started yet", "confirm_address": where,
             "next": "Nothing is searched yet. In one short line, ask them to confirm this delivery address (say the place name "
                     f"and the area, not the full line). When they say yes, call start_task again with the same order{same}; if they "
                     "name another saved place, pass it as area."}
 
 
-async def _store_named_with_address(ctx: TurnCtx) -> str | None:
-    """The store given with this person's order when its address was asked (in an earlier turn, minutes ago), if any."""
+async def _store_named_with_address(ctx: TurnCtx) -> str | list[str] | None:
+    """The store (or the stores) given with this person's order when its address was asked (in an earlier turn, minutes
+    ago), if any."""
     speaker = ctx.speaker.get("id") or ctx.elder_id
     asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - ADDRESS_OK_FOR,
                                            kinds=["order_address_asked"])
              if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("ref") != ctx.message_ref]
-    return (asked[-1].payload or {}).get("service") if asked else None
+    if not asked:
+        return None
+    p = asked[-1].payload or {}
+    return p.get("services") or p.get("service")
 
 
 def _named_place_problem(a: dict, place: dict) -> dict | None:
@@ -1165,23 +1191,27 @@ def _named_place_problem(a: dict, place: dict) -> dict | None:
     return None
 
 
-async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: dict | None = None) -> dict:
+async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: dict | None = None, named: bool = False) -> dict:
     """The same order looked up on several stores at once (no login); one task update brings every option."""
     from app.tasks import runtime
 
     from app.tasks.skills import SKILLS
 
-    busy = {t.service: t for t in await runtime.live_tasks(ctx.session, ctx.family_id) if t.kind == "order"}
+    busy = {t.service: t for t in await runtime.live_tasks(ctx.session, ctx.family_id) if t.kind == a["kind"]}
     free = [s for s in stores if s not in busy]
     if not free:
-        raise ToolRefused("Every store for this already has an order running: " + "; ".join(runtime.describe(busy[s]) for s in stores))
+        raise ToolRefused(f"Every one of these already has {'a ride' if a['kind'] == 'ride' else 'an order'} running: "
+                          + "; ".join(runtime.describe(busy[s]) for s in stores))
     gid = uuid.uuid4().hex[:10]
     place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
-    started = [await _create_task(ctx, a, s, extra={"compare": gid}, place=place) for s in free]
+    started = [await _create_task(ctx, a, s, extra={"compare": gid, **({"named": True} if named else {})}, place=place) for s in free]
     out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started],
-                 "next": "The store and the product are picked for them (never ask which). A task update brings the one confirm with "
-                         "the total (a store login code may be asked first), usually within a minute or two. Nothing is ordered "
-                         "before they say yes to it."}
+                 "next": ("A task update brings the fares from every app, numbered with your suggestion marked, usually within a "
+                          "minute: they pick, then after the login the one confirm with the fare. Nothing is booked before they say "
+                          "yes to it." if a["kind"] == "ride" else
+                          "A task update brings what every store found, numbered with your suggestion marked, usually within a "
+                          "minute or two: they pick, then the one confirm with the total (a store login code may be asked first). "
+                          "Nothing is ordered before they say yes to it.")}
     if len(free) < len(stores):
         out["already_running"] = [runtime.describe(busy[s]) for s in stores if s in busy]
     return out
@@ -1299,8 +1329,8 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "task_input",
     "Give a running task what it is waiting for: the person's confirm of the cart and total (confirm: yes/no), the login "
-    "code (otp, from whoever the update says has it), the name of the product they picked when options were listed (go), "
-    "approval of a cancellation fee (fee: yes/no), which ride option to book (choice), which alternative to get for an item "
+    "code (otp, from whoever the update says has it), the option they picked when options were listed (go: its number), "
+    "approval of a cancellation fee (fee: yes/no, older rides only), which ride fare to book (choice: its number as listed), which alternative to get for an item "
     "that is out of stock (swap: the alternative's name, or 'no'), the family approver's answer (approve: yes/no; only an "
     "approver's answer counts), or, at the confirm, a change they ask for: change (target = which asked item, items = what "
     "replaces it: another product, brand, size or quantity; several products are several entries), add (items), remove "
@@ -1312,7 +1342,7 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
     {
         "task_id": {"type": "string"},
         "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep", "resend", "only"]},
-        "value": {"type": "string", "description": "confirm / approve / fee / keep: exactly 'yes' or 'no' (you decide from their words, any language); go: the option id(s) as listed (e.g. 'p3' or 'p3, p7'), or 'yes' for Saheli's own pick; otp: the digits; choice / swap: the option as listed"},
+        "value": {"type": "string", "description": "confirm / approve / fee / keep: exactly 'yes' or 'no' (you decide from their words, any language); go: the number(s) of the option(s) they picked, as listed (e.g. '2' or '1, 5'), 'yes' for the suggested one, or 'no' for none; choice (a ride's fare): its number as listed, or 'yes' for the one they picked before; otp: the digits; swap: the option as listed"},
         "items": {"type": "array", "items": {"type": "object", "properties": {
                     "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},
                     "qty": {"type": "integer"},
@@ -1516,8 +1546,10 @@ async def set_boundaries(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "cancel_task",
-    "Cancel a running or placed task: stops it before placing, or cancels the placed order or ride on the "
-    "service. If cancelling costs a fee you will be asked before it is accepted.",
+    "Cancel a task: an order or ride not placed or booked yet is stopped (nothing is ordered). A PLACED order or a BOOKED "
+    "ride cannot be cancelled by Saheli, nor one being placed right now: the result says so and what to tell them (the care "
+    "recipient: the caregiver is told now; a caregiver or someone ordering for themselves: cancel it in that app). Say "
+    "exactly what the result says; never say cancelled unless it says stopped.",
     {"task_id": {"type": "string"}, "reason": {"type": "string"}},
     ["task_id", "reason"],
 )
@@ -1616,6 +1648,13 @@ async def order_feedback(ctx: TurnCtx, a: dict) -> dict:
     if not task or not ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
         raise ToolRefused("No placed order to give feedback on. If it is about something not ordered through you, save it with "
                           "remember (domain preference).")
+    rows = aftercare.items_of(task)
+    wrong = [it.get("item") for it in a.get("items") or [] if isinstance(it, dict) and it.get("item") not in {r["n"] for r in rows}]
+    if wrong and len(rows) > 1:
+        # The options listed before the order had their own numbers (sim 2026-10-12: the khakhra, option 3 there, was given
+        # as product 3 of a two-product order and its feedback was lost): the order's own numbers, so nothing is lost.
+        raise ToolRefused("Products are numbered by this order, not by the options listed before it: "
+                          + "; ".join(f"{r['n']}. {r['name']}" for r in rows) + ". Call order_feedback again with these numbers.")
     return await aftercare.record(
         ctx.session, task, by=ctx.speaker.get("id") or ctx.elder_id, source_kind=ctx.source_kind,
         confidence=0.9 if ctx.speaker_is_elder else 1.0, arrived=a.get("arrived"), problem=a.get("problem"), items=a.get("items"),

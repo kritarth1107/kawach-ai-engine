@@ -124,10 +124,15 @@ async def test_connector_practice_rebuilds_the_cart_and_never_calls_place(db, at
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order",
                              goal="Diet Coke", details={"items": [{"name": "Diet Coke", "qty": 1}]})
     await db.commit()
-    for _ in range(3):
+    await h.tick()
+    await db.refresh(t)
+    assert t.input_needed == "go", t.history  # what was found goes to the person first
+    await runtime.provide_input(db, t, kind="go", value="1", by=ELDER, by_is_elder=True)
+    await db.commit()
+    for _ in range(2):
         await h.tick()
     await db.refresh(t)
-    assert t.status == "awaiting_confirm", t.history
+    assert t.status == "awaiting_confirm" and t.input_needed == "confirm", t.history
     await runtime.provide_input(db, t, kind="confirm", value="yes", by=ELDER, by_is_elder=True)
     await db.commit()
     await h.tick()
