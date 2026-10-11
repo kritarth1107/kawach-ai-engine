@@ -28,6 +28,8 @@ WRITE_TOOLS = {
     "log_appointment_notes",
     "create_reminder",
     "cancel_reminder",
+    "skip_reminder",
+    "update_reminder",
     "notify_caregivers",
     "trigger_emergency_escalation",
     "save_memory",

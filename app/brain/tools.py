@@ -574,18 +574,139 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
     }
 
 
+REMINDER_SCHEDULE = {
+    "repeat": {"type": "string", "enum": ["daily", "weekly", "once"],
+               "description": "daily (default); weekly on days; once on date (a reminder for one day, e.g. 'on 15 Oct at 5 pm')"},
+    "date": {"type": "string", "description": "once only: the day, YYYY-MM-DD (IST)"},
+    "days": {"type": "array", "items": {"type": "integer"}, "description": "weekly only: days, Monday=0 … Sunday=6"},
+    "until": {"type": "string", "description": "Last day it goes out, YYYY-MM-DD, when they gave an end ('till 30 Nov', 'for a week')"},
+    "every_hour": {"type": "object", "description": "Every hour between two times instead of fixed times (may cross midnight)",
+                   "properties": {"from": {"type": "string", "description": "HH:MM"}, "to": {"type": "string", "description": "HH:MM"}},
+                   "required": ["from", "to"], "additionalProperties": False},
+}
+
+
+def _reminder_schedule(a: dict, *, partial: bool = False) -> dict:
+    """The schedule as data for the reminder service: the brain read the words; nothing here reads them. partial (a
+    change): only what was given, so the rest stays as it was."""
+    from app.care import doses
+
+    sched: dict = {} if partial and not a.get("repeat") else {"repeat": a.get("repeat") or "daily"}
+    hourly = a.get("every_hour") if isinstance(a.get("every_hour"), dict) else None
+    if hourly:
+        sched["windowStart"], sched["windowEnd"] = hourly.get("from"), hourly.get("to")
+    elif a.get("times") is not None:
+        sched["times"] = a.get("times")
+    if a.get("date"):
+        sched["date"] = a["date"]
+    if a.get("days") is not None:
+        sched["days"] = doses.to_backend_days(a["days"])  # the reminder service counts from Sunday (0), the record from Monday (0)
+    if a.get("until"):
+        sched["endDate"] = a["until"]
+    return sched
+
+
+def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
+    """Your own reminders, or the care recipient's if you are a caregiver; never another caregiver's own (their self care)."""
+    if ctx.is_system:
+        raise ToolRefused("Only the person, or a caregiver, can change reminders.")
+    me = ctx.speaker.get("id")
+    if subject == me or (ctx.is_caregiver and subject == ctx.elder_id):
+        return
+    raise ToolRefused("You can change only your own reminders" + (" or the care recipient's." if ctx.is_caregiver else "."))
+
+
 @tool(
     "set_reminder",
-    "A one-off or repeating reminder that is not a medicine (medicines get reminders through remember). "
-    "times are 'HH:MM' in IST.",
-    {"text": {"type": "string"}, "times": {"type": "array", "items": {"type": "string"}}, "about": ABOUT},
-    ["text", "times"],
+    "A reminder that is not a medicine (medicines get reminders through remember): every day at times, on chosen weekdays, "
+    "once on one date, or every hour between two times; optionally until a date. times are 'HH:MM' in IST. Read their words "
+    "and fill the fields: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times ['17:00']; 'every Monday and Thursday "
+    "at 7' is weekly days [0, 3]; 'every hour from 2 pm to 3 am' is every_hour {from 14:00, to 03:00}. Tell them the schedule "
+    "the tool returns.",
+    {"text": {"type": "string", "description": "What to remind, in the person's own words"},
+     "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM times (leave out for every_hour)"},
+     **REMINDER_SCHEDULE, "about": ABOUT},
+    ["text"],
 )
 async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
-    return await ctx.host.call(
-        "create_reminder", {"text": a["text"], "times": a["times"], "kind": "multi_time"},
-        family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), actor_id=ctx.actor_id,
+    if not a.get("times") and not isinstance(a.get("every_hour"), dict):
+        raise ToolRefused("Give times (HH:MM), or every_hour with from and to. If they did not say when, ask.")
+    subject = ctx.subject(a.get("about"))
+    out = await ctx.host.call(
+        "create_reminder", {"text": a["text"], "schedule": _reminder_schedule(a)},
+        family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
+    if isinstance(out, dict) and out.get("status") == "not_set":
+        raise ToolRefused(f"Not set: {out.get('error')}. Ask them for what is missing.")
+    return out
+
+
+def _reminder_line(r: dict) -> dict:
+    nxt = r.get("next") or {}
+    return {"id": r.get("reminderId"), "text": r.get("text"), "schedule": r.get("schedule"), "status": r.get("status"),
+            "next": f"{nxt.get('day')} {nxt.get('time')}" if nxt else None, "skipped": r.get("skips") or None}
+
+
+@tool(
+    "reminders",
+    "The person's reminders that are not medicines (what Saheli will remind them about, when, and the next time), each with "
+    "its id. Use it for 'what reminders do I have?', and before skipping, stopping or changing one (change_reminder needs "
+    "the id).",
+    {"about": ABOUT, "include_stopped": {"type": "boolean", "description": "Also the ones stopped or finished in the last 30 days"}},
+    [],
+)
+async def reminders_tool(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
+    if not ctx.is_system:
+        _may_manage_reminders(ctx, subject)
+    out = await ctx.host.call("list_reminders", {"status": "all" if a.get("include_stopped") else "active"},
+                              family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    rows = (out or {}).get("reminders") or []
+    return {"reminders": [_reminder_line(r) for r in rows], "count": len(rows),
+            "note": "Medicine reminders follow the medicines in the CARE RECORD (change them with remember or stop)."}
+
+
+@tool(
+    "change_reminder",
+    "Skip, stop or change one reminder from the reminders tool (by its id). skip: one time ('not tomorrow', 'skip today's'): "
+    "give date (and time for one of several times that day), or leave both out for the next time; unskip undoes a skip. "
+    "stop: it never goes out again. change: new times / repeat / days / date / until / every_hour (what you leave out stays). "
+    "Say exactly what changed, from the tool's result.",
+    {"id": {"type": "string", "description": "The reminder id from the reminders tool"},
+     "action": {"type": "string", "enum": ["skip", "unskip", "stop", "change"]},
+     "time": {"type": "string", "description": "skip / unskip: the HH:MM time on that date"},
+     "times": {"type": "array", "items": {"type": "string"}, "description": "change: new HH:MM times"},
+     "text": {"type": "string", "description": "change: new words for the reminder"},
+     **REMINDER_SCHEDULE, "about": ABOUT},
+    ["id", "action"],
+)
+async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
+    subject = ctx.subject(a.get("about"))
+    _may_manage_reminders(ctx, subject)
+    rid = str(a["id"]).strip()
+    action = a["action"]
+    kw = {"family_id": ctx.family_id, "subject_id": subject, "actor_id": ctx.actor_id}
+    if action == "stop":
+        out = await ctx.host.call("cancel_reminder", {"reminderId": rid}, **kw)
+    elif action in ("skip", "unskip"):
+        out = await ctx.host.call("skip_reminder", {"reminderId": rid, "date": a.get("date"), "time": a.get("time"),
+                                                    "undo": action == "unskip"}, **kw)
+    else:
+        sched_fields = {k: a[k] for k in ("times", "repeat", "date", "days", "until", "every_hour") if a.get(k) is not None}
+        args: dict = {"reminderId": rid}
+        if sched_fields:
+            args["schedule"] = _reminder_schedule(sched_fields, partial=True)
+        if a.get("text"):
+            args["text"] = a["text"]
+        if len(args) == 1:
+            raise ToolRefused("Say what to change: times, days, date, until, every_hour or the words.")
+        out = await ctx.host.call("update_reminder", args, **kw)
+    if isinstance(out, dict) and out.get("ok") is False:
+        raise ToolRefused(f"Not done: {out.get('error')}")
+    out = out or {}
+    r = out.get("reminder") or {}
+    return {"result": {"stop": "stopped", "skip": "skipped", "unskip": "unskipped"}.get(action, "changed"),
+            "reminder": _reminder_line(r) if r else None, **({"skipped": out["skipped"]} if out.get("skipped") else {})}
 
 
 @tool(
