@@ -67,7 +67,7 @@ async def test_otp_then_continue(db, at, sessions):
     await h.tick()
     await h.tick()
     await db.refresh(t)
-    assert t.status == "needs_input" and t.input_needed == "otp" and "9888" in h.told[-1]
+    assert t.status == "needs_input" and t.input_needed == "otp" and "2002" in h.told[-1]
     assert await runtime.provide_input(db, t, kind="otp", value="hello", by=ELDER, by_is_elder=True) != "code received; continuing"
     assert await runtime.provide_input(db, t, kind="otp", value="4821", by=ELDER, by_is_elder=True) == "code received; continuing"
     await db.commit()
@@ -384,13 +384,13 @@ async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
     from app.sim.world import SimHost
 
     at("2026-10-09 15:03")
-    e = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    e = {"id": ELDER, "name": "Shanti", "role": "elder"}
     ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=e, speaker=e, members=[e])
     with pytest.raises(tools.ToolRefused):
         await tools.start_task(ctx, {"kind": "ride", "goal": "Cab to the clinic"})
     old = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Atta",
                                details={"items": [{"name": "Atta", "qty": 1}]})
-    ask = {"kind": "order", "category": "grocery", "goal": "Diet Coke for Vasundara ji", "items": [{"name": "Diet Coke"}]}
+    ask = {"kind": "order", "category": "grocery", "goal": "Diet Coke for Shanti ji", "items": [{"name": "Diet Coke"}]}
     ctx.message_ref = "wamid.1"
     first = await tools.start_task(ctx, ask)
     assert "confirm_address" in first and first["status"] == "not started yet", "the address is confirmed before any search"
@@ -682,13 +682,13 @@ async def test_blinkit_looks_up_through_its_own_web_request_in_seconds_then_the_
     at("2026-10-09 17:30")
     agent = FastAgent(script={"prepare": [OTP]})
     h = LoginHarness(sessions, agent, "9000012345")
-    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "Sunita Park, Raipur", "lat": 21.238, "lng": 81.6858}
+    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "Sample Park, Raipur", "lat": 21.251, "lng": 81.6296}
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
                              details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place=place))
     await db.commit()
     await h.tick()
     await db.refresh(t)
-    assert agent.runs == [] and asked == {"cdp": "https://fs-1.cdp.test", "query": "Diet Coke", "lat": 21.238, "lon": 81.6858}
+    assert agent.runs == [] and asked == {"cdp": "https://fs-1.cdp.test", "query": "Diet Coke", "lat": 21.251, "lon": 81.6296}
     assert t.status == "queued" and t.phase == "prepare" and t.agent_session == "fs-1" and h.told == []
     await h.tick()
     run = agent.runs[-1]
@@ -737,7 +737,7 @@ async def test_logged_in_blinkit_builds_the_cart_through_its_own_request(db, at,
     async def fake_cart(cdp, products, lat=None, lon=None):
         built["products"] = products
         return {"items": [{"name": "Coca-Cola Diet Coke Soft Drink No Caffeine", "qty": 1, "price": "₹209", "available": True}],
-                "total": "₹218", "fees": "₹9", "cod_available": True, "logged_in": True, "address_used": "Home: 504, Sunita Park, Raipur 492001"}
+                "total": "₹218", "fees": "₹9", "cod_available": True, "logged_in": True, "address_used": "Home: 12, Sample Park, Raipur 492001"}
 
     monkeypatch.setattr(fastpath, "search", fake_search)
     monkeypatch.setattr(fastpath, "blinkit_cart", fake_cart)
@@ -746,7 +746,7 @@ async def test_logged_in_blinkit_builds_the_cart_through_its_own_request(db, at,
     agent = FastAgent(script={})
     h = LoginHarness(sessions, agent, "9000012345")
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
-                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.25, "lng": 81.63, "pincode": "492001"}))
     await db.commit()
     await h.tick()
     await db.refresh(t)
@@ -781,7 +781,7 @@ async def test_not_logged_in_the_agent_only_logs_in_then_the_cart_is_built_fast(
     agent = FastAgent(script={"prepare": [OTP, logged]})
     h = LoginHarness(sessions, agent, "9000012345")
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Diet Coke",
-                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69}))
+                             details={"items": [{"name": "Diet Coke", "qty": 1}]}, limits=Limits(place={"lat": 21.25, "lng": 81.63}))
     await db.commit()
     await h.tick()
     await db.refresh(t)
@@ -804,7 +804,7 @@ async def test_rapido_fares_come_through_its_own_request_with_places_resolved(db
     class Host:
         async def call(self, tool, args, **kw):
             assert tool == "ride_place"
-            return {"lat": 21.24, "lng": 81.69, "label": args["words"]}
+            return {"lat": 21.25, "lng": 81.63, "label": args["words"]}
 
     async def fake_fares(service, cdp, pickup, drop):
         assert pickup["label"] == "Home" and drop["label"] == "Raipur Railway Station"
@@ -848,7 +848,7 @@ async def _instamart_browser_order(db, h, monkeypatch, place_result, second_tota
         assert service == "instamart" and products[0]["cart_ref"]["item_id"] == "I1" and place["pincode"] == "492001"
         total = second_total if second_total and calls["cart"] > 1 else 129
         return {"items": [{"name": "Vachan Butter", "qty": 1, "price": "₹117", "available": True}], "total": f"₹{total}", "fees": "₹12",
-                "cod_available": True, "logged_in": True, "address_used": "Kavach Home: C504 Sunita Park, Raipur 492001",
+                "cod_available": True, "logged_in": True, "address_used": "Kavach Home: B12 Sample Park, Raipur 492001",
                 "place_check": {"items": {"I1": 1}, "total": total, "address_id": "A1"}}
 
     async def fake_place(service, cdp, check):
@@ -861,7 +861,7 @@ async def _instamart_browser_order(db, h, monkeypatch, place_result, second_tota
     monkeypatch.setattr(fastpath, "cart", fake_cart)
     monkeypatch.setattr(fastpath, "place", fake_place)
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
-    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "C504 Sunita Park, Raipur", "line1": "C504, Sunita Park", "lat": 21.24, "lng": 81.69}
+    place = {"addressId": "a1", "nickname": "Home", "pincode": "492001", "full": "B12 Sample Park, Raipur", "line1": "B12, Sample Park", "lat": 21.25, "lng": 81.63}
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="instamart", kind="order", goal="butter",
                              details={"items": [{"name": "butter", "qty": 1}], "channel": "browser"}, limits=Limits(place=place))
     await db.commit()
@@ -1024,7 +1024,7 @@ def _fake_cdp(monkeypatch, tab):
     monkeypatch.setattr(fastpath.websockets, "connect", lambda *a, **k: tab)
 
 
-BLINKIT_CHECK = {"count": 2, "prices": [78, 63], "address": "504 Block C", "total": 180}
+BLINKIT_CHECK = {"count": 2, "prices": [78, 63], "address": "12, Block D", "total": 180}
 
 
 async def test_blinkit_place_reads_the_order_id_after_the_full_page_load_and_empties_the_app_cart(monkeypatch):
@@ -1107,7 +1107,7 @@ async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db
     h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="mushroom, maggi",
                              details={"items": [{"name": "mushroom", "qty": 1}, {"name": "maggi", "qty": 1}]},
-                             limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+                             limits=Limits(place={"lat": 21.25, "lng": 81.63, "pincode": "492001"}))
     await db.commit()
     await h.tick(); await h.tick()
     await db.refresh(t)
@@ -1147,7 +1147,7 @@ async def test_change_add_remove_at_the_confirm_are_data_from_the_brain(db, at, 
     at("2026-10-10 17:40")
     h = LoginHarness(sessions, FastAgent(script={}), "9000012345")
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="paneer",
-                             details={"items": [{"name": "paneer", "qty": 2}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+                             details={"items": [{"name": "paneer", "qty": 2}]}, limits=Limits(place={"lat": 21.25, "lng": 81.63, "pincode": "492001"}))
     await db.commit()
     await h.tick(); await h.tick()
     await db.refresh(t)
@@ -1260,7 +1260,7 @@ async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_
         return {"profileId": "p", "loginPhone": "9000012345"}
 
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Khakhra",
-                             details={"items": [{"name": "Khakhra", "qty": 1}]}, limits=Limits(place={"lat": 21.24, "lng": 81.69, "pincode": "492001"}))
+                             details={"items": [{"name": "Khakhra", "qty": 1}]}, limits=Limits(place={"lat": 21.25, "lng": 81.63, "pincode": "492001"}))
     await db.commit()
     for _ in range(4):
         await runtime.tick(sessions, agent, profile_for=prof, notify=notify, host_for=lambda f: Host())

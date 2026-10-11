@@ -13,7 +13,7 @@ CART = {
     "total": "₹318", "fees": "₹29", "cod_available": True, "eta": "18 min",
 }
 PLACED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "placed": True, "order_id": "IM-55821", "payment_method": "Cash on Delivery", "eta": "17 min", "total": "₹318"}
-OTP = {"logged_in": False, "needs_otp": True, "otp_sent_to": "+91 ******9888", "blocked": False, "problem": "login needs OTP"}
+OTP = {"logged_in": False, "needs_otp": True, "otp_sent_to": "+91 ******2002", "blocked": False, "problem": "login needs OTP"}
 CANCELLED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "cancelled": True}
 FARES = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "options": [{"type": "Auto", "fare": "₹142", "eta": "4 min"}, {"type": "Uber Go", "fare": "₹236", "eta": "6 min"}], "surge": False}
 BOOKED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "booked": True, "ride_id": "UB-9921", "driver": "Ramesh, KA01AB1234", "status": "driver assigned"}

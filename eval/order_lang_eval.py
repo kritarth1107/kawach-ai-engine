@@ -77,7 +77,7 @@ MATCH_CASES = [
 
 
 # which saved place a person's words mean (an AI decision; the backend matches the exact name it gives)
-SAVED = [{"name": "Home", "address": "74 4th Cross, Amrutnagar, Bangalore 560092", "isDefault": True},
+SAVED = [{"name": "Home", "address": "21 5th Main, Jayanagar, Bangalore 560011", "isDefault": True},
          {"name": "Beta's flat", "address": "B-7, Silver Oak Residency, Vijay Nagar, Indore 452010"},
          {"name": "Clinic", "address": "Shop 3, Arera Medical Plaza, Bhopal 462016"}]
 PLACE_CASES = [("ghar pe hi", "Home"), ("घर", "Home"), ("வீட்டுக்கு", "Home"), ("বাড়িতে", "Home"), ("my place", "Home"),

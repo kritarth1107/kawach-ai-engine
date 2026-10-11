@@ -34,8 +34,8 @@ from app.sim.world import SimHost
 from app.tasks import aftercare, fastpath, runtime
 from app.tasks.models import Task
 
-ELDER = {"id": "elder-sim", "name": "Vasundara Devi", "role": "elder"}
-SON = {"id": "son-sim", "name": "Kritarth", "role": "primary caregiver"}
+ELDER = {"id": "elder-sim", "name": "Shanti Devi", "role": "elder"}
+SON = {"id": "son-sim", "name": "Mohan", "role": "primary caregiver"}
 P = lambda pid, name, price, pack: {"name": name, "price": f"₹{price}", "pack": pack, "available": True, "store_id": pid,  # noqa: E731
                                      "cart_ref": {"product_id": pid}}
 CATALOGUE = {
@@ -192,7 +192,7 @@ class Family:
 
 RAIPUR = Family("Raipur, Hinglish/Hindi, elder with a caregiver, place with a map point", elder=ELDER, carer=SON, speaker="elder",
                 place={"addressId": "addr-ghar", "nickname": "Ghar", "full": "12 Civil Lines, Raipur 492001", "pincode": "492001",
-                       "lat": 21.24, "lng": 81.69, "geoPrecision": "address"}, home_words=("civil",))
+                       "lat": 21.25, "lng": 81.63, "geoPrecision": "address"}, home_words=("civil",))
 
 
 class StoreHost(SimHost):
@@ -438,7 +438,7 @@ async def late_order_tells_the_caregiver(c: Conversation):
     await c.say("nahi aaya abhi tak")
     t = await c.task()
     c.check(not (t.details or {}).get("aftercare", {}).get("caregiver_due"), "caregiver told before it was late")
-    # ten minutes later it is long overdue: asked again, still not here → Kritarth is told
+    # ten minutes later it is long overdue: asked again, still not here → Mohan is told
     clock.set_now(clock.now() + timedelta(minutes=11))
     c.check(await c.wake() == 1, "not asked again when it became late")
     await c.say("abhi bhi nahi aaya")
@@ -450,11 +450,11 @@ async def late_order_tells_the_caregiver(c: Conversation):
 # --- every family, not one (founder 2026-10-11): cities, languages, places with and without a map point, self-care ---------
 
 BANGALORE = Family("Bangalore, English, a son orders for his mother, place saved WITHOUT a map point (found at order time)",
-                   elder={"id": "elder-blr", "name": "Sudha", "role": "elder"},
-                   carer={"id": "son-blr", "name": "Vish", "role": "primary caregiver"}, speaker="carer",
-                   place={"addressId": "addr-blr", "nickname": "Home", "pincode": "560092",
-                          "full": "74 4th cross 4c sector amrutnagar byatarayanapura bangalore karnataka india, 560092"},
-                   heal={"lat": 13.0617, "lng": 77.5929, "geoPrecision": "pincode"}, home_words=("amrutnagar",))
+                   elder={"id": "elder-blr", "name": "Lakshmi", "role": "elder"},
+                   carer={"id": "son-blr", "name": "Arjun", "role": "primary caregiver"}, speaker="carer",
+                   place={"addressId": "addr-blr", "nickname": "Home", "pincode": "560011",
+                          "full": "21 5th main 4th block jayanagar south bangalore karnataka india, 560011"},
+                   heal={"lat": 12.9299, "lng": 77.5826, "geoPrecision": "pincode"}, home_words=("jayanagar",))
 DELHI = Family("Delhi, Hindi (Devanagari), elder with a caregiver, place with a map point",
                elder={"id": "elder-del", "name": "Kamla Devi", "role": "elder"},
                carer={"id": "son-del", "name": "Rohit", "role": "primary caregiver"}, speaker="elder",

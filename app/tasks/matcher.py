@@ -98,7 +98,7 @@ does. JSON only: {"same": true | false, "why": "<a few words>"}"""
 
 async def same_place(saved_full: str, pincode: str, shown: str) -> bool | None:
     """Is the store's checkout address the family's saved place? None when the model could not answer (the cart check's own
-    pincode rule still applies). Live run 2026-10-11: the agent picked the account's old "Home" in Purena for Sunita Park."""
+    pincode rule still applies). Live run 2026-10-11: the agent picked the account's old "Home" in another area for the saved place."""
     if not saved_full or not shown:
         return None
     try:

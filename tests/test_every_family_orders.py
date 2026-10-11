@@ -14,10 +14,10 @@ BAR_50 = {"name": "RiteBite Max Protein Daily Choco Berry 10 g Protein Bar", "pa
 BAR_100 = {"name": "RiteBite Max Protein Choco Berry 30 g Protein Bar", "pack": "100 g", "price": "₹177", "available": True}
 COMBO = {"name": "RiteBite Max Protein Daily Choco Almond Protein Bar + RiteBite Max Protein Daily Choco Berry Protein Bar Combo",
          "pack": "50 g + 50 g", "price": "₹151", "available": True}
-# what the Blinkit browser agent reported live on 2026-10-11 (task 51492e5b): the quantity inside for_item
-BLINKIT_LIVE = {**FOUND, "eta": "8 mins", "location_set": "560092 (Sahakar Nagar, Byatarayanapura)",
+# what the Blinkit browser agent reported live on 2026-10-11: the quantity inside for_item
+BLINKIT_LIVE = {**FOUND, "eta": "8 mins", "location_set": "560011 (Jayanagar 4th Block)",
                 "items": [{**x, "for_item": f"4 x {RITEBITE}"} for x in (BAR_50, BAR_100, COMBO)]}
-BANGALORE = {"addressId": "pl-blr", "nickname": "Home", "pincode": "560092", "full": "74 4th cross 4c sector amrutnagar bangalore karnataka india, 560092"}
+BANGALORE = {"addressId": "pl-blr", "nickname": "Home", "pincode": "560011", "full": "21 5th main 4th block jayanagar bangalore karnataka india, 560011"}
 
 
 @pytest.fixture
@@ -230,7 +230,7 @@ async def _fast_tick(sessions, agent, host):
 
 
 async def test_a_place_without_a_map_point_never_sends_an_empty_one(db, at, sessions, monkeypatch):
-    """Live 2026-10-11 tasks 51492e5b and d4961ba6: lat/lng were empty and Blinkit and Zepto answered 400 (an ops alert each)."""
+    """Live 2026-10-11: lat/lng were empty and Blinkit and Zepto answered 400 (an ops alert each)."""
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")
     at("2026-10-11 14:52")
     searched = []
@@ -249,11 +249,11 @@ async def test_a_place_without_a_map_point_never_sends_an_empty_one(db, at, sess
     assert any("no map point" in x["note"] for x in t.history) and [r["phase"] for r in agent.runs] == ["browse"]
 
     # the backend found the point now (every place gets one): the saved look-up runs with it
-    host2 = PlaceHost({"lat": 13.0617, "lng": 77.5929, "geoPrecision": "pincode"})
+    host2 = PlaceHost({"lat": 12.9299, "lng": 77.5826, "geoPrecision": "pincode"})
     t2 = await _bars(db, service="zepto")
     await _fast_tick(sessions, FastAgent(script={}), host2)
     await db.refresh(t2)
-    assert searched == [("zepto", 13.0617, 77.5929)] and t2.details["limits"]["place"]["lat"] == 13.0617
+    assert searched == [("zepto", 12.9299, 77.5826)] and t2.details["limits"]["place"]["lat"] == 12.9299
 
 
 async def test_does_not_deliver_at_the_pincodes_centre_is_checked_by_the_agent_with_the_address(db, at, sessions, monkeypatch):
@@ -267,7 +267,7 @@ async def test_does_not_deliver_at_the_pincodes_centre_is_checked_by_the_agent_w
     agent = FastAgent(script={"browse": [{**FOUND, "items": [BAR_50]}]})
     t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="bars",
                              details={"items": [{"name": RITEBITE, "qty": 4}]},
-                             limits=Limits(place={**BANGALORE, "lat": 13.0617, "lng": 77.5929, "geoPrecision": "pincode"}))
+                             limits=Limits(place={**BANGALORE, "lat": 12.9299, "lng": 77.5826, "geoPrecision": "pincode"}))
     await db.commit()
     told = await _fast_tick(sessions, agent, PlaceHost({}))
     await db.refresh(t)
@@ -324,9 +324,9 @@ async def test_a_store_error_inside_a_200_is_a_failed_look_up_not_nothing_found(
     assert (await fastpath.search("swiggy", "ws://x", "unicorn curry", lat=12.97, lon=77.59))["items"] == [], "a real empty result"
     for lat, lon in ((None, None), ("", ""), (0, 0)):
         with pytest.raises(fastpath.NoPoint):
-            await fastpath.search("blinkit", "ws://x", "milk", lat=lat, lon=lon, pincode="560092")
+            await fastpath.search("blinkit", "ws://x", "milk", lat=lat, lon=lon, pincode="560011")
     answers[:] = [{"status": 200, "serviceable": True, "products": [{"name": "Dolo 650", "price": 30}]}]
-    assert (await fastpath.search("apollo", "ws://x", "dolo", pincode="560092"))["items"], "pharmacies work by pincode"
+    assert (await fastpath.search("apollo", "ws://x", "dolo", pincode="560011"))["items"], "pharmacies work by pincode"
 
 
 def test_the_confirm_buttons_and_the_tap_reply_speak_the_persons_language():
@@ -386,7 +386,7 @@ async def test_the_ai_decides_which_saved_place_the_words_mean(monkeypatch):
 
         async def call(self, tool, args, **kw):
             self.calls.append((tool, args))
-            return {"places": [{"name": "Home", "address": "74 4th cross, Bangalore 560092", "isDefault": True},
+            return {"places": [{"name": "Home", "address": "21 5th main, Bangalore 560011", "isDefault": True},
                                {"name": "Beta's flat", "address": "B-7, Vijay Nagar, Indore 452010"}]}
 
     async def ai(words, places):
@@ -480,7 +480,7 @@ async def test_an_estimated_total_gets_one_look_at_the_checkout(db, at, sessions
 
 async def test_after_pay_now_an_unclear_place_reads_the_order_list_and_never_says_it_failed(db, at, sessions, monkeypatch):
     """Live 2026-10-11 17:05: the agent pressed Pay Now (cash), ran out of steps on the confirmation page and reported not
-    placed; Saheli said 'could not be placed, no amount was charged' while Blinkit was packing order 3845242107."""
+    placed; Saheli said 'could not be placed, no amount was charged' while Blinkit was packing order 3800000001."""
     from app.specialists.contract import Limits as L
 
     class PlaceAgent(FakeAgent):
@@ -497,7 +497,7 @@ async def test_after_pay_now_an_unclear_place_reads_the_order_list_and_never_say
     ran_out = {"logged_in": True, "needs_otp": False, "blocked": False, "placed": False,
                "problem": "Reached maximum steps while waiting for order confirmation after clicking Pay Now."}
     cart = {**CART, "items": [{"name": BAR_50["name"], "qty": 4, "price": "₹320", "available": True}], "total": "₹334"}
-    for listed, want in (("3845242107", "done"), (None, "failed")):
+    for listed, want in (("3800000001", "done"), (None, "failed")):
         at("2026-10-11 17:03")
         h = LoginHarness(sessions, PlaceAgent(script={"prepare": [cart], "place": [ran_out]}), "9000012345")
         t = await runtime.create(db, family_id=f"fam-place-{want}", subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order",
@@ -511,7 +511,7 @@ async def test_after_pay_now_an_unclear_place_reads_the_order_list_and_never_say
         await db.refresh(t)
         assert t.status == want, (want, t.status, t.history[-2:])
         if want == "done":
-            assert t.result["placed"] and t.result["order_id"] == "3845242107" and "Placed" in h.told[-1]
+            assert t.result["placed"] and t.result["order_id"] == "3800000001" and "Placed" in h.told[-1]
             assert looked[-1][1] == [BAR_50["name"]], "matched by the picked product when the amount differs"
         else:
             assert "not clear" in h.told[-1] and "Nothing was charged" not in h.told[-1] and "do not say it failed" in h.told[-1]

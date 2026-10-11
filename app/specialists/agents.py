@@ -76,7 +76,7 @@ class Specialist:
         items = "; ".join(f"{i.get('qty', 1)} x {i.get('name')}" for i in d.get("items") or []) or task.goal
         place = (d.get("limits") or {}).get("place") or {}
         # By the address line, not the label: the account may have several "Home"s (live run 2026-10-11: the agent took the
-        # account's old "Home" in Purena instead of "Kavach Home", C504 Sunita Park).
+        # account's old "Home" in another area instead of the saved place).
         where = ((f" Deliver only to the account's saved address that reads like: '{place.get('full')}' (pincode {place.get('pincode')}). "
                   "Several saved addresses can have similar labels such as 'Home': choose by this address line, never by the label; "
                   "if none matches, stop and report it.") if place.get("full") else

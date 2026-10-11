@@ -17,8 +17,8 @@ from app.sim.world import SimHost
 from app.tasks import aftercare, runtime
 
 FAM, ELDER, SON = "fam-ac", "elder-ac", "son-ac"
-E = {"id": ELDER, "name": "Vasundara Devi", "role": "elder"}
-S = {"id": SON, "name": "Kritarth", "role": "primary caregiver"}
+E = {"id": ELDER, "name": "Shanti Devi", "role": "elder"}
+S = {"id": SON, "name": "Mohan", "role": "primary caregiver"}
 CART = [{"name": "Amul Taaza Toned Milk", "qty": 2, "price": "₹56"}, {"name": "Charliee Methi Khakhra", "qty": 1, "price": "₹65"}]
 
 
@@ -72,9 +72,9 @@ async def test_every_order_gets_an_arrival_question_after_the_stores_time(db, at
 async def test_the_person_it_is_for_is_asked_if_they_talk_to_saheli(db, at):
     at("2026-10-11 10:00")
     t = await _placed(db, requested_by=SON)
-    assert (await _loop(db, t)).owner_id == ELDER, "Kritarth ordered it; Maa receives it and talks to Saheli"
+    assert (await _loop(db, t)).owner_id == ELDER, "Mohan ordered it; Maa receives it and talks to Saheli"
     loop = await _loop(db, t)
-    assert "(Kritarth ordered it for them)" in await wake.wake_prompt(db, loop, ELDER)
+    assert "(Mohan ordered it for them)" in await wake.wake_prompt(db, loop, ELDER)
 
 
 async def test_someone_who_never_writes_is_not_asked(db, at):
@@ -156,7 +156,7 @@ async def test_long_overdue_tells_the_caregiver_once(db, at, sessions):
     t = await _placed(db)
     at("2026-10-11 10:45")
     r = await _say(db, {"task_id": str(t.id), "arrived": "no"})
-    assert r["tell"].startswith("Kritarth will be told now") and "do not message them yourself" in r["tell"]
+    assert r["tell"].startswith("Mohan will be told now") and "do not message them yourself" in r["tell"]
     told = []
 
     async def notify(fam, person, text):
@@ -182,7 +182,7 @@ async def test_store_says_delivered_but_it_did_not_come_tells_the_caregiver_at_o
     await db.commit()
     at("2026-10-11 10:12")
     r = await _say(db, {"task_id": str(t.id), "arrived": "no"})
-    assert r["tell"].startswith("Kritarth will be told now")
+    assert r["tell"].startswith("Mohan will be told now")
     await db.refresh(t)
     assert "the store says it was delivered, but they say it has not come" in t.details["aftercare"]["caregiver_due"]["why"]
 
@@ -192,7 +192,7 @@ async def test_something_wrong_or_missing_goes_to_the_caregiver(db, at, sessions
     t = await _placed(db)
     at("2026-10-11 10:20")
     r = await _say(db, {"task_id": str(t.id), "arrived": "partly", "problem": "khakhra missing"})
-    assert r["tell"].startswith("Kritarth will be told now") and "next" not in r
+    assert r["tell"].startswith("Mohan will be told now") and "next" not in r
     told = []
 
     async def notify(fam, person, text):
@@ -260,7 +260,7 @@ async def test_the_store_saying_delivered_moves_on_and_asks_the_right_person(db,
     loop = await _loop(db, t)
     assert loop.detail["stage"] == "feedback" and "store_delivered_at" in loop.detail
     t2 = await _placed(db, requested_by=SON, service="instamart")
-    assert await aftercare.store_delivered(db, t2, clock.now()) is False, "Kritarth asked; Maa is asked later with how was it"
+    assert await aftercare.store_delivered(db, t2, clock.now()) is False, "Mohan asked; Maa is asked later with how was it"
     loop2 = await _loop(db, t2)
     at("2026-10-11 13:10")
     prompt = await wake.wake_prompt(db, loop2, ELDER)

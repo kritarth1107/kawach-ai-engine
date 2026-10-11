@@ -367,7 +367,7 @@ async def test_a_yes_tap_in_chat_places_without_the_model(db, at, monkeypatch):
 
     at("2026-10-10 20:00")
     t = await _awaiting(db)
-    E = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    E = {"id": ELDER, "name": "Shanti", "role": "elder"}
     await store.save_roster(db, FAM, E, [E])
 
     class Shadow(SimHost):
@@ -386,7 +386,7 @@ async def test_a_delivered_update_is_not_blocked_as_a_repeat_of_placed(db, at):
     from app.brain import tools
 
     at("2026-10-10 20:00")
-    E = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    E = {"id": ELDER, "name": "Shanti", "role": "elder"}
     placed = "आपका ब्लिंकिट ऑर्डर हो गया है (आईडी: SIM1)। सामान 10 मिनट में घर पहुँच जाएगा।"
     await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="assistant", text=placed, meta={"proactive": True})
     await db.commit()
@@ -406,7 +406,7 @@ async def test_a_tap_is_answered_in_the_script_the_confirm_was_written_in(db, at
 
     at("2026-10-11 10:30")
     t = await _awaiting(db)
-    E = {"id": ELDER, "name": "Vasundara", "role": "elder"}
+    E = {"id": ELDER, "name": "Shanti", "role": "elder"}
     await store.save_roster(db, FAM, E, [E])
     await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="user", text="blinkit se ek Amul butter mangwa do", meta={})
     await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="assistant", text="ब्लिंकिट पर अमूल बटर तैयार है, ₹75। ऑर्डर कर दूँ?", meta={})

@@ -156,7 +156,7 @@ async def test_a_cart_on_another_address_is_switched_once_then_stopped(db, at, m
     t = await runtime.create(db, family_id="fam-food", subject_id="e", requested_by="e", service="swiggy", kind="order", goal="paneer",
                              details={"items": [{"name": "paneer butter masala"}]})
     t.phase = "prepare"
-    t.details = {**t.details, "limits": {**t.details["limits"], "place": {"nickname": "Home", "full": "C504, Sunita Park, Labhandih, Raipur 492001", "pincode": "492001"}}}
+    t.details = {**t.details, "limits": {**t.details["limits"], "place": {"nickname": "Home", "full": "B12, Sample Park, Civil Lines, Raipur 492001", "pincode": "492001"}}}
     seen = []
 
     async def different(saved, pin, shown):
@@ -164,11 +164,11 @@ async def test_a_cart_on_another_address_is_switched_once_then_stopped(db, at, m
         return False
 
     monkeypatch.setattr(matcher, "same_place", different)
-    out = {"items": [{"name": "Paneer Butter Masala", "qty": 1}], "total": "₹200", "address_used": "Home: 504, Block C (lilly), Purena"}
+    out = {"items": [{"name": "Paneer Butter Masala", "qty": 1}], "total": "₹200", "address_used": "Home: 12, Block D (lilly), Shankar Nagar"}
     status, message = await runtime._check_address(t, out, "awaiting_confirm", "The cart is ready")
     assert status == "queued" and message is None and t.details["address_fix_pending"] is True and t.input_needed is None
     goal = runtime._goal(t)
-    assert "The delivery address is wrong" in goal and "C504, Sunita Park" in goal and "never by a label" in goal
+    assert "The delivery address is wrong" in goal and "B12, Sample Park" in goal and "never by a label" in goal
     status, message = await runtime._check_address(t, out, "awaiting_confirm", "The cart is ready")
     assert status == "failed" and "keeps using another delivery address" in message and seen == [out["address_used"]] * 2
 
@@ -185,14 +185,14 @@ def test_the_agent_is_given_the_address_line_not_the_label():
 
     class T:
         service, kind, phase, family_id = "swiggy", "order", "browse", "fam-x"
-        details = {"items": [{"name": "dosa", "qty": 1}], "limits": {"place": {"nickname": "Home", "full": "C504, Sunita Park, Raipur 492001", "pincode": "492001"}}}
+        details = {"items": [{"name": "dosa", "qty": 1}], "limits": {"place": {"nickname": "Home", "full": "B12, Sample Park, Raipur 492001", "pincode": "492001"}}}
         result = {}
         goal = "dosa"
 
     T.phase = "place"
     T.details = {**T.details, "confirmed_total": "₹200"}
     goal = specialist_for("swiggy").goal(T())
-    assert "reads like: 'C504, Sunita Park, Raipur 492001'" in goal and "never by the label" in goal
+    assert "reads like: 'B12, Sample Park, Raipur 492001'" in goal and "never by the label" in goal
 
 
 async def test_a_dish_left_out_of_the_cart_moves_the_order_to_the_next_restaurant(db, at):

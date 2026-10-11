@@ -13,8 +13,8 @@ from app.sim.agent import CART, OTP, FakeAgent
 from app.tasks import runtime
 
 FAM, ELDER, SON = "fam-op", "elder-op", "son-op"
-E = {"id": ELDER, "name": "Vasundara", "role": "elder"}
-S = {"id": SON, "name": "Kritarth", "role": "primary caregiver"}
+E = {"id": ELDER, "name": "Shanti", "role": "elder"}
+S = {"id": SON, "name": "Mohan", "role": "primary caregiver"}
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def test_whose_phone_gets_the_code():
     assert boundaries.code_person({}, ELDER, SON) == SON
     assert boundaries.code_person(p, ELDER, ELDER) == SON
     assert boundaries.code_person({"login_codes": {ELDER: "self"}}, ELDER, SON) == ELDER
-    assert "login codes for Vasundara's orders go to Kritarth" in boundaries.describe(p, {ELDER: "Vasundara", SON: "Kritarth"})
+    assert "login codes for Shanti's orders go to Mohan" in boundaries.describe(p, {ELDER: "Shanti", SON: "Mohan"})
 
 
 async def _order(db, requested_by=ELDER):
@@ -96,7 +96,7 @@ async def test_a_caregiver_cancelling_tells_the_care_recipient_who_cancelled(db,
     ctx = tools.TurnCtx(session=db, host=None, family_id=FAM, elder=E, speaker=S, members=[E, S])
     out, err = await tools.run(ctx, "cancel_task", {"task_id": str(t.id), "reason": "not now"})
     r = json.loads(out)
-    assert not err and "nothing was placed" in r["result"] and f"Tell person {ELDER}" in r["tell"] and "Kritarth asked to cancel" in r["tell"]
+    assert not err and "nothing was placed" in r["result"] and f"Tell person {ELDER}" in r["tell"] and "Mohan asked to cancel" in r["tell"]
     # Maa cancelling her own order: nobody else to tell
     t2 = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="milk",
                               details={"items": [{"name": "milk"}]})
@@ -114,7 +114,7 @@ async def test_only_an_approver_sets_who_gives_codes_and_only_to_family_members(
     _, err = await tools.run(son, "set_boundaries", {"login_codes": {ELDER: "stranger"}})
     assert err
     out, err = await tools.run(son, "set_boundaries", {"login_codes": {ELDER: SON}})
-    assert not err and "login codes for Vasundara's orders go to Kritarth" in json.loads(out)["saved"]
+    assert not err and "login codes for Shanti's orders go to Mohan" in json.loads(out)["saved"]
     assert boundaries.code_person(await boundaries.get(db, FAM), ELDER, ELDER) == SON
     _, err = await tools.run(tools.TurnCtx(session=db, host=None, family_id=FAM, elder=E, speaker=E, members=[E, S]),
                              "set_boundaries", {"login_codes": {ELDER: "self"}})
@@ -127,7 +127,7 @@ async def test_onboarding_saves_who_gives_codes_before_the_household_is_on_file(
     from app.api import dash
 
     at("2026-10-10 19:30")
-    body = dash.LoginCodesIn(actor=dash.Actor(id=SON, name="Kritarth"), codes={ELDER: SON})
+    body = dash.LoginCodesIn(actor=dash.Actor(id=SON, name="Mohan"), codes={ELDER: SON})
     out = await dash.login_codes_save(FAM, ELDER, body, db)
     assert out["login_codes"] == {ELDER: SON}
     with pytest.raises(HTTPException):
