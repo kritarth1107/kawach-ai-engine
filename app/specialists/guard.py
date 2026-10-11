@@ -54,6 +54,8 @@ class Verdict:
     block: list[str] = field(default_factory=list)
     approval: list[str] = field(default_factory=list)
     warn: list[str] = field(default_factory=list)
+    # a block from the family's own rules (care record, prescription): another store would be stopped the same way
+    family_rule: bool = False
 
     @property
     def ok(self) -> bool:
@@ -151,6 +153,7 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
     text = " ".join(str(i.get("name", "")) for i in items)
     for c in policy.order_conflicts(text, limits.allergies, limits.never_order):
         v.block.append(f"the cart has something the care record forbids: {c}")
+        v.family_rule = True
     asked = {str(r.get("name", "")).lower(): qty(r.get("qty")) for r in requested}
     for i in items:
         q = qty(i.get("qty"))
@@ -168,6 +171,7 @@ def check_cart(kind: str, agent: str, requested: list[dict], report: dict, limit
                 v.block.append(f"{r.get('name')}: the cart has a different strength; medicines are never substituted")
         if report.get("needs_prescription") and not rx_covers(requested, limits.rx_on_file):
             v.block.append("this medicine needs a prescription upload first (none on file for it)")
+            v.family_rule = True
     else:
         missing = missing_items(requested, items)
         if missing:

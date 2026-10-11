@@ -22,11 +22,15 @@ For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
 {"picks": [{"item": <item number>, "exact": [<listing numbers that are exactly the item, best first>], "closest": <listing number or null>, "why": "<short reason>"}]}
 
 - exact: listings that ARE the product asked for: every trait in must_match is true of it (flavour, variant, brand,
-  size, strength) and it is the same kind of product. Spelling, script, language and word order do not matter:
+  size, strength) and it is the same kind of product. A flavour or variant in the item's own name is asked for too,
+  even when must_match is empty ("Methi Khakhra" is never a masala khakhra; "Choco Berry bar" never a choco almond
+  one). Spelling, script, language and word order do not matter:
   "muruku" = "Murukku", "doodh" = milk, "khakra" = "khakhra", "atta" = wheat flour, "anda" = eggs. A brand or flavour
-  that was not asked for is fine. Order them best first: a single pack unless more were asked (no "x 2", "pack of 6",
-  "combo" unless asked); within max_price if given; the cheapest first if cheapest is true; otherwise the most
-  ordinary everyday choice among the first few, not a premium or gift pack. Never include a listing marked unavailable.
+  that was not asked for is fine. Order them best first: the listing for ONE unit of what was asked (qty is how many
+  of the chosen listing go in the cart, so "4 bars" is 4 x the single bar: a multi-pack such as "x 4", "pack of 6" or a
+  combo comes only when they asked for that pack itself, never to make up qty); within max_price if given; the cheapest
+  first if cheapest is true; otherwise the most ordinary everyday choice among the first few, not a premium or gift
+  pack. Never include a listing marked unavailable.
 - closest: when exact is empty, the nearest other variant of the same kind of product (asked peri peri muruku, there is
   only butter muruku → closest is butter muruku), else null. It will NOT be bought without asking the person.
 - Medicines (medicine: true): exact only when the medicine name and strength match.

@@ -36,7 +36,8 @@
       if (j2 && j2.statusCode === 0) {
         out.serviceable = ((j2.data && j2.data.cards) || []).some(c => /restaurant_grid_listing/.test(String(c.card && c.card.card && c.card.card.id || '')));
       }
-      out.error = out.serviceable === false ? 'no restaurants deliver to this location' : 'no dishes found for this search';
+      // a real "nothing found" is a note, not an error (an error means the look-up itself failed)
+      if (out.serviceable === false) out.error = 'no restaurants deliver to this location'; else out.note = 'no dishes found for this search';
       return out;
     }
     out.serviceable = true;

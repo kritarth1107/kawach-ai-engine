@@ -50,6 +50,15 @@ async def _row(session: AsyncSession, service: str, channel: str) -> ChannelHeal
     return row
 
 
+# A connector answer about this family's own link, not the store's connector: it never counts against the connector for
+# everyone (live 2026-10-11: one family's expired Zepto link took Zepto's connector out for all families for 30 minutes).
+FAMILY_LINK_KINDS = {"not_connected", "auth_expired", "no_place", "unserviceable"}
+
+
+def family_link_problem(answer: dict | None) -> bool:
+    return bool(answer) and str((answer or {}).get("kind") or "") in FAMILY_LINK_KINDS
+
+
 async def record(session: AsyncSession, service: str, channel: str, ok: bool, error: str | None = None) -> None:
     row = await _row(session, service, channel)
     row.last_at = clock.now()

@@ -43,6 +43,7 @@ class TurnCtx:
     meds: dict = field(default_factory=dict)
     profiles: dict = field(default_factory=dict)
     buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp buttons attached to the reply
+    buttons_spec: tuple | None = None  # (kind, key) of those buttons: titled in the final reply's script
     situation: str = "chit_chat"  # learning: what kind of moment this is (app.learn.situations)
     playbook_version: int = 0
     arm: str = "live"
@@ -651,7 +652,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     if (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
         from app.care import outcomes
 
-        payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]))
+        payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]), a["text"])
     res = await ctx.host.call(
         "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
@@ -983,7 +984,9 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: 
     place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
     started = [await _create_task(ctx, a, s, extra={"compare": gid}, place=place) for s in free]
     out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started],
-                 "next": "One task update brings the options from every store (usually in 2 to 4 minutes); nothing is ordered before they pick."}
+                 "next": "The store and the product are picked for them (never ask which). A task update brings the one confirm with "
+                         "the total (a store login code may be asked first), usually within a minute or two. Nothing is ordered "
+                         "before they say yes to it."}
     if len(free) < len(stores):
         out["already_running"] = [runtime.describe(busy[s]) for s in stores if s in busy]
     return out
@@ -1660,6 +1663,7 @@ async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
     from app.care import outcomes
 
     ctx.buttons = outcomes.buttons(a["kind"], a["key"], ctx.profiles.get(ctx.speaker.get("id")))
+    ctx.buttons_spec = (a["kind"], a["key"])  # titled again in the reply's own script when it is final (loop)
     return {"attached": [b["title"] for b in ctx.buttons]}
 
 

@@ -26,6 +26,16 @@ class FastPathError(RuntimeError):
     pass
 
 
+class NoPoint(FastPathError):
+    """The store's own search needs the delivery point and the place has none: not a broken step (no alert)."""
+
+
+def _broken(out: dict) -> bool:
+    """The snippet reports the store's own error and found nothing: a failed look-up, never an empty result (a snippet
+    reports a real "nothing found" without an error)."""
+    return bool(out.get("error")) and not out.get("products")
+
+
 class ItemsUnavailable(FastPathError):
     """Products the store's cart refused (not sold at the serving store, out of stock): ids = their store ids."""
 
@@ -121,10 +131,13 @@ class Site:
     kind: str = "shop"  # shop | ride
     settle_s: float = 3.0  # wait after opening the page before the snippet runs
     ready: str | None = None  # JS condition that is true once the real page is there (after a bot-check reload)
+    # The store finds its serving shop from the delivery point (lat/lng) only: without one its own request answers 400
+    # (Blinkit, Zepto) or "not serviceable" at 0,0 (Instamart, Swiggy, Zomato). Pharmacies also take a pincode.
+    needs_point: bool = True
 
 
 # One entry per store with a working snippet in app/tasks/fastjs/<service>.js. A snippet returns
-# shop: {status, serviceable?, eta?, products: [{name, pack, price, mrp, available, rx_required?, restaurant?, eta?, id}]}
+# shop: {status, serviceable?, eta?, products: [{name, pack, price, mrp, available, rx_required?, restaurant?, eta?, id}], error?}
 # ride: {status, login_required?, options: [{type, fare, eta}]}
 SITES: dict[str, Site] = {
     "blinkit": Site("https://blinkit.com/"),
@@ -136,10 +149,19 @@ SITES: dict[str, Site] = {
     "zepto": Site("https://www.zepto.com/", settle_s=1.0, ready="document.cookie.includes('XSRF-TOKEN=') && document.readyState !== 'loading'"),
     "zomato": Site("https://www.zomato.com/", settle_s=3.0),
     # pharmacies search by pincode
-    "apollo": Site("https://www.apollopharmacy.in/", settle_s=1.5),
-    "1mg": Site("https://www.1mg.com/", settle_s=1.0),
-    "pharmeasy": Site("https://pharmeasy.in/", settle_s=1.5),
+    "apollo": Site("https://www.apollopharmacy.in/", settle_s=1.5, needs_point=False),
+    "1mg": Site("https://www.1mg.com/", settle_s=1.0, needs_point=False),
+    "pharmeasy": Site("https://pharmeasy.in/", settle_s=1.5, needs_point=False),
 }
+
+
+def has_point(lat, lon) -> bool:
+    """A usable delivery point: two numbers, not 0,0 (an empty value read as a number)."""
+    try:
+        la, lo = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False
+    return -90 <= la <= 90 and -180 <= lo <= 180 and not (la == 0 and lo == 0)
 FAST_SERVICES = set(SITES)
 JS_DIR = Path(__file__).parent / "fastjs"
 
@@ -160,24 +182,33 @@ def _rupees(v) -> str | None:
     return t if t.startswith("₹") else (f"₹{t}" if re.fullmatch(r"\d+(\.\d+)?", t) else t)
 
 
-async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 8) -> dict:
+async def search(service: str, cdp_url: str, query: str, *, lat=None, lon=None, pincode=None, limit: int = 12) -> dict:
     """A store's own search, run in the task's cloud browser. Returns {deliverable, eta, items}; raises FastPathError when
     the answer is not usable (so the caller falls back to the browser agent)."""
     site = SITES[service]
+    if site.needs_point and not has_point(lat, lon):
+        # Never sent without the point (live 2026-10-11: Blinkit and Zepto answered 400, Instamart "not found", for a family
+        # whose saved place had a pincode only). The caller looks with the browser agent and the written address instead.
+        raise NoPoint(f"{service} needs the delivery point (lat/lng) and the place has none")
     js = _snippet(service, {"q": query, "lat": lat, "lon": lon, "pincode": pincode})
     try:
         out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s, ready=site.ready, timeout_s=45)
     except FastPathError as exc:
         out = {"status": 0, "error": str(exc)}  # the page was not there yet (a cold browser): once more below
-    if isinstance(out, dict) and out.get("status") in (0, 202, 403):
-        # the page was not really there yet: a bot-check page (202/403 from a cold browser, store health 2026-10-10) or a
-        # reload with old cookies in the profile; once more, with longer settling
+    if isinstance(out, dict) and (out.get("status") in (0, 202, 403) or _broken(out)):
+        # the page was not really there yet: a bot-check page (202/403 from a cold browser, store health 2026-10-10), a
+        # reload with old cookies in the profile, or the store's own error inside a 200; once more, with longer settling
         await asyncio.sleep(2.0)
         out = await cdp_evaluate(cdp_url, site.start_url, js, settle_s=site.settle_s + 3, ready=site.ready, timeout_s=45)
     if not isinstance(out, dict) or out.get("status") != 200:
-        raise FastPathError(f"{service} search answered {out.get('status') if isinstance(out, dict) else out!r}"[:160])
+        raise FastPathError(f"{service} search answered {out.get('status') if isinstance(out, dict) else out!r}"
+                            + (f": {out['error']}" if isinstance(out, dict) and out.get("error") else "")[:200])
     if out.get("serviceable") is False:
         return {"deliverable": False, "eta": None, "items": []}
+    if _broken(out):
+        # A 200 that carries the store's own error and no products is not "not found" (live 2026-10-11: Instamart said
+        # "not found" for a protein bar it had; the daily check said "no products" for milk).
+        raise FastPathError(f"{service} search: {str(out.get('error'))[:160]}")
     if not isinstance(out.get("products"), list):
         raise FastPathError(f"{service} search returned no product list")
     items = []

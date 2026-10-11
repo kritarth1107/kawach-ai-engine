@@ -1117,7 +1117,7 @@ async def test_more_options_for_one_item_looks_it_up_again_with_a_longer_list(db
     assert "looking for more maggi" in out
     await h.tick()
     await db.refresh(t)
-    assert ("maggi", 12) in asked and ("mushroom", 6) in asked[2:], asked
+    assert ("maggi", runtime.MORE_LIMIT) in asked and ("mushroom", 6) in asked[2:], asked
     assert t.input_needed == "go" and "840 g" in h.told[-1] and "Kept for the rest: mushroom: Button Mushroom (180 g)" in h.told[-1]
     assert "pass the id" in await runtime.provide_input(db, t, kind="go", value="Maggi 840 g", by=ELDER, by_is_elder=True)
     big = next(i["oid"] for i in t.result["items"] if i.get("pack") == "840 g")

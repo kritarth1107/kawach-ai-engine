@@ -126,13 +126,34 @@ BUTTON_SETS = {
 }
 
 
-def buttons(kind: str, key: str, profile: dict | None) -> list[dict]:
-    """WhatsApp reply buttons for a question Saheli asks; ids carry the meaning so a tap needs no model."""
+# The one confirm's buttons (yes, change, cancel) in the person's own language, for every Indian script (sim 2026-10-11: a
+# Tamil and a Bengali confirm came with English buttons and an English "placing the order now").
+ORDER_BUTTONS = {
+    "mr": ("हो, मागवा", "बदला", "रद्द करा"),
+    "bengali": ("হ্যাঁ, অর্ডার করো", "বদলাও", "বাতিল করো"),
+    "tamil": ("ஆம், ஆர்டர் செய்", "மாற்று", "ரத்து செய்"),
+    "telugu": ("అవును, ఆర్డర్ చేయి", "మార్చు", "రద్దు చేయి"),
+    "kannada": ("ಹೌದು, ಆರ್ಡರ್ ಮಾಡಿ", "ಬದಲಿಸಿ", "ರದ್ದುಮಾಡಿ"),
+    "gujarati": ("હા, ઓર્ડર કરો", "બદલો", "રદ કરો"),
+    "gurmukhi": ("ਹਾਂ, ਆਰਡਰ ਕਰੋ", "ਬਦਲੋ", "ਰੱਦ ਕਰੋ"),
+    "malayalam": ("അതെ, ഓർഡർ ചെയ്യൂ", "മാറ്റുക", "റദ്ദാക്കുക"),
+    "odia": ("ହଁ, ଅର୍ଡର କର", "ବଦଳାଅ", "ବାତିଲ କର"),
+}
+
+
+def buttons(kind: str, key: str, profile: dict | None, text: str | None = None) -> list[dict]:
+    """WhatsApp reply buttons for a question Saheli asks; ids carry the meaning so a tap needs no model. text: the message
+    they go with; when the person's language is not saved yet, its script decides (a Tamil confirm gets Tamil buttons)."""
     from app.brain import guards
 
     k = guards.canned_key(profile)
-    col = 3 if k in ("devanagari", "mr") else (2 if k == "indic" else 1)
+    shown = guards.script_of(text or "") if text and not (profile or {}).get("saved") else None
+    if shown and shown not in ("latin", "arabic") and not (shown == "devanagari" and k in ("devanagari", "mr")):
+        k = shown
     tag = {"feedback": "fb", "order": "od"}.get(kind, "oc")
+    if kind == "order" and k in ORDER_BUTTONS:
+        return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": title[:20]} for row, title in zip(BUTTON_SETS[kind], ORDER_BUTTONS[k])]
+    col = 3 if k in ("devanagari", "mr") else (2 if k == "indic" else 1)
     return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": row[col][:20]} for row in BUTTON_SETS[kind]]
 
 
@@ -140,6 +161,15 @@ ORDER_TAP = {
     "english": {"yes": "Okay, placing the order now 🙏", "cancel": "Okay, cancelled. Nothing was ordered 🙏", "done": "That order is not waiting any more."},
     "indic": {"yes": "Theek hai, order kar rahi hoon 🙏", "cancel": "Theek hai, cancel kar diya. Kuch order nahi hua 🙏", "done": "Woh order ab ruka hua nahi hai."},
     "devanagari": {"yes": "ठीक है, ऑर्डर कर रही हूँ 🙏", "cancel": "ठीक है, रद्द कर दिया। कुछ ऑर्डर नहीं हुआ 🙏", "done": "वो ऑर्डर अब रुका हुआ नहीं है।"},
+    "mr": {"yes": "ठीक आहे, ऑर्डर करते आहे 🙏", "cancel": "ठीक आहे, रद्द केलं. काहीही ऑर्डर झालं नाही 🙏", "done": "ती ऑर्डर आता थांबलेली नाही."},
+    "bengali": {"yes": "ঠিক আছে, অর্ডার করছি 🙏", "cancel": "ঠিক আছে, বাতিল করলাম। কিছু অর্ডার হয়নি 🙏", "done": "ওই অর্ডারটি আর অপেক্ষায় নেই।"},
+    "tamil": {"yes": "சரி, ஆர்டர் செய்கிறேன் 🙏", "cancel": "சரி, ரத்து செய்தேன். எதுவும் ஆர்டர் ஆகவில்லை 🙏", "done": "அந்த ஆர்டர் இப்போது காத்திருக்கவில்லை."},
+    "telugu": {"yes": "సరే, ఆర్డర్ చేస్తున్నాను 🙏", "cancel": "సరే, రద్దు చేశాను. ఏదీ ఆర్డర్ కాలేదు 🙏", "done": "ఆ ఆర్డర్ ఇప్పుడు వేచి లేదు."},
+    "kannada": {"yes": "ಸರಿ, ಆರ್ಡರ್ ಮಾಡುತ್ತಿದ್ದೇನೆ 🙏", "cancel": "ಸರಿ, ರದ್ದು ಮಾಡಿದೆ. ಏನೂ ಆರ್ಡರ್ ಆಗಿಲ್ಲ 🙏", "done": "ಆ ಆರ್ಡರ್ ಈಗ ಕಾಯುತ್ತಿಲ್ಲ."},
+    "gujarati": {"yes": "ઠીક છે, ઓર્ડર કરું છું 🙏", "cancel": "ઠીક છે, રદ કર્યું. કંઈ ઓર્ડર થયું નથી 🙏", "done": "એ ઓર્ડર હવે રાહ જોતો નથી."},
+    "gurmukhi": {"yes": "ਠੀਕ ਹੈ, ਆਰਡਰ ਕਰ ਰਹੀ ਹਾਂ 🙏", "cancel": "ਠੀਕ ਹੈ, ਰੱਦ ਕਰ ਦਿੱਤਾ। ਕੁਝ ਆਰਡਰ ਨਹੀਂ ਹੋਇਆ 🙏", "done": "ਉਹ ਆਰਡਰ ਹੁਣ ਉਡੀਕ ਵਿੱਚ ਨਹੀਂ ਹੈ।"},
+    "malayalam": {"yes": "ശരി, ഓർഡർ ചെയ്യുന്നു 🙏", "cancel": "ശരി, റദ്ദാക്കി. ഒന്നും ഓർഡർ ചെയ്തിട്ടില്ല 🙏", "done": "ആ ഓർഡർ ഇപ്പോൾ കാത്തിരിക്കുന്നില്ല."},
+    "odia": {"yes": "ଠିକ ଅଛି, ଅର୍ଡର କରୁଛି 🙏", "cancel": "ଠିକ ଅଛି, ବାତିଲ କଲି। କିଛି ଅର୍ଡର ହୋଇନାହିଁ 🙏", "done": "ସେହି ଅର୍ଡର ଆଉ ଅପେକ୍ଷାରେ ନାହିଁ।"},
 }
 
 

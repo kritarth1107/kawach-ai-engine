@@ -668,6 +668,11 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
             kick_tasks()
         except Exception:  # noqa: BLE001 — the scheduler still runs every minute
             logger.exception("kick tasks failed")
+    if ctx.buttons and final and final != "none" and getattr(ctx, "buttons_spec", None):
+        from app.care import outcomes
+
+        # in the script of the reply they go with (a Tamil confirm with Tamil buttons, not English ones)
+        ctx.buttons = outcomes.buttons(*ctx.buttons_spec, ctx.profiles.get(req.speaker["id"]), final)
     return TurnResult(
         reply=final,
         actions=ctx.actions,

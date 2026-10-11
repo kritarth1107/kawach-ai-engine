@@ -35,6 +35,13 @@ BRAIN_CASES = [
     ("English", "order khakhra under 100 rupees from instamart", [{"any": ["khakh", "khakr"], "max_price": 100}]),
     ("Hinglish", "instamart se noice ka methi aur masala khakhra dono mangaao saath me peri peri muruku bhi",
      [{"any": ["methi"]}, {"any": ["masala"]}, {"any": ["muruk"], "must": "peri"}]),
+    # every family, not one (2026-10-11): more languages and the Bangalore order of that day
+    ("English", "Hey can u order 4 rite bite choco berry bars from blinkit", [{"any": ["choco berry"], "qty": 4}]),
+    ("Kannada", "ಬ್ಲಿಂಕಿಟ್‌ನಿಂದ ಎರಡು ಪ್ಯಾಕೆಟ್ ನಂದಿನಿ ಹಾಲು ತರಿಸಿ", [{"any": ["nandini"], "qty": 2}]),
+    ("Telugu", "జెప్టో నుండి ఒక కిలో ఉల్లిపాయలు పంపండి", [{"any": ["onion"]}]),
+    ("Gujarati", "બ્લિંકિટથી અમૂલ દૂધ મંગાવો", [{"any": ["milk", "amul"]}]),
+    ("Punjabi", "ਇੰਸਟਾਮਾਰਟ ਤੋਂ ਦੋ ਪੈਕਟ ਬ੍ਰੈੱਡ ਭੇਜ ਦਿਓ", [{"any": ["bread"], "qty": 2}]),
+    ("Marathi", "झेप्टो वरून दोन पाकीट गोकुळ दूध पाठवा", [{"any": ["gokul"], "qty": 2}]),
 ]
 
 L = lambda name, price, pack="", available=True: {"name": name, "price": price, "pack": pack, "available": available}  # noqa: E731
@@ -52,6 +59,20 @@ MATCH_CASES = [
     ("medicine strength", {"name": "Dolo 650"}, [L("Dolo 500 Tablet", "₹30", "15 tablets"), L("Dolo 650 Tablet", "₹33", "15 tablets")], True, "Dolo 650 Tablet", None),
     ("brand asked", {"name": "butter", "must_match": ["Amul"]}, [L("Vachan Butter", "₹117", "200 g"), L("Amul Butter", "₹60", "100 g")], False, "Amul Butter", None),
     ("unavailable skipped", {"name": "bread"}, [L("Britannia Bread", "₹50", "400 g", available=False), L("Modern Bread", "₹45", "400 g")], False, "Modern Bread", None),
+    # a flavour in the item's own name counts even when the brain left must_match empty (lang eval 2026-10-11)
+    ("flavour in the name only", {"name": "Methi Khakhra"}, [L("Charliee Masala Khakhra", "₹65", "150 g"), L("Charliee Methi Khakhra", "₹65", "150 g")],
+     False, "Charliee Methi Khakhra", None),
+    ("flavour in the name only, not there", {"name": "Methi Khakhra"}, [L("Charliee Masala Khakhra", "₹65", "150 g")],
+     False, None, "Charliee Masala Khakhra"),
+    # qty is how many of the listing go in the cart: "4 bars" is 4 x the single bar, never 4 x a 4-pack (Instamart, 2026-10-11)
+    ("4 bars: the single bar, not the 4-pack", {"name": "RiteBite Choco Berry protein bar", "qty": 4, "must_match": ["Choco Berry", "RiteBite"]},
+     [L("RiteBite Max Protein Daily Choco Berry 10g Protein Bar", "₹316", "50 g x 4"), L("RiteBite Max Protein Daily Choco Berry 10g Protein Bar", "₹79", "50 g")],
+     False, "RiteBite Max Protein Daily Choco Berry 10g Protein Bar|50 g", None),
+    # what Blinkit listed live that day: the everyday 50 g bar first
+    ("the live Blinkit listings", {"name": "RiteBite Choco Berry protein bar", "qty": 4, "must_match": ["Choco Berry", "RiteBite"]},
+     [L("RiteBite Max Protein Daily Choco Berry 10 g Protein Bar", "₹80", "50 g"), L("RiteBite Max Protein Choco Berry 30 g Protein Bar", "₹177", "100 g"),
+      L("RiteBite Max Protein Daily Choco Almond Protein Bar + RiteBite Max Protein Daily Choco Berry Protein Bar Combo", "₹151", "50 g + 50 g")],
+     False, "RiteBite Max Protein Daily Choco Berry 10 g Protein Bar", None),
 ]
 
 
@@ -93,8 +114,9 @@ async def brain_case(lang: str, message: str, expected: list[dict]) -> list[str]
             continue
         if e.get("qty") and int(it.get("qty") or 1) != e["qty"]:
             problems.append(f"{it.get('name')}: qty {it.get('qty')} not {e['qty']}")
-        if e.get("must") and not any(e["must"] in str(m).lower() for m in it.get("must_match") or []):
-            problems.append(f"{it.get('name')}: must_match {it.get('must_match')} lacks {e['must']}")
+        # the asked flavour must reach the picker: in must_match or in the name (the picker treats both as asked)
+        if e.get("must") and not any(e["must"] in str(m).lower() for m in [it.get("name"), *(it.get("must_match") or [])]):
+            problems.append(f"{it.get('name')}: neither the name nor must_match {it.get('must_match')} has {e['must']}")
         if e.get("max_price") and float(it.get("max_price") or 0) != e["max_price"]:
             problems.append(f"{it.get('name')}: max_price {it.get('max_price')} not {e['max_price']}")
         if e.get("cheapest") and not it.get("cheapest"):
@@ -108,6 +130,8 @@ async def match_case(item: dict, listings: list[dict], medicine: bool, want_exac
         return ["no answer"]
     r = out[0]
     first = listings[r["exact"][0]]["name"] if r["exact"] else None
+    if want_exact and "|" in want_exact and r["exact"]:  # two listings with one name: told apart by the pack
+        first = f"{first}|{listings[r['exact'][0]]['pack']}"
     closest = listings[r["closest"]]["name"] if r.get("closest") is not None else None
     problems = []
     if first != want_exact:

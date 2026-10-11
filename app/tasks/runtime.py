@@ -56,7 +56,12 @@ def browse_first(task: Task) -> bool:
 # No store named: look on the usual stores for that kind of thing at once and offer every option (founder 2026-10-09:
 # "it should go for other options also like Instamart and Zepto, and give available options as we had earlier").
 COMPARE_STORES = {"grocery": ("blinkit", "instamart", "zepto"), "medicine": ("apollo", "1mg", "pharmeasy"), "food": ("swiggy", "zomato")}
-COMPARE_WAIT = timedelta(minutes=4)  # after the first store answers, the others get this long before the options go out
+# After the first store answers, a slow one gets this long before Saheli picks from the stores that answered (founder
+# 2026-10-11: never wait silently on a slow store; it was 4 minutes).
+COMPARE_WAIT = timedelta(seconds=int(os.getenv("COMPARE_WAIT_S", "90")))
+# A comparison nobody has heard about this long after it started: one "still looking" line (live 2026-10-11: 6 minutes of
+# silence; the one-line rule below skipped comparisons until they were decided).
+COMPARE_STILL_WORKING = timedelta(seconds=int(os.getenv("COMPARE_STILL_WORKING_S", "120")))
 
 
 def compare_group(task: Task) -> str | None:
@@ -75,10 +80,14 @@ async def siblings(session: AsyncSession, task: Task) -> list[Task]:
     return [t for t in rows if compare_group(t) == gid]
 
 
-def _drop_others(group: list[Task], keep: Task, why: str) -> None:
+def _drop_others(group: list[Task], keep: Task, why: str, *, standby: bool = False) -> None:
+    """Stop the other stores of a comparison. standby: Saheli picked `keep` herself, so the others keep their look-up and
+    pick as the next choice if `keep` cannot build the cart (_try_next_store)."""
     for t in group:
         if t.id != keep.id and t.status in LIVE:
             t.status, t.cancel_requested, t.input_needed = "cancelled", True, None
+            if standby and (t.details or {}).get("chosen"):
+                t.details = {**(t.details or {}), "dropped_for": str(keep.id)}
             note(t, why)
 
 
@@ -105,7 +114,9 @@ def _option(item: dict) -> str:
 
 
 def _compare_summary(group: list[Task]) -> str:
-    """One update with what every store of the comparison found, for the brain to read out as numbered options."""
+    """No store of the comparison has a product picked (nothing there, only other things instead, or prices behind a
+    login): one update that says so plainly, with at most one suggestion to say yes or no to (founder 2026-10-10: never a
+    list to choose from)."""
     lines, open_ = [], []
     for t in sorted(group, key=lambda t: (not _found(t), SKILLS[t.service]["label"])):
         label, r, d = SKILLS[t.service]["label"], t.result or {}, t.details or {}
@@ -128,15 +139,23 @@ def _compare_summary(group: list[Task]) -> str:
     head = f"Looked on {stores} without logging in; nothing is ordered.\n" + "\n".join(lines) + "\n"
     if not open_:
         return head + "It is not available on any of them. Tell the person plainly and offer another name, or the family can order in the app."
+    if any(t.input_needed == "go" and _found(t) for t in open_):
+        # Only medicines get here (every other listing is picked, exact or closest): never swapped for a near match.
+        return head + (
+            "None of these has exactly this medicine (the same name and strength), and medicines are never swapped for a "
+            "near match. Tell them plainly in one line and suggest checking the exact name with the caregiver or doctor; do "
+            "not offer the other medicines. If they then name the exact one, start the order again with that name.")
+    swaps = [t for t in open_ if t.input_needed == "swap"]
+    if swaps:
+        return head + (
+            "It is not on any of these stores. From the 'has instead' lines above, name the ONE product closest to what they "
+            "asked, with its store and price, and ask in one short question whether to get that instead (do not list the "
+            "others). Yes → task_input swap with that product's name on that store's task; no → task_input go no on any one "
+            "of the tasks. The other stores are dropped by themselves.")
+    t = open_[0]
     return head + (
-        "Tell the person the options as a short numbered list: exact matches first (cheapest first), then the similar ones marked "
-        "as not exactly what they asked, from every store above that has any (do not leave a store out); in one short line, say "
-        "which stores do not deliver there or had nothing. Each option with product, pack size, price, store and delivery time. "
-        "Ask which one they want. "
-        "When they pick, call task_input on that option's task: kind go with value = the product with its pack and price exactly "
-        "as listed above (e.g. 'Diet Coke Can (300 ml) ₹40'); for a 'has instead' item: kind swap. The other stores are dropped "
-        f"by themselves. A store marked linked account needs no login code; for the others a login code then comes to "
-        f"{_code_to(open_[0])}. If they want none, task_input go no on any one of them.")
+        f"{SKILLS[t.service]['label']} shows the price only after a login. Ask in one short question whether to go ahead there "
+        f"(a login code comes to {_code_to(t)}): yes → task_input go yes on task {t.id}; no → task_input go no on it.")
 
 
 async def _compare_update(session: AsyncSession, task: Task, own: str) -> tuple[str | None, bool]:
@@ -165,16 +184,40 @@ def best_store(group: list[Task]) -> Task | None:
     has the most of the items, then the most exact matches, then the lowest price, then no login code needed, then the
     soonest delivery."""
     cands = [t for t in group if t.status == "awaiting_confirm" and t.input_needed == "go" and (t.details or {}).get("chosen")]
+    return min(cands, key=_store_score) if cands else None
 
-    def score(t: Task):
-        d, r = t.details or {}, t.result or {}
-        chosen = d.get("chosen") or []
-        asked = d.get("items") or []
-        price = sum(_rupee_value(c.get("price")) * channels._qty_for(asked, c) for c in chosen) if asked else sum(_rupee_value(c.get("price")) for c in chosen)
-        no_code = d.get("channel") == "connector" or bool(r.get("logged_in"))
-        return (-len(chosen), -sum(1 for c in chosen if c.get("exact_match")), price, 0 if no_code else 1, _eta_minutes(r.get("eta")))
 
-    return min(cands, key=score) if cands else None
+def _store_score(t: Task):
+    """Lower is better: most items, then most exact matches, then lowest price, then no login code, then soonest."""
+    d, r = t.details or {}, t.result or {}
+    chosen = d.get("chosen") or []
+    asked = d.get("items") or []
+    price = sum(_rupee_value(c.get("price")) * channels._qty_for(asked, c) for c in chosen) if asked else sum(_rupee_value(c.get("price")) for c in chosen)
+    no_code = d.get("channel") == "connector" or bool(r.get("logged_in"))
+    return (-len(chosen), -sum(1 for c in chosen if c.get("exact_match")), price, 0 if no_code else 1, _eta_minutes(r.get("eta")))
+
+
+async def _try_next_store(session: AsyncSession, task: Task) -> str | None:
+    """The store Saheli picked could not build the cart (not sold at its serving shop, the site failed): the next best store
+    of the same comparison takes over with the product it had picked, before anyone is asked. Not when the reason holds
+    for every store (no number to log in with, a family rule), and never after a confirm. Returns its label."""
+    d = task.details or {}
+    if (not compare_group(task) or task.kind != "order" or d.get("confirmed_by") or (task.result or {}).get("placed")
+            or d.get("login_missing") or d.get("rule_block") or d.get("unauthorized_place") or d.get("practice_accident")):
+        return None
+    cands = [t for t in await siblings(session, task) if t.id != task.id and t.status == "cancelled"
+             and (t.details or {}).get("dropped_for") == str(task.id) and (t.details or {}).get("chosen")]
+    if not cands:
+        return None
+    nxt = min(cands, key=_store_score)
+    nxt.details = {**(nxt.details or {}), "dropped_for": None, "revived_after": str(task.id), "told_working": None,
+                   "active_from": clock.now().isoformat()}
+    nxt.status, nxt.phase, nxt.input_needed, nxt.cancel_requested = "queued", "prepare", None, False
+    nxt.deadline_at = clock.now() + TASK_LIFETIME
+    label = SKILLS[nxt.service]["label"]
+    note(nxt, f"{SKILLS[task.service]['label']} could not build the cart; {label} takes over with its pick")
+    note(task, f"could not build the cart; {label} takes over")
+    return label
 
 
 async def _fall_back_to_other_stores(session: AsyncSession, task: Task) -> list[str]:
@@ -249,7 +292,7 @@ async def choose_stores(sessions: async_sessionmaker) -> list[tuple[Task, str]]:
             best.phase, best.status, best.input_needed = "prepare", "queued", None
             best.deadline_at = clock.now() + TASK_LIFETIME
             note(best, f"picked {label} of {len(group)} stores: " + "; ".join(_label(c) for c in (best.details or {}).get("chosen") or []))
-            _drop_others(group, best, f"Saheli picked {label}")
+            _drop_others(group, best, f"Saheli picked {label}", standby=True)
         await session.commit()
     return out
 
@@ -600,7 +643,7 @@ RELOOK = {"browsed": False, "chosen": None, "cart_fp": None, "connector_card": N
 
 
 APPROVAL_WAIT = timedelta(minutes=90)
-MORE_LIMIT = 12  # products listed for an item they asked to see more of (6 otherwise)
+MORE_LIMIT = 20  # products looked up for an item they asked to see more of (12 otherwise)
 
 
 def _eta_wait(task: Task) -> timedelta:
@@ -980,6 +1023,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         task.details = {**d, "login_only": False, "login_done": True, "fast_cart_tried": False}
         return "queued", ""
     if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
+        task.details = {**(task.details or {}), "login_missing": True}  # true on every store: no next store is tried
         return "failed", (f"{SKILLS[task.service]['label']} needs a login and there is no phone number to log in with, so nothing was "
                           "ordered and no code was sent. Offer another service, or the family can order in the app.")
     if out.get("blocked"):
@@ -1057,6 +1101,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             asked = [{"name": c.get("name"), "qty": channels._qty_for(asked, c) if asked else 1} for c in d["chosen"] if c.get("name")]
         v = guard.check_cart("order", spec.name, asked, out, limits)
         if not v.ok:
+            if v.family_rule:  # the care record or a prescription: the next store would be stopped the same way
+                task.details = {**(task.details or {}), "rule_block": True}
             return "failed", "Stopped before placing: " + "; ".join(v.block) + ". Nothing was placed."
         if rupees(out.get("total")) is None and not d.get("total_relook"):
             # Live 2026-10-11: the cart came back without a total and Maa was asked to confirm with no amount. One short look
@@ -1308,6 +1354,21 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
                                     + f". Other places on {label} have it: {listed} Nothing is ordered yet. Tell them plainly and ask "
                                     f"whether to get it from one of these places on {label} instead (pass its id in brackets, e.g. p2, as "
                                     "the value of task_input go), or wait for the one they named.")
+    one_cart = SKILLS[task.service].get("kind") != "food" or len(groups) == 1  # a food cart is one restaurant: no mixing
+    if not more and not medicine and one_cart and (compare_group(task) or matched is None):
+        # Saheli picks herself (founder 2026-10-10: never a list to choose from). In a comparison an item with no exact
+        # listing here takes its closest one, so the store with exact matches wins and, when no store has it exactly, the
+        # one confirm says it is the closest match. When the AI could not choose at all, the store's own top listing is
+        # that closest match (live 2026-10-11 the person got a numbered list instead).
+        taken = {_pkey(p) for p in picks.values() if p}
+        for asked, g in groups:
+            if picks.get(asked) or asked in menu_find or not g:
+                continue
+            k = (matched.get(asked) or {}).get("closest") if matched is not None else _pkey(g[0])
+            c = next((i for i in g if _pkey(i) == k), None) if k else None
+            if c is not None and _pkey(c) not in taken:
+                picks[asked] = {**c, "exact_match": False}
+                taken.add(_pkey(c))
     if matched is not None and groups and not any(picks.values()) and not more and not medicine and not compare_group(task):
         # Nothing here is what they asked for (only other variants, or nothing): the other usual stores look.
         return "failed", (f"Not on {label} exactly ({'; '.join(a for a, _ in groups)})"
@@ -1325,14 +1386,16 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     if groups and picks and all(picks.get(a) for a, _ in groups) and not more:
         # Founder 2026-10-10: ask only what, where, and one confirm with the amount. The AI picked the product; the
         # confirm names it, and they can change it there.
-        task.details = {**task.details, "chosen": [picks[a] for a, _ in groups], "auto_picked": True, "menu_find": menu_find or None,
+        # an exact pick says so (the store comparison prefers exact over closest; a fast look-up's listing carries no flag)
+        task.details = {**task.details, "chosen": [picks[a] if picks[a].get("exact_match") is False else {**picks[a], "exact_match": True}
+                                                   for a, _ in groups], "auto_picked": True, "menu_find": menu_find or None,
                         # the look-up's products, kept: a cart report replaces result items, and a refused product needs the next one
                         "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40],
                         "missing_items": missing or None}
         if compare_group(task):
             # In a comparison the store is picked once every store has looked (choose_stores): no login or cart here yet.
             task.input_needed = "go"
-            return "awaiting_confirm", f"{label} has it: " + "; ".join(_option(i) for i in picks.values())
+            return "awaiting_confirm", f"{label} has it: " + "; ".join(_option(i) for i in task.details["chosen"])
         task.phase = "prepare"
         return "queued", ""
     # They asked to see more of one item, a medicine has no exact match, or the AI could not choose: list the options.
@@ -1366,6 +1429,26 @@ def _number(found: list[dict]) -> None:
     """Short ids for the options shown to the person (the brain passes them back; nothing is matched by name)."""
     for n, i in enumerate(found, 1):
         i.setdefault("oid", f"p{n}")
+
+
+def _canon_for_item(names: list[str], found: list[dict]) -> None:
+    """A look-up's for_item tags as the asked items' own names. A browser agent echoes the goal ("4 x RiteBite Choco Berry
+    protein bar") or writes the item's number; live 2026-10-11 the picker then got no listings for "RiteBite Choco Berry
+    protein bar", chose nothing, and the person was sent a list. Our own item names only; never the person's words."""
+    if not names:
+        return
+    for i in found:
+        tag = str(i.get("for_item") or "").strip()
+        if not tag or tag in names:
+            continue
+        if tag.isdigit() and 1 <= int(tag) <= len(names):
+            i["for_item"] = names[int(tag) - 1]
+            continue
+        hits = [n for n in names if n and n.lower() in tag.lower()]
+        if len(names) == 1 or len(hits) == 1:
+            i["for_item"] = names[0] if len(names) == 1 else hits[0]
+        else:
+            i.pop("for_item", None)  # cannot tell which item: the picker chooses it for whichever item it fits
 
 
 async def family_tastes(session: AsyncSession, task: Task) -> list[str]:
@@ -1407,8 +1490,11 @@ async def _ai_pick(task: Task, report: dict, session: AsyncSession | None = None
         return
     _number(found)
     names = [str(i.get("name") or "") for i in items]
+    _canon_for_item(names, report.get("items") or [])
     tagged = any(i.get("for_item") for i in found)
     if tagged:
+        for i in found:
+            i.setdefault("for_item", names[0])  # an untagged product of a tagged report: the first item's (as before)
         lists = [[i for i in found if i.get("for_item") == n] for n in names]
     else:  # one look-up for everything (a browser agent's report): every item is chosen from all of it
         lists = [found for _ in names]
@@ -1416,9 +1502,11 @@ async def _ai_pick(task: Task, report: dict, session: AsyncSession | None = None
 
     tastes = await family_tastes(session, task) if session is not None else []
     res = await matcher.choose(items, lists, medicine=d.get("agent") == "pharmacy", family=tastes or None)
+    if res is None:  # a model hiccup: once more before anything falls back
+        res = await matcher.choose(items, lists, medicine=d.get("agent") == "pharmacy", family=tastes or None)
     if res is None:
         task.details = {**d, "matched": None}
-        note(task, "the product choice could not be made; the options go to the person")
+        note(task, "the AI product choice failed twice; the store's own top listing is taken as the closest match")
         return
     if not tagged and len(items) > 1:
         # tag each listing with the item it was chosen for, so the items are kept apart from here on
@@ -1457,7 +1545,9 @@ async def _connector_lookup(session: AsyncSession, host, task: Task) -> dict | N
         return None
     bad = next((r for r in results if not r.get("ok") and r.get("kind") != "unserviceable"), None)
     if bad is not None:
-        await channels.record(session, task.service, "connector", False, bad.get("detail"))
+        if not channels.family_link_problem(bad):  # this family's expired or missing link is not the connector's fault
+            await channels.record(session, task.service, "connector", False, bad.get("detail"))
+        note(task, f"connector look-up: {str(bad.get('kind') or 'error')} ({str(bad.get('detail') or '')[:100]})")
         return None
     await channels.record(session, task.service, "connector", True)
     task.phase = "browse"
@@ -1499,8 +1589,27 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
     stays open for the login and cart runs. None (and a note) when it cannot run, so the browser agent looks instead."""
     place = ((task.details or {}).get("limits") or {}).get("place") or {}
     lat, lng, pincode = place.get("lat"), place.get("lng"), place.get("pincode")
-    ride = fastpath.SITES[task.service].kind == "ride"
-    if not hasattr(agent, "open_session") or (not ride and (lat is None or lng is None) and not pincode):
+    site = fastpath.SITES[task.service]
+    ride = site.kind == "ride"
+    if not hasattr(agent, "open_session"):
+        return None
+    if not ride and site.needs_point and not fastpath.has_point(lat, lng):
+        # Live 2026-10-11 (a Bangalore family, pincode only): Blinkit and Zepto answered 400, Instamart "not found". The
+        # place is given a point (backend); until then the browser agent looks with the written address.
+        try:
+            got = await host.call("delivery_place", {"words": place.get("nickname") or ""}, family_id=task.family_id.removeprefix("shadow:"),
+                                  subject_id=task.subject_id, actor_id=task.requested_by) if host is not None and place.get("addressId") else None
+        except Exception:  # noqa: BLE001 — no point: the agent looks
+            got = None
+        if got and got.get("addressId") == place.get("addressId") and fastpath.has_point(got.get("lat"), got.get("lng")):
+            place = {**place, "lat": got["lat"], "lng": got["lng"], "geoPrecision": got.get("geoPrecision")}
+            lat, lng = place["lat"], place["lng"]
+            d = task.details or {}
+            task.details = {**d, "limits": {**(d.get("limits") or {}), "place": place}}
+        else:
+            note(task, f"no map point for {place.get('nickname') or 'the place'}: the browser agent looks with the address instead")
+            return None
+    if not ride and not site.needs_point and not pincode and not fastpath.has_point(lat, lng):
         return None
     ends = None
     if ride:
@@ -1539,10 +1648,19 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
                  "logged_in": all(r.get("logged_in") for r in results),
                  "items": [{**i, **({"for_item": q} if many else {})} for q, r in zip(asked, results) for i in r["items"]],
                  "missing": [q for q, r in zip(asked, results) if r["deliverable"] and not r["items"]]}
+    except fastpath.NoPoint as exc:  # not a broken step: no alert
+        note(task, f"fast look-up skipped ({str(exc)[:120]}); the browser agent looks instead")
+        return None
     except Exception as exc:  # noqa: BLE001 — a changed site or a slow browser: the agent looks instead
         note(task, f"fast look-up did not work ({str(exc)[:120]}); the browser agent looks instead")
         logger.warning("fast look-up failed task=%s: %s", task.id, exc)
         await _ops_alert(host, task, "look-up", str(exc))
+        return None
+    if not found["deliverable"] and site.needs_point and place.get("geoPrecision") in ("area", "pincode"):
+        # The point is the area's or pincode's centre, not the door: "does not deliver here" may be about the centre. The
+        # browser agent checks with the written address before anyone hears "not delivered".
+        note(task, f"{SKILLS[task.service]['label']} says it does not deliver at the area's centre; the browser agent checks the address")
+        task.details = {**(task.details or {}), "fast_session": True}  # this browser has no store tab: the agent opens the store
         return None
     task.phase = "browse"
     task.details = {**(task.details or {}), "fast_session": True}
@@ -1790,7 +1908,8 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
         if r.get("kind") in ("cod_unavailable", "not_found"):
             await channels.record(session, task.service, "connector", True)
             return {"items": [], "cod_available": r.get("kind") != "cod_unavailable", "problem": r.get("detail"), "alternatives": r.get("alternatives") or []}
-        await channels.record(session, task.service, "connector", False, r.get("detail"))
+        if not channels.family_link_problem(r):
+            await channels.record(session, task.service, "connector", False, r.get("detail"))
         return None
     except Exception as exc:  # noqa: BLE001 — a broken connector falls back to the browser
         await channels.record(session, task.service, "connector", False, str(exc)[:200])
@@ -1898,7 +2017,18 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
             if t.family_id.startswith("shadow:") or t.phase == "cancel" or (t.phase == "place" and d.get("place_started")):
                 continue  # a test turn, a cancel in progress, or an order the store may be taking right now
             if compare_group(t) and not d.get("compare_announced"):
-                continue  # still looking on several stores
+                # Still looking on several stores. Live 2026-10-11 nobody heard anything for 6 minutes: one line for the
+                # whole comparison once it has taken COMPARE_STILL_WORKING, no question.
+                if t.status in ("queued", "running") and now - t.created_at >= COMPARE_STILL_WORKING and not d.get("told_working"):
+                    group = await siblings(session, t)
+                    if not any((g.details or {}).get("told_working") for g in group):
+                        t.details = d = {**d, "told_working": True}
+                        slow = sorted({SKILLS[g.service]["label"] for g in group if g.status in ("queued", "running")})
+                        sends.append(("notify", t.family_id, t.requested_by, (
+                            f"[Task update] Still looking on {', '.join(slow)} (the website is slow); nothing is ordered and "
+                            "there is nothing to answer. Tell them in one short line that it is taking a minute or two more and "
+                            "that you will come back with the one confirm. Do not ask anything.")))
+                continue
             start = datetime.fromisoformat(d["ladder_from"]) if d.get("ladder_from") else t.created_at
             busy_since = datetime.fromisoformat(d["active_from"]) if d.get("active_from") else t.created_at
             if (t.status in ("queued", "running") and not d.get("told_working") and now - busy_since >= STILL_WORKING
@@ -2229,6 +2359,12 @@ async def tick(
                     # The store named does not deliver there or does not have it: look on the other usual stores for it
                     # (the best one is then picked and comes back as the one confirm), instead of asking.
                     if await _fall_back_to_other_stores(session, task):
+                        message = None
+                if (task.status == "failed" and task.kind == "order" and not was_browse and not expired and compare_group(task)
+                        and task.phase in ("prepare", "otp")):
+                    # The store Saheli picked could not build the cart (live 2026-10-11: Zepto failed after the others were
+                    # dropped, and the brain read Blinkit's old options out as a list): the next best store takes over.
+                    if await _try_next_store(session, task):
                         message = None
                 own = message
                 if own and was_browse and not expired and compare_group(task) and task.status in ("awaiting_confirm", "needs_input", "failed"):

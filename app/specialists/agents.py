@@ -85,10 +85,12 @@ class Specialist:
         if task.phase == "browse":
             spot = (f"{place.get('full')} (pincode {place.get('pincode')})" if place.get("full") else
                     f"pincode {place.get('pincode')}" if place.get("pincode") else d.get("area") or "the family's area")
+            # numbered, so for_item can be the number (live 2026-10-11: the agent wrote "4 x <name>" and the picker saw nothing)
+            numbered = "; ".join(f"item {n}: {i.get('name')} ({i.get('qty', 1)} wanted)" for n, i in enumerate(d.get("items") or [], 1)) or task.goal
             return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker, then "
-                    f"search for: {items}. For each item report up to 3 matching products, best match first (for example a single "
+                    f"search for each of these: {numbered}. For each item report up to 3 matching products, best match first (for example a single "
                     f"can and a pack of 6): the exact name, the pack size exactly as the product card shows it (e.g. '6 x 300 ml'), "
-                    f"the price of that pack, whether it is in stock, for_item (which item asked for it matches) and exact_match (false for a "
+                    f"the price of that pack, whether it is in stock, for_item (the item's number, e.g. '1') and exact_match (false for a "
                     f"different brand or flavour, e.g. Coke Zero or Pepsi when Diet Coke was asked; list those only if the exact product "
                     f"is not there). Report "
                     f"deliverable (does {label} deliver to this location) and the eta if shown. If an item is missing, list up to 3 "

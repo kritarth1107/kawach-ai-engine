@@ -296,11 +296,13 @@ async def test_store_health_retries_a_cold_page_before_alerting(monkeypatch):
         alerts.append((subject, text))
 
     agent = GuestAgent()
-    out = await store_health.check(agent, alert, retry_wait_s=0)
+    out = await store_health.check(agent, alert, retry_wait_s=0, place=store_health.CITIES[1])
     assert out["instamart"] == "ok", "a cold first page is tried once more"
-    assert out["1mg"].startswith("failed") and tries["1mg"] == 2
+    assert out["1mg"].startswith("failed") and tries["1mg"] == 2 and "Failed to parse URL" in out["1mg"]
     assert len(alerts) == 1 and alerts[0][0] == "Store check: saved look-up broke on 1mg"
-    assert agent.opened == [None] and agent.stopped == ["s1"], "one guest browser, closed after"
+    assert "Delhi" in alerts[0][1] and "two browsers" in alerts[0][1], "the alert says where and the store's own error"
+    assert agent.opened == [None, None] and agent.stopped == ["s1", "s2"], "the retry is a fresh guest browser; both closed"
+    assert tries["blinkit"] == 1, "only the failed stores are tried again"
 
 
 async def test_store_health_is_quiet_when_all_stores_work(monkeypatch):
@@ -317,8 +319,16 @@ async def test_store_health_is_quiet_when_all_stores_work(monkeypatch):
         raise AssertionError("no alert")
 
     out = await store_health.check(GuestAgent(), alert, retry_wait_s=0)
-    assert set(out.values()) == {"ok"}
+    assert {k: v for k, v in out.items() if k != "_place"} == {s: "ok" for s in fastpath.SITES}
     assert await store_health.check(object()) == {"skipped": "no cloud browser"}
+
+
+def test_store_health_moves_through_the_cities(at):
+    seen = set()
+    for day in range(1, 8):
+        at(f"2026-10-{day:02d} 10:00")
+        seen.add(store_health.place_for_today()["city"])
+    assert seen == {c["city"] for c in store_health.CITIES}, "a different city each day, every city within a week"
 
 
 # --- Instamart: a sent order with no clear answer is looked up in the linked account -------------------------------------
