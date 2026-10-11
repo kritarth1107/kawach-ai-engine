@@ -39,7 +39,7 @@ Return ONLY JSON:
 {
   "body_md": "full markdown file with YAML frontmatter",
   "aliases": ["alias1", "alias2"],
-  "links": [{"target_slug": "person-medha", "relation": "related"}],
+  "links": [{"target_slug": "person-sarla", "relation": "related"}],
   "status": "active|needs-review",
   "review_by": "YYYY-MM-DD or null"
 }"""
