@@ -159,10 +159,15 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
 CONSOLIDATE_PROMPT = """You keep a person's memory notes for their care companion. Rewrite the note below into a clean, well-organised markdown note: merge duplicates, keep every distinct fact, keep dates where they matter, put newer information in place of what it corrects (and say "earlier: …" when the change matters), and drop one-time codes. No headings above level 3. Write only the note."""
 
 
+# Notes with their own shape, kept small by their writers: dated history (diary, rollups) and the card rebuilt nightly
+# from the record. A rewrite would merge dated lines away (the rollups read "- YYYY-MM-DD:" lines).
+KEEP_SHAPE = {"diary", "weekly", "monthly", "profile-card"}
+
+
 async def consolidate_family(session: AsyncSession, family_id: str, *, min_lines: int = 12) -> int:
     rewritten = 0
     for n in list((await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id))).scalars()):
-        if n.body_md.count("\n") + 1 < min_lines:
+        if n.slug in KEEP_SHAPE or n.body_md.count("\n") + 1 < min_lines:
             continue
         reply = await router.complete(
             "extract",

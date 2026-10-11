@@ -27,12 +27,28 @@ async def ensure_database_schema() -> None:
         await run_v2_migrations(conn)  # columns/indexes added after tables first shipped
 
 
+async def cleanup_memory_index(sessions) -> None:
+    """D-12: fix search-index rows written before it (stale "(active)" labels, note lines no longer in their note), for
+    every family, at each start (idempotent, one instance at a time). A failure never stops the engine starting."""
+    import asyncio
+    import logging
+    import os
+
+    if os.getenv("MEMORY_INDEX_CLEANUP", "on") != "on":
+        return
+    try:
+        await asyncio.wait_for(care_memory_index.cleanup_on_start(sessions), timeout=60)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("memory index cleanup failed; the nightly pass will catch up")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await ensure_database_schema()
     from app.db.session import SessionLocal
 
     llm_spend.configure(SessionLocal)
+    await cleanup_memory_index(SessionLocal)
     yield
     await llm_spend.flush()  # write the last ledger rows before the instance stops
     from app.agents.tool_client import close_clients

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,6 +16,34 @@ from app.care.domains import medicine_slug, merged_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock
+
+logger = logging.getLogger(__name__)
+
+
+async def _keep_index(session: AsyncSession, family_id: str, subject_id: str, *, note: str | None = None) -> None:
+    """Keep the meaning-search index in step with what was just written (app.care.memory_index): a changed fact's row
+    is relabelled at once, a note line that is gone is dropped at once. Never blocks the write: a failure is rolled back
+    to its own savepoint and the nightly pass catches up."""
+    from app.care import memory_index
+
+    try:
+        async with session.begin_nested():
+            if note is None:
+                await memory_index.sync_facts(session, family_id, subject_id)
+            else:
+                await memory_index.sync_notes(session, family_id, subject_id, slug=note)
+    except Exception:  # noqa: BLE001
+        logger.warning("index upkeep failed family=%s subject=%s note=%s", family_id, subject_id, note, exc_info=True)
+
+
+def fact_label(f: CareFact) -> str:
+    """How a care-record row reads in recall. An earlier value says so plainly, with when it ended, so it is never
+    mistaken for the current one (when memories disagree, the newest wins and the CARE RECORD beats everything)."""
+    since = clock.ist_day(f.valid_from)
+    if f.status in ("superseded", "stopped"):
+        until = clock.ist_day(f.valid_to) if f.valid_to else "?"
+        return f"(EARLIER: {'replaced' if f.status == 'superseded' else 'stopped'} on {until}; was true {since}→{until}, {f.source_kind}) {f.text}"
+    return f"({f.status}, {since}→now, {f.source_kind}) {f.text}"
 
 
 @dataclass
@@ -134,6 +163,8 @@ async def write_fact(
     session.add(row)
     await session.flush()
     await versions.record_fact(session, row, "write")
+    if old:
+        await _keep_index(session, family_id, subject_id)
     return FactWrite("superseded" if old else "created", row, old)
 
 
@@ -193,6 +224,7 @@ async def stop_fact(
     old.note = reason
     await session.flush()
     await versions.record_fact(session, old, "stop")
+    await _keep_index(session, family_id, subject_id)
     return FactWrite("stopped", old)
 
 
@@ -229,6 +261,7 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     )
     await session.flush()
     await versions.record_fact(session, row, "approve" if approve else "reject")
+    await _keep_index(session, row.family_id, row.subject_id)
     return row
 
 
@@ -373,6 +406,8 @@ async def upsert_note(
     # populate_existing: a note loaded earlier in this session must show what was just written.
     note = (await session.execute(stmt, execution_options={"populate_existing": True})).scalar_one()
     await versions.record_note(session, note, op=op, meta=meta, actor_id=actor_id, source=source, reason=reason, undoes=undoes)
+    if existing:
+        await _keep_index(session, family_id, subject_id, note=slug)  # lines this write took out are not found any more
     return note
 
 
@@ -596,8 +631,7 @@ async def recall(
         .limit(limit)
     )
     for f in fact_rows.scalars():
-        span = f"{clock.ist_day(f.valid_from)}→{clock.ist_day(f.valid_to) if f.valid_to else 'now'}"
-        hits.append(Hit("fact", f.recorded_at, f"({f.status}, {span}, {f.source_kind}) {f.text}", f"fact:{f.id}"))
+        hits.append(Hit("fact", f.recorded_at, fact_label(f), f"fact:{f.id}"))
 
     hits.sort(key=lambda h: h.when, reverse=True)
     return hits[:limit]

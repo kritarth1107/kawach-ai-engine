@@ -151,6 +151,12 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
         report["patterns"] += len(new or [])
     if with_models:
         report["notes"] = await step("consolidate", lambda s: consolidate_family(s, fid)) or 0
+        # after the rewrite, on the notes as they now stand: contradictions with the record or between notes become one
+        # question each to a caregiver (D-12); nothing is changed
+        for p in uniq:
+            report["contradictions"] = report.get("contradictions", 0) + (await step(
+                f"contradictions:{p['id']}",
+                lambda s, p=p: memory_upkeep.ask_about_contradictions(s, fid, p["id"], owner if owner != p["id"] else None)) or 0)
 
     async def mark(session):
         await store.record_event(session, family_id=fid, subject_id=(roster.elder or {}).get("id") or "family", kind="dream",

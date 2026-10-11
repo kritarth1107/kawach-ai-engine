@@ -491,15 +491,15 @@ async def _set_note(session: AsyncSession, v: MemoryVersion, title: str, body: s
         gone_title = note.title
         await session.delete(note)
         await session.flush()
-        await memory_index.unindex(session, v.family_id, f"note:{v.target}")
+        await memory_index.unindex(session, v.family_id, f"note:{v.target}", subject_id=v.subject_id)
         await add(session, family_id=v.family_id, subject_id=v.subject_id, kind="note", target=v.target, op=op, title=gone_title,
                   body="", value={"deleted": True}, reason=reason, undoes=undoes)
         return {"result": "done", "note": v.target, "removed": True}
     if note and note.body_md == body:
         return {"result": "nothing", "why": "the note already reads like that"}
+    # upsert_note drops the index rows of lines this takes out; lines it brings back are indexed tonight
     await store.upsert_note(session, family_id=v.family_id, subject_id=v.subject_id, slug=v.target, title=title or v.target,
                             body_md=body, op=op, reason=reason, undoes=undoes)
-    await memory_index.unindex(session, v.family_id, f"note:{v.target}")  # re-indexed from the new text tonight
     return {"result": "done", "note": v.target}
 
 

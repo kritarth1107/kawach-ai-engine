@@ -14,17 +14,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections import defaultdict
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import store
 from app.care.domains import medicine_slug
-from app.care.models import CareEvent, CareFact, MemoryNote
+from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop
 from app.core import clock
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,148 @@ async def ask_about_health(session: AsyncSession, family_id: str, subject_id: st
     return opened
 
 
+# ── contradictions between notes and the record (D-12) ──────────────────────────
+
+NO_CHECK_NOTES = {"diary", "weekly", "monthly", "profile-card"}  # dated history, and the card built from the record itself
+MAX_CONTRADICTION_QUESTIONS = 3  # per person per night: a caregiver is never flooded
+CONTRADICTION_PROMPT = (
+    "You check a care companion's memory of one person for contradictions. CARE RECORD lines are confirmed and current; "
+    "NOTES are free-text memory. List only real contradictions: (1) a note line that cannot be true at the same time as a "
+    "CARE RECORD line (a different medicine, dose, time, allergy, condition, doctor, address or family rule); (2) two note "
+    "lines that disagree with each other. NOT contradictions: history (a line telling what was true before: 'earlier', "
+    "'used to', 'stopped on', a past date), a note adding detail the record does not have, the same thing in other words. "
+    "Never decide which side is right. Return ONLY JSON: {\"contradictions\": [{\"record_key\": \"<the key in [ ] from the "
+    "CARE RECORD, or empty>\", \"note\": \"<the note slug in [ ]>\", \"line\": \"<that note line, copied exactly>\", "
+    "\"other_note\": \"<slug, only for two notes>\", \"other_line\": \"<that line, copied exactly>\", \"question\": \"<one "
+    "short, kind question for a caregiver that would settle it, in English>\"}]}, with an empty list when there are none."
+)
+
+
+def _norm(line: str) -> str:
+    return " ".join((line or "").strip().lstrip("-*• ").split()).lower()
+
+
+def _find_line(body: str, quoted: str) -> str | None:
+    """The note's own line the model quoted (the same, or one containing the other), or None when it is not there: a
+    contradiction is only asked about when both sides can be pointed at."""
+    want = _norm(quoted)
+    if len(want) < 6:
+        return None
+    for ln in (body or "").splitlines():
+        have = _norm(ln)
+        if have and (have == want or (len(want) >= 12 and (want in have or have in want))):
+            return ln.strip()
+    return None
+
+
+def _stopped_medicine_lines(facts: list[CareFact], notes: list[MemoryNote]) -> list[str]:
+    """Note lines that name a medicine the record has stopped (no current entry for it under any dose): likely
+    contradictions, given to the model to confirm (a line telling the history of the stop is not one). Names come from
+    the record, not from a word list."""
+    current = {medicine_slug(str((f.value or {}).get("name") or f.key.split(":", 1)[1])).split("_")[0]
+               for f in facts if f.domain == "medicine" and f.status == "active"}
+    ended: dict[str, str] = {}
+    for f in facts:
+        if f.domain == "medicine" and f.status in ("stopped", "superseded"):
+            name = str((f.value or {}).get("name") or f.key.split(":", 1)[1]).replace("_", " ").strip()
+            if len(name) >= 3 and medicine_slug(name).split("_")[0] not in current:
+                ended[name.lower()] = f.status
+    out = []
+    for n in notes:
+        for ln in (n.body_md or "").splitlines():
+            for name in ended:
+                if re.search(rf"\b{re.escape(name)}\b", ln.lower()):
+                    out.append(f"[{n.slug}] {ln.strip()}  (the record has {name} stopped)")
+    return out[:20]
+
+
+async def _changed_since(session: AsyncSession, family_id: str, subject_id: str, since) -> bool:
+    notes = await session.scalar(select(func.count()).select_from(MemoryNote).where(
+        MemoryNote.family_id == family_id, MemoryNote.subject_id == subject_id, MemoryNote.updated_at >= since))
+    if notes:
+        return True
+    return bool(await session.scalar(select(func.count()).select_from(CareFact).where(
+        CareFact.family_id == family_id, CareFact.subject_id == subject_id, or_(CareFact.recorded_at >= since, CareFact.valid_to >= since))))
+
+
+async def contradictions(session: AsyncSession, family_id: str, subject_id: str) -> list[dict]:
+    """Contradictions between this person's notes and their care record, and between their notes: one cheap model call
+    (essential=False, so it stays under the spend caps). Nothing is changed here, ever, in any domain: each one is a
+    question for a caregiver."""
+    from app.care.extract import parse_json
+    from app.llm import router
+
+    facts = await store.facts(session, family_id, subject_id, statuses=("active", "superseded", "stopped"))
+    current = [f for f in facts if f.status == "active"]
+    notes = [n for n in await store.notes(session, family_id, [subject_id]) if n.slug not in NO_CHECK_NOTES and (n.body_md or "").strip()]
+    hints = _stopped_medicine_lines(facts, notes)
+    if not notes or (not current and len(notes) < 2 and not hints):
+        return []
+    record = "\n".join(f"[{f.key}] {f.text}" for f in current) or "(nothing current)"
+    body = "\n\n".join(f"[{n.slug}] {n.title}\n{n.body_md.strip()}" for n in notes)
+    text = f"CARE RECORD (current):\n{record}\n\nNOTES:\n{body}"[:12000]
+    if hints:
+        text += ("\n\nCHECK THESE NOTE LINES (they name a medicine the record has stopped; say whether each is a contradiction or "
+                 "only history):\n" + "\n".join(hints))
+    try:
+        out = await router.complete("extract", system_stable=CONTRADICTION_PROMPT,
+                                    messages=[{"role": "user", "content": [{"type": "text", "text": text}]}],
+                                    max_tokens=1500, effort="low", essential=False)
+    except router.AllModelsFailed:
+        return []
+    keys = {f.key for f in facts}  # a stopped medicine is a side too: the record says it ended
+    by_slug = {n.slug: n for n in notes}
+    found = []
+    for c in (parse_json(out.text or "").get("contradictions") or [])[:10]:
+        if not isinstance(c, dict):
+            continue
+        note = by_slug.get(str(c.get("note") or "").strip())
+        line = _find_line(note.body_md, str(c.get("line") or "")) if note else None
+        if not line:
+            continue
+        rkey = str(c.get("record_key") or "").strip()
+        rkey = rkey if rkey in keys else ""
+        other = by_slug.get(str(c.get("other_note") or "").strip())
+        oline = _find_line(other.body_md, str(c.get("other_line") or "")) if other else None
+        if oline and other.slug == note.slug and _norm(oline) == _norm(line):
+            oline = None
+        if not rkey and not oline:
+            continue  # a contradiction needs a second side that really exists
+        question = " ".join(str(c.get("question") or "").split())[:300] or (
+            f"My notes say \"{line[:120]}\", which does not match what else I have. Which is right now?")
+        found.append({"record_key": rkey, "note": note.slug, "line": line, "other_note": other.slug if oline else "",
+                      "other_line": oline or "", "question": question})
+    return found
+
+
+async def ask_about_contradictions(session: AsyncSession, family_id: str, subject_id: str, owner_id: str | None) -> int:
+    """For a person whose notes or care record changed since yesterday: each contradiction becomes one question to a
+    caregiver through the memory_check path, asked once (never again for the same two lines, even after an answer).
+    Nothing in the record or the notes is changed here; health facts change only through the record's own rules."""
+    if not await _changed_since(session, family_id, subject_id, clock.now() - timedelta(hours=26)):
+        return 0
+    opened = 0
+    for c in await contradictions(session, family_id, subject_id):
+        if opened >= MAX_CONTRADICTION_QUESTIONS:
+            break
+        sig = hashlib.sha256("|".join([subject_id, c["record_key"], c["note"], _norm(c["line"]), c["other_note"], _norm(c["other_line"])])
+                             .encode()).hexdigest()[:16]
+        key = f"memcheck:{subject_id}:contra:{sig}"
+        if await session.scalar(select(func.count()).select_from(OpenLoop).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == key)):
+            continue  # asked before
+        problem = (f"note '{c['note']}': {c['line']}" + (f" | record [{c['record_key']}]" if c["record_key"] else "")
+                   + (f" | note '{c['other_note']}': {c['other_line']}" if c["other_line"] else ""))
+        await store.open_loop(
+            session, family_id=family_id, subject_id=subject_id, kind="memory_check", title=c["question"],
+            detail={"problem": problem[:600], "kind": "contradiction", "max_wakes": 1, "record_key": c["record_key"], "note": c["note"],
+                    "line": c["line"][:300], "other_note": c["other_note"], "other_line": c["other_line"][:300]},
+            owner_id=owner_id, wake_at=clock.ist().replace(hour=11, minute=0, second=0, microsecond=0) + timedelta(days=1),
+            alert_rule="dashboard", dedupe_key=key,
+        )
+        opened += 1
+    return opened
+
+
 # ── profile card ───────────────────────────────────────────────────────────────
 
 
@@ -236,7 +379,7 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
         for ln in (note.body_md or "").splitlines():
             (drop if all(w in ln.lower() for w in words) else keep).append(ln)
         if drop:
-            rewrites.append((note, "\n".join(keep)))
+            rewrites.append((note, "\n".join(keep), drop))
             removed_lines += [{"subject": note.subject_id, "slug": note.slug, "title": note.title, "line": d} for d in drop]
     events = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids)))).scalars()
     hide = [e for e in events if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten")]
@@ -244,10 +387,12 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     eid = await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
                                    payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True},
                                    actor_id=by)
-    for note, body in rewrites:
-        await store.upsert_note(session, family_id=family_id, subject_id=note.subject_id, slug=note.slug, title=note.title, body_md=body,
+    for note, body, drop in rewrites:
+        title = note.title
+        await store.upsert_note(session, family_id=family_id, subject_id=note.subject_id, slug=note.slug, title=title, body_md=body,
                                 op="forget", actor_id=by, reason=f"forget: {what[:120]}", meta={"forget_event": eid})
-        await memory_index.unindex(session, family_id, f"note:{note.slug}")
+        # exactly the forgotten lines (diary lines too, which a rewrite would otherwise keep findable as history)
+        await memory_index.unindex_note_lines(session, family_id, note.subject_id, note.slug, title, drop)
     for e in hide:
         e.payload = {**(e.payload or {}), "forgotten": True, "forgotten_by": by}
         await memory_index.unindex(session, family_id, f"event:{e.id}")

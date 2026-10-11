@@ -221,7 +221,8 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     if how:
         parts.append(how)
     if hits:
-        parts.append("POSSIBLY RELEVANT MEMORY:\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
+        parts.append("POSSIBLY RELEVANT MEMORY (a line marked EARLIER is history, not true now; where a memory disagrees with the "
+                     "CARE RECORD, the record is right):\n" + "\n".join(f"  [{clock.ist(h.when).strftime('%d %b')}] {h.text}" for h in hits))
     if req.speaker["id"] != req.elder["id"] and req.speaker.get("role") != "system":
         own = await data.facts(req.speaker["id"])
         if own:
