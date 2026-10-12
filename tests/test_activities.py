@@ -165,3 +165,53 @@ async def test_routines_already_told_become_activities_and_their_own_reminder_re
         assert await activities.adopt(db, host, FAM, ME["id"]) == [], "running again adds nothing"
     finally:
         router._providers.pop("fake", None)
+
+
+async def test_their_own_reminder_before_a_habit_means_no_second_nudge_when_saheli_saves_it(db, at):
+    """Live 2026-10-13: Rahul and Kritarth already had 'leave for the gym' reminders; the backend lists times at the top level."""
+    at("2026-10-13 07:00")
+    await store.save_roster(db, FAM, ME, [ME])
+    host = SimHost()
+    await host.call("create_reminder", {"text": "Leave for the gym", "schedule": {"times": ["09:00"], "repeat": "daily"}},
+                    family_id=FAM, subject_id=ME["id"], actor_id=ME["id"])
+    out, err = await call(ctx(db, host), "activity", {"action": "add", "type": "gym", "days": [0, 1, 2, 3, 4, 5], "start": "09:30"})
+    assert not err and "nudge" not in out["what_happens"]
+    assert [l.detail["phase"] for l in await loops(db) if l.detail["date"] == "2026-10-13"] == ["after"]
+
+
+async def test_an_activity_adopted_wrongly_is_refreshed_and_one_they_told_is_left_alone(db, at, monkeypatch):
+    from app.llm import router
+    from app.llm.router import LLMReply
+
+    class Reader:
+        async def complete(self, route, **kw):
+            return LLMReply(text=json.dumps({"activities": [
+                {"type": "gym", "label": "goes to the gym", "kind": "habit", "days": [0, 1, 2, 3, 4, 5], "start": "20:00", "end": "21:00"},
+                {"type": "evening_walk", "label": "walks", "kind": "habit", "days": [], "start": "18:00"},
+            ]}), tool_calls=[], model="fake")
+
+    router.register_provider("fake", Reader())
+    monkeypatch.setenv("MODEL_ROUTES", '{"extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        at("2026-10-13 07:00")
+        await store.save_roster(db, FAM, ME, [ME])
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="routine", key="routine:gym", value={"time": "20:00"},
+                               text="Goes to the gym 8-9 pm, Mon-Sat", source_kind="elder_said")
+        # adopted before the fix: the record's words as the label and a nudge despite their own 19:30 reminder
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:gym",
+                               value=activities.normalise({"type": "gym", "label": "goes to the gym", "kind": "habit", "days": [0, 1, 2, 3, 4, 5],
+                                                           "start": "20:00", "end": "21:00"}), text="goes to the gym", source_kind="inferred")
+        # the walk they told Saheli themselves, at another time
+        await call(ctx(db), "activity", {"action": "add", "type": "evening_walk", "start": "19:00"})
+        host = SimHost()
+        await host.call("create_reminder", {"text": "Head out to the gym", "schedule": {"times": ["19:30"], "repeat": "daily"}},
+                        family_id=FAM, subject_id=ME["id"], actor_id=ME["id"])
+        made = await activities.adopt(db, host, FAM, ME["id"])
+        assert made == ["activity:gym"]
+        gym = activities.normalise((await store.active_fact(db, FAM, ME["id"], "activity:gym")).value)
+        assert gym["label"] == "Gym" and gym["nudge_before"] == 0
+        walk = activities.normalise((await store.active_fact(db, FAM, ME["id"], "activity:evening_walk")).value)
+        assert walk["start"] == "19:00", "what they told Saheli stays"
+    finally:
+        router._providers.pop("fake", None)

@@ -371,35 +371,58 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
         items = (_json.loads(m.group(0)) if m else {}).get("activities") or []
     except _json.JSONDecodeError:
         return []
-    reminder_times: list[int] = []
-    try:
-        listed = await host.call("list_reminders", {"status": "active"}, family_id=family_id, subject_id=subject_id, actor_id=subject_id)
-        for r in (listed or {}).get("reminders") or []:
-            for t in ((r.get("schedule") or {}).get("times") or []):
-                if _hm(t) is not None:
-                    reminder_times.append(_hm(t))
-    except Exception:  # noqa: BLE001 — no reminders known: the usual nudge
-        pass
+    times = await reminder_times(host, family_id, subject_id)
     made = []
-    existing = {f.key for f in await active(session, family_id, subject_id)}
+    existing = {f.key: f for f in await active(session, family_id, subject_id)}
     for it in items[:12]:
         if not isinstance(it, dict):
             continue
         typ = it.get("type") if it.get("type") in CATALOG else "custom"
-        label = (it.get("label") or CATALOG[typ]["label"]).strip()
-        key = key_for(label if typ == "custom" else typ)
-        if key in existing:
+        # a known type takes its own name ("Gym", not the record's "goes to the gym")
+        label = CATALOG[typ]["label"] if typ != "custom" else str(it.get("label") or "").strip()
+        if not label:
             continue
+        key = key_for(label if typ == "custom" else typ)
         value = normalise({"type": typ, "label": label, "kind": it.get("kind"), "days": it.get("days") or [], "start": it.get("start"),
                            "end": it.get("end") if isinstance(it.get("end"), str) else None})
         if value["kind"] in ("habit", "task") and not value["start"]:
             continue
-        start = _hm(value["start"])
-        if value["kind"] == "habit" and start is not None and any(start - 120 <= t <= start for t in reminder_times):
+        if own_reminder_before(value, times):
             value["nudge_before"] = 0  # their own reminder already nudges before it
+        old = existing.get(key)
+        if old is not None:
+            # one saved from what they said is theirs; one adopted earlier is refreshed if it was read wrongly
+            if old.source_kind != "inferred" or all(normalise(old.value).get(k) == value.get(k) for k in ("label", "nudge_before", "start", "end", "days", "kind")):
+                continue
         w = await store.write_fact(session, family_id=family_id, subject_id=subject_id, domain="activity", key=key, value=value,
                                    text=describe(value), source_kind="inferred", note="from the routine they told Saheli", replace=True)
+        await drop_future_loops(session, family_id, key)
         await plan_for(session, family_id, subject_id, w.fact)
-        existing.add(key)
+        existing[key] = w.fact
         made.append(key)
     return made
+
+
+async def reminder_times(host, family_id: str, subject_id: str) -> list[tuple[int, list[int]]]:
+    """The person's active reminders as (minute of day, weekdays; [] for every day)."""
+    out: list[tuple[int, list[int]]] = []
+    try:
+        listed = await host.call("list_reminders", {"status": "active"}, family_id=family_id, subject_id=subject_id, actor_id=subject_id)
+    except Exception:  # noqa: BLE001 — no reminders known: the usual nudge
+        return out
+    for r in (listed or {}).get("reminders") or []:
+        sched = r.get("schedule") if isinstance(r.get("schedule"), dict) else {}
+        days = [int(d) for d in (r.get("daysOfWeek") or sched.get("days") or []) if str(d).isdigit()]
+        for t in (r.get("times") or sched.get("times") or []):  # the backend sends times at the top level
+            if _hm(t) is not None:
+                out.append((_hm(t), days))
+    return out
+
+
+def own_reminder_before(value: dict, times: list[tuple[int, list[int]]]) -> bool:
+    """A habit whose start already has one of their own reminders within the two hours before it, on its days."""
+    start = _hm(value.get("start"))
+    if value.get("kind") != "habit" or start is None:
+        return False
+    act_days = set(value.get("days") or range(7))
+    return any(start - 120 <= t <= start and (not days or act_days & set(days)) for t, days in times)

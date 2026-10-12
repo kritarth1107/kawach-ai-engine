@@ -782,6 +782,8 @@ async def activity(ctx: TurnCtx, a: dict) -> dict:
                                 if a.get(k) is not None} | {"type": typ, "label": label})
         if value["kind"] in ("habit", "task") and not value["start"]:
             raise ToolRefused("Ask what time it is (and which days) before saving it.")
+        if a.get("nudge_before") is None and acts.own_reminder_before(value, await acts.reminder_times(ctx.host, ctx.family_id, subject)):
+            value["nudge_before"] = 0  # their own reminder already nudges before it: no second message
         key = a.get("key") or acts.key_for(label if typ == "custom" or a.get("label") else typ)
         w = await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=subject, domain="activity", key=key, value=value,
                                    text=acts.describe(value), source_kind=ctx.source_kind, source_ref=ctx.message_ref,
