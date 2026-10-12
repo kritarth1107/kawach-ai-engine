@@ -33,6 +33,43 @@ def in_quiet_hours(at=None) -> bool:
     return h >= QUIET_START or h < QUIET_END
 
 
+async def own_night(session: AsyncSession, family_id: str, person: str | None) -> tuple[int, int] | None:
+    """Their own night from what they told Saheli (sleep and wake-up times), as minutes of the day; None when not known
+    or not believable. Someone who sleeps at 3 and wakes at 1:30 pm is not asleep at 9:15 pm (live 2026-10-13: an
+    evening gym check-in would have waited till the next morning)."""
+    if not person:
+        return None
+    from app.care import activities
+
+    acts = {activities.normalise(f.value).get("type"): activities.normalise(f.value) for f in await activities.active(session, family_id, person)}
+    sleep = activities._hm((acts.get("sleep") or {}).get("start"))
+    wake = activities._hm((acts.get("wake_up") or {}).get("start"))
+    if sleep is None or wake is None:
+        return None
+    length = (wake - sleep) % (24 * 60)
+    return (sleep, wake) if 5 * 60 <= length <= 12 * 60 else None
+
+
+def _inside(minute: int, night: tuple[int, int]) -> bool:
+    start, end = night
+    return start <= minute < end if start < end else minute >= start or minute < end
+
+
+async def quiet_for(session: AsyncSession, family_id: str, person: str | None, at=None) -> tuple[bool, datetime | None]:
+    """Whether it is night for this person, and when their morning starts (their wake-up plus 30 min, or 08:30)."""
+    night = await own_night(session, family_id, person)
+    if night is None:
+        return (True, next_morning(at)) if in_quiet_hours(at) else (False, None)
+    local = clock.ist(at)
+    minute = local.hour * 60 + local.minute
+    if not _inside(minute, night):
+        return False, None
+    morning = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=night[1] + 30)
+    if morning <= local:
+        morning += timedelta(days=1)
+    return True, morning
+
+
 def next_morning(at=None):
     local = clock.ist(at)
     morning = local.replace(hour=8, minute=30, second=0, microsecond=0)
@@ -389,8 +426,9 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 await session.commit()
                 stats["expired"] += 1
                 continue
-            if in_quiet_hours() and loop.alert_rule != "alert_caregiver":
-                loop.wake_at = next_morning()
+            quiet, morning = await quiet_for(session, family_id, loop.owner_id or loop.subject_id) if loop.alert_rule != "alert_caregiver" else (False, None)
+            if quiet:
+                loop.wake_at = morning or next_morning()
                 await session.commit()
                 stats["deferred"] += 1
                 continue

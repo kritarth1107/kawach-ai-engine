@@ -215,3 +215,20 @@ async def test_an_activity_adopted_wrongly_is_refreshed_and_one_they_told_is_lef
         assert walk["start"] == "19:00", "what they told Saheli stays"
     finally:
         router._providers.pop("fake", None)
+
+
+async def test_quiet_hours_follow_their_own_night_when_they_told_saheli(db, at):
+    """Live 2026-10-13: Kritarth sleeps at 3 and wakes at 1:30 pm; his 9:15 pm gym check-in must not wait till morning.
+    Without their own sleep times the household night (21:00–08:00) stays."""
+    from app.brain import wake
+    from app.core import clock
+
+    at("2026-10-13 21:15")
+    await store.save_roster(db, FAM, ME, [ME])
+    assert (await wake.quiet_for(db, FAM, ME["id"]))[0], "no sleep times known: the usual night"
+    await call(ctx(db), "activity", {"action": "add", "type": "sleep", "start": "03:00", "kind": "routine"})
+    await call(ctx(db), "activity", {"action": "add", "type": "wake_up", "start": "13:30", "kind": "routine"})
+    assert (await wake.quiet_for(db, FAM, ME["id"])) == (False, None), "9:15 pm is his evening"
+    at("2026-10-14 05:00")
+    quiet, morning = await wake.quiet_for(db, FAM, ME["id"])
+    assert quiet and clock.ist(morning).strftime("%d %H:%M") == "14 14:00", "his morning: wake-up plus 30 min"
