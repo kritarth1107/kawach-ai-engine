@@ -314,8 +314,8 @@ async def plan(session: AsyncSession, host, family_id: str, subject: str, *, now
         ("feelings", 0, f"[Check-in: how they are] Ask person {subject} one short, warm question in their language and script about how "
                         f"they are feeling today: any pain, trouble, sleep or worry.{about} Fit it to what you know of them (their "
                         f"conditions, the last things they told you, how they felt last time) and do not repeat a question from the last "
-                        f"days. If they mention a problem later, log it (log_event symptom) and follow your red-flag rules. send_message, "
-                        f"then reply none."),
+                        f"days. If they mention a problem later, log it (log_event symptom) and follow your red-flag rules; when they answer, "
+                        f"note how they feel too (log_event mood with mood_score and mood_word). send_message, then reply none."),
         ("reports", 2, f"[Check-in: reports] Ask person {subject} once, short, whether they had any doctor visit, test or new report "
                        f"this week. If yes, ask them to send a photo of it here (you read it and show what you found before anything "
                        f"is saved). send_message, then reply none."),

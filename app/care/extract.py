@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import digest, store
-from app.care.domains import DOMAINS, HEALTH_DOMAINS, fact_key, merged_value, slug
+from app.care.domains import DOMAINS, HEALTH_DOMAINS, NONE_DOMAINS, fact_key, is_none_key, merged_value, slug
 from app.care.models import CareFact, MemoryNote, OpenLoop, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock
@@ -23,19 +23,27 @@ from app.llm import router
 
 logger = logging.getLogger(__name__)
 
-EXTRACT_PROMPT = f"""You maintain the care memory for an elderly person's family. You read a conversation between Saheli (their care companion) and family members, and list what should be remembered that the care record below does not already say.
+EXTRACT_PROMPT = f"""You maintain the care memory for a person cared for by Saheli, their care companion: an elder whose family looks after them, or someone caring for themselves (then the person and their caregiver are the same, and PEOPLE lists only them). You read a conversation between Saheli and the people in PEOPLE, and list what should be remembered that the care record below does not already say.
 
-Only include what a family member actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change.
+Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. A fact about a caregiver's own life (their gym, their medicine, their diet) is about them: give their person id in "about".
 
-Domains: {", ".join(sorted(DOMAINS))}.
+Domains (put each fact in the one that fits; no_order is only for an item never to buy again):
+{chr(10).join(f"- {d}: {what}" for d, what in sorted(DOMAINS.items()))}
+
+When they say they have none (no regular medicines, no allergies, no long-term conditions), give that domain with "none": true and a sentence, e.g. {{"domain": "medicine", "none": true, "sentence": "Takes no regular medicines."}}.
 
 A fact may carry links a family member said: a medicine is "for" a condition or "prescribed_by" a doctor, an appointment is "with_doctor" a doctor, a person is "related_to" another (as: son, neighbour). Give a link only when it was said, even for a fact already in the record (then repeat the fact as it is, with the link).
 
 Return only JSON:
-{{"facts": [{{"domain": "...", "name": "...", "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
+{{"facts": [{{"domain": "...", "name": "...", "none": false, "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
   "stops": [{{"domain": "...", "name": "...", "reason": "...", "evidence": "..."}}],
-  "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}]}}
+  "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}],
+  "moods": [{{"about": "person id", "score": 1, "word": "one English word, e.g. cheerful, calm, tired, worried, sad, irritated, lonely", "summary": "how they seemed and why, one line", "evidence": "their words"}}]}}
+moods: how each person (never Saheli) seemed in this conversation, only when it shows in what they wrote; one per person, the latest; score 1 very low, 2 low, 3 okay, 4 good, 5 very good.
 Use empty lists when there is nothing."""
+
+
+BATCH = 120  # turns read at once
 
 
 def parse_json(text: str) -> dict:
@@ -64,7 +72,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     pending = list(
         (
             await session.execute(
-                select(Turn).where(Turn.family_id == family_id, Turn.extracted.is_(False)).order_by(Turn.id).limit(120)
+                select(Turn).where(Turn.family_id == family_id, Turn.extracted.is_(False)).order_by(Turn.id).limit(BATCH)
             )
         ).scalars()
     )
@@ -102,9 +110,14 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
 
     for f in data.get("facts") or []:
         domain = f.get("domain")
+        if f.get("none") is True and domain in NONE_DOMAINS:
+            f = {**f, "name": "none", "details": {"none": True}, "links": []}  # "has none": never a medicine or an item to avoid
         if domain not in DOMAINS or not f.get("name") or not f.get("sentence"):
             continue
         subject = f.get("about") if f.get("about") in member_ids else elder["id"]
+        if is_none_key(fact_key(domain, f["name"])) and [x for x in await store.facts(session, family_id, subject, domains=[domain], statuses=("active", "pending"))
+                                                         if not is_none_key(x.key)]:
+            continue  # the record lists real ones: "none" is for an empty list
         key = fact_key(domain, f["name"])
         existing = await store.active_fact(session, family_id, subject, key)
         details = f.get("details") or {}
@@ -167,8 +180,27 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         await store.upsert_note(session, family_id=family_id, subject_id=subject, slug=s_, title=n["topic"].strip().title(), body_md=body)
         counts["notes"] += 1
 
+    from app.care import mood
+
+    said_at = {t.thread_id: t.at for t in pending if t.role == "user"}  # each person's last message in this batch
+    for m in data.get("moods") or []:
+        score = mood.score_of(m.get("score")) if isinstance(m, dict) else None
+        if not score:
+            continue
+        subject = m.get("about") if m.get("about") in member_ids else elder["id"]
+        when = said_at.get(subject) or pending[-1].at
+        if clock.now() - when > mood.STALE:
+            continue  # a backlog read late: yesterday's mood is not today's
+        if await mood.last(session, family_id, subject, since=pending[0].at):
+            continue  # Saheli noted their mood in this conversation already
+        if await mood.record(session, family_id=family_id, subject_id=subject, score=score, word=str(m.get("word") or ""),
+                             summary=str(m.get("summary") or mood.SCALE[score]), source="reread", at=when):
+            counts["moods"] = counts.get("moods", 0) + 1
+
     await session.execute(update(Turn).where(Turn.id.in_([t.id for t in pending])).values(extracted=True))
     await store.record_event(session, family_id=family_id, subject_id=elder["id"], kind="memory_extract", summary=json.dumps(counts))
+    if len(pending) >= BATCH:
+        counts["more"] = True  # a full batch: the caller reads the next one
     return counts
 
 

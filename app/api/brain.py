@@ -196,6 +196,9 @@ async def wake_job() -> dict:
     return out
 
 
+EXTRACT_BATCHES = 6  # per family per run: up to 6 x 120 new turns
+
+
 @router.post("/jobs/extract")
 async def extract_job() -> dict:
     """Cloud Scheduler, every 30 minutes: re-read new conversation turns for facts the brain missed."""
@@ -210,9 +213,14 @@ async def extract_job() -> dict:
     for fid in families:
         try:
             with versions.attribution(actor_id="saheli", source="background", reason="re-read of new messages"):
-                async with SessionLocal() as session:
-                    done[fid] = await extract_family(session, fid)
-                await session.commit()
+                # a long day's messages are read in a few batches, so no family falls behind (the commit ran after the
+                # session had closed from 4 to 13 Oct 2026, so only the nightly re-read of one batch was ever kept)
+                for _ in range(EXTRACT_BATCHES):
+                    async with SessionLocal() as session:
+                        done[fid] = await extract_family(session, fid)
+                        await session.commit()
+                    if not done[fid].get("more"):
+                        break
         except Exception as exc:  # noqa: BLE001
             logger.exception("extract failed family=%s", fid)
             done[fid] = {"error": str(exc)[:200]}

@@ -119,8 +119,12 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
     if with_models:
         from app.care.extract import consolidate_family, extract_family
 
-        got = await step("extract", lambda s: extract_family(s, fid))
-        report["facts"] = (got or {}).get("facts", 0) if isinstance(got, dict) else 0
+        report["facts"] = 0
+        for _ in range(6):  # the day's backlog in a few batches
+            got = await step("extract", lambda s: extract_family(s, fid))
+            report["facts"] += (got or {}).get("facts", 0) if isinstance(got, dict) else 0
+            if not (isinstance(got, dict) and got.get("more")):
+                break
         for p in uniq:
             if await step(f"diary:{p['id']}", lambda s, p=p: diary(s, fid, p, day)):
                 report["diary"] += 1

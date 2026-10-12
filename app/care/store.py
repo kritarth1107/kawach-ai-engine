@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import versions
-from app.care.domains import medicine_slug, merged_value, needs_confirmation
+from app.care.domains import NONE_DOMAINS, is_none_key, medicine_slug, merged_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock, trace
@@ -165,7 +165,21 @@ async def write_fact(
     await versions.record_fact(session, row, "write")
     if old:
         await _keep_index(session, family_id, subject_id)
+    await end_none(session, row)
     return FactWrite("superseded" if old else "created", row, old)
+
+
+async def end_none(session: AsyncSession, row: CareFact) -> None:
+    """A real medicine, allergy or condition now in effect ends the record's "has none" for that domain."""
+    if row.domain not in NONE_DOMAINS or is_none_key(row.key) or row.status != "active":
+        return
+    marker = await active_fact(session, row.family_id, row.subject_id, f"{row.domain}:none")
+    if not marker:
+        return
+    marker.status, marker.valid_to, marker.note = "stopped", clock.now(), f"ended: {row.text}"[:500]
+    await session.flush()
+    await versions.record_fact(session, marker, "stop")
+    await _keep_index(session, row.family_id, row.subject_id)
 
 
 async def stop_fact(
@@ -262,6 +276,7 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     await session.flush()
     await versions.record_fact(session, row, "approve" if approve else "reject")
     await _keep_index(session, row.family_id, row.subject_id)
+    await end_none(session, row)
     from app.care import links
 
     await links.resolve_with_fact(session, row, approve=approve, by=by)  # links proposed with it go the same way

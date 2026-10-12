@@ -34,6 +34,15 @@ DOMAINS = {
 # A change from a weaker source to these waits for a caregiver to confirm.
 HEALTH_DOMAINS = {"medicine", "allergy", "condition", "vital_target"}
 
+# "They have none" is an answer setup asks for: a fact keyed "<domain>:none" (no medicines, no allergies, no long-term
+# conditions). It is never a medicine to remind or an item to avoid; a real one in the same domain ends it (founder
+# 2026-10-13: "takes no regular medicines" was filed in the never-order list).
+NONE_DOMAINS = {"medicine", "allergy", "condition"}
+
+
+def is_none_key(key: str) -> bool:
+    return key.split(":", 1)[-1] == "none"
+
 # Stronger sources outrank weaker ones; elder_said is trusted for preferences, not for doses.
 SOURCE_RANK = {
     "prescription": 5,

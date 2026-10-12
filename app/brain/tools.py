@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain import guards, policy
 from app.brain.host import ToolHost
 from app.care import store
-from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, fact_key, slug
+from app.care.domains import DOMAINS, FOOD_TIMING, HEALTH_DOMAINS, NONE_DOMAINS, fact_key, is_none_key, slug
 from app.care.links import BRAIN_RELATIONS as LINK_RELATIONS
 from app.care.models import OpenLoop
 from app.core import clock
@@ -167,10 +167,14 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
     "appointment is 'with_doctor', a person is 'related_to' another (as: son, neighbour). To add a link to something "
     "already in the record, call remember with its current details unchanged plus the links.",
     {
-        "domain": {"type": "string", "enum": sorted(DOMAINS)},
+        "domain": {"type": "string", "enum": sorted(DOMAINS),
+                   "description": "The one that fits: " + "; ".join(f"{d}: {what}" for d, what in sorted(DOMAINS.items()))
+                                  + ". no_order is only for an item never to buy again."},
         "name": {"type": "string", "description": "What it is, e.g. 'Metformin', 'milk', 'low_salt', 'address_as', 'call_first'"},
         "details": {"type": "object", "description": "Structured details"},
         "sentence": {"type": "string", "description": "One plain sentence for the record, e.g. 'Metformin 500 mg at 08:00 after breakfast'"},
+        "none": {"type": "boolean", "description": "true when they said they have none of this (no regular medicines, no allergies, no "
+                                                   "long-term conditions): domain medicine, allergy or condition; name is then ignored"},
         "about": ABOUT,
         "links": {
             "type": "array",
@@ -198,6 +202,15 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     domain = a["domain"]
     subject = ctx.subject(a.get("about"))
     details = dict(a.get("details") or {})
+    if a.get("none"):
+        if domain not in NONE_DOMAINS:
+            raise ToolRefused(f"'none' is only for {', '.join(sorted(NONE_DOMAINS))}. Save what they said in the domain that fits.")
+        listed = [f for f in await store.facts(ctx.session, ctx.family_id, subject, domains=[domain], statuses=("active", "pending"))
+                  if not is_none_key(f.key)]
+        if listed:
+            return {"saved": False, "why": f"The record lists {domain}: " + "; ".join(f.text for f in listed[:6])
+                    + ". If one has ended, stop that one; 'none' is only for an empty list. Ask them if unsure."}
+        a, details = {**a, "name": "none"}, {"none": True}
     if domain == "language":
         from app.care import language
 
@@ -248,7 +261,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         from app.care import features
 
         out["reminders"] = await features.appointment_loops(ctx.session, family_id=ctx.family_id, subject_id=subject, f=w.fact, owner_id=ctx.speaker.get("id"))
-    if domain == "medicine" and w.result in ("created", "superseded"):
+    if domain == "medicine" and w.result in ("created", "superseded") and not is_none_key(w.fact.key):
         out["reminders"] = await _sync_medicine(ctx, subject, w.fact.key, w.fact.value, active=True)
     if a.get("links"):
         from app.care import links
@@ -542,17 +555,30 @@ async def log_vital(ctx: TurnCtx, a: dict) -> dict:
     "Record anything else about the day for the dashboard and daily snapshot: a meal or missed meal, water, "
     "mood, a symptom (pain, dizziness, swelling, constipation, wound, up at night, did not get out of bed), "
     "a routine done or missed, a home problem (helper did not come, power or water off, cylinder low, locked out), "
-    "a call with family.",
+    "a call with family. Mood: whenever how they feel shows (they say it, or it is clear from how they write), give "
+    "mood_score and mood_word, with kind mood or with the event that shows it (a visit that made them happy: kind social "
+    "plus the mood); once per conversation, and again when it changes.",
     {
         "kind": {"type": "string", "enum": ["meal", "water", "mood", "symptom", "routine", "home", "sleep", "social", "other"]},
         "summary": {"type": "string"},
         "severity": {"type": "string", "enum": ["info", "watch", "concern"]},
+        "mood_score": {"type": "integer", "minimum": 1, "maximum": 5, "description": "How they feel: 1 very low, 2 low, 3 okay, 4 good, 5 very good"},
+        "mood_word": {"type": "string", "description": "How they feel in one English word for the dashboard, e.g. cheerful, calm, tired, "
+                                                       "worried, sad, irritated, lonely, unwell"},
         "about": ABOUT,
     },
     ["kind", "summary"],
 )
 async def log_event(ctx: TurnCtx, a: dict) -> dict:
     subject = ctx.subject(a.get("about"))
+    from app.care import mood
+
+    score = mood.score_of(a.get("mood_score"))
+    if a["kind"] == "mood" or score:
+        new = await mood.record(ctx.session, family_id=ctx.family_id, subject_id=subject, score=score, word=str(a.get("mood_word") or ""),
+                                summary=a["summary"], severity=a.get("severity") if a["kind"] == "mood" else None, actor_id=ctx.speaker.get("id"))
+        if a["kind"] == "mood":
+            return {"logged": a["summary"]} if new else {"logged": False, "why": "the same mood was noted a little while ago"}
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind=a["kind"], summary=a["summary"],
         payload={"severity": a.get("severity", "info")}, actor_id=ctx.speaker.get("id"),

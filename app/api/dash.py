@@ -513,6 +513,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
     ]
     from app.care import features
 
+    from app.care import mood as care_mood
     from app.care import work as care_work
 
     for r in await care_work.items(session, family_id):
@@ -547,6 +548,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
         "timeline": timeline,
         "lastHeardAt": last_turn.at.isoformat() if last_turn else None,
         "nextAppointment": next_appt,
+        "mood": await care_mood.now_for(session, family_id, elder_id),  # the latest in 24 h, not the nightly snapshot's
     }
 
 

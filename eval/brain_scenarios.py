@@ -359,6 +359,36 @@ async def s_no_crisis_for_an_idiom(run: Run) -> None:
     run.check(not [a for a in run.host.world.alerts if a.get("kind") == "crisis"], "no crisis alert to the family")
 
 
+async def _moods(run: Run, subject: str) -> list:
+    async with SessionLocal() as session:
+        ev = await store.events(session, run.family_id, subject, limit=200)
+    return [e for e in ev if e.kind == "mood"]
+
+
+async def s_mood_good_day(run: Run) -> None:
+    await setup(run)
+    await say(run, ELDER, "Aaj bahut accha laga, beti aur naati milne aaye the. Saath mein khana khaya", "2026-10-02 19:00")
+    moods = await _moods(run, ELDER["id"])
+    run.check(any((m.payload or {}).get("score", 0) >= 4 for m in moods), f"a good mood noted with a score ({[(m.summary, m.payload) for m in moods]})")
+
+
+async def s_mood_self_care_tired(run: Run) -> None:
+    await say_alone(run, "Aaj office mein bahut kaam tha, ekdum thak gaya hoon aur mood bhi off hai", "2026-10-13 21:00")
+    moods = await _moods(run, ARJUN["id"])
+    run.check(any(1 <= (m.payload or {}).get("score", 9) <= 3 for m in moods), f"a low or tired mood noted ({[(m.summary, m.payload) for m in moods]})")
+    run.check(not run.host.world.team_alerts, "being tired is not a crisis")
+
+
+async def s_setup_none_answers(run: Run) -> None:
+    await say_alone(run, "I don't take any regular medicines and I have no allergies", "2026-10-13 01:14")
+    async with SessionLocal() as session:
+        fs = await store.facts(session, run.family_id, ARJUN["id"])
+    keys = {f.key for f in fs}
+    run.check(not [k for k in keys if k.startswith("no_order:")], f"nothing in the never-order list ({keys})")
+    run.check("medicine:none" in keys, f"no medicines saved as an answer ({keys})")
+    run.check(not run.host.world.schedules, "no reminder made for 'none'")
+
+
 async def s_no_false_promise(run: Run) -> None:
     reply = await say(run, ELDER, "Beta aaj thoda sir dard hai, aur meri dawai kab leni hai?", "2026-10-02 10:00")
     run.check(not re.search(r"(laa(ne|ti|ungi|oongi)|le aa|bhej(ti|ungi) (kisi|koi)|paani la)", reply.lower()), "no physical promise")
@@ -387,6 +417,9 @@ SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "crisis_elder": s_crisis_elder,
     "crisis_harm_others": s_crisis_harm_others,
     "no_crisis_for_an_idiom": s_no_crisis_for_an_idiom,
+    "mood_good_day": s_mood_good_day,
+    "mood_self_care_tired": s_mood_self_care_tired,
+    "setup_none_answers": s_setup_none_answers,
 }
 
 
