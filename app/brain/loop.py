@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
 from sqlalchemy import func, select, text
@@ -55,6 +55,9 @@ class TurnRequest:
     # a WhatsApp location pin in this message {"lat", "lng", "name", "address"} (founder 2026-10-12: a ride's pickup)
     location: dict | None = None
     onboarding: bool = False  # the speaker has not finished setting up: Saheli runs the setup chat
+    # messages that could not reach the speaker while their WhatsApp chat was closed (they got a template notice):
+    # [{"purpose", "text", "at"}] from the backend, given in this turn
+    waiting: list[dict] = field(default_factory=list)
 
     @property
     def voice(self) -> bool:
@@ -196,6 +199,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         if tasks else "ACTIVE TASKS: none.",
         reminders_block(req),
         onboarding_block(req),
+        waiting_block(req),
     ]
     if req.speaker.get("role") != "system":
         from app.care import brief as care_brief
@@ -302,6 +306,25 @@ def onboarding_block(req: TurnRequest) -> str:
         "for something already saved, never invent details.")
 
 
+def waiting_block(req: TurnRequest) -> str:
+    """Messages that waited while the speaker's WhatsApp chat was closed (founder 2026-10-12: WhatsApp's 24-hour window).
+    They got a short notice (a template) instead; this is their first message since, so Saheli gives them now."""
+    rows = [w for w in (req.waiting or []) if isinstance(w, dict) and str(w.get("text") or "").strip()]
+    if not rows or req.speaker.get("role") == "system":
+        return ""
+    lines = []
+    for w in rows[:8]:
+        try:
+            at = clock.ist(datetime.fromisoformat(str(w.get("at")).replace("Z", "+00:00"))).strftime("%d %b %H:%M")
+        except ValueError:
+            at = "earlier"
+        lines.append(f"  - {at} ({w.get('purpose') or 'message'}): {str(w.get('text'))[:1500]}")
+    return ("WAITING FOR THE SPEAKER (their WhatsApp chat was closed, so these could not reach them; they got a short notice "
+            "and have now written): give these in this reply, first, in their language, as they stand now (check the care "
+            "record, tasks and events: say what changed since, and leave out what no longer applies), then answer what "
+            "they wrote.\n" + "\n".join(lines))
+
+
 def reminders_block(req: TurnRequest) -> str:
     """Reminders due in the next hours, so one the person says is already done is skipped instead of going out anyway
     (live 2026-10-12: "i had the medicine" at 00:12, and the reminder for it still came at 00:15)."""
@@ -366,6 +389,8 @@ async def history(session: AsyncSession, req: TurnRequest, data: TurnData | None
     for t in turns:
         if t.message_ref and t.message_ref == req.message_ref:
             continue
+        if t.role != "user" and (t.meta or {}).get("waiting"):
+            continue  # it waited while their chat was closed: the WAITING block gives it now, as it stands
         stamp = clock.ist(t.at).strftime("%d %b %H:%M")
         if t.role == "user":
             msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {t.text}"}]})

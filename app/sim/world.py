@@ -21,6 +21,8 @@ class World:
     reminders: list[dict] = field(default_factory=list)
     alerts: list[dict] = field(default_factory=list)
     sent: list[dict] = field(default_factory=list)  # proactive WhatsApp messages Saheli started
+    templates: list[dict] = field(default_factory=list)  # template notices sent to people whose chat was closed
+    closed: set[str] = field(default_factory=set)  # people whose WhatsApp chat is closed (no message from them in 24 h)
     emergencies: list[dict] = field(default_factory=list)
     orders: list[dict] = field(default_factory=list)
     rides: list[dict] = field(default_factory=list)
@@ -134,8 +136,21 @@ class SimHost:
         if tool == "export_care_record":
             return dict(w.backend_record)
         if tool == "send_whatsapp":
+            if args.get("to") in w.closed:
+                # the backend: a closed chat gets the template (the message waits for their next one), or nothing
+                if not args.get("template"):
+                    return {"delivered": False, "reason": "outside_window"}
+                w.templates.append({"to": args.get("to"), **args["template"], "waiting": args.get("text"), "at": clock.now().isoformat()})
+                return {"delivered": True, "via": "template", "waiting": True}
             w.sent.append({**args, "at": clock.now().isoformat()})
             return {"delivered": True}
+        if tool == "whatsapp_window":
+            return {"open": args.get("to") not in w.closed}
+        if tool == "send_template":
+            if args.get("to") not in w.closed:
+                return {"sent": False, "reason": "chat open"}
+            w.templates.append({"to": args.get("to"), **(args.get("template") or {}), "at": clock.now().isoformat()})
+            return {"sent": True}
         if tool == "send_song":
             w.sent.append({**args, "song": True, "at": clock.now().isoformat()})
             return {"delivered": True}

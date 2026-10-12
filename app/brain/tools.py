@@ -873,6 +873,51 @@ async def _approval_just_asked(ctx: TurnCtx, person: str) -> bool:
     return False
 
 
+def first_line(text: str, limit: int = 90) -> str:
+    """The first sentence of Saheli's message: the short line of an alert or update template."""
+    import re
+
+    one = " ".join(re.sub(r"[*_~`]", "", text or "").split())
+    first = (re.split(r"(?<=[.!?।॥])\s", one, maxsplit=1)[0] or one).rstrip(".।")
+    return first if len(first) <= limit else first[: limit - 1].rsplit(" ", 1)[0] + "…"
+
+
+async def _order_label(ctx: TurnCtx, person: str) -> str:
+    from sqlalchemy import or_, select
+
+    from app.tasks.models import Task
+
+    t = (await ctx.session.execute(
+        select(Task).where(Task.family_id == ctx.family_id, or_(Task.requested_by == person, Task.subject_id == person))
+        .order_by(Task.updated_at.desc()).limit(1)
+    )).scalar_one_or_none()
+    if t is None:
+        return "order"
+    return f"{str(t.service or '').replace('_', ' ').title()} {'ride' if t.kind == 'ride' else 'order'}".strip()
+
+
+async def template_hint(ctx: TurnCtx, to: str, text: str) -> dict | None:
+    """What reaches someone whose WhatsApp chat is closed (no message from them in 24 hours; founder 2026-10-12): the
+    backend sends this Utility template, and the message itself waits for their next message. The nightly brief, an
+    order's update, and news for a caregiver have one; a check-in, a question to the person cared for, and a message
+    someone asked Saheli to pass on do not (they are not sent while the chat is closed)."""
+    if not ctx.is_system:
+        return None
+    ref = ctx.message_ref or ""
+    if ref.startswith("checkin:"):
+        return None
+    saved = ((ctx.profiles.get(to) or {}).get("saved") or {}).get("language")
+    lang = {"lang": saved} if saved else {}
+    who = (str(ctx.elder.get("name") or "").split() or ["-"])[0]
+    if ref.startswith("brief:"):
+        return {"purpose": "summary", "params": [who], **lang}
+    if ref.startswith("task:"):
+        return {"purpose": "order", "params": [await _order_label(ctx, to), first_line(text)], **lang}
+    if to != ctx.elder_id:
+        return {"purpose": "alert", "params": [who, first_line(text)], **lang}
+    return None
+
+
 @tool(
     "send_message",
     "Send a WhatsApp message to someone in the family other than the person you are replying to: pass a message "
@@ -925,15 +970,27 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         from app.care import outcomes
 
         payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]), a["text"])
+    template = await template_hint(ctx, a["to"], a["text"])
+    if template:
+        payload["template"] = template
     res = await ctx.host.call(
         "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
+    if res.get("reason") == "outside_window":
+        # nothing reached them: not part of their chat, and it does not count as said (a check-in is tried again later)
+        return {**res, "note": "Not sent: their WhatsApp chat is closed (no message from them in 24 hours), and nothing can "
+                               "reach them until they write."}
     ctx.messaged.add(a["to"])
+    waiting = res.get("via") == "template"
     turn_id = await store.add_turn(
         ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
-        meta={"proactive": True, "delivered": res.get("delivered"), **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {})},
+        meta={"proactive": True, "delivered": res.get("delivered"), **({"via": "template", "waiting": True} if waiting else {}),
+              **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {})},
     )
+    if waiting:
+        res = {**res, "note": "Their WhatsApp chat was closed (no message from them in 24 hours): they got a short notice, "
+                              "and this message reaches them when they write or tap it."}
     try:
         from app.learn import scoring, situations
 

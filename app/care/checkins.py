@@ -384,6 +384,17 @@ STYLE = (" Do not start with the same greeting as your last message to them; var
          "unwell or upset, follow up on that instead.")
 
 
+async def chat_open(host, family_id: str, person: str) -> bool:
+    """WhatsApp lets Saheli start a chat only within 24 hours of the person's last message, and a check-in has no
+    template: while their chat is closed none is planned (no brain call for a message that cannot go; their reminders
+    still reach them as templates). Unknown (backend unreachable): try, the send gate decides."""
+    try:
+        res = await host.call("whatsapp_window", {"to": person}, family_id=family_id.removeprefix("shadow:"), subject_id=person, actor_id=person)
+    except Exception:  # noqa: BLE001
+        return True
+    return bool((res or {}).get("open", True))
+
+
 async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = None) -> dict:
     """Every few minutes: for each person cared for (elders and people caring for themselves), send the check-in that is due."""
     from app.brain.wake import system_turn
@@ -406,7 +417,7 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                     live = await runtime.live_tasks(session, r.family_id)
                     got = await plan(session, host_for(r.family_id), r.family_id, subject, now=now, busy=moving_for(live, subject, now),
                                      cared=cared, name=names.get(subject, ""))
-                    if not got:
+                    if not got or not await chat_open(host_for(r.family_id), r.family_id, subject):
                         continue
                     topic, prompt = got
                     # counted before the brain runs, so a crash cannot make it repeat; marked "not sent" below if nothing went

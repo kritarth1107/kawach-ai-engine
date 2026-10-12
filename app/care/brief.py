@@ -94,6 +94,25 @@ async def in_window(session: AsyncSession, family_id: str, person: str, now: dat
     return bool(last and now - last < WINDOW)
 
 
+async def chat_open(host, session: AsyncSession, family_id: str, person: str, now: datetime) -> bool:
+    """Is their WhatsApp chat open? The backend keeps every inbound message's time (also a button tap that never reached
+    Saheli); without it, whether they wrote to Saheli in the last 24 hours."""
+    try:
+        res = await host.call("whatsapp_window", {"to": person}, family_id=family_id.removeprefix("shadow:"), subject_id=person, actor_id=person)
+        if isinstance(res, dict) and isinstance(res.get("open"), bool):
+            return res["open"]
+    except Exception:  # noqa: BLE001
+        pass
+    return await in_window(session, family_id, person, now)
+
+
+async def language_setting(session: AsyncSession, family_id: str, person: str) -> dict | None:
+    from app.care import language
+
+    row = next((f for f in await store.facts(session, family_id, person, domains=["language"]) if f.status == "active"), None)
+    return language.normalise(row.value) if row and isinstance(row.value, dict) else None
+
+
 async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: str, *, now: datetime | None = None) -> str:
     """The day as data, for Saheli to write the brief from (and the fallback if she sends nothing)."""
     from app.tasks.models import Task
@@ -188,7 +207,7 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
     fid, cg = roster.family_id, caregiver["id"]
     async with sessions() as session:
         text = await digest(session, host, fid, roster.elder, day, now=now)
-        open_now = on_request or await in_window(session, fid, cg, now)
+        open_now = on_request or await chat_open(host, session, fid, cg, now)
         if not open_now:
             name = roster.elder.get("name") or "them"
             await store.open_loop(session, family_id=fid, subject_id=cg, kind="brief", owner_id=cg,
@@ -198,6 +217,14 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
             await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
                                      summary=f"Daily brief for {day} waiting for {caregiver.get('name') or cg}", payload={"to": cg, "day": day, "waiting": True})
             await session.commit()
+            # the approved "daily summary is ready" template tells them now; their tap opens the chat and the brief goes
+            saved = (await language_setting(session, fid, cg)) or {}
+            try:
+                await host.call("send_template", {"to": cg, "template": {
+                    "purpose": "summary", "params": [(str(name).split() or ["-"])[0]], **({"lang": saved["language"]} if saved.get("language") else {})}},
+                    family_id=fid.removeprefix("shadow:"), subject_id=roster.elder["id"], actor_id=roster.elder["id"])
+            except Exception:  # noqa: BLE001 — the brief still waits for their next message
+                logger.warning("brief template failed family=%s", fid)
             return "waiting"
         await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
                                  summary=f"Daily brief for {day} to {caregiver.get('name') or cg}", payload={"to": cg, "day": day})

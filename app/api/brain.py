@@ -52,6 +52,12 @@ class Location(BaseModel):
     address: str = Field(default="", max_length=400)
 
 
+class Waiting(BaseModel):
+    purpose: str = Field(default="message", max_length=24)
+    text: str = Field(max_length=4000)
+    at: str = Field(default="", max_length=40)
+
+
 class TurnIn(BaseModel):
     family_id: str
     elder: Person
@@ -68,6 +74,8 @@ class TurnIn(BaseModel):
     reminders_soon: list[ReminderSoon] = Field(default_factory=list, max_length=24)  # due in the next hours (backend)
     onboarding: bool = False  # the speaker has not finished setting up (a new WhatsApp sign-up, or never finished)
     location: Location | None = None  # a WhatsApp location pin in this message
+    # messages that waited while the speaker's WhatsApp chat was closed (backend; they got a template notice)
+    waiting: list[Waiting] = Field(default_factory=list, max_length=8)
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
 
@@ -92,6 +100,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         reminders_soon=[r.model_dump() for r in body.reminders_soon],
         location=body.location.model_dump() if body.location else None,
         onboarding=body.onboarding,
+        waiting=[w.model_dump() for w in body.waiting],
     )
     try:
         result = await run_turn(session, host, req)
