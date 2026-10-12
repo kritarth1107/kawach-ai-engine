@@ -232,3 +232,32 @@ async def test_quiet_hours_follow_their_own_night_when_they_told_saheli(db, at):
     at("2026-10-14 05:00")
     quiet, morning = await wake.quiet_for(db, FAM, ME["id"])
     assert quiet and clock.ist(morning).strftime("%d %H:%M") == "14 14:00", "his morning: wake-up plus 30 min"
+
+
+async def test_adopting_again_never_duplicates_one_already_saved_under_another_name(db, at, monkeypatch):
+    """Live 2026-10-13: a second run named Rahul's wake-up "wakes_up" next to the saved "wake_up"."""
+    from app.llm import router
+    from app.llm.router import LLMReply
+
+    class Reader:
+        async def complete(self, route, **kw):
+            return LLMReply(text=json.dumps({"activities": [{"type": "wakes_up", "label": "Wakes up", "kind": "routine", "days": [], "start": "08:30"}]}),
+                            tool_calls=[], model="fake")
+
+    router.register_provider("fake", Reader())
+    monkeypatch.setenv("MODEL_ROUTES", '{"extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        at("2026-10-13 07:00")
+        await store.save_roster(db, FAM, ME, [ME])
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="routine", key="routine:wake", value={"time": "08:30"},
+                               text="Wakes up at 8:30", source_kind="elder_said")
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:wake_up", source_kind="inferred",
+                               value=activities.normalise({"type": "wake_up", "label": "Wake up", "kind": "routine", "start": "08:30"}), text="Wake up")
+        # the duplicate an earlier run left behind
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:wakes_up", source_kind="inferred",
+                               value=activities.normalise({"type": "custom", "label": "Wakes up", "kind": "routine", "start": "08:30"}), text="Wakes up")
+        assert await activities.adopt(db, SimHost(), FAM, ME["id"]) == []
+        assert {f.key for f in await activities.active(db, FAM, ME["id"])} == {"activity:wake_up"}
+    finally:
+        router._providers.pop("fake", None)

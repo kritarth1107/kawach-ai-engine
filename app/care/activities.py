@@ -374,6 +374,16 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
     times = await reminder_times(host, family_id, subject_id)
     made = []
     existing = {f.key: f for f in await active(session, family_id, subject_id)}
+    # an adopted one under its own words ("activity:wakes_up") next to the catalogue one at the same time is a duplicate
+    for k, f in list(existing.items()):
+        v = normalise(f.value)
+        if f.source_kind == "inferred" and v["type"] == "custom" and any(
+                o.key != k and normalise(o.value)["type"] != "custom" and normalise(o.value)["kind"] == v["kind"]
+                and normalise(o.value)["start"] == v["start"] for o in existing.values()):
+            await store.stop_fact(session, family_id=family_id, subject_id=subject_id, key=k, reason="duplicate of a catalogue activity",
+                                  source_kind="inferred")
+            await drop_future_loops(session, family_id, k)
+            existing.pop(k)
     for it in items[:12]:
         if not isinstance(it, dict):
             continue
@@ -389,6 +399,9 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
             continue
         if own_reminder_before(value, times):
             value["nudge_before"] = 0  # their own reminder already nudges before it
+        if typ == "custom" and any(normalise(o.value)["kind"] == value["kind"] and normalise(o.value)["start"] == value["start"]
+                                   for k2, o in existing.items() if k2 != key):
+            continue  # the same thing at the same time is already saved under another name
         old = existing.get(key)
         if old is not None:
             # one saved from what they said is theirs; one adopted earlier is refreshed if it was read wrongly
