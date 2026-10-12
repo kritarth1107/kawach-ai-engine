@@ -139,11 +139,18 @@ def _v(f: CareFact, *names: str) -> str | None:
 
 
 async def emergency(session: AsyncSession, family_id: str, subject_id: str) -> dict:
+    from app.care.domains import is_none_key
+
     rows = await store.facts(session, family_id, subject_id, statuses=("active",))
     by: dict[str, list[CareFact]] = defaultdict(list)
+    none: dict[str, bool] = {}
     for f in rows:
+        if is_none_key(f.key):
+            none[f.domain] = True  # "has none" is an answer, never an allergen or a medicine on the card
+            continue
         by[f.domain].append(f)
-    profile = {f.key.split(":", 1)[1]: (_v(f, "value", "blood_group", "text") or f.text) for f in by["profile"]}
+    profile = {f.key.split(":", 1)[1]: (_v(f, "value", "age", "blood_group", "text") or f.text) for f in by["profile"]}
+    home = next((_v(f, "address") for f in by["home"] if _v(f, "address")), None)
     contacts = [
         {"name": _v(f, "name") or f.key.split(":", 1)[1].replace("_", " ").title(), "phone": _v(f, "phone", "number"),
          "relation": _v(f, "relation", "role"), "emergency": bool(f.value.get("emergency")), "text": f.text}
@@ -161,6 +168,8 @@ async def emergency(session: AsyncSession, family_id: str, subject_id: str) -> d
         "hospital": [{"name": _v(f, "name") or f.text, "phone": _v(f, "phone"), "address": _v(f, "address"), "text": f.text} for f in by["hospital"]],
         "contacts": contacts,
         "familyRules": [f.text for f in by["family"] if f.key.split(":", 1)[1] in ("call_first", "payer", "neighbour")],
+        "none": {d: none.get(d, False) for d in ("allergy", "condition", "medicine")},
+        "home": home,
     }
 
 

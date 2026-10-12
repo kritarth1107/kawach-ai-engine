@@ -555,6 +555,15 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
 # ── care views (the same data Saheli's tools read on WhatsApp) ─────────────────
 
 
+@router.get("/{family_id}/{elder_id}/portrait")
+async def portrait(family_id: str, elder_id: str, session: DB) -> dict:
+    """The person-centred pages (Care plan, Story, Emergency card): who they are, mood, learned with their words, people,
+    their day and a week of doses."""
+    from app.care import portrait as care_portrait
+
+    return await care_portrait.build(session, family_id, elder_id)
+
+
 @router.get("/{family_id}/{elder_id}/stock")
 async def stock_view(family_id: str, elder_id: str, session: DB) -> dict:
     from app.care import features
