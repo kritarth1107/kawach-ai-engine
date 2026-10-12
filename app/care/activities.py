@@ -345,7 +345,11 @@ Each line below is a routine fact (text and data). Return the activities it desc
 For each: type (custom with a label when none fits), label (their words), kind (habit for things to check in on like the gym
 or a walk; routine for wake-up, meals, sleep; quit for giving something up; task for a chore at a time), days (0=Mon..6=Sun,
 [] for every day), start and end as HH:MM (24h) when the record says them. Only what the record says; no guesses.
-Return only JSON: {{"activities": [{{"type": "...", "label": "...", "kind": "...", "days": [], "start": "HH:MM", "end": "HH:MM or null"}}]}}"""
+ALREADY SAVED lists the activities they have: return only ones not already there (the same thing under another name or a
+slightly different time is already there), and list in duplicates the keys of saved ones that repeat another saved one
+(keep the one with a type id from the list above).
+Return only JSON: {{"activities": [{{"type": "...", "label": "...", "kind": "...", "days": [], "start": "HH:MM", "end": "HH:MM or null"}}],
+"duplicates": ["activity:..."]}}"""
 
 
 async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) -> list[str]:
@@ -361,6 +365,8 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
     if not facts:
         return []
     lines = "\n".join(f"- {f.text} | {_json.dumps(f.value, ensure_ascii=False)}" for f in facts)
+    saved = await active(session, family_id, subject_id)
+    lines += "\n\nALREADY SAVED\n" + ("\n".join(f"- {f.key}: {describe(normalise(f.value))} [{normalise(f.value)['type']}]" for f in saved) or "- none")
     try:
         reply = await router.complete("extract", system_stable=ADOPT_PROMPT.format(catalog=catalog_line()),
                                       messages=[{"role": "user", "content": [{"type": "text", "text": lines}]}], max_tokens=3000, effort="low")
@@ -368,18 +374,23 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
         return []
     m = _re.search(r"\{.*\}", reply.text or "", _re.S)
     try:
-        items = (_json.loads(m.group(0)) if m else {}).get("activities") or []
+        parsed = _json.loads(m.group(0)) if m else {}
     except _json.JSONDecodeError:
         return []
+    items = parsed.get("activities") or []
+    dupes = {str(k) for k in (parsed.get("duplicates") or []) if isinstance(k, str)}
     times = await reminder_times(host, family_id, subject_id)
     made = []
     existing = {f.key: f for f in await active(session, family_id, subject_id)}
-    # an adopted one under its own words ("activity:wakes_up") next to the catalogue one at the same time is a duplicate
+    # an adopted one under its own words ("activity:wakes_up") next to the catalogue one is a duplicate: the same time, or
+    # one the reader named as repeating another (only ones Saheli adopted herself, never one the person told her)
     for k, f in list(existing.items()):
         v = normalise(f.value)
-        if f.source_kind == "inferred" and v["type"] == "custom" and any(
-                o.key != k and normalise(o.value)["type"] != "custom" and normalise(o.value)["kind"] == v["kind"]
-                and normalise(o.value)["start"] == v["start"] for o in existing.values()):
+        same_time = v["type"] == "custom" and any(
+            o.key != k and normalise(o.value)["type"] != "custom" and normalise(o.value)["kind"] == v["kind"]
+            and normalise(o.value)["start"] == v["start"] for o in existing.values())
+        named = k in dupes and len(existing) > 1
+        if f.source_kind == "inferred" and (same_time or named):
             await store.stop_fact(session, family_id=family_id, subject_id=subject_id, key=k, reason="duplicate of a catalogue activity",
                                   source_kind="inferred")
             await drop_future_loops(session, family_id, k)

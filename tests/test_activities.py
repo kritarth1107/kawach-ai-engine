@@ -261,3 +261,31 @@ async def test_adopting_again_never_duplicates_one_already_saved_under_another_n
         assert {f.key for f in await activities.active(db, FAM, ME["id"])} == {"activity:wake_up"}
     finally:
         router._providers.pop("fake", None)
+
+
+async def test_a_duplicate_the_reader_names_is_stopped_only_if_saheli_adopted_it(db, at, monkeypatch):
+    from app.llm import router
+    from app.llm.router import LLMReply
+
+    class Reader:
+        async def complete(self, route, **kw):
+            assert "ALREADY SAVED" in kw["messages"][0]["content"][0]["text"]
+            return LLMReply(text=json.dumps({"activities": [], "duplicates": ["activity:sleeps", "activity:night_walk"]}), tool_calls=[], model="fake")
+
+    router.register_provider("fake", Reader())
+    monkeypatch.setenv("MODEL_ROUTES", '{"extract": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        at("2026-10-13 07:00")
+        await store.save_roster(db, FAM, ME, [ME])
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="routine", key="routine:sleep", value={"time": "00:00"},
+                               text="Sleeps around midnight", source_kind="elder_said")
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:sleep", source_kind="inferred",
+                               value=activities.normalise({"type": "sleep", "label": "Sleep", "kind": "routine", "start": "00:00"}), text="Sleep")
+        await store.write_fact(db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:sleeps", source_kind="inferred",
+                               value=activities.normalise({"type": "custom", "label": "Sleeps", "kind": "routine", "start": "00:30"}), text="Sleeps")
+        await call(ctx(db), "activity", {"action": "add", "type": "custom", "label": "Night walk", "start": "22:00"})
+        await activities.adopt(db, SimHost(), FAM, ME["id"])
+        assert {f.key for f in await activities.active(db, FAM, ME["id"])} == {"activity:sleep", "activity:night_walk"}, "what they told stays"
+    finally:
+        router._providers.pop("fake", None)
