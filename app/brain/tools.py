@@ -9,7 +9,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -142,6 +142,12 @@ class ToolRefused(Exception):
 
 
 ABOUT = {"type": "string", "description": "Person id this is about. Leave out for the care recipient."}
+
+
+def acts_catalog_line() -> str:
+    from app.care.activities import catalog_line
+
+    return catalog_line()
 # Who an order or a ride is for (founder 2026-10-12: a caregiver's own biscuits, ordered to his own home, were recorded as his
 # mother's and she was asked whether they came). Always filled by the brain, never a default.
 FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this order or ride is for: who will receive and use it (whose "
@@ -521,14 +527,22 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     return out
 
 
+VITAL_KINDS = ["bp", "sugar", "weight", "height", "bmi", "body_fat", "muscle_mass", "waist", "temperature", "spo2", "pulse", "other"]
+
+
 @tool(
     "log_vital",
-    "Record a reading: bp ('140/90'), sugar (mg/dL, say fasting or after food in note), weight (kg), "
-    "temperature (°F or °C), spo2 (%), pulse. Returns red_flag when the reading needs a caregiver now.",
+    "Record a reading; every reading reaches their Health Records. bp ('140/90'), sugar (mg/dL, say fasting or after food "
+    "in note), weight (kg), height (cm), bmi, body_fat (%), muscle_mass (kg), waist (cm), temperature (°F or °C), spo2 "
+    "(%), pulse; anything else as other with its name. Typed, said, or seen in a photo (a scale, BP monitor, glucometer, "
+    "an InBody or body-composition scan): one call per value, each of them, with taken_on when it was measured on another "
+    "day. Returns red_flag when the reading needs a caregiver now.",
     {
-        "kind": {"type": "string", "enum": ["bp", "sugar", "weight", "temperature", "spo2", "pulse"]},
+        "kind": {"type": "string", "enum": VITAL_KINDS},
+        "name": {"type": "string", "description": "For other: what was measured (e.g. visceral fat, HbA1c)"},
         "value": {"type": "string"},
         "unit": {"type": "string"},
+        "taken_on": {"type": "string", "description": "YYYY-MM-DD when measured, if not today"},
         "note": {"type": "string"},
         "about": ABOUT,
     },
@@ -536,18 +550,32 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
 )
 async def log_vital(ctx: TurnCtx, a: dict) -> dict:
     subject = ctx.subject(a.get("about"))
-    a = {k: v for k, v in a.items() if k != "about"}
-    flag = policy.vital_red_flag(a["kind"], a["value"])
-    summary = f"{a['kind']} {a['value']}{(' ' + a['unit']) if a.get('unit') else ''}" + (f" ({a['note']})" if a.get("note") else "")
+    a = {k: v for k, v in a.items() if k != "about" and v not in (None, "")}
+    if a["kind"] == "other" and not str(a.get("name") or "").strip():
+        raise ToolRefused("Say what was measured in name (e.g. visceral fat).")
+    at = None
+    if a.get("taken_on"):
+        try:
+            day = datetime.strptime(str(a["taken_on"])[:10], "%Y-%m-%d").date()
+        except ValueError:
+            raise ToolRefused("taken_on must be YYYY-MM-DD.")
+        if day > clock.ist().date():
+            raise ToolRefused("taken_on is in the future.")
+        if day < clock.ist().date():
+            at = datetime.combine(day, time(12, 0), tzinfo=clock.IST)
+    flag = policy.vital_red_flag(a["kind"], a["value"]) if not at else None  # an old reading is history, not an emergency now
+    label = a["name"].strip() if a["kind"] == "other" else a["kind"]
+    summary = f"{label} {a['value']}{(' ' + a['unit']) if a.get('unit') else ''}" + (f" ({a['note']})" if a.get("note") else "")
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind="vital", summary=summary,
-        payload={**a, "red_flag": flag}, actor_id=ctx.speaker.get("id"),
+        payload={**a, "red_flag": flag}, actor_id=ctx.speaker.get("id"), at=at,
     )
     await ctx.host.call(
-        "log_vitals", {"kind": a["kind"], "value": a["value"], "unit": a.get("unit"), "note": a.get("note")},
+        "log_vitals", {"kind": a["kind"], "name": a.get("name"), "value": a["value"], "unit": a.get("unit"), "note": a.get("note"),
+                       "taken_on": at.date().isoformat() if at else None},
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
-    return {"logged": summary, "red_flag": flag}
+    return {"logged": summary, "red_flag": flag, "health_records": "saved"}
 
 
 @tool(
@@ -711,6 +739,141 @@ def _reminder_line(r: dict) -> dict:
     nxt = r.get("next") or {}
     return {"id": r.get("reminderId"), "text": r.get("text"), "schedule": r.get("schedule"), "status": r.get("status"),
             "next": f"{nxt.get('day')} {nxt.get('time')}" if nxt else None, "skipped": r.get("skips") or None}
+
+
+@tool(
+    "activity",
+    "Activities and habits, the person's daily life: gym, walks, yoga, pooja, classes, hobbies, things they are giving up "
+    "(smoking), and routine (meals, wake-up, sleep). Not reminders: around each habit you nudge lightly before (fitness) and "
+    "check in after (did it happen, what did they do, follow-ups), and log what they say. When someone tells you a routine "
+    "with a time ('gym 9:30 Mon-Sat', 'I walk at 6', 'pooja at 7', 'class till 4'), save it at once with action add and say "
+    "what you set; never ask whether to add a reminder. A one-off or plain chore (call someone, pay a bill) is set_reminder. "
+    "action: add | change | pause | resume | stop. type: one id from " + acts_catalog_line() + " (custom with a label when none "
+    "fits). kind decides what you do (habit, quit, task, routine); leave it out for the type's usual kind.",
+    {
+        "action": {"type": "string", "enum": ["add", "change", "pause", "resume", "stop"]},
+        "type": {"type": "string", "description": "Catalogue id, e.g. gym, morning_walk, pooja, no_smoking, lunch; custom when none fits"},
+        "label": {"type": "string", "description": "Their name for it when it differs ('Gym at Cult', 'Evening walk with Sunita')"},
+        "kind": {"type": "string", "enum": ["habit", "quit", "task", "routine"]},
+        "days": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6}, "description": "0=Mon … 6=Sun; leave out for every day"},
+        "start": {"type": "string", "description": "HH:MM IST"},
+        "end": {"type": "string", "description": "HH:MM IST, when it ends (e.g. back from the gym)"},
+        "minutes": {"type": "integer", "description": "How long, when they said that instead of an end"},
+        "nudge_before": {"type": "integer", "description": "Minutes before to nudge (0 for none). Leave out for the usual"},
+        "check_at": {"type": "string", "description": "quit only: HH:MM for the daily check, default 20:00"},
+        "goal": {"type": "string", "description": "What they are working towards, if they said ('lose 5 kg', '10k steps')"},
+        "place": {"type": "string"},
+        "key": {"type": "string", "description": "change/pause/resume/stop: the activity's key from ACTIVITIES"},
+        "about": ABOUT,
+    },
+    ["action"],
+)
+async def activity(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import activities as acts
+
+    subject = ctx.subject(a.get("about"))
+    action = a["action"]
+    if action == "add":
+        typ = a.get("type") if a.get("type") in acts.CATALOG else "custom"
+        if typ == "custom" and not a.get("label"):
+            raise ToolRefused("Give a label for a custom activity (what they call it).")
+        label = a.get("label") or acts.CATALOG[typ]["label"]
+        value = acts.normalise({k: a.get(k) for k in ("kind", "days", "start", "end", "minutes", "nudge_before", "check_at", "goal", "place")
+                                if a.get(k) is not None} | {"type": typ, "label": label})
+        if value["kind"] in ("habit", "task") and not value["start"]:
+            raise ToolRefused("Ask what time it is (and which days) before saving it.")
+        key = a.get("key") or acts.key_for(label if typ == "custom" or a.get("label") else typ)
+        w = await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=subject, domain="activity", key=key, value=value,
+                                   text=acts.describe(value), source_kind=ctx.source_kind, source_ref=ctx.message_ref,
+                                   stated_by=ctx.speaker.get("id"), replace=True)
+        await acts.drop_future_loops(ctx.session, ctx.family_id, w.fact.key)
+        await acts.plan_for(ctx.session, ctx.family_id, subject, w.fact)
+        what = {"habit": "I'll check in after each one and keep a log" + (f", with a nudge {value['nudge_before']} min before" if value["nudge_before"] else ""),
+                "quit": f"I'll check in every evening at {value.get('check_at') or '20:00'} on how the day went",
+                "task": "I'll remind them at the time", "routine": "noted, so I time my messages around it"}[value["kind"]]
+        return {"saved": acts.describe(value), "key": w.fact.key, "what_happens": what}
+    key = a.get("key")
+    current = await store.active_fact(ctx.session, ctx.family_id, subject, key) if key else None
+    if not current or current.domain != "activity":
+        rows = await acts.status(ctx.session, ctx.family_id, subject)
+        raise ToolRefused("Which activity? Use its key from ACTIVITIES: " + "; ".join(f"{r['key']} = {r['text']}" for r in rows))
+    if action == "stop":
+        await store.stop_fact(ctx.session, family_id=ctx.family_id, subject_id=subject, key=current.key, reason="they asked to stop it",
+                              source_kind=ctx.source_kind, stated_by=ctx.speaker.get("id"))
+        await acts.drop_future_loops(ctx.session, ctx.family_id, current.key)
+        return {"stopped": acts.describe(current.value)}
+    value = acts.normalise(current.value)
+    if action in ("pause", "resume"):
+        value["paused"] = action == "pause"
+    else:
+        for k in ("kind", "days", "start", "end", "minutes", "nudge_before", "check_at", "goal", "place", "label"):
+            if a.get(k) is not None:
+                value[k] = a[k]
+        if a.get("start") and a.get("end") is None and a.get("minutes") is None:
+            value["end"] = None  # recomputed from the usual length
+        value = acts.normalise(value)
+    w = await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=subject, domain="activity", key=current.key, value=value,
+                               text=acts.describe(value), source_kind=ctx.source_kind, source_ref=ctx.message_ref,
+                               stated_by=ctx.speaker.get("id"), replace=True)
+    await acts.drop_future_loops(ctx.session, ctx.family_id, current.key)
+    await acts.plan_for(ctx.session, ctx.family_id, subject, w.fact)
+    return {"saved": acts.describe(value), "key": current.key}
+
+
+@tool(
+    "log_activity",
+    "Log what they told you about an activity: done (with what they did, how long, details) or skipped (and why, kindly). "
+    "Readings they mention (weight, steps, BP) go in readings and reach their health records. Then ask at most one natural "
+    "follow-up about what they said; keep the chat warm, never a quiz.",
+    {
+        "key": {"type": "string", "description": "The activity's key from ACTIVITIES (or a catalogue type for one not saved)"},
+        "done": {"type": "boolean"},
+        "summary": {"type": "string", "description": "One line: what they did / why skipped, in plain English"},
+        "duration_min": {"type": "integer"},
+        "details": {"type": "object", "description": "What they said worth keeping: exercises, distance_km, intensity, pain, with_whom, food, mood, cravings…"},
+        "readings": {"type": "array", "items": {"type": "object", "properties": {
+            "kind": {"type": "string", "enum": [*VITAL_KINDS[:-1], "steps"]},
+            "value": {"type": "string"}, "unit": {"type": "string"}}, "required": ["kind", "value"]}},
+        "day": {"type": "string", "description": "YYYY-MM-DD when it was not today"},
+        "about": ABOUT,
+    },
+    ["key", "done", "summary"],
+)
+async def log_activity(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import activities as acts
+
+    subject = ctx.subject(a.get("about"))
+    key = a["key"] if str(a["key"]).startswith("activity:") else acts.key_for(a["key"])
+    fact = await store.active_fact(ctx.session, ctx.family_id, subject, key)
+    label = acts.normalise(fact.value)["label"] if fact else (acts.CATALOG.get(str(a["key"])) or {}).get("label") or str(a["key"])
+    when = clock.now()
+    if a.get("day"):
+        try:
+            when = datetime.fromisoformat(f"{a['day']}T12:00:00+05:30")
+        except ValueError:
+            raise ToolRefused("day must be YYYY-MM-DD") from None
+    details = dict(a.get("details") or {})
+    if a.get("duration_min"):
+        details["duration_min"] = int(a["duration_min"])
+    await store.record_event(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, kind="activity_done" if a["done"] else "activity_skipped",
+        summary=f"{label}: {a['summary']}"[:500], payload={"key": key, "label": label, "details": details}, actor_id=ctx.speaker.get("id"), at=when,
+    )
+    saved = []
+    for r in (a.get("readings") or [])[:6]:
+        if r.get("kind") == "steps":
+            continue  # steps stay in the activity's details
+        res = await log_vital(ctx, {"kind": r["kind"], "value": str(r["value"]), "unit": r.get("unit"), "note": f"said after {label}", "about": a.get("about")})
+        saved.append({**r, "flag": (res or {}).get("red_flag")})
+    # this occurrence's check-in is answered
+    day = clock.ist(when).strftime("%Y-%m-%d")
+    for lp in await store.live_loops(ctx.session, ctx.family_id, [subject]):
+        d = lp.detail or {}
+        if lp.kind == "activity" and d.get("activity_key") == key and d.get("date") == day:
+            await store.close_loop(ctx.session, lp.id, note="they told me")
+    st = next((r for r in await acts.status(ctx.session, ctx.family_id, subject) if r["key"] == key), None)
+    return {"logged": f"{label}: {a['summary']}", "readings": saved, "streak": (st or {}).get("streak", 0),
+            "week_done": (st or {}).get("week_done", 0)}
 
 
 @tool(
@@ -1687,7 +1850,26 @@ async def maps_link_pin(link: str) -> dict | None:
         final, page = await _follow(link)
     except Exception:  # noqa: BLE001 — unreadable: they are asked for the location instead
         return None
-    return _maps_point(final) or _maps_point(page)
+    pin = _maps_point(final) or _maps_point(page)
+    if pin and page:
+        pin = {**pin, **_maps_meta(page, pin.get("name") or "")}
+    return pin
+
+
+def _maps_meta(page: str, name: str) -> dict:
+    """The place's name and address from a Maps page's share card ("Name · Address"), when it has one."""
+    import html
+    import re
+
+    m = re.search(r'<meta[^>]+(?:property|itemprop)="og:title"[^>]+content="([^"]+)"', page) or \
+        re.search(r'<meta[^>]+content="([^"]+)"[^>]+(?:property|itemprop)="og:title"', page)
+    if not m:
+        return {}
+    title = html.unescape(m.group(1)).strip()
+    if "·" in title:
+        head, tail = (x.strip() for x in title.split("·", 1))
+        return {"name": name or head, "address": tail}
+    return {"name": name or title} if title and "Google Maps" not in title else {}
 
 
 def _pin_place(pin: dict) -> dict:
@@ -1843,6 +2025,8 @@ async def places(ctx: TurnCtx, a: dict) -> dict:
         "receiver_phone": {"type": "string"},
         "make_default": {"type": "boolean"},
         "use_shared_location": {"type": "boolean", "description": "The place's exact point is the WhatsApp location they shared (for rides and deliveries)"},
+        "maps_link": {"type": "string", "description": "A Google Maps link they sent for this place: its exact point (and name/address when the "
+                                                       "link has them) is read and saved"},
     },
     [],
 )
@@ -1857,7 +2041,34 @@ async def save_place(ctx: TurnCtx, a: dict) -> dict:
         if pin is None:
             raise ToolRefused("No location was shared yet: ask for it with ask_location.")
         args = {**args, "lat": float(pin["lat"]), "lng": float(pin["lng"])}
+    if a.get("maps_link"):
+        # founder 2026-10-13: a Google Maps link anywhere is read for its point and place details
+        pin = await maps_link_pin(str(a["maps_link"]))
+        if pin is None:
+            raise ToolRefused("That link could not be read as a Google Maps place. Ask them to share the location in WhatsApp instead (ask_location).")
+        args = {**args, "lat": float(pin["lat"]), "lng": float(pin["lng"])}
+        if not args.get("address") and not args.get("place"):
+            label = ", ".join(x for x in (str(pin.get("name") or "").strip(), str(pin.get("address") or "").strip()) if x)
+            if label:
+                args["address"] = label
+            if not args.get("name") and pin.get("name"):
+                args["name"] = str(pin["name"])[:40]
     return await ctx.host.call("save_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+
+
+@tool(
+    "map_link",
+    "Read a Google Maps link someone sent (maps.app.goo.gl, goo.gl/maps, google.com/maps): its place name, address and exact "
+    "coordinates. Use it whenever a maps link comes in and you need to know where it points (to save it as a place with "
+    "save_place maps_link, to tell them what it is, or for a ride: start_task takes the link itself).",
+    {"link": {"type": "string"}},
+    ["link"],
+)
+async def map_link(ctx: TurnCtx, a: dict) -> dict:
+    pin = await maps_link_pin(str(a["link"]))
+    if pin is None:
+        return {"read": False, "next": "Not a readable Google Maps link: ask them to share the location in WhatsApp (ask_location)."}
+    return {"read": True, "name": pin.get("name"), "address": pin.get("address"), "lat": float(pin["lat"]), "lng": float(pin["lng"])}
 
 
 @tool(

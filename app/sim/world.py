@@ -96,6 +96,9 @@ class SimHost:
         if tool == "create_reminder":
             w.reminders.append(args)
             return {"ok": True, "reminderId": f"rem-{len(w.reminders)}"}
+        if tool == "list_reminders":
+            return {"reminders": [{"reminderId": f"rem-{i + 1}", "text": r.get("text"), "schedule": r.get("schedule") or {}, "status": "active"}
+                                  for i, r in enumerate(w.reminders)]}
         if tool == "notify_caregivers":
             # the backend never alerts the person the alert is about: a self-care family has no one else (others 0)
             w.alerts.append({**args, "at": clock.now().isoformat()})

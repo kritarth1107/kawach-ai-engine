@@ -42,6 +42,12 @@ def next_morning(at=None):
 
 
 KIND_PROMPTS = {
+    "plan": (
+        "[Follow-up on something they said] Person {owner} said: \"{title}\". It should have happened by now. Ask them warmly "
+        "with send_message how it went, one short question in their language, building on what you know. When they answer, "
+        "remember what matters (remember, log_event, log_activity) and reply like a friend. If the chat already shows how it "
+        "went, do not ask. Then close_loop {id} and reply none."
+    ),
     "family_task": (
         "[Scheduled wake-up] Family task {id} is due: \"{title}\". It is assigned to person {owner}. Send {owner} one short "
         "reminder with send_message (who it is for and what to do). Do not message anyone else. If the conversation shows it "
@@ -83,8 +89,45 @@ KIND_PROMPTS = {
 }
 
 
+async def activity_prompt(session: AsyncSession, loop: OpenLoop) -> str | None:
+    """Around one occurrence of a habit (founder 2026-10-13): a light nudge before, a check-in after with follow-ups, an
+    evening check for something they are giving up. The words are written now, fresh; the facts come from the record."""
+    from app.care import activities as acts
+
+    d = loop.detail or {}
+    fact = await store.active_fact(session, loop.family_id, loop.subject_id, d.get("activity_key") or "")
+    if not fact or acts.normalise(fact.value).get("paused"):
+        return None
+    v = acts.normalise(fact.value)
+    rows = {r["key"]: r for r in await acts.status(session, loop.family_id, loop.subject_id)}
+    st = rows.get(fact.key) or {}
+    evs = await acts.logs(session, loop.family_id, loop.subject_id, days=10, key=fact.key)
+    if any(e.day == d.get("date") for e in evs):
+        return None  # they already told Saheli about this day's
+    recent = [e.summary for e in evs[-3:]]
+    ctx = (f" Streak: {st.get('streak', 0)} in a row; {st.get('week_done', 0)} this week." + (f" Goal: {v['goal']}." if v.get("goal") else "")
+           + (" Last times: " + " | ".join(recent) if recent else ""))
+    who = loop.owner_id or loop.subject_id
+    if d.get("phase") == "before":
+        return (f"[Activity: before] {acts.describe(v)} for person {who} starts at {v['start']}.{ctx} Send them one short, light nudge "
+                f"with send_message, fresh words (a cheer, their goal or streak, what to carry), never the same as last time. If the "
+                f"conversation shows they are skipping today or already went, do not send. Then close_loop {loop.id} and reply none.")
+    asks = acts.CATEGORY.get(v["category"], ("how it went", []))[0]
+    if v["kind"] == "quit":
+        return (f"[Activity: evening check] Person {who} is working on: {v['label']}.{ctx} Ask them warmly with send_message how "
+                f"today went with it (one question). When they answer: log_activity (done = they kept to it), praise every win, "
+                f"no shame for a slip, ask what helped or one gentle follow-up. Then close_loop {loop.id} and reply none.")
+    return (f"[Activity: after] {acts.describe(v)} for person {who} should be over now.{ctx} With send_message ask them warmly "
+            f"whether they are back / it happened and how it went, one question. When they answer, log_activity what they say "
+            f"(done or skipped, details, any reading such as weight), then ask one natural follow-up from their answer ({asks}); "
+            f"at most two follow-ups in all, then wrap up warmly. If they skipped, be kind and ask if the time should change. "
+            f"If they do not answer, ask once more later; keep this loop open until it is logged. Reply none.")
+
+
 async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str | None:
     """The scheduled turn for a due loop; None when there is nothing left to do (the loop is closed)."""
+    if loop.kind == "activity":
+        return await activity_prompt(session, loop)
     if loop.kind == "delivery":
         from app.tasks import aftercare  # did the order come, and later how was it
 

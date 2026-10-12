@@ -396,6 +396,70 @@ async def s_no_false_promise(run: Run) -> None:
                                                 "सूची", "लिस्ट", "नहीं है", "बता", "पता नहीं")), "says the medicine list is missing")
 
 
+async def _acts(run: Run, subject: str) -> dict:
+    from app.care import activities
+
+    async with SessionLocal() as session:
+        return {f.key: activities.normalise(f.value) for f in await activities.active(session, run.family_id, subject)}
+
+
+async def s_gym_schedule_is_an_activity(run: Run) -> None:
+    """Live 2026-10-12: Rahul told his gym schedule and had to ask separately for reminders (founder: do it automatically)."""
+    reply = await say_alone(run, "I wake up at 8:30 and go to the gym at 9:30, Monday to Saturday. Sunday is off.", "2026-10-13 07:30")
+    acts = await _acts(run, ARJUN["id"])
+    gym = next((a for k, a in acts.items() if "gym" in k), None)
+    run.check(gym is not None, f"gym saved as an activity ({list(acts)})")
+    if gym:
+        run.check(gym.get("start") == "09:30" and sorted(gym.get("days") or []) == [0, 1, 2, 3, 4, 5], f"gym 09:30 Mon–Sat ({gym})")
+    run.check("remind" not in reply.lower() or "?" not in reply, "does not ask whether to add reminders")
+    run.check(not any("gym" in (r.get("title") or r.get("text") or "").lower() for r in run.host.world.schedules.values()),
+              "not a plain reminder")
+
+
+async def s_gym_check_in(run: Run) -> None:
+    """After the gym, Saheli asks how it went; his answer is logged with the weight going to health data."""
+    await say_alone(run, "I go to the gym at 9:30 every day except Sunday, for about an hour", "2026-10-13 07:30")
+    reply = await say_alone(run, "Back from the gym! Did legs today, squats and lunges, 55 minutes. Weight was 89.6 kg", "2026-10-13 10:50")
+    async with SessionLocal() as session:
+        ev = await store.events(session, run.family_id, ARJUN["id"], limit=50)
+    run.check(any(e.kind == "activity_done" for e in ev), f"the session is logged ({[e.kind for e in ev]})")
+    run.check(any(v.get("kind") == "weight" and "89.6" in str(v.get("value")) for v in run.host.world.vitals), f"weight reached health data ({run.host.world.vitals})")
+    run.check("?" in reply, "asks one natural follow-up")
+
+
+async def s_scan_readings(run: Run) -> None:
+    """Live 2026-10-11: an InBody scan's BMI and body fat were kept only as a note. Every value is a reading now."""
+    await say_alone(run, "My InBody scan from yesterday: weight 73.5 kg, BMI 25.4, body fat 23.2%, skeletal muscle 31.8 kg", "2026-10-12 19:00")
+    kinds = {v.get("kind") for v in run.host.world.vitals}
+    run.check({"weight", "bmi", "body_fat"} <= kinds, f"weight, BMI and body fat logged ({run.host.world.vitals})")
+    run.check(all(v.get("taken_on") == "2026-10-11" for v in run.host.world.vitals), "dated the day of the scan")
+
+
+async def s_maps_link(run: Run) -> None:
+    from app.brain import tools as brain_tools
+
+    async def follow(link):
+        return ("https://www.google.com/maps/place/Ambuja+Mall/@21.2380,81.6843,17z/data=!3d21.23801!4d81.68437",
+                '<meta content="Ambuja City Centre Mall · Vidhan Sabha Rd, Raipur, Chhattisgarh 492001" property="og:title">')
+
+    real = brain_tools._follow
+    brain_tools._follow = follow
+    try:
+        await say_alone(run, "Save this as my office: https://maps.app.goo.gl/AbCdEf123", "2026-10-13 12:00")
+    finally:
+        brain_tools._follow = real
+    saved = getattr(run.host.world, "places", None) or [c for c in getattr(run.host.world, "calls", []) if c.get("tool") == "save_place"]
+    run.check(bool(saved), f"the place is saved from the link ({saved})")
+
+
+async def s_plan_is_followed_up(run: Run) -> None:
+    await say_alone(run, "My trainer will send me a diet plan tonight, I'll start it tomorrow", "2026-10-13 18:00")
+    async with SessionLocal() as session:
+        loops = (await session.execute(text("SELECT kind, title FROM open_loops WHERE family_id = :f AND status = 'open'"), {"f": run.family_id})).all()
+        notes = (await session.execute(text("SELECT body_md FROM memory_notes WHERE family_id = :f"), {"f": run.family_id})).scalars().all()
+    run.check(bool(loops) or any("diet" in (n or "").lower() for n in notes), f"the plan is remembered or followed up ({loops}, {notes})")
+
+
 SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "setup": s_setup,
     "naming_correction": s_naming_correction,
@@ -420,6 +484,11 @@ SCENARIOS: dict[str, Callable[[Run], Awaitable[None]]] = {
     "mood_good_day": s_mood_good_day,
     "mood_self_care_tired": s_mood_self_care_tired,
     "setup_none_answers": s_setup_none_answers,
+    "gym_schedule_is_an_activity": s_gym_schedule_is_an_activity,
+    "gym_check_in": s_gym_check_in,
+    "scan_readings": s_scan_readings,
+    "maps_link": s_maps_link,
+    "plan_is_followed_up": s_plan_is_followed_up,
 }
 
 

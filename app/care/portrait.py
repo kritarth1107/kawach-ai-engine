@@ -71,6 +71,12 @@ async def _said(session: AsyncSession, family_id: str, facts: list[CareFact]) ->
     return out
 
 
+async def _activities(session: AsyncSession, family_id: str, subject_id: str) -> list[dict]:
+    from app.care import activities
+
+    return await activities.status(session, family_id, subject_id)
+
+
 async def week_doses(session: AsyncSession, family_id: str, subject_id: str, days: int = 7) -> list[dict]:
     from app.api.dash import _day_doses  # the one dose list Home and the Day page show
 
@@ -176,5 +182,6 @@ async def build(session: AsyncSession, family_id: str, subject_id: str, *, names
         "enjoys": enjoys[:8],
         "avoid": avoid[:6],
         "week": await week_doses(session, family_id, subject_id),
+        "activities": await _activities(session, family_id, subject_id),
         "knownSince": first_turn.isoformat() if first_turn else None,
     }

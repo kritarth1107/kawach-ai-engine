@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.care import digest, store
 from app.care.domains import DOMAINS, HEALTH_DOMAINS, NONE_DOMAINS, fact_key, is_none_key, merged_value, slug
 from app.care.models import CareFact, MemoryNote, OpenLoop, Turn
+from app.brain.host import ShadowHost
 from app.care.redact import scrub_secrets
 from app.core import clock
 from app.llm import router
@@ -24,6 +26,8 @@ from app.llm import router
 logger = logging.getLogger(__name__)
 
 EXTRACT_PROMPT = f"""You maintain the care memory for a person cared for by Saheli, their care companion: an elder whose family looks after them, or someone caring for themselves (then the person and their caregiver are the same, and PEOPLE lists only them). You read a conversation between Saheli and the people in PEOPLE, and list what should be remembered that the care record below does not already say.
+
+Nothing they say about their life is lost: a plan, a worry, a person they mention, a place, a preference, a habit, a goal, something they did. If it is not a fact for the record, it is a note or a plan.
 
 Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. A fact about a caregiver's own life (their gym, their medicine, their diet) is about them: give their person id in "about".
 
@@ -38,7 +42,11 @@ Return only JSON:
 {{"facts": [{{"domain": "...", "name": "...", "none": false, "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
   "stops": [{{"domain": "...", "name": "...", "reason": "...", "evidence": "..."}}],
   "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}],
+  "readings": [{{"about": "person id", "kind": "weight|height|bmi|body_fat|muscle_mass|waist|bp|sugar|pulse|spo2|temperature|other", "name": "for other", "value": "73.5", "unit": "kg", "taken_on": "YYYY-MM-DD"}}],
+  "plans": [{{"about": "person id", "what": "what will happen, one line", "when": "YYYY-MM-DDTHH:MM or null", "ask_after": "what to ask afterwards"}}],
   "moods": [{{"about": "person id", "score": 1, "word": "one English word, e.g. cheerful, calm, tired, worried, sad, irritated, lonely", "summary": "how they seemed and why, one line", "evidence": "their words"}}]}}
+readings: every measurement a person gave in these messages (typed, said, or that Saheli read out from their photo): weight, height (cm), BMI, body fat, BP, sugar, pulse, SpO2, temperature, muscle mass, waist, or other with its name. taken_on is YYYY-MM-DD when it was measured.
+plans: things a person said they will do or that will happen (a call, a visit, a delivery, "trainer will send a diet plan tonight", an exam); Saheli follows up afterwards. when is YYYY-MM-DDTHH:MM IST if they said when, else null.
 moods: how each person (never Saheli) seemed in this conversation, only when it shows in what they wrote; one per person, the latest; score 1 very low, 2 low, 3 okay, 4 good, 5 very good.
 Use empty lists when there is nothing."""
 
@@ -62,6 +70,9 @@ async def families_with_new_turns(session: AsyncSession, limit: int = 50) -> lis
         select(Turn.family_id).where(Turn.extracted.is_(False), Turn.role == "user").group_by(Turn.family_id).limit(limit)
     )
     return [r[0] for r in rows]
+
+
+host_for_readings = None  # tests swap in a sim host
 
 
 async def extract_family(session: AsyncSession, family_id: str) -> dict:
@@ -179,6 +190,51 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         body = (existing[s_].body_md.rstrip() + "\n" + line) if s_ in existing else line
         await store.upsert_note(session, family_id=family_id, subject_id=subject, slug=s_, title=n["topic"].strip().title(), body_md=body)
         counts["notes"] += 1
+
+    from app.care import readings
+
+    for r in (data.get("readings") or [])[:12]:
+        if isinstance(r, dict) and await readings.save(session, ShadowHost() if family_id.startswith("shadow:") else host_for_readings, family_id,
+                                                       r.get("about") if r.get("about") in member_ids else elder["id"], r, source="re-read"):
+            counts["readings"] = counts.get("readings", 0) + 1
+
+    for pl in (data.get("plans") or [])[:8]:
+        if not isinstance(pl, dict) or not str(pl.get("what") or "").strip():
+            continue
+        subject = pl.get("about") if pl.get("about") in member_ids else elder["id"]
+        when = None
+        try:
+            when = datetime.fromisoformat(f"{pl['when']}:00+05:30") if pl.get("when") else None
+        except (TypeError, ValueError):
+            when = None
+        now = clock.now()
+        if when and when < now - timedelta(hours=6):
+            continue  # long past: nothing to follow up
+        wake_at = (when + timedelta(hours=2)) if when else clock.ist(now).replace(hour=11, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        what = str(pl["what"]).strip()[:200]
+        await store.open_loop(
+            session, family_id=family_id, subject_id=subject, kind="plan", owner_id=subject,
+            title=f"{what}" + (f" (ask: {str(pl.get('ask_after'))[:120]})" if pl.get("ask_after") else ""),
+            detail={"what": what, "when": pl.get("when"), "max_wakes": 1, "expire_at": (wake_at + timedelta(days=2)).isoformat()},
+            wake_at=wake_at, dedupe_key=f"plan:{subject}:{slug(what)[:60]}",
+        )
+        counts["plans"] = counts.get("plans", 0) + 1
+
+    routine_of = {f.get("about") if f.get("about") in member_ids else elder["id"]
+                  for f in (data.get("facts") or []) if isinstance(f, dict) and f.get("domain") in ("routine", "activity")}
+    if routine_of:
+        # a routine with a time they mentioned becomes an activity with check-ins (founder 2026-10-13)
+        try:
+            from app.brain.host import LiveHost
+            from app.care import activities
+
+            host = ShadowHost() if family_id.startswith("shadow:") else LiveHost()
+            for pid in sorted(routine_of):
+                made = await activities.adopt(session, host, family_id, pid)
+                if made:
+                    counts["activities"] = counts.get("activities", 0) + len(made)
+        except Exception:  # noqa: BLE001 — the re-read's facts are kept either way
+            logger.exception("adopt activities after re-read failed family=%s", family_id)
 
     from app.care import mood
 

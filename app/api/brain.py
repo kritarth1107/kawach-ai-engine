@@ -156,6 +156,26 @@ class SpeechIn(BaseModel):
     language: str = Field(default="Hindi", max_length=80)
 
 
+class ComposeIn(BaseModel):
+    family_id: str
+    subject_id: str
+    purpose: str = Field(max_length=600)
+    at: str | None = None
+    recent: list[str] = Field(default_factory=list, max_length=12)
+    kind: str = "reminder"
+    item: str | None = None
+
+
+@router.post("/brain/compose-reminder")
+async def compose_reminder(body: ComposeIn, session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
+    """The backend's reminder scheduler asks for the line just before it sends: written for this moment, never a repeat
+    of the earlier lines (founder 2026-10-13). {"text": null} means send the stored text."""
+    from app.care import compose
+
+    return await compose.reminder_text(session, family_id=body.family_id, subject_id=body.subject_id, purpose=body.purpose,
+                                       at=body.at, recent=body.recent, kind=body.kind, item=body.item)
+
+
 @router.post("/voice/prepare")
 async def voice_prepare(body: SpeechIn) -> dict:
     """The backend's TTS asks how Saheli would say a message in a voice note (spoken script + mood)."""
@@ -174,7 +194,16 @@ async def wake_job() -> dict:
     def host_for(fid: str):
         return ShadowHost() if fid.startswith("shadow:") else LiveHost()
 
+    try:
+        from app.care import activities
+
+        # every activity's next check-ins are planned (a day ahead), before the due loops run
+        out_plan = await activities.plan_all(SessionLocal)
+    except Exception:  # noqa: BLE001
+        logger.exception("activity planning failed")
+        out_plan = None
     out = await wake_due(SessionLocal, host_for)
+    out["activities_planned"] = out_plan
     try:
         from app.care import careteam
 
@@ -225,6 +254,63 @@ async def extract_job() -> dict:
             logger.exception("extract failed family=%s", fid)
             done[fid] = {"error": str(exc)[:200]}
     return {"families": len(families), "results": done}
+
+
+@router.post("/jobs/adopt-activities")
+async def adopt_activities_job() -> dict:
+    """Once after the activities release (safe to run again): routine facts with times become activities with check-ins."""
+    from sqlalchemy import select as sql_select
+
+    from app.care import activities
+    from app.care.models import CareFact
+    from app.db.session import SessionLocal
+
+    async with SessionLocal() as session:
+        people = sorted({(r[0], r[1]) for r in await session.execute(
+            sql_select(CareFact.family_id, CareFact.subject_id).where(CareFact.domain == "routine", CareFact.status == "active",
+                                                                     ~CareFact.family_id.startswith("shadow:"), ~CareFact.family_id.startswith("sim-")))})
+    done: dict[str, list[str]] = {}
+    for fid, sid in people:
+        try:
+            async with SessionLocal() as session:
+                made = await activities.adopt(session, LiveHost(), fid, sid)
+                await session.commit()
+            done[f"{fid[:8]}/{sid[:8]}"] = made
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("adopt activities failed family=%s", fid)
+            done[f"{fid[:8]}/{sid[:8]}"] = [f"error: {str(exc)[:120]}"]
+    return {"people": len(people), "adopted": done}
+
+
+@router.post("/jobs/recover-readings")
+async def recover_readings_job(apply: bool = False) -> dict:
+    """Once (safe to run again): readings kept only in facts or notes go to Health Records. apply=false lists them."""
+    from sqlalchemy import select as sql_select
+    from sqlalchemy import union
+
+    from app.care import readings
+    from app.care.models import CareFact, MemoryNote
+    from app.db.session import SessionLocal
+
+    real = lambda col: ~col.startswith("shadow:") & ~col.startswith("sim-")  # noqa: E731
+    async with SessionLocal() as session:
+        people = sorted({(r[0], r[1]) for r in await session.execute(union(
+            sql_select(CareFact.family_id, CareFact.subject_id).where(CareFact.status == "active", real(CareFact.family_id)),
+            sql_select(MemoryNote.family_id, MemoryNote.subject_id).where(real(MemoryNote.family_id))))})
+    found: dict[str, list[dict]] = {}
+    for fid, sid in people:
+        if not sid or sid == "family":
+            continue
+        try:
+            async with SessionLocal() as session:
+                got = await readings.recover(session, fid, sid, apply=apply)
+                await session.commit()
+            if got:
+                found[f"{fid[:8]}/{sid[:8]}"] = got
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("recover readings failed family=%s", fid)
+            found[f"{fid[:8]}/{sid[:8]}"] = [{"error": str(exc)[:120]}]
+    return {"people": len(people), "applied": apply, "readings": found}
 
 
 @router.post("/jobs/consolidate")

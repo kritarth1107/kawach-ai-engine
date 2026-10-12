@@ -178,6 +178,9 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
     return block, known, avoid + [f"__unreachable__{u}" for u in unreachable]
 
 
+SYSTEM_ID = "saheli-scheduler"
+
+
 async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData | None = None) -> tuple[str, str]:
     data = data or TurnData(session, req)
     now = clock.ist()
@@ -208,6 +211,14 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             parts.append(f"A DAILY BRIEF IS WAITING FOR THE SPEAKER (it could not be sent while WhatsApp's 24-hour window was "
                          f"closed): answer what they wrote first, then give them the brief in the same reply, written from this "
                          f"data only (short sections, bold titles), and close_loop {lp.id}.\n{str((lp.detail or {}).get('text') or '')[:5000]}")
+    from app.care import activities as care_activities
+
+    for pid, pname in {req.elder["id"]: req.elder.get("name"), req.speaker["id"]: req.speaker.get("name")}.items():
+        if pid == SYSTEM_ID:
+            continue
+        block = care_activities.context_block(pname or "them", await care_activities.status(session, req.family_id, pid))
+        if block:
+            parts.append(block)
     if req.speaker["id"] != req.elder["id"]:
         # A caregiver asking "what's pending?" gets who acts next on every job (the elder's turns stay short).
         from app.care import work

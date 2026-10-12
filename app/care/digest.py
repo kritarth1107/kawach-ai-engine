@@ -63,6 +63,7 @@ TITLES = {
     "preference": "Preferences",
     "profile": "Emergency profile",
     "appointment": "Appointments",
+    "activity": "Activities and habits",
 }
 
 
