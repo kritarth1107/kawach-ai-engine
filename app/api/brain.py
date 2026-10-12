@@ -66,6 +66,7 @@ class TurnIn(BaseModel):
     voice_confidence: float | None = Field(default=None, ge=0, le=1)
     voice_language: str | None = Field(default=None, max_length=16)
     reminders_soon: list[ReminderSoon] = Field(default_factory=list, max_length=24)  # due in the next hours (backend)
+    onboarding: bool = False  # the speaker has not finished setting up (a new WhatsApp sign-up, or never finished)
     location: Location | None = None  # a WhatsApp location pin in this message
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
@@ -90,6 +91,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         voice_language=body.voice_language,
         reminders_soon=[r.model_dump() for r in body.reminders_soon],
         location=body.location.model_dump() if body.location else None,
+        onboarding=body.onboarding,
     )
     try:
         result = await run_turn(session, host, req)
@@ -169,6 +171,12 @@ async def wake_job() -> dict:
         out["checkins"] = await checkins.run(SessionLocal, host_for)
     except Exception:  # noqa: BLE001 — loops above already ran
         logger.exception("check-ins failed")
+    try:
+        from app.care import brief
+
+        out["briefs"] = await brief.run(SessionLocal, host_for)  # each caregiver's nightly brief, at their time
+    except Exception:  # noqa: BLE001
+        logger.exception("daily briefs failed")
     return out
 
 

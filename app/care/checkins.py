@@ -147,7 +147,7 @@ async def about_them(session: AsyncSession, family_id: str, person: str, now: da
 
 async def next_to_know(session: AsyncSession, family_id: str, person: str, asked: dict[str, datetime], now: datetime) -> tuple | None:
     """The first getting-to-know item the care record does not answer yet and that was not asked lately."""
-    have = {f.domain for f in await store.facts(session, family_id, person) if f.status == "active"}
+    have = {f.domain for f in await store.facts(session, family_id, person) if f.status == "active" and f.key != "routine:daily_brief"}
     for item in KNOW:
         key, _, _, domains = item
         if domains and have.intersection(domains):

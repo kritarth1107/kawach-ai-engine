@@ -54,6 +54,7 @@ class TurnRequest:
     reminders_soon: list[dict] = field(default_factory=list)
     # a WhatsApp location pin in this message {"lat", "lng", "name", "address"} (founder 2026-10-12: a ride's pickup)
     location: dict | None = None
+    onboarding: bool = False  # the speaker has not finished setting up: Saheli runs the setup chat
 
     @property
     def voice(self) -> bool:
@@ -194,7 +195,15 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
         reminders_block(req),
+        onboarding_block(req),
     ]
+    if req.speaker.get("role") != "system":
+        from app.care import brief as care_brief
+
+        for lp in await care_brief.waiting_for(session, req.family_id, req.speaker["id"]):
+            parts.append(f"A DAILY BRIEF IS WAITING FOR THE SPEAKER (it could not be sent while WhatsApp's 24-hour window was "
+                         f"closed): answer what they wrote first, then give them the brief in the same reply, written from this "
+                         f"data only (short sections, bold titles), and close_loop {lp.id}.\n{str((lp.detail or {}).get('text') or '')[:5000]}")
     if req.speaker["id"] != req.elder["id"]:
         # A caregiver asking "what's pending?" gets who acts next on every job (the elder's turns stay short).
         from app.care import work
@@ -258,6 +267,39 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             )
     known = "\n".join(h.text for h in hits) + "\n" + "\n".join(e.summary for e in day_events)
     return "\n\n".join(parts), known
+
+
+def onboarding_block(req: TurnRequest) -> str:
+    """Setup on WhatsApp (founder 2026-10-12: "if a new user sends hi, start their onboarding directly"): a chat, one
+    question at a time, language first, then whether it is for them or someone they look after (the approved design of
+    the dashboard's onboarding chat)."""
+    if not req.onboarding or req.speaker.get("role") == "system":
+        return ""
+    me = req.speaker["id"]
+    cared = req.elder["id"] != me
+    who = (f"The person they look after is already added: {req.elder.get('name')} (id {req.elder['id']}); the care questions are about "
+           "them (about = their id)." if cared else
+           "Nobody else is added yet: until they say it is for someone else, it is for themselves (about = their own id).")
+    return (
+        "SETUP NOT FINISHED: this person is new on WhatsApp or never finished setting up. Run the setup as a warm chat: one "
+        "short question per message, in their language, saving each answer with its tool before the next question. "
+        f"{who}\n"
+        "  1. If they just greeted you: welcome them as Saheli from Kavach in one or two lines (daily check-ins and reminders for "
+        "a parent or for themselves, medicines, orders and rides, always asking first), then ask which language they want to "
+        "talk in, offering their own bhasha or dialect too (language_preference, about their own id).\n"
+        "  2. Their name, if you only have 'Friend' or no name (my_name).\n"
+        "  3. Is this for themselves, or for someone they look after (a parent or another family member)?\n"
+        "  4. For someone else: their name and what the family calls them, how they are related, and their WhatsApp number with "
+        "country code, then add_person; then that person's language or dialect (language_preference about their id).\n"
+        "  5. The care basics with setup_progress (about the person cared for, or themselves): conditions, allergies, medicines "
+        "with times, their day (wake, meals, sleep), doctor, emergency contact, what they enjoy.\n"
+        "  6. When the essentials are saved, or they want to stop: finish_setup, then tell them in a few lines what is set up, "
+        "what you will do (reminders at the saved times, check-ins, the nightly brief), the dashboard (app.kavach.care, sign in "
+        "with this WhatsApp number), and, if someone was added, the link to share so that person sends you a hi from their own "
+        "WhatsApp (you can write to them only after that).\n"
+        "If they ask for something else, help with that first, then offer to go on with the setup. If they already use Kavach "
+        "with another number, tell them their family can add this number on the dashboard, and set up nothing new. Never ask "
+        "for something already saved, never invent details.")
 
 
 def reminders_block(req: TurnRequest) -> str:

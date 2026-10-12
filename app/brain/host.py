@@ -13,6 +13,9 @@ from app.agents.tool_client import execute_backend_tool
 
 # Backend tools that change something in the world or in the family's records.
 WRITE_TOOLS = {
+    "add_family_member",
+    "set_my_name",
+    "finish_setup",
     "record_review",
     "connector_place",
     "save_place",

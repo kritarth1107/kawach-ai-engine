@@ -2704,6 +2704,114 @@ async def setup_progress(ctx: TurnCtx, a: dict) -> dict:
 
 
 @tool(
+    "daily_brief",
+    "The nightly brief caregivers get on WhatsApp about the care recipient's day (medicines, health and mood, what they did "
+    "and talked about, orders, reminders, what needs a caregiver). By default it comes about 30 minutes after the care "
+    "recipient's bedtime (22:00 if that is not known). action: set (time HH:MM: their own time; a morning time brings the "
+    "previous day's brief), off, on (back to their time or the default), now (send today's brief now), status. Only a "
+    "caregiver, for their own brief.",
+    {"action": {"type": "string", "enum": ["set", "off", "on", "now", "status"]},
+     "time": {"type": "string", "description": "set: HH:MM in IST"}},
+    ["action"],
+)
+async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import brief
+
+    me = ctx.speaker.get("id")
+    if ctx.is_system or not ctx.is_caregiver or me == ctx.elder_id:
+        raise ToolRefused("Only a caregiver gets the daily brief, and changes only their own.")
+    action = a["action"]
+    if action in ("set", "off", "on"):
+        if action == "set":
+            t = brief._hm(a.get("time"))
+            if not t:
+                raise ToolRefused("Give the time as HH:MM (IST).")
+            value, text = {"time": t.strftime("%H:%M")}, f"Gets the nightly brief at {t.strftime('%H:%M')}"
+        elif action == "off":  # their time is kept for when they turn it back on
+            cur = await brief.setting(ctx.session, ctx.family_id, me)
+            value, text = {"off": True, **({"time": cur["time"]} if cur.get("time") else {})}, "Does not want the nightly brief"
+        else:
+            cur = await brief.setting(ctx.session, ctx.family_id, me)
+            value = {k: v for k, v in cur.items() if k == "time"}
+            text = f"Gets the nightly brief at {value['time']}" if value else "Gets the nightly brief at the default time"
+        await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=me, domain="routine", key=brief.SETTING_KEY, value=value,
+                               text=text, source_kind="caregiver_said", source_ref=ctx.message_ref, stated_by=me, confidence=1.0, replace=True)
+    if action == "now":
+        roster = await store.roster(ctx.session, ctx.family_id)
+        if not roster or not roster.elder:
+            raise ToolRefused("There is no one in the family's care yet to brief about.")
+        text = await brief.digest(ctx.session, ctx.host, ctx.family_id, roster.elder, clock.ist_day())
+        return {"result": "write it now", "brief_data": text,
+                "how": "Write the brief for them now as your reply (short sections with bold titles; only this data; a dose not "
+                       "marked is 'not marked'); no send_message needed."}
+    at = await brief.brief_time(ctx.session, ctx.family_id, me, ctx.elder_id)
+    return {"result": "off" if at is None else "on", "time": at.strftime("%H:%M") if at else None,
+            "default": not (await brief.setting(ctx.session, ctx.family_id, me)).get("time")}
+
+
+def _caregiver_by_role(ctx: TurnCtx) -> bool:
+    """A primary or co-caregiver, also when the care record is about themselves (a new sign-up's family has nobody else
+    yet, so they are its subject and is_caregiver says no)."""
+    return not ctx.is_system and "caregiver" in str(ctx.speaker.get("role", "")).lower()
+
+
+@tool(
+    "add_person",
+    "Setup: add the person this family looks after (a parent or another family member) when a caregiver gives their name, "
+    "how they are related and their WhatsApp number. Their number is proven when they first write to you from it; you "
+    "cannot message them before that, so give the caregiver the returned link to share with them.",
+    {"name": {"type": "string", "description": "Their full name"},
+     "relationship": {"type": "string", "description": "How they are related to the caregiver, e.g. mother, father"},
+     "phone": {"type": "string", "description": "Their WhatsApp number with country code, e.g. +919876543210 (leave out if they have none)"}},
+    ["name"],
+)
+async def add_person(ctx: TurnCtx, a: dict) -> dict:
+    if not _caregiver_by_role(ctx):
+        raise ToolRefused("Only a caregiver adds someone to the family.")
+    if ctx.elder_id != ctx.speaker.get("id"):
+        raise ToolRefused("This family already has the person it looks after; others are added on the dashboard.")
+    out = await ctx.host.call("add_family_member", {"name": a["name"], "relationship": a.get("relationship"), "phone": a.get("phone")},
+                              family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+    if isinstance(out, dict) and out.get("ok") is False:
+        raise ToolRefused(f"Not added: {out.get('error')}")
+    uid = (out or {}).get("userId")
+    if uid:  # the rest of this turn may save things about them (about = their id)
+        ctx.members.append({"id": uid, "name": a["name"], "role": "elder"})
+    return {"result": "added", "id": uid, "name": a["name"], "join_link": (out or {}).get("joinLink"),
+            "next": "Ask their language or dialect next (language_preference about their id), then the care basics about them."}
+
+
+@tool(
+    "my_name",
+    "Setup: save the speaker's own name when they tell you (new on WhatsApp, their name was not known).",
+    {"first_name": {"type": "string"}, "last_name": {"type": "string"}},
+    ["first_name"],
+)
+async def my_name(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system:
+        raise ToolRefused("Only the person themselves.")
+    out = await ctx.host.call("set_my_name", {"firstName": a["first_name"], "lastName": a.get("last_name") or ""},
+                              family_id=ctx.family_id, subject_id=ctx.speaker.get("id"), actor_id=ctx.actor_id)
+    if isinstance(out, dict) and out.get("ok") is False:
+        raise ToolRefused(f"Not saved: {out.get('error')}")
+    return {"result": "saved", "first_name": a["first_name"]}
+
+
+@tool(
+    "finish_setup",
+    "Setup: the essentials are saved (or they want to stop for now). Marks their account as set up, so the dashboard will "
+    "not ask again; returns the dashboard address and how to sign in.",
+    {},
+    [],
+)
+async def finish_setup(ctx: TurnCtx, a: dict) -> dict:
+    if not _caregiver_by_role(ctx):
+        raise ToolRefused("Only the person setting up the family.")
+    out = await ctx.host.call("finish_setup", {}, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+    return {"result": "done", **{k: v for k, v in (out or {}).items() if k in ("dashboard", "signIn", "saheliNumber")}}
+
+
+@tool(
     "service_status",
     "Is the family logged in on a store or ride app (Uber, Ola, Rapido, Apollo, 1mg, PharmEasy, Swiggy, Zepto, Blinkit, Zomato)? "
     "Answers from what the order agents last saw; it does not open the app. Use for 'Uber login hai?' or before promising an order.",
