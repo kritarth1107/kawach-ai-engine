@@ -274,3 +274,112 @@ async def admin_export(family_id: str, subject: str, session: DB) -> dict:
                    "validFrom": ln.valid_from.isoformat(), "validTo": ln.valid_to.isoformat() if ln.valid_to else None} for ln in rows],
         "conversation": [{"at": t.at.isoformat(), "role": t.role, "text": t.text} for t in turns],
     }
+
+
+@router.get("/live")
+async def admin_live(session: DB, minutes: int = 30) -> dict:
+    """What is going on right now (founder 2026-10-13: "watch live, every session ongoing"): conversations in the last
+    minutes with their pace, cost and mood, orders and rides running, check-ins due within the hour, and alerts of the
+    day. No message text here: reading a conversation stays behind break-glass."""
+    from datetime import timedelta
+
+    from app.care.models import CareEvent, OpenLoop, Turn
+    from app.care.why import TraceTurn
+    from app.core import clock
+    from app.tasks.models import Task as CareTask
+
+    now = clock.now()
+    since = now - timedelta(minutes=max(5, min(minutes, 240)))
+    real = lambda col: ~col.startswith("shadow:") & ~col.startswith("sim-")  # noqa: E731
+    turns = (await session.execute(select(Turn.family_id, Turn.thread_id, Turn.role, Turn.at).where(Turn.at >= since, real(Turn.family_id))
+                                   .order_by(Turn.at))).all()
+    convs: dict[tuple[str, str], dict] = {}
+    for fid, thread, role, at in turns:
+        if thread == "saheli-scheduler":
+            continue
+        c = convs.setdefault((fid, thread), {"familyId": fid, "personId": thread, "startedAt": at.isoformat(), "messages": 0, "replies": 0,
+                                             "lastAt": at.isoformat(), "lastRole": role})
+        c["messages" if role == "user" else "replies"] += 1
+        c["lastAt"], c["lastRole"] = at.isoformat(), role
+    traces = (await session.execute(select(TraceTurn.family_id, TraceTurn.thread_id, TraceTurn.ms, TraceTurn.cost_inr, TraceTurn.models, TraceTurn.kind)
+                                    .where(TraceTurn.at >= since, real(TraceTurn.family_id)))).all()
+    outreach: dict[str, int] = {}
+    for fid, thread, ms, cost, models, kind in traces:
+        c = convs.get((fid, thread))
+        if kind == "system":
+            outreach[fid] = outreach.get(fid, 0) + 1
+        if not c:
+            continue
+        c.setdefault("_ms", []).append(ms or 0)
+        c["costInr"] = round(c.get("costInr", 0) + float(cost or 0), 2)
+        for m in models or []:
+            if isinstance(m, dict) and m.get("role") == "brain" and m.get("model"):
+                c["model"] = m["model"]
+    if convs:
+        moods = (await session.execute(select(CareEvent.family_id, CareEvent.subject_id, CareEvent.payload, CareEvent.at)
+                                       .where(CareEvent.kind == "mood", CareEvent.at >= now - timedelta(hours=24),
+                                              CareEvent.family_id.in_({k[0] for k in convs})).order_by(CareEvent.at))).all()
+        last_mood = {(f, s): p for f, s, p, _ in moods}
+    else:
+        last_mood = {}
+    out_convs = []
+    for (fid, thread), c in convs.items():
+        ms = c.pop("_ms", [])
+        mood = last_mood.get((fid, thread)) or {}
+        waiting = c["lastRole"] == "user"
+        out_convs.append({**c, "avgReplyMs": int(sum(ms) / len(ms)) if ms else None, "waitingForSaheli": waiting,
+                          "waitingSeconds": int((now - datetime_from(c["lastAt"])).total_seconds()) if waiting else None,
+                          "mood": {"score": mood.get("score"), "word": mood.get("word")} if mood else None,
+                          "active": (now - datetime_from(c["lastAt"])).total_seconds() < 300})
+    out_convs.sort(key=lambda c: c["lastAt"], reverse=True)
+
+    tasks = (await session.execute(select(CareTask).where(CareTask.status.in_(("queued", "running", "needs_input", "awaiting_confirm")),
+                                                          real(CareTask.family_id)).order_by(CareTask.updated_at.desc()).limit(50))).scalars().all()
+    out_tasks = [{"taskId": str(t.id), "familyId": t.family_id, "personId": t.subject_id, "service": t.service, "kind": t.kind,
+                  "status": t.status, "phase": t.phase, "inputNeeded": t.input_needed, "startedAt": t.created_at.isoformat(),
+                  "updatedAt": t.updated_at.isoformat(), "runs": t.runs, "hasLiveView": bool(t.agent_session),
+                  "minutes": int((now - t.created_at).total_seconds() // 60)} for t in tasks]
+
+    due = (await session.execute(select(OpenLoop.family_id, OpenLoop.owner_id, OpenLoop.kind, OpenLoop.wake_at)
+                                 .where(OpenLoop.status == "open", OpenLoop.wake_at >= now, OpenLoop.wake_at <= now + timedelta(minutes=60),
+                                        real(OpenLoop.family_id)).order_by(OpenLoop.wake_at).limit(50))).all()
+    alerts = (await session.execute(select(CareEvent.family_id, CareEvent.subject_id, CareEvent.kind, CareEvent.at)
+                                    .where(CareEvent.kind.in_(("alert_whatsapp", "alert_dashboard", "crisis", "emergency_alone")),
+                                           CareEvent.at >= now - timedelta(hours=24), real(CareEvent.family_id)).order_by(CareEvent.at.desc()).limit(50))).all()
+    return {
+        "now": now.isoformat(),
+        "windowMinutes": int((now - since).total_seconds() // 60),
+        "conversations": out_convs,
+        "outreach": [{"familyId": f, "count": n} for f, n in outreach.items()],
+        "tasks": out_tasks,
+        "comingUp": [{"familyId": f, "personId": o, "kind": k, "at": w.isoformat()} for f, o, k, w in due],
+        "alerts": [{"familyId": f, "personId": s, "kind": k, "at": a.isoformat()} for f, s, k, a in alerts],
+    }
+
+
+def datetime_from(iso: str):
+    from datetime import datetime as _dt
+
+    return _dt.fromisoformat(iso)
+
+
+@router.get("/tasks/{task_id}/live-url")
+async def admin_task_live_url(task_id: str, session: DB) -> dict:
+    """The browser view of a running order or ride (the admin API asks for break-glass and a reason first)."""
+    import uuid as _uuid
+
+    from app.brain import tools
+    from app.tasks.models import Task as CareTask
+
+    try:
+        t = await session.get(CareTask, _uuid.UUID(task_id))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad id") from None
+    if not t:
+        raise HTTPException(status_code=404, detail="no such task")
+    if not t.agent_session:
+        return {"url": None}
+    try:
+        return {"url": await tools.task_agent().live_url(t.agent_session)}
+    except Exception:  # noqa: BLE001 — the browser may already be closed
+        return {"url": None}
