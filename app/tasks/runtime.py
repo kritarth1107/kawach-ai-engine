@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 LIVE = ("queued", "running", "needs_input", "awaiting_confirm")
 TASK_LIFETIME = timedelta(minutes=45)
 RUN_TIMEOUT = timedelta(minutes=12)
+CHECK_TIMEOUT = timedelta(minutes=5)  # reading the store's own list is short (live 2026-10-13: one ran 11 minutes)
 
 Notify = Callable[[str, str, str], Awaitable[None]]  # (family_id, requested_by, prompt)
 
@@ -641,7 +642,9 @@ def _stage(task: Task) -> str:
     elif task.status in ("needs_input", "awaiting_confirm"):
         s = f"asking:{task.input_needed}"
         if task.input_needed == "otp":
-            s += f":{int(d.get('codes_sent') or 0)}"  # each new code the store sends is news
+            # each new code the store sends is news, and so is a code that did not go in (live sim 2026-10-13: "send the
+            # newest code again" was skipped as already told)
+            s += f":{int(d.get('codes_sent') or 0)}:{int(d.get('code_fails') or 0)}"
         if task.input_needed in ("confirm", "choice", "approve"):
             s += ":" + str(d.get("cart_fp") or "")[:8]
         if task.input_needed in ("go", "choice"):
@@ -1065,6 +1068,32 @@ def _goal(task: Task) -> str:
     return specialist_for(task.service).goal(task)
 
 
+CODE_TYPED = ("The login code is already typed into the code boxes on the open page. Do not type it again, do not ask for a new "
+              "code and do not restart the login: press Continue / Verify / Login if the site still shows it, then carry on with "
+              "the task. If the site says the code is wrong or has expired, stop and report needs_otp=false and "
+              "problem='code not accepted'.")
+CODE_BY_HAND = ("Enter this login code where the site asks for it: {code}. Click the first code box and type the digits one key at a "
+                "time (the site moves to the next box itself); never paste it or set it with a script. Then carry on with the "
+                "task. Never ask for a new code and never restart the login yourself: if the boxes do not take it, stop and report "
+                "needs_otp=false and problem='code not accepted'.")
+CODE_TRIES = 2  # login codes that did not go in before it stops and says so (each one is a code the person had to send)
+
+
+async def _type_code(agent: BrowserAgent, task: Task, code: str) -> bool:
+    """The code typed into the open login page of this task's browser (app.tasks.codeentry); False lets the agent type it."""
+    from app.tasks import codeentry
+    from app.tasks.browser_use import DOMAINS
+
+    if not task.agent_session or not hasattr(agent, "cdp_url") or os.getenv("TYPE_LOGIN_CODES", "on") != "on":
+        return False
+    try:
+        cdp = await agent.cdp_url(task.agent_session)
+    except Exception:  # noqa: BLE001
+        return False
+    hosts = tuple(d.removeprefix("*.") for d in DOMAINS.get(task.service, ()))
+    return bool(cdp) and await codeentry.type_code(cdp, code, hosts=hosts)
+
+
 def _guest_run(task: Task) -> bool:
     """The task's browser is a look-up's own, with no login: nothing can be booked or placed in it."""
     d = task.details or {}
@@ -1100,6 +1129,10 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         await _drop_session(agent, task, "the look-up's browser had no login: this step opens the family's own")
     if guest:
         pass  # no profile: not logged in anywhere, so nothing can be booked or placed in this run
+    else:
+        task.details = {**(task.details or {}), "login_at_start": await sandbox.login_live(session, task.family_id, task.service)}
+    if guest:
+        pass
     elif not task.agent_session:
         got = await profile_for(task)
         # The host answers {profileId, loginPhone}; older callers (bench, tests) give just the profile id.
@@ -2445,7 +2478,10 @@ async def _stop_before_confirm(agent: BrowserAgent, task: Task) -> tuple[str, st
     if task.phase == "check":  # already reading the store's list: it goes on, and a clean list now means stopped
         task.details = {**d, "check": {**(d.get("check") or {}), "then": "cancelled"}}
         return "queued", None
-    logged = int(d.get("login_runs") or 0) > 0 and task.phase in guard.BEFORE_CONFIRM and not _guest_run(task)
+    # only an account that was logged in can have something on it (live 2026-10-13: a check ran for an account whose login
+    # code never went in): a run saw it logged in, or its login was alive when a run began
+    logged = (int(d.get("login_runs") or 0) > 0 and task.phase in guard.BEFORE_CONFIRM and not _guest_run(task)
+              and bool(d.get("seen_logged_in") or d.get("login_at_start")))
     path: list[str] = []
     if task.status == "running" and task.agent_task:
         if logged:
@@ -2481,6 +2517,20 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     if out.get("needs_otp") and login == "none":
         # It had no number to log in with, so no code can have been sent (live 2026-10-08: "sent to phone", field empty).
         out = {**out, "needs_otp": False, "problem": "login needed"}
+    if d.get("otp_entered") and not out.get("logged_in") and (out.get("needs_otp") or str(out.get("problem") or "").lower().startswith("code not accepted")):
+        # The code they sent did not go in (PharmEasy, live 2026-10-13: asked six times). Once more with the newest code,
+        # then it stops and says so; the agent never asks the store for new codes by itself.
+        fails = int(d.get("code_fails") or 0) + 1
+        task.details = d = {**d, "code_fails": fails}
+        label = SKILLS[task.service]["label"]
+        if fails >= CODE_TRIES:
+            return "failed", (f"{label}'s login did not take the login code ({fails} codes tried), so nothing was ordered and no more "
+                              f"codes are asked for. Say so plainly in one short line, sorry for the codes, and offer another store or "
+                              f"ordering in the {label} app.")
+        task.input_needed = "otp"
+        return "needs_input", (f"The login code did not go in on {label} (it may have been mistyped or expired). Ask them in one short "
+                               f"line to send the newest code from the SMS again; if no new one came, task_input kind resend asks {label} "
+                               "for a new one.")
     if out.get("needs_otp"):
         task.input_needed = "otp"
         task.details = d = {**d, "codes_sent": int(d.get("codes_sent") or 0) + 1}
@@ -3711,8 +3761,11 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
                             "that it is taking a minute or two more and that you will come back with what each one has. Do not ask "
                             "anything.")))
                 continue
-            if t.kind != "order":
-                continue  # the 20/25/30-minute ladder is for orders; a ride waiting on a person ends at its deadline
+            if t.kind != "order" or t.phase == "check" or t.cancel_requested:
+                # the 20/25/30-minute ladder is for orders; a ride waiting on a person ends at its deadline; a store check, or
+                # an order they asked to stop, is not "not placed yet" (live 2026-10-13: asked, emailed and cancelled while
+                # she had said cancel four times)
+                continue
             start = datetime.fromisoformat(d["ladder_from"]) if d.get("ladder_from") else t.created_at
             busy_since = datetime.fromisoformat(d["active_from"]) if d.get("active_from") else t.created_at
             if (t.status in ("queued", "running") and not d.get("told_working") and now - busy_since >= STILL_WORKING
@@ -4008,11 +4061,17 @@ async def tick(
                         if browse_first(task):
                             task.phase = "browse"
                             note(task, "looking it up before any login")
-                        extra = f"Enter this code where the login asks for it: {task.details.get('otp')}. Then continue with the task." if task.phase == "otp" else ""
+                        extra = ""
                         if task.phase == "otp":
+                            # Typed key by key into the store's own code boxes by code (PharmEasy, live 2026-10-13: the
+                            # agent put 3 of 4 digits in, restarted the login and the number was blocked); else the agent
+                            # types it, told how. The code is handed over once and not kept on the task.
+                            code = str((task.details or {}).get("otp") or "")
+                            typed = await _type_code(agent, task, code)
+                            extra = CODE_TYPED if typed else CODE_BY_HAND.format(code=code)
                             task.phase = "prepare"
-                            # The code is handed to the agent once and not kept on the task.
-                            task.details = {**{k: v for k, v in (task.details or {}).items() if k != "otp"}, "otp_entered": True}
+                            task.details = {**{k: v for k, v in (task.details or {}).items() if k != "otp"}, "otp_entered": True, "code_typed": typed}
+                            note(task, "the login code was typed into the code boxes" if typed else "the agent types the login code")
                         await _start_run(session, agent, task, profile_for, extra)
                         stats["started"] += 1
                 elif task.status == "running":
@@ -4068,6 +4127,8 @@ async def tick(
                                 logger.warning("practice order-list check failed task=%s: %s", task.id, exc)
                         if task.phase == "browse":  # how the login is spoken of comes from the family's saved login
                             task.details = {**(task.details or {}), "login_live": await sandbox.login_live(session, task.family_id, task.service)}
+                        if out.get("logged_in") is True:
+                            task.details = {**(task.details or {}), "seen_logged_in": True}
                         guarded = _before_confirm_guard(task, run.path or [], out)
                         if not guarded and task.phase == "check":
                             # the store's own list: owned and cancelled, or the step's own report goes on as it would have
@@ -4122,7 +4183,7 @@ async def tick(
                             text_ = f"{task.phase} failed: {note_}"
                             if text_ not in await _learned(session, task.service):
                                 session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
-                    elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > RUN_TIMEOUT:
+                    elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > (CHECK_TIMEOUT if task.phase == "check" else RUN_TIMEOUT):
                         await agent.stop(task.agent_task)
                         sandbox.audit(task, phase=task.phase, status="timeout", steps=run.steps, path=run.path, cost=0)
                         task.status = "failed"

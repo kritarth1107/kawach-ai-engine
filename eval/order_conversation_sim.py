@@ -90,6 +90,7 @@ class Store:
         self.broken: set[str] = set()  # stores whose saved look-up fails (the browser agent looks instead)
         self.away: set[str] = set()  # stores that do not deliver to the family's place
         self.needs_code: set[str] = set()  # stores whose account is not logged in: a login code comes first
+        self.codes_refused: dict[str, int] = {}  # how many login codes a store's boxes do not take first (PharmEasy, 2026-10-13)
         self.cancel_mode: dict[str, str] = {}  # how a store answers a cancel: ok (default), fee0, fee25, refuse
         self.cancelled: list[str] = []
         self.logged_in: set[str] = set()
@@ -213,9 +214,13 @@ class Browser:
             self.shop.cancelled.append(service)
             return {**base, "cancelled": True}
         if phase in ("prepare", "otp") and service in self.shop.needs_code and service not in self.shop.logged_in:
-            if "Enter this code" not in goal:  # the store sends a login code to the family's phone
+            # a code given to this run: typed into the boxes already, or handed to the agent to type
+            if "Enter this login code" not in goal and "already typed into the code boxes" not in goal:  # the store sends one
                 self.code_sent_at = getattr(self, "polls_total", 0)
                 return {**base, "logged_in": False, "needs_otp": True, "otp_sent_to": "phone ending 1111"}
+            if self.shop.codes_refused.get(service):  # its code boxes did not take this one
+                self.shop.codes_refused[service] -= 1
+                return {**base, "logged_in": False, "needs_otp": False, "problem": "code not accepted: the boxes kept 3 of 4 digits"}
             self.shop.logged_in.add(service)
         if phase == "browse":  # the agent sets the location by the written address, then searches each item
             items = []
@@ -1144,6 +1149,30 @@ async def kolkata_two_of_three_named_login_code_asked_at_once(c: Conversation):
         c.check(len(c.shop.placed) == 1, f"not placed once ({len(c.shop.placed)})")
 
 
+async def kolkata_first_code_did_not_go_in(c: Conversation):
+    """Live 2026-10-13 (PharmEasy): the store's code boxes did not take the code; the person was asked for a code six times.
+    Now the first code that does not go in is asked for once more, plainly, and the second goes through to the confirm."""
+    await c.setup()
+    c.shop.needs_code.add("zepto")
+    c.shop.codes_refused["zepto"] = 1
+    await c.say("জেপ্টো থেকে দুই প্যাকেট মারি বিস্কুট পাঠাও")
+    await c.say("হ্যাঁ, বাড়িতেই পাঠাও")
+    await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    await c.say("প্রথমটা নাও")
+    await c.ticks_any(lambda ts: any(t.service == "zepto" and t.input_needed == "otp" for t in ts), most=8)
+    seen = len(c.maa_messages())
+    await c.say("কোড 4821")
+    ts = await c.ticks_any(lambda ts: any(t.service == "zepto" and t.input_needed == "otp" and int((t.details or {}).get("code_fails") or 0) == 1
+                                          for t in ts) and _idle(ts), most=8)
+    c.check(any(int((t.details or {}).get("code_fails") or 0) == 1 for t in ts), "the code that did not go in was not counted")
+    c.check(len(c.maa_messages()) > seen, "she was not told the code did not go in")
+    await c.say("নতুন কোড 7390")
+    ts = await c.ticks_any(lambda ts: any(t.service == "zepto" and t.input_needed == "confirm" for t in ts), most=8)
+    c.check(any(t.service == "zepto" and t.input_needed == "confirm" for t in ts), "no confirm after the second code")
+    asks = [p for k, person, p in c.prompt_ticks if person == c.family.speaker["id"] and "code" in p and "ask" in p.lower()]
+    c.check(len(asks) <= 2, f"asked for a code {len(asks)} times")
+
+
 async def raipur_approval_at_once_then_cancel_while_placing(c: Conversation):
     """Above the family's limit for her: her son's approval is asked in the first step after her yes; he approves; while it
     is being placed she asks to cancel: she hears it cannot be stopped, then ONE message with the outcome; he is told once
@@ -1273,6 +1302,8 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
              ("Chennai: Tamil medicine, exact strength only", chennai_tamil_medicine_exact_strength_only, CHENNAI,
               tuple(f"{s}:{p}" for s in ("apollo", "1mg", "pharmeasy") for p in ("prepare", "place"))),
              ("Kolkata: Bengali, two of three named, login code at once", kolkata_two_of_three_named_login_code_asked_at_once, KOLKATA,
+              ("zepto:prepare", "zepto:place")),
+             ("Kolkata: the first login code did not go in: asked once more, then the confirm", kolkata_first_code_did_not_go_in, KOLKATA,
               ("zepto:prepare", "zepto:place")),
              ("Raipur: approval at once, cancel while placing, her son's cancel with a fee", raipur_approval_at_once_then_cancel_while_placing,
               RAIPUR, ("zepto:prepare", "zepto:place", "zepto:cancel")),

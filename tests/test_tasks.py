@@ -87,7 +87,10 @@ async def test_otp_then_continue(db, at, sessions):
 
 
 async def test_cancel_before_placing_stops_agent(db, at, sessions):
+    from app.tasks import sandbox
+
     at("2026-10-02 10:00")
+    await sandbox.note_login(db, FAM, "instamart", {"logged_in": True}, phase="prepare")  # the account is logged in
     agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=5)
     h = Harness(sessions, agent)
     t = await _order(db)

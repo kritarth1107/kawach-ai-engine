@@ -212,11 +212,11 @@ class Specialist:
 
 
 SHOPPING = Specialist("shopping", ("swiggy", "instamart", "zepto", "blinkit", "zomato"), SHOPPING_RULES, "SHOPPING_AGENT_LLM",
-                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 20})
+                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 12})
 PHARMACY = Specialist("pharmacy", ("apollo", "1mg", "pharmeasy"), PHARMACY_RULES, "PHARMACY_AGENT_LLM",
-                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 20})
+                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 12})
 RIDES = Specialist("rides", ("uber", "ola", "rapido"), RIDES_AGENT_RULES, "RIDES_AGENT_LLM",
-                   {"prepare": 45, "otp": 40, "place": 30, "cancel": 30, "check": 20})
+                   {"prepare": 45, "otp": 40, "place": 30, "cancel": 30, "check": 12})
 
 SPECIALISTS = {s.name: s for s in (SHOPPING, PHARMACY, RIDES)}
 

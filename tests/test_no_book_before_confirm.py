@@ -56,6 +56,14 @@ class H:
         return await runtime.tick(self.sessions, self.agent, profile_for=self.profile_for, notify=self.notify)
 
 
+async def _ola_logged_in(db) -> None:
+    """Ola was still logged in from an earlier ride (his case): the family's saved login is alive."""
+    from app.tasks import sandbox
+
+    await sandbox.note_login(db, FAM, "ola", {"logged_in": True}, phase="prepare")
+    await db.commit()
+
+
 async def _ride(db, **details) -> Task:
     t = await runtime.create(db, family_id=FAM, subject_id=ME, requested_by=ME, service="ola", kind="ride",
                              goal="Cab from home to the office", details={"pickup": "Home", "drop": "Office", "for_set": True, **details})
@@ -124,6 +132,7 @@ async def test_his_cancel_while_it_books_never_hears_nothing_was_booked(db, at, 
     at("2026-10-12 21:53")
     agent = PathAgent(script={"prepare": [HIDDEN], "cancel": [CANCELLED]}, finish_after_polls=99, paths={"prepare": BOOKED_PAGES[:4]})
     h = H(sessions, agent)
+    await _ola_logged_in(db)
     t = await _ride(db)
     await h.tick()
     await db.refresh(t)
@@ -138,6 +147,7 @@ async def test_a_cancel_after_a_logged_in_run_reads_the_store_first_and_tells_th
     shown = {**CHECKED, "this_task": True, "ride_id": "CRN10000000001", "status": "Cancelled by you", "cancelled": True}
     agent = PathAgent(script={"prepare": [FARES], "check": [shown]}, finish_after_polls=99, paths={"prepare": [OLA]})
     h = H(sessions, agent)
+    await _ola_logged_in(db)
     t = await _ride(db)
     await h.tick()
     await db.refresh(t)
@@ -157,6 +167,7 @@ async def test_a_list_that_cannot_be_read_is_never_nothing_was_booked(db, at, se
     agent = PathAgent(script={"prepare": [FARES], "check": [{**CHECKED, "this_task": None, "logged_in": False, "problem": "login page"}]},
                       finish_after_polls=99, paths={"prepare": [OLA]})
     h = H(sessions, agent)
+    await _ola_logged_in(db)
     t = await _ride(db)
     await h.tick()
     await db.refresh(t)
@@ -290,3 +301,37 @@ async def test_a_run_that_asked_for_a_login_code_had_no_login_and_is_not_checked
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.status == "needs_input" and t.input_needed == "otp" and [r["phase"] for r in agent.runs] == ["prepare"]
+
+
+async def test_an_account_that_never_logged_in_is_stopped_at_once_and_never_checked(db, at, sessions):
+    """Live 2026-10-13 (PharmEasy): the login code never went in, she cancelled, and a store check ran 11 minutes while the
+    20-minute "not placed" ladder asked and emailed. Never logged in: nothing can be on the account; stopped at once."""
+    at("2026-10-13 02:00")
+    agent = PathAgent(script={"prepare": [FARES]}, finish_after_polls=99, paths={"prepare": [OLA + "login"]})
+    h = H(sessions, agent)
+    t = await _ride(db)
+    await h.tick()
+    await db.refresh(t)
+    said = await runtime.request_cancel(db, agent, t, by=ME, reason="switching to another app")
+    assert said == "stopped; nothing was booked" and t.status == "cancelled" and not any(r["phase"] == "check" for r in agent.runs)
+
+
+async def test_the_not_placed_ladder_never_runs_on_a_check_or_after_a_cancel(db, at, sessions):
+    from datetime import timedelta
+
+    from app.core import clock
+
+    at("2026-10-13 02:00")
+    t = await runtime.create(db, family_id=FAM, subject_id=ME, requested_by=ME, service="pharmeasy", kind="order", goal="medicine",
+                             details={"items": [{"name": "Almox 250mg"}], "for_set": True})
+    t.phase, t.status, t.cancel_requested = "check", "running", True
+    t.agent_task, t.agent_session = "t9", "s9"
+    t.details = {**t.details, "run_started": clock.now().isoformat(), "check": {"then": "cancelled", "from": "prepare"}}
+    await db.commit()
+    agent = PathAgent(script={}, finish_after_polls=99)
+    h = H(sessions, agent)
+    at("2026-10-13 02:25")
+    await h.tick()
+    await db.refresh(t)
+    assert not t.details.get("ladder_asked_at") and not any("not placed" in x["note"] for x in t.history)
+    assert t.status == "failed" and "NOT known" in h.told[-1], "a check that takes over 5 minutes stops and says so"
