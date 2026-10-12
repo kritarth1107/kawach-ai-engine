@@ -224,6 +224,13 @@ async def sweep(sessions: async_sessionmaker, agent, *, older_than: timedelta = 
     return out
 
 
+async def login_live(session: AsyncSession, family_id: str, service: str) -> bool:
+    """The family's login on this store was alive the last time a run saw it (founder 2026-10-12: "it said it will require
+    an OTP, even when the session was still active")."""
+    row = await session.get(ServiceLogin, (_fam(family_id), service))
+    return bool(row and row.state == "ok")
+
+
 async def logins(session: AsyncSession, family_id: str) -> list[dict]:
     rows = (await session.execute(select(ServiceLogin).where(ServiceLogin.family_id == _fam(family_id)))).scalars()
     return [{"service": r.service, "state": r.state, "lastLoginOkAt": r.last_login_ok_at.isoformat() if r.last_login_ok_at else None,

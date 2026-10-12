@@ -21,7 +21,7 @@ FAM, ME = "fam-nb", "self-nb"
 OLA = "https://book.olacabs.com/"
 # his run's own pages (Browser Use steps of 2026-10-12 16:22 UTC), the agent's report without the booking
 BOOKED_PAGES = [OLA + "confirm-ride-p2p?pickup_name=x", OLA + "?pickup_name=x", OLA + "confirm-ride-p2p?pickup_name=x",
-                OLA + "ride-detail/CRN11420826289?pickup_name=x", OLA + "cancel-ride?pickup_name=x", OLA + "?pickup_name=x"]
+                OLA + "ride-detail/CRN10000000001?pickup_name=x", OLA + "cancel-ride?pickup_name=x", OLA + "?pickup_name=x"]
 HIDDEN = {**FARES, "booked": None, "ride_id": None}
 
 
@@ -71,11 +71,11 @@ async def test_his_case_the_fare_look_up_that_booked_is_owned_and_cancelled_on_t
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert (t.phase, t.status) == ("cancel", "queued"), "its own pages show the booking, though its report left it out"
-    assert t.result["booked"] and t.result["by_mistake"] and t.result["ride_id"] == "CRN11420826289"
+    assert t.result["booked"] and t.result["by_mistake"] and t.result["ride_id"] == "CRN10000000001"
     assert t.details["unauthorized_place"] and t.details["cancel_ask"]["state"] == "cancelling"
     said = h.told[-1]
     assert "MISTAKE" in said and "was booked before anyone said yes" in said and "Never say nothing was booked" in said
-    assert "CRN11420826289" in said and "cancelling it on Ola right now" in said
+    assert "CRN10000000001" in said and "cancelling it on Ola right now" in said
     await h.tick(); await h.tick()
     await db.refresh(t)
     assert t.status == "cancelled" and agent.runs[-1]["phase"] == "cancel" and "Cancelled on Ola" in h.told[-1]
@@ -128,14 +128,14 @@ async def test_his_cancel_while_it_books_never_hears_nothing_was_booked(db, at, 
     await h.tick()
     await db.refresh(t)
     said = await runtime.request_cancel(db, agent, t, by=ME, reason="said they cancelled it themselves in the app")
-    assert said.startswith("It WAS booked by mistake") and "CRN11420826289" in said and "never say nothing was booked" in said
+    assert said.startswith("It WAS booked by mistake") and "CRN10000000001" in said and "never say nothing was booked" in said
     assert t.phase == "cancel" and t.result["by_mistake"]
 
 
 async def test_a_cancel_after_a_logged_in_run_reads_the_store_first_and_tells_the_truth(db, at, sessions):
     """Nothing on its pages yet: the store's own list is read; it shows the ride, which he cancelled in the app himself."""
     at("2026-10-12 21:53")
-    shown = {**CHECKED, "this_task": True, "ride_id": "CRN11420826289", "status": "Cancelled by you", "cancelled": True}
+    shown = {**CHECKED, "this_task": True, "ride_id": "CRN10000000001", "status": "Cancelled by you", "cancelled": True}
     agent = PathAgent(script={"prepare": [FARES], "check": [shown]}, finish_after_polls=99, paths={"prepare": [OLA]})
     h = H(sessions, agent)
     t = await _ride(db)
@@ -147,7 +147,7 @@ async def test_a_cancel_after_a_logged_in_run_reads_the_store_first_and_tells_th
     agent.finish_after_polls = 1
     await h.tick(); await h.tick()
     await db.refresh(t)
-    assert t.status == "cancelled" and t.result["by_mistake"] and t.result["ride_id"] == "CRN11420826289"
+    assert t.status == "cancelled" and t.result["by_mistake"] and t.result["ride_id"] == "CRN10000000001"
     assert "now shows it cancelled" in h.told[-1] and "Never say nothing was booked" in h.told[-1]
     assert not any(r["phase"] == "cancel" for r in agent.runs), "already cancelled: nothing more to do on the app"
 
@@ -217,7 +217,7 @@ async def test_a_cancel_of_a_look_up_without_login_is_stopped_at_once(db, at, se
 
 @pytest.mark.parametrize("service,page,kind", [
     ("ola", "https://book.olacabs.com/confirm-ride-p2p?x=1", "final"),
-    ("ola", "https://book.olacabs.com/ride-detail/CRN11420826289", "after"),
+    ("ola", "https://book.olacabs.com/ride-detail/CRN10000000001", "after"),
     ("ola", "https://book.olacabs.com/cancel-ride", "after"),
     ("uber", "https://m.uber.com/go/trip/abc123", "after"),
     ("blinkit", "https://blinkit.com/payment-status", "after"),

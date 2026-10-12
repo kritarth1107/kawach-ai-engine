@@ -109,6 +109,15 @@ def _code_to(task: Task) -> str:
     return f"the phone ending {login}" if login and login != "none" else "the family phone"
 
 
+def _code_line(task: Task) -> str:
+    """What to say about a login code before one is needed: from the family's saved login (founder 2026-10-12: a code was
+    promised while the login was still alive); a code is asked for only when the store actually sends one."""
+    label = SKILLS[task.service]["label"]
+    if (task.details or {}).get("login_live"):
+        return f"the family's {label} login is still active, so no login code should be needed"
+    return f"if {label} sends a login code, it goes to {_code_to(task)} and is asked for only then"
+
+
 def _found(task: Task) -> list[dict]:
     return [i for i in ((task.result or {}).get("items") or []) if i.get("name") and i.get("available") is not False]
 
@@ -201,13 +210,19 @@ def _trip(task: Task) -> str:
 
 
 def _ride_offers(task: Task) -> list[dict]:
-    """A ride app's fares as options: the one they picked before (after the login), else the cheapest, suggested."""
+    """A ride app's fares as options: the one they picked before (after the login), else the type they named, else the one
+    they took on this app last time, else the cheapest, suggested (founder 2026-10-12: show the types with fares and ask
+    which one; the person always picks)."""
     opts = _ride_opts(task)
     if not opts:
         return []
-    picked = ((task.details or {}).get("ride_pick") or {}).get("type")
+    d = task.details or {}
+    picked = (d.get("ride_pick") or {}).get("type")
     fares = [_rupee_value(o.get("fare")) or float("inf") for o in opts]
-    sugg = next((i for i, o in enumerate(opts) if picked and o.get("type") == picked), min(range(len(opts)), key=fares.__getitem__))
+    wanted = next((m for m in (_match_option(opts, str(v)) for v in (d.get("vehicle"), d.get("usual_vehicle")) if v)
+                   if isinstance(m, dict)), None)
+    sugg = next((i for i, o in enumerate(opts) if picked and o.get("type") == picked),
+                next((i for i, o in enumerate(opts) if wanted is o), min(range(len(opts)), key=fares.__getitem__)))
     return [{"oids": [str(i)], "item": "", "items": [], "find": [], "suggested": i == sugg,
              "text": f"{o['type']} {o.get('fare') or ''}".strip() + ((f" (pickup in {o['eta']})" if any(ch.isdigit() for ch in str(o["eta"]))
                                                                        else f" ({o['eta']})") if o.get("eta") else "")}
@@ -284,7 +299,7 @@ def _ride_options_message(task: Task, *, head: str = "") -> str:
     label = SKILLS[task.service]["label"]
     lines, _ = _offer_lines(task, _offers(task), 0, mark=True)
     return (f"{head}Fares on {label}, {_trip(task)} (before the login, they may change a little; nothing is booked):\n"
-            + "\n".join(lines) + f"\nBooking needs a login on {label} (a code may come to {_code_to(task)}). "
+            + "\n".join(lines) + f"\nBooking needs a login on {label}: {_code_line(task)}. "
             + _pick_ask(f"on task {task.id}", False, ride=True))
 
 
@@ -379,7 +394,7 @@ def _compare_summary(group: list[Task], head: str = "") -> str:
             offered.append(t)
         elif t.status == "awaiting_confirm" and t.input_needed == "go":
             lines.append(f"- {label} [task {t.id}]: shows its {'fares' if t.kind == 'ride' else 'products and prices'} only after a "
-                         f"login (a login code would come to {_code_to(t)}); to look there: task_input go yes on this task")
+                         f"login ({_code_line(t)}); to look there: task_input go yes on this task")
             offered.append(t)
         elif t.status == "needs_input" and t.input_needed == "swap":
             alts = "; ".join(f"{a['name']}{(' ' + str(a['price'])) if a.get('price') else ''}" for a in (d.get("alternatives") or []))
@@ -794,8 +809,8 @@ def plain_news(tasks: list[Task], person: str, names: dict[str, str]) -> tuple[s
         return (f"{label} has sent a login code to {mine} for the {thing} ({lead.goal}). Please send me that code; nothing is "
                 f"{ordered} yet."), None
     if lead.status == "awaiting_confirm" and lead.input_needed == "go":
-        return (f"{label} shows its {'fares' if ride else 'prices'} only after a login (a code would come to {_code_to(lead)}). "
-                f"Shall I log in and look? Nothing is {ordered} yet."), None
+        return (f"{label} shows its {'fares' if ride else 'prices'} only after a login ({_code_line(lead)}). "
+                f"{'Shall I look?' if (lead.details or {}).get('login_live') else 'Shall I log in and look?'} Nothing is {ordered} yet."), None
     if lead.status == "awaiting_confirm" and lead.input_needed == "confirm":
         where = ((d.get("limits") or {}).get("place") or {}).get("nickname") or "your saved place"
         eta = f", delivery in about {r['eta']}" if r.get("eta") else ""
@@ -1183,6 +1198,20 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     note(task, f"started {task.phase} run ({spec.name} agent, browser)")
 
 
+
+
+async def _save_usual_vehicle(session: AsyncSession, task: Task, vehicle: str | None, *, by: str, by_is_elder: bool) -> None:
+    """The ride type they picked on this app, saved for the rider: next time it is the suggestion among the fares."""
+    if not vehicle or task.kind != "ride":
+        return
+    label = SKILLS[task.service]["label"]
+    try:
+        await store.write_fact(session, family_id=task.family_id, subject_id=task.subject_id, domain="preference",
+                               key=f"ride_vehicle:{task.service}", value={"service": label, "vehicle": str(vehicle)[:40], "task_id": str(task.id)},
+                               text=f"Takes {vehicle} on {label}", source_kind="elder_said" if by_is_elder else "caregiver_said",
+                               stated_by=by, confidence=0.9)
+    except Exception:  # noqa: BLE001 — the ride goes on; only next time's suggestion is lost
+        logger.warning("ride preference not saved task=%s", task.id)
 
 
 def _ride_fp(cart_fp: str | None, choice: str) -> str:
@@ -1720,6 +1749,8 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
             pick = {"type": opts[i].get("type"), "fare": opts[i].get("fare")} if 0 <= i < len(opts) else None
         label = SKILLS[task.service]["label"]
         task.details = {**d, "ride_pick": pick, "offer": None}
+        if pick:
+            await _save_usual_vehicle(session, task, pick.get("type"), by=by, by_is_elder=by_is_elder)
         if later.of(task) and pick:
             # For later (founder 2026-10-12): the one question now, with everything and the most they will pay; nothing
             # logs in yet (the login is planned by how long the app keeps it).
@@ -1932,6 +1963,7 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         if not opt:
             return "that is not one of the options; pass its number as listed: " + listed
         task.details = d = {**d, "ride_pick": {"type": opt.get("type"), "fare": opt.get("fare")}}
+        await _save_usual_vehicle(session, task, opt.get("type"), by=by, by_is_elder=by_is_elder)
         choice = f"{opt.get('type')} {opt.get('fare') or ''}".strip()
         lt = later.of(task)
         if lt and not lt.get("by"):
@@ -2857,8 +2889,9 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
         return "failed", f"No ride options came up on {label} ({out.get('problem') or 'unknown'}); nothing was booked. Offer another service."
     if not found and out.get("login_required") and task.kind == "ride":
         task.input_needed = "go"
-        return "awaiting_confirm", (f"{label} shows fares only after a login; nothing is booked. To look and book, a login code will "
-                                    f"come to {code_to}. Ask whether to go ahead (task_input go).")
+        return "awaiting_confirm", (f"{label} shows fares only after a login; nothing is booked. To see the fares there: {_code_line(task)}. "
+                                    "Ask whether to go ahead (task_input go); the fares come back for them to pick, nothing is booked "
+                                    "before their pick and yes.")
     if not found and out.get("login_required"):
         if compare_group(task):
             task.input_needed = "go"
@@ -4033,6 +4066,8 @@ async def tick(
                                 note(task, "practice check of the order list: " + ("unreadable" if new is None else f"{len(new)} new orders"))
                             except Exception as exc:  # noqa: BLE001 — the agent's own report still stands
                                 logger.warning("practice order-list check failed task=%s: %s", task.id, exc)
+                        if task.phase == "browse":  # how the login is spoken of comes from the family's saved login
+                            task.details = {**(task.details or {}), "login_live": await sandbox.login_live(session, task.family_id, task.service)}
                         guarded = _before_confirm_guard(task, run.path or [], out)
                         if not guarded and task.phase == "check":
                             # the store's own list: owned and cancelled, or the step's own report goes on as it would have

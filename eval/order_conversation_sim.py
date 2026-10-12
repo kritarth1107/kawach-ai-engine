@@ -193,7 +193,7 @@ class Browser:
                 return {**base, **ends, "logged_in": False, "options": fares, **({} if fares else {"problem": "no rides near the pickup"})}
             if phase == "prepare" and service in self.shop.books_on_look:
                 self.shop.books_on_look.discard(service)
-                ref = f"CRN{11420826289 + len(self.shop.rides)}"
+                ref = f"CRN{10000000001 + len(self.shop.rides)}"
                 self.shop.rides.append({"service": service, "choice": "Auto", "pickup": ends["pickup_used"], "by_mistake": True, "id": ref})
                 self._next_path = ["https://book.olacabs.com/", "https://book.olacabs.com/confirm-ride-p2p?x",
                                    f"https://book.olacabs.com/ride-detail/{ref}?x", "https://book.olacabs.com/?x"]

@@ -295,7 +295,7 @@ def past_confirm(service: str, urls: list[str]) -> tuple[str, str] | None:
 
 
 def ref_in(path: str) -> str | None:
-    """The order or ride id a store puts in its after-order page path (Ola: /ride-detail/CRN11420826289), if any."""
+    """The order or ride id a store puts in its after-order page path (Ola: /ride-detail/CRN10000000001), if any."""
     segs = [s for s in (path or "").split("/") if s]
     for s in reversed(segs):
         if len(s) >= 6 and any(c.isdigit() for c in s) and s.replace("-", "").replace("_", "").isalnum():

@@ -1224,6 +1224,9 @@ async def _task(ctx: TurnCtx, task_id: str):
         "for_whom": FOR_WHOM,
         "pickup_shared": {"type": "boolean", "description": "Ride: the pickup is the WhatsApp location they shared (this message or a recent one)"},
         "drop_shared": {"type": "boolean", "description": "Ride: the drop is the WhatsApp location they shared"},
+        "pickup_link": {"type": "string", "description": "Ride: a Google Maps link they sent for the pickup, exactly as sent"},
+        "drop_link": {"type": "string", "description": "Ride: a Google Maps link they sent for the drop, exactly as sent "
+                      "(someone who cannot find WhatsApp's location button often sends one)"},
         "at": {"type": "string", "description": "Only when they want it at a later time ('kal subah 6 baje cab', 'order milk at 7 tomorrow'): "
                "that time as ISO 8601 in IST, e.g. 2026-10-16T06:00 (work it out from NOW). Leave out for now."},
         "at_means": {"type": "string", "enum": ["arrive", "book"], "description": "With at: arrive (default) = the cab should come / the "
@@ -1281,6 +1284,15 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
     if a["kind"] == "ride":
         # The ride's ends as places: a saved place they meant (an AI decision) goes to the app as its full address (live
         # 2026-10-12: a saved home went to the app as words, the app set the city and the ride was booked from there).
+        for end in ("pickup", "drop"):
+            # a Google Maps link they sent is an exact point, like a shared WhatsApp location (founder 2026-10-12: "I can't
+            # find the location in WhatsApp"; his link went to the app as text)
+            if a.get(f"{end}_link") and not a.get(f"{end}_place"):
+                pin = await maps_link_pin(str(a[f"{end}_link"]))
+                if pin is None:
+                    raise ToolRefused(f"That Google Maps link for the {end} could not be read. Ask them in one short line to share "
+                                      "the place with the Send location button, or to say its address.")
+                a = {**a, f"{end}_place": _pin_place(pin), end: _pin_place(pin)["full"]}
         ends = [e for e in ("pickup", "drop") if a.get(e) and not a.get(f"{e}_place")]
         found = await asyncio.gather(*(_ride_end_place(ctx, str(a[e]), a["for_whom"]) for e in ends))
         a = {**a, **{f"{e}_place": f for e, f in zip(ends, found) if f}}
@@ -1534,12 +1546,18 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         ctx.session, family_id=ctx.family_id, subject_id=who, kind=a["kind"], agent=specialist_for(service).name,
         requester_is_elder=ctx.speaker_is_elder and carers, place=place,
     )
+    usual = None
+    if a["kind"] == "ride" and not a.get("vehicle"):
+        # the type this person took on this app before (founder 2026-10-12: "ask which type of cab I want"): marked as the
+        # suggestion among the fares, never booked without their pick
+        usual = next(((f.value or {}).get("vehicle") for f in await store.facts(ctx.session, ctx.family_id, who, domains=["preference"])
+                      if f.key == f"ride_vehicle:{service}" and f.status == "active"), None)
     try:
         return await runtime.create(
             ctx.session, family_id=ctx.family_id, subject_id=who, requested_by=ctx.speaker.get("id") or ctx.elder_id,
             service=service, kind=a["kind"], goal=a["goal"],
             details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place", "later") if a.get(k)},
-                     "for_set": True, **(extra or {})}, limits=limits,
+                     "for_set": True, **({"usual_vehicle": usual} if usual else {}), **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
@@ -1560,6 +1578,51 @@ async def _shared_pin(ctx: TurnCtx) -> dict | None:
         if pin and t.at and clock.now() - t.at <= PIN_KEPT_FOR:
             return pin
     return None
+
+
+MAPS_HOSTS = ("maps.app.goo.gl", "goo.gl", "maps.google.com", "google.com", "www.google.com", "google.co.in", "www.google.co.in")
+
+
+async def _follow(link: str) -> tuple[str, str]:
+    """The address a Maps link ends at, and the start of its page (some answer with the point only in the page)."""
+    import httpx
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=8.0, headers={"User-Agent": "Mozilla/5.0"}) as c:
+        r = await c.get(link)
+        return str(r.url), r.text[:300_000]
+
+
+def _maps_point(text: str) -> dict | None:
+    """The map point in a Google Maps address or page: the place's own pin (!3d..!4d..), else the map's centre (@lat,lng),
+    else a query point (q=lat,lng); with the place's name when the address has one."""
+    import re
+    from urllib.parse import unquote_plus
+
+    m = (re.search(r"!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)", text) or re.search(r"@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)", text)
+         or re.search(r"[?&](?:q|query|ll|center)=(-?\d{1,2}\.\d+)(?:,|%2C)\s*(-?\d{1,3}\.\d+)", text))
+    if not m:
+        return None
+    lat, lng = float(m.group(1)), float(m.group(2))
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180) or (lat == 0 and lng == 0):
+        return None
+    name = re.search(r"/maps/place/([^/@?]+)", text)
+    return {"lat": lat, "lng": lng, "name": unquote_plus(name.group(1))[:120] if name else ""}
+
+
+async def maps_link_pin(link: str) -> dict | None:
+    """A Google Maps link (as the person sent it) to its map point, or None when it is not one or cannot be read."""
+    from urllib.parse import urlparse
+
+    link = link.strip()
+    u = urlparse(link)
+    host = (u.hostname or "").lower()
+    if u.scheme not in ("http", "https") or host not in MAPS_HOSTS or (host == "goo.gl" and not u.path.startswith("/maps")):
+        return None
+    try:
+        final, page = await _follow(link)
+    except Exception:  # noqa: BLE001 — unreadable: they are asked for the location instead
+        return None
+    return _maps_point(final) or _maps_point(page)
 
 
 def _pin_place(pin: dict) -> dict:
@@ -1609,20 +1672,27 @@ async def _ride_pin_first(ctx: TurnCtx, a: dict) -> dict | None:
             or not (a.get("pickup") and a.get("drop"))):
         return None  # a scheduled turn, a pin already, an exact saved point, or a ride still missing its ends
     speaker = ctx.speaker.get("id") or ctx.elder_id
+    # per pickup (founder 2026-10-12: the ask for one pickup was taken as answered for the corrected one, his saved home,
+    # whose point is only its pincode's)
+    key = str((a.get("pickup_place") or {}).get("nickname") or a.get("pickup") or "").strip().lower()
     asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - RIDE_PIN_ASK_FOR,
-                                           kinds=["ride_pin_asked"]) if (e.payload or {}).get("speaker") == speaker]
+                                           kinds=["ride_pin_asked"])
+             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("pickup_key", key) == key]
     if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
         return None
     ctx.location_request = True
     if not asked:
         await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="ride_pin_asked",
                                  summary=f"Asked for the pickup as a location: {a['goal']}", actor_id=speaker,
-                                 payload={"speaker": speaker, "ref": ctx.message_ref, "pickup": str(a.get("pickup") or "")[:200]})
+                                 payload={"speaker": speaker, "ref": ctx.message_ref, "pickup": str(a.get("pickup") or "")[:200],
+                                          "pickup_key": key})
+    saved = (a.get("pickup_place") or {}).get("nickname")
+    why = f" {saved} is saved without its exact point (only its area), so the driver could go to the wrong door." if saved else ""
     return {"status": "not started yet", "ask_location": "pickup",
-            "next": "Nothing is searched yet. In one short line, ask them to share the pickup with the 'Send location' button "
-                    "under your message (if they are not there now, they can pick the spot on the map). When it comes, call "
-                    "start_task again with the same ride and pickup_shared true. If they would rather use the saved address or "
-                    "their words, call start_task again as it is."}
+            "next": "Nothing is searched yet." + why + " In one short line, ask them to share the pickup with the 'Send "
+                    "location' button under your message (if they are not there now, they can pick the spot on the map; a Google "
+                    "Maps link works too). When it comes, call start_task again with the same ride and pickup_shared true (a "
+                    "link: pickup_link). If they would rather use the saved address or their words, call start_task again as it is."}
 
 
 async def _ride_end_place(ctx: TurnCtx, words: str, rider: str | None = None) -> dict | None:
