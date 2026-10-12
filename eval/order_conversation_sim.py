@@ -257,7 +257,7 @@ RAIPUR = Family("Raipur, Hinglish/Hindi, elder with a caregiver, place with a ma
 class StoreHost(SimHost):
     def __init__(self, family: Family = RAIPUR):
         super().__init__()
-        self.family, self.place_calls = family, 0
+        self.family, self.place_calls, self.saves = family, 0, []
 
     async def call(self, tool, args, *, family_id, subject_id, actor_id):
         f = self.family
@@ -272,6 +272,9 @@ class StoreHost(SimHost):
             if f.heal and self.place_calls > 1:  # saved without a point; the backend finds one when asked again
                 place.update(f.heal)
             return {**place, "matched": True}
+        if tool == "save_place":
+            self.saves.append(args)
+            return {"ok": True}
         if tool == "list_places":
             return {"places": [{"name": f.place["nickname"], "address": f.place["full"], "isDefault": True}]}
         if tool == "browser_profile":
@@ -291,6 +294,8 @@ class Conversation:
         self.host, self.browser = StoreHost(family), Browser(self.shop)
         self.agent_ok = agent_ok  # "service:phase" runs of the browser agent this conversation expects
         self.log: list[str] = []
+        self.location_asked = False  # Saheli's last reply asked for a WhatsApp location
+        self.last_buttons: list[dict] = []  # the one-tap answers on Saheli's last reply
         self.problems: list[str] = []
         self.notified = 0
         self.prompts: list[str] = []  # the task updates Saheli was given (to check every store was reported)
@@ -321,18 +326,24 @@ class Conversation:
         async with SessionLocal() as s:
             return await store.facts(s, self.fam, self.family.elder["id"], domains=[domain], statuses=("active",))
 
-    async def say(self, text: str, who: dict | None = None) -> str:
+    async def say(self, text: str, who: dict | None = None, location: dict | None = None) -> str:
         clock.set_now(clock.now() + timedelta(seconds=30))  # people take a moment to answer
         f = self.family
         speaker = who or f.speaker
+        if location:  # as the backend sends a shared pin: the text tag and the data
+            text = text or f"[location lat={location['lat']} lng={location['lng']}]"
+            location = {"name": "", "address": "", **location}
         async with SessionLocal() as s:
             res = await run_turn(s, self.host, TurnRequest(family_id=self.fam, elder=f.elder, speaker=speaker, members=f.members, text=text,
-                                                           message_ref=f"m-{uuid.uuid4().hex[:8]}", channel="whatsapp"))
-        self.log.append(f"{speaker['name'].upper()}: {text}")
+                                                           message_ref=f"m-{uuid.uuid4().hex[:8]}", channel="whatsapp", location=location))
+        self.location_asked = bool(res.location_request)
+        self.last_buttons = list(res.buttons or [])
+        self.log.append(f"{speaker['name'].upper()}: {text}" + ("  (shared a location)" if location else ""))
         self.said_at = clock.now()
         tools = ", ".join(f"{a['tool']}{'' if a.get('ok', True) else '(x)'}" for a in res.actions)
         if res.reply and res.reply.strip().lower() != "none":
-            self.log.append(f"SAHELI (reply): {res.reply}   [{tools}]")
+            self.log.append(f"SAHELI (reply): {res.reply}   [{tools}]" + ("  [Send location button]" if res.location_request else "")
+                            + (f"   buttons={[b.get('id') for b in res.buttons]}" if res.buttons else ""))
         elif tools:
             self.log.append(f"  [{tools}]")
         return res.reply or ""
@@ -667,6 +678,13 @@ def _script(text: str, lo: int, hi: int) -> bool:
     return any(lo <= ord(ch) <= hi for ch in text)
 
 
+async def _pin_if_asked(c: Conversation, pin: dict | None, *, rather: str = "") -> None:
+    """Saheli asked for the pickup as a WhatsApp location (founder 2026-10-12): share it, or say to use the saved address."""
+    c.check(c.location_asked, "the pickup was not asked as a WhatsApp location")
+    if c.location_asked:
+        await (c.say("", location=pin) if pin else c.say(rather))
+
+
 def _points_sent(c: Conversation) -> None:
     empty = [s for s in c.shop.searched if fastpath.SITES[s[0]].needs_point and not fastpath.has_point(s[1], s[2])]
     c.check(not empty, f"a store's own search was sent without the map point: {empty}")
@@ -788,7 +806,10 @@ async def delhi_ride_cheapest_then_cancel_after_booking(c: Conversation):
     the one confirm names the fare now; booked; then she asks to cancel: never "cancelled", her son is told once."""
     await c.setup()
     await c.say("मुझे घर से एम्स अस्पताल जाना है, सबसे सस्ता ऑटो बुला दो")
+    await _pin_if_asked(c, {"lat": 28.5676, "lng": 77.2369})
     ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    c.check(any(((t.details or {}).get("pickup_place") or {}).get("lat") == 28.5676 for t in ts), "her pin is not the pickup")
+    c.check([s_.get("place") for s_ in c.host.saves] == ["Ghar"], f"her pin was not saved to Ghar: {c.host.saves}")
     offered = _offered(ts)
     c.check({t.service for t in ts} == {"uber", "ola", "rapido"}, f"not every ride app looked: {sorted(t.service for t in ts)}")
     update = next((p for p in reversed(c.prompts) if "Looked on" in p), "")
@@ -824,6 +845,7 @@ async def chennai_ride_from_home_the_app_set_the_city_first(c: Conversation):
     await c.setup()
     c.shop.city_pickup = "Chennai, Tamil Nadu"
     await c.say("வீட்டிலிருந்து அப்பல்லோ ஆஸ்பத்திரிக்கு ஊபர்ல ஆட்டோ புக் பண்ணுங்க")
+    await _pin_if_asked(c, None, rather="லொகேஷன் அனுப்ப தெரியாது, வீட்டு முகவரியையே பயன்படுத்துங்க")
     ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
     uber = next((t for t in ts if t.service == "uber"), None)
     full = c.family.place["full"]
@@ -851,6 +873,7 @@ async def bangalore_ride_he_cancelled_it_himself_in_the_app(c: Conversation):
     it in the Ola app: it is recorded, nothing is run on the app, and nothing more is asked."""
     await c.setup()
     await c.say("Book me an Ola mini from home to Bangalore airport")
+    await _pin_if_asked(c, {"lat": 12.9301, "lng": 77.5828})
     ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
     await c.say("the mini")
     await c.ticks_any(lambda ts: any(t.service == "ola" and t.input_needed == "choice" for t in ts), most=10)
@@ -869,6 +892,79 @@ async def bangalore_ride_he_cancelled_it_himself_in_the_app(c: Conversation):
     clock.set_now(clock.now() + timedelta(hours=3))  # past the "did the cab come?" time
     await c.wake()
     c.check(len(c.host.world.sent) == before, f"something more was said about it: {c.host.world.sent[before:]}")
+
+
+async def kolkata_cab_for_6_tomorrow(c: Conversation):
+    """Founder 2026-10-12: "book a cab at xyz time ... just book it that time ... send the booked details". A Bengali elder
+    asks at night for an Uber at 6 tomorrow from home to Howrah station: the pickup as a location, the fares now, her pick,
+    ONE question with everything and the most she will pay, then nothing until its time; the fare is looked at 25 minutes
+    before; booked without asking; every detail goes to her."""
+    from app.tasks import later
+
+    await c.setup()
+    clock.set_now(datetime(2026, 10, 11, 20, 0, tzinfo=clock.IST))
+    await c.say("কাল সকাল ৬টায় বাড়ি থেকে হাওড়া স্টেশন যাব, উবার বুক করে দাও")
+    await _pin_if_asked(c, {"lat": 22.5188, "lng": 88.3641})
+    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    uber = next((t for t in ts if t.service == "uber"), None)
+    c.check(uber is not None and later.of(uber).get("at", "").startswith("2026-10-12T06:00"), f"not set for 6 tomorrow: {later.of(uber) if uber else None}")
+    await c.say("অটোটা")
+    t = await c.task()
+    c.check(t.input_needed == "later", f"no one question for later after her pick: {t.status}/{t.input_needed}")
+    tap = next((b["id"] for b in c.last_buttons if b["id"].startswith("v2:lt:yes")), None)
+    c.check(tap is not None, f"the question for later has no one-tap answers: {c.last_buttons}")
+    await c.say(tap or "হ্যাঁ, ঠিক আছে")
+    t = next(x for x in await c.tasks() if x.service == "uber")
+    lt = later.of(t)
+    c.check(t.status in ("scheduled", "queued", "needs_input") and lt.get("max"), f"not set for later with a limit: {t.status} {lt}")
+    c.check(not c.shop.rides, "booked before its time")
+    if lt.get("login_at"):
+        clock.set_now(later.parse_at(lt["login_at"]) + timedelta(minutes=1))
+        await c.ticks_any(lambda ts: all(x.status == "scheduled" for x in ts if x.service == "uber"), most=6)
+    clock.set_now(later.parse_at(lt["book_at"]) - later.CHECK_BEFORE + timedelta(minutes=1))
+    await c.ticks_any(lambda ts: any(later.of(x).get("state") == "ready" for x in ts), most=8)
+    t = next(x for x in await c.tasks() if x.service == "uber")
+    clock.set_now(later.parse_at(later.of(t)["book_at"]) + timedelta(seconds=30))
+    await c.ticks_any(lambda ts: any(x.service == "uber" and x.status == "done" for x in ts), most=8)
+    c.check([r["service"] for r in c.shop.rides] == ["uber"], f"not booked once at its time: {c.shop.rides}")
+    booked = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
+    c.check("4931" in _digits(booked), f"the booked message lacks the ride PIN: {booked}")
+
+
+async def mumbai_milk_for_7_tomorrow(c: Conversation):
+    """"order milk at 7 tomorrow": a Marathi self-care lady orders at night for the morning; the options now, ONE question
+    with the most she will pay; at 06:23 the cart is built (within her limit: nothing to say); at 06:50 it is placed and every
+    detail goes to her."""
+    from app.tasks import later
+
+    await c.setup()
+    clock.set_now(datetime(2026, 10, 11, 21, 0, tzinfo=clock.IST))
+    await c.say("उद्या सकाळी ७ वाजता दोन पाकीट गोकुळ दूध पाठवा")
+    await c.say("हो, घरीच")
+    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    c.check(any(later.of(t).get("at", "").startswith("2026-10-12T07:00") for t in ts), "not set for 7 tomorrow")
+    await c.say("पहिला")
+    t = next((x for x in await c.tasks() if x.input_needed == "later"), None) or await c.task()
+    c.check(t.input_needed == "later", f"no one question for later after her pick: {t.status}/{t.input_needed}")
+    await c.say("हो चालेल, जास्तीत जास्त १०० रुपये")  # her own limit, in words
+    t = next((x for x in await c.tasks() if later.of(x).get("by")), None)
+    c.check(t is not None and later.of(t).get("max") == 100, f"her own limit was not kept: {later.of(t) if t else None}")
+    t = next((x for x in await c.tasks() if later.of(x).get("by")), None)
+    c.check(t is not None and t.status in ("scheduled", "queued", "needs_input"), f"not set for later: {t.status if t else None}")
+    if t is None:
+        return
+    lt = later.of(t)
+    if lt.get("login_at"):
+        clock.set_now(later.parse_at(lt["login_at"]) + timedelta(minutes=1))
+        await c.ticks_any(lambda ts: all(x.status == "scheduled" for x in ts if x.id == t.id), most=6)
+    clock.set_now(later.parse_at(lt["book_at"]) - later.CHECK_BEFORE + timedelta(minutes=1))
+    await c.ticks_any(lambda ts: any(later.of(x).get("state") == "ready" for x in ts), most=8)
+    c.check(not c.shop.placed, "placed before its time")
+    clock.set_now(later.parse_at(lt["book_at"]) + timedelta(seconds=30))
+    await c.ticks_any(lambda ts: any(x.id == t.id and x.status == "done" for x in ts), most=8)
+    c.check(len(c.shop.placed) == 1, f"not placed once at its time: {c.shop.placed}")
+    placed = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
+    c.check("SIM1" in placed or "1" in _digits(placed), f"no order details: {placed}")
 
 
 async def bangalore_food_two_apps_named_caregiver_cancels_in_app(c: Conversation):
@@ -1062,6 +1158,9 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
               ("uber:browse", "uber:prepare", "uber:place")),
              ("Bangalore: his Ola ride, then he cancelled it himself in the app", bangalore_ride_he_cancelled_it_himself_in_the_app,
               BANGALORE, ("ola:browse", "ola:prepare", "ola:place")),
+             ("Kolkata: Bengali cab for 6 tomorrow, booked then without asking", kolkata_cab_for_6_tomorrow, KOLKATA,
+              ("uber:browse", "uber:prepare", "uber:place")),
+             ("Mumbai: Marathi milk for 7 tomorrow, placed then", mumbai_milk_for_7_tomorrow, MUMBAI, ()),
              ("Chennai: Tamil medicine, exact strength only", chennai_tamil_medicine_exact_strength_only, CHENNAI,
               tuple(f"{s}:{p}" for s in ("apollo", "1mg", "pharmeasy") for p in ("prepare", "place"))),
              ("Kolkata: Bengali, two of three named, login code at once", kolkata_two_of_three_named_login_code_asked_at_once, KOLKATA,

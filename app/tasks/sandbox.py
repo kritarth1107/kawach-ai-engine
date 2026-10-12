@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
-from sqlalchemy import DateTime, Index, String, Text, select
+from sqlalchemy import DateTime, Index, Integer, String, Text, select
 from sqlalchemy import text as sql
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
@@ -58,6 +58,22 @@ class ServiceLogin(Base):
     last_login_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_problem: Mapped[str] = mapped_column(Text, default="")
+
+
+class StoreLogin(Base):
+    """One login of a family's store or ride account and how long it was seen to last (founder 2026-10-12: for a booking
+    set for later, the code is asked by how long the app keeps a login; no app publishes that, so it is measured)."""
+
+    __tablename__ = "store_logins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    family_id: Mapped[str] = mapped_column(String(80))
+    service: Mapped[str] = mapped_column(String(24))
+    login_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # a code was entered (or first seen logged in)
+    last_ok_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # last run that found it logged in
+    died_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # first run that found it logged out
+
+    __table_args__ = (Index("ix_store_logins_open", "family_id", "service", "login_at"),)
 
 
 class ProfileConflict(Exception):
@@ -109,10 +125,13 @@ async def stopped(session: AsyncSession, session_id: str | None, reason: str) ->
         row.stopped_at, row.stop_reason = clock.now(), reason[:40]
 
 
-async def note_login(session: AsyncSession, family_id: str, service: str, out: dict) -> None:
-    """From a run's own report: logged in → ok; asked for an OTP / not logged in → expired."""
+async def note_login(session: AsyncSession, family_id: str, service: str, out: dict, *, fresh: bool = False, phase: str = "") -> None:
+    """From a run's own report: logged in → ok; asked for an OTP / not logged in → expired. Also how long each login
+    lasts (StoreLogin): fresh = this run just entered a login code; a guest look (browse) never counts as logged out."""
     if not out:
         return
+    if phase != "browse" or out.get("logged_in") is True:
+        await _measure(session, _fam(family_id), service, out, fresh)
     fam = _fam(family_id)
     row = await session.get(ServiceLogin, (fam, service))
     if row is None:
@@ -120,11 +139,30 @@ async def note_login(session: AsyncSession, family_id: str, service: str, out: d
         session.add(row)
     now = clock.now()
     row.last_seen_at = now
-    if out.get("needs_otp") or out.get("logged_in") is False:
+    if out.get("needs_otp") or (out.get("logged_in") is False and phase != "browse"):
+        # a guest look is asked not to log in, so its "not logged in" says nothing about the account's login
         row.state = "expired"
         row.last_problem = "asked for a login code" if out.get("needs_otp") else "not logged in"
     elif out.get("logged_in") is True or out.get("placed") or out.get("booked"):
         row.state, row.last_login_ok_at, row.last_problem = "ok", now, ""
+
+
+async def _measure(session: AsyncSession, fam: str, service: str, out: dict, fresh: bool) -> None:
+    """A login's life: begun when a code was entered (or first seen logged in), alive at each run that finds it logged in,
+    gone at the first run that finds it logged out."""
+    now = clock.now()
+    cur = (await session.execute(select(StoreLogin).where(StoreLogin.family_id == fam, StoreLogin.service == service,
+                                                          StoreLogin.died_at.is_(None)).order_by(StoreLogin.login_at.desc()).limit(1))).scalar_one_or_none()
+    if out.get("needs_otp") or out.get("logged_in") is False:
+        if cur is not None and not fresh:
+            cur.died_at = now
+    elif out.get("logged_in") is True or out.get("placed") or out.get("booked"):
+        if fresh or cur is None:
+            if cur is not None:
+                cur.died_at = now  # replaced by a new login (it may still have been alive: the shortest it is known to last)
+            session.add(StoreLogin(family_id=fam, service=service, login_at=now, last_ok_at=now))
+        else:
+            cur.last_ok_at = now
 
 
 def audit(task, *, phase: str, status: str, steps: int, path: list[str], cost: float, error: str | None = None) -> None:

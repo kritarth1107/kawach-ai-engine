@@ -113,10 +113,10 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
 
 MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]", "[Approval needed]")  # updates that must reach the person
 
-IN_THEIR_WORDS = """Rewrite this WhatsApp message from Saheli (a caring assistant) for the person, in the same language and script
-they write in (their recent messages are below; English if there are none). Keep every number, amount, id, code, name,
-store and place exactly as they are, keep the line breaks of a numbered list, add nothing and leave nothing out. Only the
-message."""
+IN_THEIR_WORDS = """Rewrite this WhatsApp message from Saheli (a caring assistant) for the person: in the language and script
+Saheli has been writing to them in (her recent messages are below; else the one they write in; English if there are
+none). Keep every number, amount, id, code, name, store and place exactly as they are, keep the line breaks of a numbered
+list, add nothing and leave nothing out. Only the message."""
 
 
 def _silent(text: str) -> bool:
@@ -128,6 +128,15 @@ def _sent_to(result, person: str | None) -> bool:
                                 for a in result.actions)
 
 
+def _numbers(text: str) -> set[str]:
+    """The numbers in a message, in any script's digits (₹१४५ → 145)."""
+    import re
+    import unicodedata
+
+    plain = "".join(str(unicodedata.digit(ch)) if unicodedata.digit(ch, None) is not None else ch for ch in text or "")
+    return set(re.findall(r"\d+", plain))
+
+
 async def in_their_words(sessions: async_sessionmaker, family_id: str, person: str, text: str) -> str:
     """A message written by code, put in the language the person writes in (an AI rewrite; their own recent messages
     show the language). The text as it is when no model answers."""
@@ -135,12 +144,21 @@ async def in_their_words(sessions: async_sessionmaker, family_id: str, person: s
 
     try:
         async with sessions() as session:
-            mine = [t.text for t in await store.recent_turns(session, family_id, person, limit=12) if t.role == "user" and t.text][-4:]
-        reply = await router.complete("worker", system_stable=IN_THEIR_WORDS, effort="low", max_tokens=900, timeout_s=25, messages=[
-            {"role": "user", "content": [{"type": "text", "text": "THEIR RECENT MESSAGES:\n" + ("\n".join(f"- {m[:200]}" for m in mine) or "(none)")
+            recent = await store.recent_turns(session, family_id, person, limit=12)
+        mine = [t.text for t in recent if t.role == "user" and t.text][-4:]
+        hers = [t.text for t in recent if t.role == "assistant" and (t.text or "").strip() not in ("", "none")][-3:]
+        reply = await router.complete("worker", system_stable=IN_THEIR_WORDS, effort="low", max_tokens=4000, timeout_s=30, messages=[
+            {"role": "user", "content": [{"type": "text", "text": "SAHELI'S RECENT MESSAGES TO THEM:\n"
+                                          + ("\n".join(f"- {m[:200]}" for m in hers) or "(none)")
+                                          + "\n\nTHEIR RECENT MESSAGES:\n" + ("\n".join(f"- {m[:200]}" for m in mine) or "(none)")
                                           + f"\n\nMESSAGE:\n{text}"}]}])
         out = (reply.text or "").strip()
-        return out if out and len(out) < 4 * len(text) + 200 else text
+        # a rewrite that lost a number, id, amount or code is not sent (sim 2026-10-12: a Tamil rewrite stopped half-way and
+        # dropped the driver, car and PIN): the plain text goes instead
+        if not out or len(out) > 4 * len(text) + 200 or not _numbers(text) <= _numbers(out):
+            logger.warning("in_their_words: the rewrite lost something; sending the plain text family=%s", family_id)
+            return text
+        return out
     except Exception as exc:  # noqa: BLE001 — the plain text still goes
         logger.warning("in_their_words failed: %s", exc)
         return text
@@ -174,6 +192,18 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
         async with sessions() as session:
             if await update.already_told(session, deliver_to):
                 logger.info("task update not sent again: person %s was told this state family=%s ref=%s", deliver_to, family_id, ref)
+                return
+            # (when they wrote after it was written and were answered, the brain decides whether they already heard it)
+            booked = await update.booked(session) and not await update.wrote_since(session, family_id, deliver_to)
+            if booked:
+                names = {m.get("id"): m.get("name") for m in [roster.elder, *roster.members] if m.get("id")}
+                news = await update.news(session, deliver_to, names)
+        if booked and news:
+            # Placed or booked: every detail, written from the task data (the brain once left out the driver, car and PIN).
+            words = await in_their_words(sessions, family_id, deliver_to, news[0])
+            if await _send(sessions, host, roster, family_id, deliver_to, words, f"{ref}:booked", buttons=news[1]):
+                async with sessions() as session:
+                    await update.told(session, deliver_to, "composed")
                 return
 
     async def turn(text: str, ref_: str):

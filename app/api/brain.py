@@ -43,6 +43,15 @@ class ReminderSoon(BaseModel):
     item: str | None = Field(default=None, max_length=200)
 
 
+class Location(BaseModel):
+    """A WhatsApp location they shared (the backend passes it as data, beside the text)."""
+
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+    name: str = Field(default="", max_length=200)
+    address: str = Field(default="", max_length=400)
+
+
 class TurnIn(BaseModel):
     family_id: str
     elder: Person
@@ -57,6 +66,7 @@ class TurnIn(BaseModel):
     voice_confidence: float | None = Field(default=None, ge=0, le=1)
     voice_language: str | None = Field(default=None, max_length=16)
     reminders_soon: list[ReminderSoon] = Field(default_factory=list, max_length=24)  # due in the next hours (backend)
+    location: Location | None = None  # a WhatsApp location pin in this message
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
 
@@ -79,6 +89,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         voice_confidence=body.voice_confidence,
         voice_language=body.voice_language,
         reminders_soon=[r.model_dump() for r in body.reminders_soon],
+        location=body.location.model_dump() if body.location else None,
     )
     try:
         result = await run_turn(session, host, req)

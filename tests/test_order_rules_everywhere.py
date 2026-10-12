@@ -112,7 +112,10 @@ async def test_one_ride_app_lists_its_guest_fares_for_the_pick(db, at, sessions,
 
 async def test_a_ride_with_no_app_named_compares_every_ride_app_and_named_apps_are_exactly_those(db, at):
     at("2026-10-11 21:45")
-    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=E, members=[E, S], message_ref="m1")
+    out = await tools.start_task(ctx, {"kind": "ride", "goal": "Auto to AIIMS", "pickup": "Home", "drop": "AIIMS"})
+    assert out["ask_location"] == "pickup", "the pickup is asked as a WhatsApp location first (tests/test_ride_pins.py)"
+    ctx.message_ref = "m2"  # they would rather go on without a pin
     out = await tools.start_task(ctx, {"kind": "ride", "goal": "Auto to AIIMS", "pickup": "Home", "drop": "AIIMS"})
     assert out["looking_on"] == ["Uber", "Ola", "Rapido"] and "fares from every app" in out["next"]
     for t in await runtime.live_tasks(db, FAM):
@@ -150,7 +153,10 @@ async def test_a_ride_from_a_saved_place_gives_the_app_its_full_address(db, at, 
         return "Ghar" if "home" in words.lower() else None  # the AI's answer, faked
 
     monkeypatch.setattr(matcher, "which_place", which)
-    ctx = tools.TurnCtx(session=db, host=PlacesHost(), family_id=FAM, elder=E, speaker=E, members=[E, S])
+    ctx = tools.TurnCtx(session=db, host=PlacesHost(), family_id=FAM, elder=E, speaker=E, members=[E, S], message_ref="m1")
+    await tools.start_task(ctx, {"kind": "ride", "goal": "Auto to the station", "pickup": "my home", "drop": "Raipur railway station",
+                                 "services": ["ola"]})  # the pickup is asked as a location first; they go on with the address
+    ctx.message_ref = "m2"
     await tools.start_task(ctx, {"kind": "ride", "goal": "Auto to the station", "pickup": "my home", "drop": "Raipur railway station",
                                  "services": ["ola"]})
     t = (await runtime.live_tasks(db, FAM))[0]

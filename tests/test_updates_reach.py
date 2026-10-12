@@ -104,7 +104,9 @@ async def test_a_code_ask_right_after_saheli_wrote_still_reaches_him_and_is_not_
     assert len(host.world.sent) == 2
 
 
-async def test_a_booked_ride_the_brain_will_not_announce_goes_out_from_the_task_data_with_every_detail(db, at, sessions, brain):
+async def test_a_booked_ride_goes_out_from_the_task_data_with_every_detail(db, at, sessions, brain):
+    """Live 2026-10-12 the booked update never reached him; in a sim the brain's message left out the driver, car and PIN.
+    A plain booking (or placing) is written from the task data, every detail in it, in their words; the brain is not asked."""
     b = brain(Brain(lazy=True))
     at("2026-10-12 02:06")
     t = await _ride(db, status="done", phase="place")
@@ -114,10 +116,10 @@ async def test_a_booked_ride_the_brain_will_not_announce_goes_out_from_the_task_
     await db.commit()
     host = SimHost()
     await wake.system_turn(sessions, host, FAM, f"[Task update] [{t.id}] Ola ride: Booked.", "task:b1", deliver_to=SON["id"], still_true=_update(t))
-    assert b.calls == 2 and b.rewrites == 1
+    assert b.calls == 0 and b.rewrites == 1
     sent = host.world.sent[-1]["text"]
     assert sent.startswith("[hi] Booked on Ola: Mini ₹548, from 12 Civil Lines, Raipur to Airport")
-    for bit in ("ride id CRN-1", "driver Ajay", "car White Dzire CG04 AB 0001", "pickup in about 4 min", "ride PIN 4321"):
+    for bit in ("Ride id CRN-1", "Driver Ajay", "Car White Dzire CG04 AB 0001", "Pickup in about 4 min", "Ride PIN 4321"):
         assert bit in sent, bit
     assert await _told(db, t) == [(SON["id"], "composed")]
 
@@ -180,3 +182,27 @@ async def test_an_update_whose_task_moved_on_is_never_sent_from_the_task_data(db
     host = SimHost()
     await wake.system_turn(sessions, host, FAM, f"[Task update] [{t.id}] waiting for otp", "task:m1", deliver_to=SON["id"], still_true=upd)
     assert not host.world.sent
+
+
+async def test_a_rewrite_that_loses_a_number_is_not_sent(db, at, sessions, monkeypatch):
+    """Sim 2026-10-12: the Tamil rewrite of a booked ride stopped half-way and dropped the driver, car and PIN. A rewrite
+    must keep every number (in any script's digits); otherwise the plain text goes."""
+
+    class Cutter:
+        async def complete(self, route, *, messages, **kw):
+            text = messages[-1]["content"][0]["text"].split("MESSAGE:\n", 1)[1]
+            return LLMReply(text=text.split(". Ride id")[0], tool_calls=[], model="fake")  # stops half-way
+
+    class Tamil:
+        async def complete(self, route, *, messages, **kw):
+            return LLMReply(text="பதிவு ₹௫௪௮, PIN ௪௩௨௧, ride id CRN-1", tool_calls=[], model="fake")  # Tamil digits are fine
+
+    plain = "Booked on Ola: Mini ₹548. Ride id CRN-1. Ride PIN 4321 (tell the driver at pickup)."
+    for provider, want in ((Cutter(), plain), (Tamil(), "பதிவு ₹௫௪௮, PIN ௪௩௨௧, ride id CRN-1")):
+        router.register_provider("fake", provider)
+        monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "worker": ["fake:m"]}')
+        router.reset_breakers()
+        try:
+            assert await wake.in_their_words(sessions, FAM, SON["id"], plain) == want
+        finally:
+            router._providers.pop("fake", None)

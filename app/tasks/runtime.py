@@ -33,7 +33,7 @@ from app.specialists import channels, guard, metrics
 from app.specialists.agents import specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
-from app.tasks import fastpath, practice, sandbox, tracking
+from app.tasks import fastpath, later, practice, sandbox, tracking
 from app.tasks.models import SkillNote, Task, TaskTold
 from app.tasks.skills import SKILLS
 
@@ -496,7 +496,8 @@ async def _fall_back_to_other_stores(session: AsyncSession, task: Task, why: str
             continue
         try:
             await create(session, family_id=task.family_id, subject_id=task.subject_id, requested_by=task.requested_by, service=service,
-                         kind=task.kind, goal=task.goal, details={**{k: d[k] for k in ("items", "area", "pickup", "drop", "vehicle", "pickup_place", "drop_place") if d.get(k)},
+                         kind=task.kind, goal=task.goal, details={**{k: d[k] for k in ("items", "area", "pickup", "drop", "vehicle", "pickup_place", "drop_place",
+                                                                                         "later") if d.get(k)},
                                                                  "compare": gid, "fallback_from": task.service, "fallback_why": why or None},
                          limits=Limits.from_dict(d.get("limits")))
             started.append(SKILLS[service]["label"])
@@ -687,6 +688,17 @@ class TaskUpdate:
                                   .on_conflict_do_nothing(index_elements=["task_id", "person", "stage"]))
         await session.commit()
 
+    async def booked(self, session: AsyncSession) -> bool:
+        """Every task of this update was just placed or booked, plainly (no warning, no wrong pickup, no cancel): its message
+        is written from the task data, so no detail can be left out (sim 2026-10-12: a booked ride's message came without
+        the driver, car or PIN; founder: "I never received the booking details")."""
+        tasks = await self._tasks(session)
+        return bool(tasks) and all(
+            t.status == "done" and ((t.result or {}).get("placed") or (t.result or {}).get("booked"))
+            and self.expect.get(str(t.id), "").startswith("done|")
+            and not any((t.details or {}).get(k) for k in ("placed_warn", "ends_wrong", "cancel_ask", "practice", "place_unclear"))
+            for t in tasks)
+
     async def news(self, session: AsyncSession, person: str, names: dict[str, str] | None = None) -> tuple[str, tuple[str, str] | None] | None:
         tasks = await self._tasks(session)
         tasks.sort(key=lambda t: list(self.expect).index(str(t.id)))
@@ -701,10 +713,12 @@ def delivery_check() -> TaskUpdate | None:
 
 
 def _end_plain(task: Task, end: str) -> str:
-    """A ride's end for the person: where the app set it, else the place they meant."""
+    """A ride's end for the person: where the app set it, else the place they meant ("the location you shared" for a bare
+    map point, never its numbers)."""
     d, r = task.details or {}, task.result or {}
     place = d.get(f"{end}_place") or {}
-    return str(r.get(f"{end}_used") or place.get("full") or d.get(end) or f"the {end}").strip()
+    out = str(r.get(f"{end}_used") or place.get("full") or d.get(end) or f"the {end}").strip()
+    return out if any(ch.isalpha() for ch in out) else "the location you shared"
 
 
 def ride_details(task: Task) -> list[str]:
@@ -755,6 +769,25 @@ def plain_news(tasks: list[Task], person: str, names: dict[str, str]) -> tuple[s
         head = ("Fares" if ride else "What I found") + ("" if many else f" on {label}") + (f", {trip}" if ride else "") + f" (nothing is {done} yet):"
         return "\n".join([head, *lines, *login, *none, f"Which one shall I {'book' if ride else 'get'}? Reply with its number."]), None
     ask = d.get("cancel_ask") or {}
+    lt = later.of(lead)
+    if lt:
+        at, book_at = later.parse_at(lt.get("at")), later.parse_at(lt.get("book_at"))
+        if lead.status == "awaiting_confirm" and lead.input_needed == "later":
+            amount = _later_amount(lead)
+            sug = later.suggest_max(amount)
+            what = (d.get("ride_pick") or {}).get("type") or "the ride" if ride else "; ".join(_label(c) for c in d.get("chosen") or []) or lead.goal
+            return ((f"For later: {what} on {label}" + (f", {trip}" if ride else "") + f", for {later.hm(at)}, cash. Today it is about "
+                     f"₹{amount:.0f}; then it may differ. Shall I {'book' if ride else 'order'} it then, paying up to ₹{sug}? (If it is above "
+                     f"about ₹{later.cap(sug):.0f} I will ask you first.) You can also tell me your own limit.") if amount and sug else (
+                     f"For later: {what} on {label}, for {later.hm(at)}, cash. Shall I {'book' if ride else 'order'} it then? Tell me the most "
+                     "you want to pay."), ("later", f"{lead.id}:{sug or ''}"))
+        if lead.status == "needs_input" and lead.input_needed == "fare":
+            asked = lt.get("asked") or {}
+            return (f"For your {'ride' if ride else 'order'} on {later.hm(book_at)}: it costs {asked.get('amount')} on {label} now, above "
+                    f"the ₹{lt.get('max') or 0:.0f} you set. Shall I {'book' if ride else 'order'} it at {asked.get('amount')}?"), None
+        if lead.status == "scheduled":
+            return (f"Set for later: {label} will be {'booked' if ride else 'ordered'} on {later.hm(book_at)}"
+                    + (f", up to ₹{lt['max']:.0f}" if lt.get("max") else "") + "; I will send every detail then."), None
     if lead.status == "needs_input" and lead.input_needed == "otp":
         mine = "your phone" if d.get("code_from") == person else _code_to(lead)
         return (f"{label} has sent a login code to {mine} for the {thing} ({lead.goal}). Please send me that code; nothing is "
@@ -793,9 +826,10 @@ def plain_news(tasks: list[Task], person: str, names: dict[str, str]) -> tuple[s
         carers = " and ".join(who(c) for c in ask.get("carers") or []) or "your family"
         return f"It is already {done} on {label}, so I cannot cancel it from here; I have told {carers}.", None
     if lead.status == "done" and (r.get("placed") or r.get("booked")):
+        cap = lambda x: x[:1].upper() + x[1:]  # noqa: E731
         if ride:
-            return ". ".join([f"Booked on {label}: {d.get('choice') or 'your ride'}, {trip}", *ride_details(lead)]) + ".", None
-        return ". ".join([f"Ordered on {label}: {bought(lead)}", *order_details(lead)]) + ".", None
+            return ". ".join(cap(x) for x in [f"Booked on {label}: {d.get('choice') or 'your ride'}, {trip}", *ride_details(lead)]) + ".", None
+        return ". ".join(cap(x) for x in [f"Ordered on {label}: {bought(lead)}", *order_details(lead)]) + ".", None
     if lead.status == "failed" and d.get("place_unclear"):
         return (f"It is not clear whether the {thing} went through on {label}. Please check the {label} app before "
                 f"{'booking' if ride else 'ordering'} again."), None
@@ -853,6 +887,12 @@ async def create(
         payload={"task_id": str(task.id), "agent": agent.name}, actor_id=requested_by,
     )
     return task
+
+
+async def shown_tasks(session: AsyncSession, family_id: str) -> list[Task]:
+    """What the brain sees as the family's tasks: the live ones and the ones set for later."""
+    q = select(Task).where(Task.family_id == family_id, Task.status.in_((*LIVE, "scheduled"))).order_by(Task.created_at)
+    return list((await session.execute(q)).scalars())
 
 
 async def live_tasks(session: AsyncSession, family_id: str) -> list[Task]:
@@ -925,6 +965,17 @@ def describe(task: Task) -> str:
         bits.append(f"eta {r['eta']}")
     if r.get("order_id") or r.get("ride_id"):
         bits.append(f"id {r.get('order_id') or r.get('ride_id')}")
+    lt = d.get("later") or {}
+    if lt:
+        at, book_at, login_at = later.parse_at(lt.get("at")), later.parse_at(lt.get("book_at")), later.parse_at(lt.get("login_at"))
+        most = (f"up to ₹{lt['max']:.0f} without asking (asks above about ₹{later.cap(lt['max']):.0f})" if lt.get("max") else
+                "no price limit (they said any amount)" if lt.get("no_max") else "the most they will pay not set yet")
+        bits.append(f"SET FOR LATER: for {later.hm(at)}, {'booked' if task.kind == 'ride' else 'ordered'} at {later.hm(book_at)}; {most}; "
+                    + {"waiting": f"login code to be asked on {later.hm(login_at)}" if login_at else "waiting for its time",
+                       "logged_in": "logged in; waiting for its time", "login": "logging in now (a code may be asked)",
+                       "check": "looking at the fare now", "ready": "fare agreed; it books at its time",
+                       "fare_ask": "asked them about the new fare", "booking": "booking it now", "missed": "the time passed; not booked"}
+                    .get(lt.get("state"), "waiting for their yes to all of it (task_input later)"))
     ask = d.get("cancel_ask") or {}
     if ask:
         # One true status: what is true about a cancel they asked for after it was placed (founder 2026-10-11 and -12).
@@ -1304,10 +1355,152 @@ async def _approval_gate(session: AsyncSession, task: Task, amount: float | None
             "Tell the person that in one short line.")
 
 
+def _later_amount(task: Task) -> float | None:
+    """Today's fare (the type picked) or the picked items' prices times quantities (or the cart's total once built)."""
+    d, r = task.details or {}, task.result or {}
+    if task.kind == "ride":
+        return rupees((d.get("ride_pick") or {}).get("fare"))
+    if task.phase != "browse" and d.get("cart_fp") and rupees(r.get("total")):
+        return rupees(r.get("total"))
+    asked = d.get("items") or []
+    total = sum((rupees(c.get("price")) or 0) * channels._qty_for(asked, c) for c in d.get("chosen") or [])
+    return total or None
+
+
+def _later_ask(task: Task) -> str:
+    """The ONE question for a booking set for later (later.ask_text), and the task waits for it."""
+    d = task.details or {}
+    label = SKILLS[task.service]["label"]
+    task.phase, task.status, task.input_needed = "browse" if task.phase == "browse" else task.phase, "awaiting_confirm", "later"
+    task.deadline_at = clock.now() + TASK_LIFETIME
+    if task.kind == "ride":
+        pick = d.get("ride_pick") or {}
+        what, where = f"{pick.get('type') or 'the ride'}", _trip(task)
+    else:
+        asked = d.get("items") or []
+        what = "; ".join(f"{channels._qty_for(asked, c)} x {_label(c)} {c.get('price') or ''}".strip() for c in d.get("chosen") or []) or bought(task)
+        where = "to " + (((d.get("limits") or {}).get("place") or {}).get("nickname") or "their saved place")
+    return later.ask_text(task, label=label, what=what, amount=_later_amount(task), where=where)
+
+
+async def _schedule(session: AsyncSession, task: Task) -> str:
+    """Confirmed for later: the login is planned by how long the app keeps one, and the task waits (later.due moves it)."""
+    lt = later.of(task)
+    label = SKILLS[task.service]["label"]
+    book_at = later.parse_at(lt.get("book_at"))
+    now = clock.now()
+    life = await later.login_life(session, task.service)
+    since = await later.logged_in_since(session, task.family_id, task.service)
+    login_at = later.plan_login(now, book_at, life, since)
+    lt.update(login_at=login_at.isoformat() if login_at else None, life_h=round(life.total_seconds() / 3600, 1),
+              state="waiting" if login_at else "logged_in")
+    task.details = {**(task.details or {}), "later": lt, "offer": None}
+    task.deadline_at = book_at + later.GIVE_UP_AFTER
+    if compare_group(task):
+        _drop_others(await siblings(session, task), task, f"set for later on {label}")
+    if login_at and login_at <= now + timedelta(minutes=1):
+        task.details = {**task.details, "later": {**lt, "state": "login", "login_started": now.isoformat()}, "login_only": True,
+                        **LADDER_RESET, "ladder_from": now.isoformat()}
+        task.phase, task.status, task.input_needed = "prepare", "queued", None
+    else:
+        task.status, task.input_needed = "scheduled", None
+    note(task, f"set for {later.hm(book_at)}; login " + (f"at {later.hm(login_at)}" if login_at else "not needed") + f" (logins last ~{life})")
+    return later.scheduled_text(task, label=label, login_at=login_at, logged=since is not None)
+
+
+def _later_ready(task: Task, *, choice: str | None, fare, by: str) -> str:
+    """The fare (or cart) for a later booking is agreed: it books at its time, or now if that time has come."""
+    lt = later.of(task)
+    d = task.details or {}
+    book_at = later.parse_at(lt.get("book_at"))
+    lt.update(state="ready", asked=None)
+    total = fare if task.kind == "ride" else ((task.result or {}).get("total") or fare)
+    task.details = {**d, "later": lt, **({"choice": choice} if choice else {}), "confirmed_total": total}
+    if book_at and clock.now() >= book_at:
+        lt.update(state="booking")
+        task.details = {**task.details, "later": lt}
+        return (_start_booking(task, lt.get("by") or by, choice or d.get("choice") or "", total) if task.kind == "ride"
+                else _start_placing(task, lt.get("by") or by))
+    task.status, task.input_needed = "scheduled", None
+    note(task, f"ready for {later.hm(book_at)} at {total}")
+    return f"agreed: it will be {'booked' if task.kind == 'ride' else 'ordered'} at {later.hm(book_at)} for about {total} (NOT yet). Say only that."
+
+
+async def _later_step(session: AsyncSession, task: Task, status: str, message: str | None) -> tuple[str, str | None]:
+    """A step of a task set for later has ended: the login (back to waiting), the fare check (ready, or ONE question with the
+    new amount), or the question with everything when the fares or cart came only after a login."""
+    lt = later.of(task)
+    if not lt:
+        return status, message
+    d = task.details or {}
+    label = SKILLS[task.service]["label"]
+    book_at = later.parse_at(lt.get("book_at"))
+    state = lt.get("state")
+    if not lt.get("by") and status == "awaiting_confirm" and task.input_needed in ("confirm", "choice"):
+        if task.kind == "ride" and not d.get("ride_pick"):
+            return status, message  # the fares to pick from first; the pick goes into the one question
+        return "awaiting_confirm", _later_ask(task)
+    if state == "login" and status == "queued" and d.get("login_done") and not d.get("login_only"):
+        lt.update(state="logged_in", login_done_at=clock.now().isoformat())
+        task.details = {**d, "later": lt}
+        return "scheduled", (f"Logged in on {label} for the booking on {later.hm(book_at)}; nothing more is needed now. Tell them in one "
+                             "short line that it is all set.")
+    if state == "login" and status == "needs_input" and task.input_needed == "otp":
+        return status, (f"For the {label} booking set for {later.hm(book_at)}: logging in now, ahead of it, so it can be booked then "
+                        "without asking anything. Say that in a few words with the code ask. " + (message or ""))
+    if state in ("check", "booking") and status == "needs_input" and task.input_needed == "otp":
+        since = lt.get("login_done_at") or lt.get("confirmed_at")
+        return status, (f"For the booking on {later.hm(book_at)}: the {label} login ran out" + (f" (it was logged in on {later.hm(later.parse_at(since))})" if since else "")
+                        + f", so {label} sent a new login code. Say why in a few words and ask for the code now. " + (message or ""))
+    if state != "check" or status != "awaiting_confirm":
+        return status, message
+    mx = lt.get("max")
+    limit = later.cap(mx)
+    if task.kind == "ride":
+        pick = d.get("ride_pick") or {}
+        same = next((o for o in _ride_opts(task) if o.get("type") == pick.get("type")), None)
+        if not same:
+            return "awaiting_confirm", (f"For the booking on {later.hm(book_at)}: {pick.get('type')} is not offered on {label} now. "
+                                        + _ride_choice_message(task))
+        fare = rupees(same.get("fare"))
+        choice = f"{same.get('type')} {same.get('fare') or ''}".strip()
+        eta = re.search(r"\d+", str(same.get("eta") or ""))
+        if eta and lt.get("means") != "book":
+            # the app's own pickup time: booked that long before the time they asked for
+            lt["book_at"] = max(later.book_time(later.parse_at(lt["at"]), "arrive", timedelta(minutes=int(eta.group()))), clock.now()).isoformat()
+            book_at = later.parse_at(lt["book_at"])
+    else:
+        fare = rupees((task.result or {}).get("total"))
+        choice = None
+    if lt.get("no_max") and fare is not None:
+        task.details = {**d, "later": lt}
+        gate = await _approval_gate(session, task, fare, lt.get("by") or task.requested_by,
+                                    choice={"choice": choice, "fare": same.get("fare")} if task.kind == "ride" else None)
+        if gate:
+            lt.update(state="approval")
+            task.details = {**task.details, "later": lt}
+            task.deadline_at = book_at + later.GIVE_UP_AFTER  # the approver's yes counts until its time, not later
+            return "awaiting_confirm", (f"For the booking on {later.hm(book_at)}: it is {'₹%.0f' % fare} now; {gate}")
+    if lt.get("no_max") or (fare is not None and limit is not None and fare <= limit):
+        task.details = {**d, "later": lt}
+        task.input_needed = None
+        _later_ready(task, choice=choice, fare=same.get("fare") if task.kind == "ride" else (task.result or {}).get("total"),
+                     by=lt.get("by") or task.requested_by)
+        return task.status, None  # nothing to say: it books at its time
+    shown = f"₹{fare:.0f}" if fare else "not shown"
+    lt.update(state="fare_ask", asked={"choice": choice, "amount": shown})
+    task.details = {**d, "later": lt}
+    task.input_needed = "fare"
+    return "needs_input", (f"For the booking on {later.hm(book_at)}: the {'fare for ' + choice.split(' ', 1)[0] if choice else 'total'} on {label} is "
+                           f"{shown} now, above the ₹{mx:.0f} they set. Ask ONE short question at once: book it at {shown}? Yes → "
+                           "task_input fare yes; no → task_input fare no (nothing is booked).")
+
+
 def _start_placing(task: Task, by: str) -> str:
     d = task.details or {}
     fp = d.get("cart_fp")
     task.details = {**d, "confirmed_by": by, "confirmed_total": (task.result or {}).get("total"), "confirmed_fp": fp,
+                    "confirmed_items_fp": guard.items_fingerprint(task.result or {}),
                     "confirm_token": guard.confirm_token(str(task.id), fp, by), "place_started": None}
     task.phase, task.status, task.input_needed = "place", "queued", None
     task.deadline_at = clock.now() + TASK_LIFETIME
@@ -1354,12 +1547,14 @@ async def ask_approvers(sessions: async_sessionmaker, notify) -> int:
 
 
 async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: str = "", by: str, by_is_elder: bool,
-                        items: list[dict] | None = None, target: int | str | None = None) -> str:
+                        items: list[dict] | None = None, target: int | str | None = None, max_amount: float | None = None,
+                        no_max: bool = False) -> str:
     """provide_input under the task's own trace (the turn that answered is kept as `via`), with an audit event for a
     confirm or an approval: who, when and for what total (D-13 why-trail, F4 audit of confirm / place / cancel)."""
     with trace.for_task(task):
         d0 = dict(task.details or {})
-        out = await _provide_input(session, task, kind=kind, value=value, by=by, by_is_elder=by_is_elder, items=items, target=target)
+        out = await _provide_input(session, task, kind=kind, value=value, by=by, by_is_elder=by_is_elder, items=items, target=target,
+                                   max_amount=max_amount, no_max=no_max)
         d = task.details or {}
         label = SKILLS[task.service]["label"]
         total = d.get("confirmed_total") or (d.get("approval_needed") or {}).get("amount") or (task.result or {}).get("total")
@@ -1382,7 +1577,8 @@ async def provide_input(session: AsyncSession, task: Task, *, kind: str, value: 
 
 
 async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value: str = "", by: str, by_is_elder: bool,
-                         items: list[dict] | None = None, target: int | str | None = None) -> str:
+                         items: list[dict] | None = None, target: int | str | None = None, max_amount: float | None = None,
+                         no_max: bool = False) -> str:
     """The person answered: an OTP, a confirm, a fee approval, a ride choice or a swap. Returns what happens next.
 
     The answer must be the one the task is waiting for (task.input_needed); anything else is refused, so a
@@ -1443,7 +1639,7 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         note(task, f"login code did not come (said {by}): asking the store for a new one")
         return ("asking the store for a new login code now (NOT ordered); a task update comes when it is sent. Say only that a "
                 "new code is coming to the same phone in a minute")
-    if kind in ("confirm", "choice", "swap", "go", "approve") and _is_no(value) and not placed:
+    if kind in ("confirm", "choice", "swap", "go", "approve", "later", "fare") and _is_no(value) and not placed:
         if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id):
             return "only the family's approver can decline this"
         task.status, task.cancel_requested = "cancelled", True
@@ -1484,6 +1680,13 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
             pick = {"type": opts[i].get("type"), "fare": opts[i].get("fare")} if 0 <= i < len(opts) else None
         label = SKILLS[task.service]["label"]
         task.details = {**d, "ride_pick": pick, "offer": None}
+        if later.of(task) and pick:
+            # For later (founder 2026-10-12): the one question now, with everything and the most they will pay; nothing
+            # logs in yet (the login is planned by how long the app keeps it).
+            note(task, f"picked for later by {by}: {pick['type']} {pick.get('fare') or ''}".rstrip())
+            if compare_group(task):
+                _drop_others(await siblings(session, task), task, f"{by} picked {label} for later")
+            return _later_ask(task)
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"go-ahead from {by}" + (f" for {pick['type']} {pick.get('fare') or ''}".rstrip() if pick else ""))
@@ -1547,6 +1750,11 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
                          "missing_items": [*(d.get("missing_items") or []), *([] if food else left)] or None,
                          "found": [{k: v for k, v in i.items() if k != "image_url"} for i in found][:40]}
                         if chosen else {**d, "more": None, "offer": None})
+        if later.of(task) and chosen and found:
+            note(task, f"picked for later by {by}: " + "; ".join(_label(c) for c in chosen))
+            if compare_group(task):
+                _drop_others(await siblings(session, task), task, f"{by} picked {SKILLS[task.service]['label']} for later")
+            return _later_ask(task)
         task.phase, task.status, task.input_needed = "prepare", "queued", None
         task.deadline_at = clock.now() + TASK_LIFETIME
         note(task, f"go-ahead from {by}" + (f" for {'; '.join(_label(p) for p in pick)}" if pick else ""))
@@ -1685,10 +1893,44 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
             return "that is not one of the options; pass its number as listed: " + listed
         task.details = d = {**d, "ride_pick": {"type": opt.get("type"), "fare": opt.get("fare")}}
         choice = f"{opt.get('type')} {opt.get('fare') or ''}".strip()
+        lt = later.of(task)
+        if lt and not lt.get("by"):
+            return _later_ask(task)  # not confirmed for later yet: this pick goes into the one question
+        if lt:
+            # they picked this fare themselves at the check: that is their yes to it
+            return _later_ready(task, choice=choice, fare=opt.get("fare"), by=by)
         gate = await _approval_gate(session, task, rupees(opt.get("fare")), by, choice={"choice": choice, "fare": opt.get("fare")})
         if gate:
             return gate
         return _start_booking(task, by, choice, opt.get("fare"))
+    if kind == "later":
+        lt = later.of(task)
+        if not lt or task.input_needed != "later":
+            return "nothing is waiting for an answer about booking it for later"
+        if not _is_yes(value):
+            return "pass value yes (with max_amount, or no_max true) once they agreed, or value no"
+        amount = _later_amount(task)
+        mx = None if no_max else (float(max_amount) if max_amount else later.suggest_max(amount))
+        lt.update(max=mx, no_max=mx is None, by=by, confirmed_at=clock.now().isoformat())
+        task.details = d = {**d, "later": lt}
+        note(task, f"set for later by {by}: " + (f"up to ₹{mx:.0f}" if mx else "no limit"))
+        # the family's limits against the most it may cost, now: an approver's yes comes up front (founder 2026-10-12)
+        gate = await _approval_gate(session, task, later.cap(mx) or amount, by,
+                                    choice={"choice": f"{(d.get('ride_pick') or {}).get('type') or ''} up to ₹{mx:.0f}".strip() if mx else None,
+                                            "fare": mx} if task.kind == "ride" else None)
+        if gate:
+            return gate
+        return await _schedule(session, task)
+    if kind == "fare":
+        lt = later.of(task)
+        if task.input_needed != "fare" or not lt.get("asked"):
+            return "nothing is waiting for a yes to a new fare or total"
+        if not _is_yes(value):
+            return "pass value yes to book it at the new amount, or no"
+        a = lt["asked"]
+        lt.update(max=rupees(a.get("amount")) or lt.get("max"))
+        task.details = {**d, "later": lt}
+        return _later_ready(task, choice=a.get("choice"), fare=a.get("amount"), by=by)
     if kind == "approve":
         ap = d.get("approval_needed") or {}
         if not ap:
@@ -1699,6 +1941,13 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
             return "pass value yes to approve or no to decline"
         task.details = {**d, "approval_needed": None, "approved_by": by, "approved_at": clock.now().isoformat()}
         note(task, f"approved by {by}")
+        if later.of(task).get("by") and later.of(task).get("state") in (None, "new"):
+            out = await _schedule(session, task)
+            return f"approved. {out} Tell person {task.requested_by} in one line with send_message that it was approved."
+        if later.of(task).get("state") == "approval":
+            c = ap.get("choice") or {}
+            out = _later_ready(task, choice=c.get("choice"), fare=c.get("fare") or (task.result or {}).get("total"), by=by)
+            return f"approved. {out} Tell person {task.requested_by} in one line with send_message that it was approved."
         if task.kind == "ride":
             c = ap.get("choice") or {}
             out = _start_booking(task, by, c.get("choice") or "", c.get("fare"))
@@ -1937,6 +2186,10 @@ async def _request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task
         return f"already cancelled on {SKILLS[task.service]['label']}; nothing more to do"
     if task.status in ("failed", "cancelled") and not maybe_placed:
         return f"nothing to cancel: it had already stopped ({task.status}) and nothing was {ordered}"
+    if task.status == "scheduled":
+        task.status, task.cancel_requested = "cancelled", True
+        note(task, f"the booking set for later was cancelled by {by}: {reason}")
+        return f"stopped: the {'ride' if task.kind == 'ride' else 'order'} set for later is cancelled; nothing was {ordered}"
     if task.phase == "cancel" and task.status in LIVE:
         return await _cancel_after_placed(session, task, by=by, reason=reason, placing=False)
     task.cancel_requested = True
@@ -2098,12 +2351,12 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         if not out.get("alternatives"):
             task.result = {**(task.result or {}), "alternatives": None}  # an earlier report's, not this cart's
         prev = d.get("replace_confirmed") or {}
-        if (prev.get("fp") and prev.get("by") and task.details["cart_fp"] == prev["fp"] and not v.approval
+        same = (task.details["cart_fp"] == prev.get("fp") or bool(prev.get("items_fp")) and guard.items_fingerprint(out) == prev["items_fp"])
+        if (prev.get("fp") and prev.get("by") and same and not v.approval
                 and int(d.get("auto_replaced") or 0) < 2
-                and rupees(out.get("total")) is not None and rupees(prev.get("total")) is not None
-                and rupees(out.get("total")) <= rupees(prev.get("total")) + 1):
-            # Rebuilt after a place step could not send (lab: a changed site): the same cart at no higher total goes on the
-            # yes they already gave, without asking again.
+                and guard.within_leeway(rupees(out.get("total")), rupees(prev.get("total")))):
+            # Rebuilt after a place step could not send (lab: a changed site): the same products at a total within the
+            # leeway of the one they agreed (founder 2026-10-12: ₹900 may be ₹920) go on the yes they already gave.
             task.details = {**task.details, "replace_confirmed": None, "auto_replaced": int(d.get("auto_replaced") or 0) + 1}
             note(task, "same cart and total as confirmed: placing on that yes")
             _start_placing(task, prev["by"])
@@ -2121,6 +2374,17 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             return "failed", (f"This was a practice order, but {SKILLS[task.service]['label']} may have placed a real order"
                               + (f" (order id {out.get('order_id')})" if out.get("order_id") else "") + ". Tell the caregiver right "
                               "away to check the app and cancel it there; do not order again.")
+        if out.get("price_changed") and (d.get("later") or {}).get("by"):
+            lt = dict(d["later"])
+            shown = out.get("new_total") or "a higher amount"
+            lt.update(state="fare_ask", asked={"choice": f"{((d.get('ride_pick') or {}).get('type') or '').strip()} {shown}".strip()
+                                               if task.kind == "ride" else None, "amount": shown})
+            task.details = {**d, "later": lt, "confirm_token": None, "place_started": None}
+            task.phase, task.input_needed = "prepare", "fare"
+            return "needs_input", (f"At the booking time the {'fare' if task.kind == 'ride' else 'total'} on {SKILLS[task.service]['label']} is "
+                                   f"{shown}, above the ₹{lt.get('max') or 0:.0f} they set; nothing was {'booked' if task.kind == 'ride' else 'ordered'}. "
+                                   f"Ask ONE short question at once: {'book' if task.kind == 'ride' else 'order'} it at {shown}? Yes → task_input fare "
+                                   "yes; no → task_input fare no.")
         if out.get("price_changed") and task.kind == "ride":
             # Fares moved at booking: fetch fresh fares and let the person choose again.
             task.phase, task.input_needed = "prepare", None
@@ -2137,6 +2401,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
             v = guard.check_placed(task.kind, out, guard.rupees(d.get("confirmed_total")))
             metrics.on_milestone(task, "placed")
             if v.warn:
+                task.details = {**d, "placed_warn": v.warn}  # said by the brain (it tells the caregiver), not by code
                 return "done", "Placed, but: " + "; ".join(v.warn)
             details = "; ".join(ride_details(task) if task.kind == "ride" else order_details(task))
             if task.kind == "ride" and d.get("ends_wrong"):
@@ -2211,7 +2476,9 @@ async def _ride_ends_check(task: Task, out: dict) -> tuple[str, str] | None:
     from app.specialists.agents import ride_end
     from app.tasks import matcher
 
-    ends = [e for e in ("pickup", "drop") if str(out.get(f"{e}_used") or "").strip() and ride_end(d, e)]
+    # a shared map point with no name or address has nothing to compare words with (the agent sets it by its point)
+    ends = [e for e in ("pickup", "drop") if str(out.get(f"{e}_used") or "").strip() and ride_end(d, e)
+            and not ((d.get(f"{e}_place") or {}).get("pin") and not any(ch.isalpha() for ch in ride_end(d, e)))]
     verdicts = await asyncio.gather(*(matcher.same_ride_end(ride_end(d, e), str(out[f"{e}_used"]).strip(),
                                                             saved=bool((d.get(f"{e}_place") or {}).get("full"))) for e in ends))
     wrong = {e: str(out[f"{e}_used"]).strip()[:120] for e, same in zip(ends, verdicts) if same is False}
@@ -2934,7 +3201,8 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
         task.phase = "prepare"
         task.details = {**d, "fast_place_check": None, "fast_cart_tried": False, "cart_fp": None, "confirm_token": None, "place_started": None,
                         "fast_place_failures": int(d.get("fast_place_failures") or 0) + (0 if changed else 1),
-                        "replace_confirmed": {"fp": d.get("confirmed_fp"), "total": d.get("confirmed_total"), "by": d.get("confirmed_by")}}
+                        "replace_confirmed": {"fp": d.get("confirmed_fp"), "total": d.get("confirmed_total"), "by": d.get("confirmed_by"),
+                                              "items_fp": d.get("confirmed_items_fp")}}
         return {"requeue": True, "requeue_note": f"not placed, nothing sent ({str(exc)[:120]}); building the cart again"}
     if out.get("unclear") and task.service == "instamart" and host is not None and (task.details or {}).get("fast_place_check", {}).get("total"):
         # Sent but no clear answer: the linked Swiggy account's order list says whether it went through (never placed twice).
@@ -3017,7 +3285,7 @@ async def _connector_step(session: AsyncSession, host, task: Task) -> dict | Non
             if not r.get("ok"):
                 return {"practice": True, "reached_final_step": False, "problem": r.get("detail") or r.get("kind") or "the cart could not be built again"}
             confirmed, now_total = guard.rupees(d.get("confirmed_total")), guard.rupees(r.get("total"))
-            if confirmed and now_total and now_total > confirmed + 10:
+            if confirmed and now_total and not guard.within_leeway(now_total, confirmed):
                 task.details = {**d, "connector_card": r.get("card")}
                 return {"price_changed": True, "new_total": r.get("total")}
             return {"practice": True, "reached_final_step": True, "final_button": "the store's place-order call (not made)",
@@ -3156,7 +3424,8 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
     sends: list[tuple] = []
     async with sessions() as session:
         rows = list((await session.execute(
-            select(Task).where(Task.kind.in_(("order", "ride")), Task.status.in_(LIVE), Task.created_at >= now - timedelta(days=1))
+            select(Task).where(Task.kind.in_(("order", "ride")), Task.status.in_(LIVE),
+                               or_(Task.created_at >= now - timedelta(days=1), Task.updated_at >= now - timedelta(days=1)))
             .with_for_update(skip_locked=True)
         )).scalars())
         picking: set[str] = set()
@@ -3165,6 +3434,8 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
             d = t.details or {}
             if t.family_id.startswith("shadow:") or t.phase == "cancel" or (t.phase == "place" and d.get("place_started")):
                 continue  # a test turn, a cancel in progress, or an order the store may be taking right now
+            if (d.get("later") or {}).get("state") in ("login", "new") or ((d.get("later") or {}).get("state") is None and d.get("later")):
+                continue  # a login made hours ahead of a booking, or the question for later: they have until it is due
             gid = compare_group(t)
             if gid and d.get("compare_announced") and t.input_needed == "go":
                 if gid in picking:
@@ -3314,6 +3585,10 @@ async def tick(
     housekeeping (idle browsers, delivery tracking, aftercare) to the full tick."""
     stats = {"started": 0, "polled": 0, "finished": 0, "expired": 0}
     try:
+        stats["later"] = await later.due(sessions, notify)  # bookings set for later whose login, fare check or time has come
+    except Exception:  # noqa: BLE001
+        logger.exception("later bookings failed")
+    try:
         if not light:
             stats["released"] = await release_sessions(sessions, agent)
     except Exception:  # noqa: BLE001 — cleanup must never stop the tick
@@ -3340,13 +3615,26 @@ async def tick(
             trace.bind_task(task)  # its model calls, events and outcome are filed under the trace that started it (D-13)
             was_browse, expired = task.phase == "browse", False
             try:
-                if task.deadline_at < clock.now() and task.status != "running":
+                if task.deadline_at < clock.now() and task.status != "running" and later.of(task).get("state") == "login":
+                    lt = later.of(task)
+                    task.status, task.phase, task.input_needed = "scheduled", "prepare", None
+                    task.details = {**(task.details or {}), "login_only": False, "later": {**lt, "state": "waiting", "login_at": None}}
+                    task.deadline_at = later.parse_at(lt["book_at"]) + later.GIVE_UP_AFTER
+                    note(task, "nobody gave the login code ahead; it is asked again at the fare check")
+                    message = None
+                elif task.deadline_at < clock.now() and task.status != "running":
                     task.status, expired = "failed", True
                     note(task, "timed out waiting")
                     message = "Nobody answered in time, so the task was stopped; nothing was placed." if task.phase != "cancel" else "Cancel was not finished; tell the caregiver."
                     from app.brain.wake import in_quiet_hours
 
-                    if task.phase != "cancel" and in_quiet_hours():
+                    lt_ = later.of(task)
+                    if lt_.get("by"):
+                        # they counted on it at that time: never left unsaid (not even in the early morning)
+                        message = (f"NOT {'booked' if task.kind == 'ride' else 'ordered'}: the {SKILLS[task.service]['label']} "
+                                   f"{'ride' if task.kind == 'ride' else 'order'} set for {later.hm(later.parse_at(lt_.get('at')))} was "
+                                   f"waiting for {_waiting_for(task)} and nobody answered in time. Tell them plainly in one short line.")
+                    elif task.phase != "cancel" and in_quiet_hours():
                         message = None  # live 2026-10-08 22:21: "nobody answered, stopped" woke her at night; nothing was placed
                     if compare_group(task) and was_browse:
                         # One "nobody answered" for the whole comparison, not one per store.
@@ -3418,6 +3706,7 @@ async def tick(
                                     d_ = task.details or {}
                                     task.phase = "prepare"
                                     task.details = {**d_, "replace_confirmed": {"fp": d_.get("confirmed_fp"), "total": d_.get("confirmed_total"),
+                                                                                "items_fp": d_.get("confirmed_items_fp"),
                                                                                 "by": d_.get("confirmed_by")}, "place_started": None}
                                 note(task, "connector failed, falling back to the browser")
                     if (report is None and task.phase == "prepare" and browse_first(task) and task.service in fastpath.FAST_SERVICES
@@ -3443,6 +3732,7 @@ async def tick(
                         if task.phase == "browse":
                             await _ai_pick(task, task.result, session)
                         status, message = _outcome(task, task.result if task.phase == "browse" else report)
+                        status, message = await _later_step(session, task, status, message)
                         task.status = status
                         via = ("connector" if (task.details or {}).get("channel") == "connector" else
                                "fast look-up" if task.phase == "browse" else "saved steps")
@@ -3477,7 +3767,8 @@ async def tick(
                         metrics.on_browser_run(task, run.steps)
                         sandbox.audit(task, phase=task.phase, status=run.status, steps=run.steps, path=run.path,
                                       cost=float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0)) - before, error=run.error)
-                        await sandbox.note_login(session, task.family_id, task.service, run.output or {})
+                        await sandbox.note_login(session, task.family_id, task.service, run.output or {},
+                                                 fresh=bool((task.details or {}).get("otp_entered")), phase=task.phase)
                         await channels.record(session, task.service, "browser", run.status == "finished" and not (run.output or {}).get("blocked"), run.error)
                         out = run.output or {}
                         if (task.details or {}).get("otp_entered") and out.get("problem"):
@@ -3513,6 +3804,7 @@ async def tick(
                             out = task.result
                         status, message = await _ride_ends_check(task, out) or _outcome(task, out)
                         status, message = await _check_address(task, out, status, message)
+                        status, message = await _later_step(session, task, status, message)
                         if task.phase == "place" and status == "failed" and (task.details or {}).get("place_unclear") and not practice.on(task):
                             found = await _order_on_store_list(task, agent, host_for(task.family_id) if host_for else None)
                             if found:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.specialists import guard
 from app.tasks import practice
 from app.tasks.models import Task
 from app.tasks.skills import COMMON, SKILLS, schema_for
@@ -33,9 +34,15 @@ RIDES_AGENT_RULES = """RIDES AGENT RULES
 
 def ride_end(d: dict, end: str) -> str:
     """A ride's pickup or drop as the app must be given it: the saved place's full address when the person meant one (an AI
-    decision at the start), else their words (a landmark the app finds)."""
+    decision at the start), the WhatsApp location they shared, else their words (a landmark the app finds)."""
     place = d.get(f"{end}_place") or {}
     return str(place.get("full") or d.get(end) or "")
+
+
+def pin_of(d: dict, end: str) -> dict | None:
+    """The exact map point of a ride's end, when they shared it as a WhatsApp location."""
+    place = d.get(f"{end}_place") or {}
+    return place if place.get("pin") and place.get("lat") is not None and place.get("lng") is not None else None
 
 
 def cancel_terms(d: dict) -> str:
@@ -85,6 +92,13 @@ class Specialist:
             ends = (f" Set the pickup to exactly '{pick}' and the drop to exactly '{drop}': type the full address and choose the "
                     "suggestion that matches it (never a city or area alone). Report pickup_used and drop_used exactly as the app "
                     "shows them.")
+            for end in ("pickup", "drop"):
+                pin = pin_of(d, end)
+                if pin:
+                    # the WhatsApp location they shared: its exact point (founder 2026-10-12)
+                    ends += (f" The {end} is the map point {float(pin['lat']):.6f}, {float(pin['lng']):.6f}: set the {end} there (type "
+                             f"these coordinates, or the place, into the {end} box and choose the suggestion at that point, or move "
+                             "the map pin onto it); never a nearby landmark or the area.")
             if d.get("ends_fix"):
                 ends += f" The last run set {d['ends_fix']}, which is wrong: set it again carefully."
             if task.phase == "browse":
@@ -95,6 +109,11 @@ class Specialist:
                         "surge, and whether you are logged in.")
             if task.phase == "place":
                 choice = d.get("choice") or "the option the family confirmed"
+                # a fare that moved after their yes: within the leeway it is booked, above it they are asked (founder 2026-10-12)
+                agreed = guard.rupees((d.get("later") or {}).get("max") or d.get("confirmed_total"))
+                ends += ("" if (d.get("later") or {}).get("no_max") or not agreed else
+                         f" If the fare shown for it is above ₹{agreed + guard.leeway(agreed):.0f}, do NOT book: report price_changed=true "
+                         "and new_total (the fare shown).")
                 return (f"On {label}, book the ride {what}: {choice}, payment Cash.{ends} Before you book, look at the pickup the app "
                         f"shows: if it is only a city or an area, or another place than '{pick}', do NOT book: report "
                         "pickup_mismatch=true and pickup_used. After booking, wait for the driver to be assigned and report booked, "
@@ -138,10 +157,16 @@ class Specialist:
             return practice.browser_goal(label, items, d.get("confirmed_total") or (task.result or {}).get("total"), where)
         if task.phase == "place":
             total = d.get("confirmed_total") or (task.result or {}).get("total")
+            # the most it may cost and still be placed on their yes: the confirmed total (or, for one booked ahead, the most
+            # they said they would pay) plus the leeway (founder 2026-10-12)
+            agreed = guard.rupees((d.get("later") or {}).get("max") or total)
+            over = f"₹{agreed + guard.leeway(agreed):.0f}" if agreed else f"{total} by over ₹10"
+            if (d.get("later") or {}).get("no_max"):
+                over = "anything (they set no limit)"
             return (f"On {label}, the cart for: {items} is ready and the family confirmed a total of {total}. Open the cart (if it is empty, "
                     f"add exactly these items again first). Place the order now with Cash on "
                     f"Delivery only: choose Cash / Pay on Delivery as the payment method, never a saved card, UPI or wallet; if cash on "
-                    f"delivery is not offered, do NOT place and report problem='cod_unavailable'.{where} If the cart items changed or the total is now more than {total} by over ₹10, do NOT place: report "
+                    f"delivery is not offered, do NOT place and report problem='cod_unavailable'.{where} If the cart items changed or the total is now more than {over}, do NOT place: report "
                     f"price_changed=true and new_total. Otherwise report placed, order_id, payment_method, total and eta, and pressed_place=true "
                     "once you pressed the final place-order / pay button (also when no confirmation page came; then wait for it and "
                     "report what the page shows).")

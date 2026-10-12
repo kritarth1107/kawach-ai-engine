@@ -123,6 +123,8 @@ BUTTON_SETS = {
     "feedback": [("up", "👍 Useful", "👍 Kaam ka", "👍 काम का"), ("down", "👎 Not useful", "👎 Kaam ka nahi", "👎 काम का नहीं")],
     # the one confirm of an order (key = task id): a tap places, changes or cancels it without a model reading words
     "order": [("yes", "Yes, order it", "Haan, mangao", "हाँ, मंगाओ"), ("change", "Change", "Badlo", "बदलो"), ("cancel", "Cancel", "Cancel karo", "रद्द करो")],
+    # the one question of a booking set for later (key = "<task id>:<suggested limit>"): yes up to that limit, any amount, no
+    "later": [("yes", "Yes, do it", "Haan, kar do", "हाँ, कर दो"), ("any", "Any amount", "Kitna bhi ho", "कितना भी हो"), ("no", "No", "Nahi", "नहीं")],
 }
 
 
@@ -141,6 +143,20 @@ ORDER_BUTTONS = {
 }
 
 
+# The question for later's buttons in every Indian script (yes up to the limit in the message, any amount, no).
+LATER_BUTTONS = {
+    "mr": ("हो, करा", "कितीही असो", "नको"),
+    "bengali": ("হ্যাঁ, করে দাও", "যত হোক", "না"),
+    "tamil": ("ஆம், செய்யுங்கள்", "எவ்வளவு ஆனாலும்", "வேண்டாம்"),
+    "telugu": ("అవును, చేయండి", "ఎంతైనా సరే", "వద్దు"),
+    "kannada": ("ಹೌದು, ಮಾಡಿ", "ಎಷ್ಟಾದರೂ ಸರಿ", "ಬೇಡ"),
+    "gujarati": ("હા, કરો", "ગમે તેટલું", "ના"),
+    "gurmukhi": ("ਹਾਂ, ਕਰ ਦਿਓ", "ਜਿੰਨਾ ਵੀ ਹੋਵੇ", "ਨਹੀਂ"),
+    "malayalam": ("അതെ, ചെയ്യൂ", "എത്രയായാലും", "വേണ്ട"),
+    "odia": ("ହଁ, କର", "ଯେତେ ହେଉ", "ନା"),
+}
+
+
 def buttons(kind: str, key: str, profile: dict | None, text: str | None = None) -> list[dict]:
     """WhatsApp reply buttons for a question Saheli asks; ids carry the meaning so a tap needs no model. text: the message
     they go with; when the person's language is not saved yet, its script decides (a Tamil confirm gets Tamil buttons)."""
@@ -150,9 +166,10 @@ def buttons(kind: str, key: str, profile: dict | None, text: str | None = None) 
     shown = guards.script_of(text or "") if text and not (profile or {}).get("saved") else None
     if shown and shown not in ("latin", "arabic") and not (shown == "devanagari" and k in ("devanagari", "mr")):
         k = shown
-    tag = {"feedback": "fb", "order": "od"}.get(kind, "oc")
-    if kind == "order" and k in ORDER_BUTTONS:
-        return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": title[:20]} for row, title in zip(BUTTON_SETS[kind], ORDER_BUTTONS[k])]
+    tag = {"feedback": "fb", "order": "od", "later": "lt"}.get(kind, "oc")
+    local = {"order": ORDER_BUTTONS, "later": LATER_BUTTONS}.get(kind) or {}
+    if k in local:
+        return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": title[:20]} for row, title in zip(BUTTON_SETS[kind], local[k])]
     col = 3 if k in ("devanagari", "mr") else (2 if k == "indic" else 1)
     return [{"id": f"v2:{tag}:{row[0]}:{key}"[:250], "title": row[col][:20]} for row in BUTTON_SETS[kind]]
 
@@ -219,6 +236,32 @@ async def handle_order_button(session: AsyncSession, *, family_id: str, speaker_
     return None, None
 
 
+async def handle_later_button(session: AsyncSession, *, family_id: str, speaker_id: str, elder_id: str, code: str, key: str) -> str:
+    """A tap on the question of a booking set for later (key "<task id>:<suggested limit>"): yes sets it with that limit,
+    any amount with none, no drops it. Returns the note for the brain, which tells them in their words."""
+    import uuid as _uuid
+
+    from app.tasks import runtime
+    from app.tasks.models import Task
+
+    tid, _, limit = key.partition(":")
+    try:
+        task = await session.get(Task, _uuid.UUID(tid), with_for_update=True, populate_existing=True)
+    except ValueError:
+        task = None
+    if not task or task.family_id != family_id:
+        return "(tapped a button of a booking for later that is not there any more: say so in one short line)"
+    if task.input_needed != "later":
+        return f"(tapped {code} on the booking for later {tid}, which is not waiting for that answer now: {runtime.describe(task)}; say where it stands)"
+    try:
+        amount = float(limit) if code == "yes" and limit else None
+    except ValueError:
+        amount = None
+    out = await runtime.provide_input(session, task, kind="later", value="no" if code == "no" else "yes", by=speaker_id,
+                                      by_is_elder=speaker_id == elder_id, max_amount=amount, no_max=code == "any")
+    return f"(tapped {'yes, up to ₹' + limit if code == 'yes' else 'any amount' if code == 'any' else 'no'} on the booking for later {tid}: {out[:700]})"
+
+
 THANKS = {
     "english": {"up": "Thank you, noted 🙏", "down": "Thank you, I'll mention fewer things like this 🙏", "all_fine": "So glad to hear that 🙏",
                 "doctor_visit": "Noted 🙏 If the doctor changed anything, tell me and I'll update the reminders.",
@@ -236,7 +279,7 @@ THANKS = {
                    "nochange": "ठीक है, कुछ नहीं बदला 🙏", "medicine_changed": "नई दवा, खुराक और समय बताइए, मैं रिमाइंडर बदल दूँगी।",
                    "later": "ठीक है, जब आपको ठीक लगे 🙏"},
 }
-BUTTON_ID = re.compile(r"^v2:(fb|oc|od):([a-z_]+):(.+)$")
+BUTTON_ID = re.compile(r"^v2:(fb|oc|od|lt):([a-z_]+):(.+)$")
 
 
 def parse_button(text: str) -> tuple[str, str, str] | None:

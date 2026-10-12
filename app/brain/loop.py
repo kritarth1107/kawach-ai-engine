@@ -52,6 +52,8 @@ class TurnRequest:
     # reminders due in the next hours for the speaker and the person cared for (from the backend, with the message):
     # [{"id", "person", "text", "day", "time", "repeat", "item"}]
     reminders_soon: list[dict] = field(default_factory=list)
+    # a WhatsApp location pin in this message {"lat", "lng", "name", "address"} (founder 2026-10-12: a ride's pickup)
+    location: dict | None = None
 
     @property
     def voice(self) -> bool:
@@ -77,6 +79,7 @@ class TurnResult:
     trace_id: str | None = None  # the why-trail this turn is filed under (app.core.trace)
     turn_id: int | None = None  # Saheli's reply turn
     stale: bool = False  # an update that was no longer true when its turn came: nothing was said
+    location_request: bool = False  # the reply goes with WhatsApp's "Send location" button
 
 
 async def _lock_family(session: AsyncSession, family_id: str) -> None:
@@ -113,7 +116,7 @@ class TurnData:
         if self._tasks is None:
             from app.tasks import runtime as task_runtime
 
-            self._tasks = await task_runtime.live_tasks(self.session, self.req.family_id)
+            self._tasks = await task_runtime.shown_tasks(self.session, self.req.family_id)
         return self._tasks
 
 
@@ -431,7 +434,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     from app.tasks import runtime as task_runtime
 
     ordering_ok = any(a["tool"] in ("start_task", "task_input", "order_feedback") and a.get("ok") for a in ctx.actions) or bool(
-        await data.tasks() if data else await task_runtime.live_tasks(session, req.family_id))
+        await data.tasks() if data else await task_runtime.shown_tasks(session, req.family_id))
     prices_ok = ordering_ok or any(a["tool"] in ("past_orders", "spending") and a.get("ok") for a in ctx.actions)
     problems += guards.false_claims(final, others=others, messaged=messaged, ordering_ok=ordering_ok, prices_ok=prices_ok)
     seen, out = set(), []
@@ -512,7 +515,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
         speaker_id=req.speaker["id"], message_ref=req.message_ref,
-        meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {})},
+        meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
+              **({"location": req.location} if req.location else {})},
     )
     if req.message_ref and inserted is None:
         prior = (
@@ -553,6 +557,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             return TurnResult(reply=tapped, actions=[{"tool": "order_button", "args": {"id": req.text}, "ok": True}], alerts=[], model="none",
                               ms=int((time.monotonic() - started) * 1000))
         req.text = for_brain or req.text
+    elif parsed_button and parsed_button[0] == "lt":
+        # A tap on the question of a booking set for later: the answer is data; the brain tells them what was set.
+        req.text = await outcomes.handle_later_button(session, family_id=req.family_id, speaker_id=req.speaker["id"],
+                                                      elder_id=req.elder["id"], code=parsed_button[1], key=parsed_button[2])
     elif parsed_button:
         # A tapped Saheli button: record it and answer without a model call.
         speaker_prof = (await writing_profiles(session, req.family_id, [req.speaker])).get(req.speaker["id"])
@@ -633,6 +641,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
+        location=req.location,
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
@@ -747,6 +756,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         ms=int((time.monotonic() - started) * 1000),
         buttons=ctx.buttons if final and final != "none" else [],
         turn_id=turn_id,
+        location_request=bool(ctx.location_request and final and final != "none" and not ctx.buttons),
     )
 
 

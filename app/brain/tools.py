@@ -57,6 +57,9 @@ class TurnCtx:
     # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
     messaged: set = field(default_factory=set)
     told_by_tasks: set = field(default_factory=set)
+    # A WhatsApp location pin in this message, and whether the reply asks for one (a "Send location" button)
+    location: dict | None = None
+    location_request: bool = False
 
     @property
     def elder_id(self) -> str:
@@ -875,7 +878,8 @@ async def _approval_just_asked(ctx: TurnCtx, person: str) -> bool:
         "to": {"type": "string", "description": "Person id from HOUSEHOLD"},
         "text": {"type": "string"},
         "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback|order, key: the key given in the prompt (for order: the task id)}",
-                    "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order"]}, "key": {"type": "string"}}},
+                    "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order", "later"]}, "key": {"type": "string"}}},
+        "ask_location": {"type": "boolean", "description": "The message asks them to share a location: it goes with WhatsApp's 'Send location' button"},
     },
     ["to", "text"],
 )
@@ -899,7 +903,21 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     a = {**a, "text": guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)),
                                           ctx.profiles.get(a["to"]))}
     payload = {"to": a["to"], "text": a["text"]}
-    if (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
+    if (a.get("buttons") or {}).get("kind") == "later":
+        # only on the question of a booking set for later (sim 2026-10-12: they went on a ride's fare confirm for now)
+        from app.tasks import later, runtime
+
+        try:
+            t = await _task(ctx, str(a["buttons"].get("key") or "").partition(":")[0])
+        except ToolRefused:
+            t = None
+        if t is None or t.input_needed != "later":
+            a = {**a, "buttons": None}
+        else:
+            a = {**a, "buttons": {"kind": "later", "key": f"{t.id}:{later.suggest_max(runtime._later_amount(t)) or ''}"}}
+    if a.get("ask_location"):
+        payload["location_request"] = True
+    elif (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
         from app.care import outcomes
 
         payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]), a["text"])
@@ -1136,6 +1154,12 @@ async def _task(ctx: TurnCtx, task_id: str):
         "drop": {"type": "string"},
         "vehicle": {"type": "string", "description": "auto, mini, sedan, bike, or omit for cheapest car"},
         "area": {"type": "string", "description": "Delivery area or pincode if known"},
+        "pickup_shared": {"type": "boolean", "description": "Ride: the pickup is the WhatsApp location they shared (this message or a recent one)"},
+        "drop_shared": {"type": "boolean", "description": "Ride: the drop is the WhatsApp location they shared"},
+        "at": {"type": "string", "description": "Only when they want it at a later time ('kal subah 6 baje cab', 'order milk at 7 tomorrow'): "
+               "that time as ISO 8601 in IST, e.g. 2026-10-16T06:00 (work it out from NOW). Leave out for now."},
+        "at_means": {"type": "string", "enum": ["arrive", "book"], "description": "With at: arrive (default) = the cab should come / the "
+                     "order should arrive by then; book = they want it booked or placed exactly then"},
     },
     ["kind", "goal"],
 )
@@ -1159,12 +1183,54 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
                 a = {**a, "services": got}
             elif got:
                 a = {**a, "service": got if isinstance(got, str) else got[0]}
+    if a.get("at"):
+        # Set for later (founder 2026-10-12): looked up now, then ONE question with everything and the most they will pay;
+        # booked at its time without asking (app/tasks/later.py).
+        from app.tasks import later
+
+        at = later.parse_at(a["at"])
+        if at is None:
+            raise ToolRefused("at must be a date and time like 2026-10-16T06:00 (IST); work it out from NOW and their words.")
+        if at <= clock.now():
+            raise ToolRefused(f"That time ({later.hm(at)}) has passed; ask them which time they mean.")
+        means = a.get("at_means") if a.get("at_means") in ("arrive", "book") else "arrive"
+        if later.book_time(at, means) - clock.now() >= later.MIN_AHEAD:
+            a = {**a, "later": {"at": at.isoformat(), "means": means, "book_at": later.book_time(at, means).isoformat()}}
     if a["kind"] == "ride":
         # The ride's ends as places: a saved place they meant (an AI decision) goes to the app as its full address (live
         # 2026-10-12: a saved home went to the app as words, the app set the city and the ride was booked from there).
         ends = [e for e in ("pickup", "drop") if a.get(e) and not a.get(f"{e}_place")]
         found = await asyncio.gather(*(_ride_end_place(ctx, str(a[e])) for e in ends))
         a = {**a, **{f"{e}_place": f for e, f in zip(ends, found) if f}}
+        saved = {e: dict(a[f"{e}_place"]) for e in ("pickup", "drop") if a.get(f"{e}_place")}
+        for end in ("pickup", "drop"):
+            if a.get(f"{end}_shared"):
+                pin = await _shared_pin(ctx)
+                if pin is None:
+                    raise ToolRefused("No location was shared yet: ask for it (ask_location), or start the ride with their words.")
+                if not (str(pin.get("name") or "").strip() or str(pin.get("address") or "").strip()):
+                    # "my current location": its address in words (reverse geocoded), for the app and for checking what it sets
+                    try:
+                        rev = await ctx.host.call("ride_place", {"lat": float(pin["lat"]), "lng": float(pin["lng"])},
+                                                  family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+                    except Exception:  # noqa: BLE001 — the point alone still goes to the app
+                        rev = {}
+                    if (rev or {}).get("address"):
+                        pin = {**pin, "address": str(rev["address"])[:300]}
+                if end == "pickup" and not saved.get("pickup"):
+                    # the place they named when the pin was asked for ("from home"), even if this call names the pin itself
+                    words = await _pickup_words_asked(ctx)
+                    found = await _ride_end_place(ctx, words) if words else None
+                    if found:
+                        saved["pickup"] = found
+                a = {**a, f"{end}_place": _pin_place(pin), end: _pin_place(pin)["full"]}
+                if end == "pickup" and saved.get("pickup") and not a.get("later"):
+                    a = {**a, "pin_saved_to": await _save_pin(ctx, saved["pickup"], pin)}
+        ask = await _ride_pin_first(ctx, a)
+        if ask:
+            return ask
+    pin_note = ({"pin_saved": f"The location they shared is now {a['pin_saved_to']}'s exact point for next time: say so in a few words."}
+                if a.get("pin_saved_to") else {})
     place = None
     if a["kind"] == "order" and a.get("area"):
         # Also after the address was confirmed: a place they name now must be a saved one (it went to the default place).
@@ -1174,18 +1240,18 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
             return problem
     if a.get("services"):
         # Several stores or apps they named: exactly those are searched, and every one is reported (founder 2026-10-11).
-        return await _start_compare(ctx, a, tuple(a["services"]), place=place, named=True)
+        return {**(await _start_compare(ctx, a, tuple(a["services"]), place=place, named=True)), **pin_note}
     if not a.get("service"):
         cat = "ride" if a["kind"] == "ride" else a.get("category") or ""
         stores = runtime.COMPARE_STORES.get(cat) if (cat == "ride") == (a["kind"] == "ride") else None
         if not stores:
             raise ToolRefused("Say which store (service), or give category for an order with no store named.")
-        return await _start_compare(ctx, a, stores, place=place)
+        return {**(await _start_compare(ctx, a, stores, place=place)), **pin_note}
     for t in await runtime.live_tasks(ctx.session, ctx.family_id):
         if t.service == a["service"] and t.kind == a["kind"]:
             return {"already_running": runtime.describe(t)}
     task = await _create_task(ctx, a, a["service"], place=place)
-    return {"task_id": str(task.id), "status": "started",
+    return {**pin_note, "task_id": str(task.id), "status": "started",
             "next": ("A task update brings what the store has, numbered with your suggestion, for them to pick; then the one "
                      "confirm with the total. Nothing is ordered before that." if a["kind"] == "order" else
                      "A task update brings the fares, numbered, for them to pick; then the one confirm with the fare. Nothing is "
@@ -1297,11 +1363,91 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         return await runtime.create(
             ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
             service=service, kind=a["kind"], goal=a["goal"],
-            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place") if a.get(k)},
+            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place", "later") if a.get(k)},
                      **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
+
+
+RIDE_PIN_ASK_FOR = timedelta(minutes=10)
+PIN_KEPT_FOR = timedelta(hours=2)
+PIN_SAVE_WITHIN_KM = 1.5
+
+
+async def _shared_pin(ctx: TurnCtx) -> dict | None:
+    """The WhatsApp location pin of this message, else the one this person shared in the last two hours."""
+    if ctx.location and ctx.location.get("lat") is not None:
+        return ctx.location
+    who = ctx.speaker.get("id") or ctx.elder_id
+    for t in reversed(await store.recent_turns(ctx.session, ctx.family_id, who, limit=12)):
+        pin = (t.meta or {}).get("location") if t.role == "user" else None
+        if pin and t.at and clock.now() - t.at <= PIN_KEPT_FOR:
+            return pin
+    return None
+
+
+def _pin_place(pin: dict) -> dict:
+    lat, lng = float(pin["lat"]), float(pin["lng"])
+    label = ", ".join(x for x in (str(pin.get("name") or "").strip(), str(pin.get("address") or "").strip()) if x)
+    return {"nickname": str(pin.get("name") or "").strip() or "the shared location", "full": label or f"{lat:.5f}, {lng:.5f}",
+            "lat": lat, "lng": lng, "precision": "user", "pin": True}
+
+
+def _km(a: dict, b: dict) -> float:
+    import math
+
+    p1, p2 = math.radians(float(a["lat"])), math.radians(float(b["lat"]))
+    dp, dl = p2 - p1, math.radians(float(b["lng"]) - float(a["lng"]))
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 6371.0 * 2 * math.asin(math.sqrt(h))
+
+
+async def _save_pin(ctx: TurnCtx, place: dict, pin: dict) -> str | None:
+    """The pin they shared for a saved place they named ("from home") becomes that place's exact point for next time,
+    when it is near where the place was thought to be (they may share where they are, not the place); else nothing."""
+    if place.get("precision") == "user" or not place.get("nickname"):
+        return None
+    if place.get("lat") is not None and place.get("lng") is not None and _km(place, pin) > PIN_SAVE_WITHIN_KM:
+        return None
+    try:
+        got = await ctx.host.call("save_place", {"place": place["nickname"], "lat": float(pin["lat"]), "lng": float(pin["lng"])},
+                                  family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+    except Exception:  # noqa: BLE001 — the ride goes on with the pin either way
+        return None
+    return place["nickname"] if (got or {}).get("ok") else None
+
+
+async def _pickup_words_asked(ctx: TurnCtx) -> str:
+    """The pickup in their words when the pin was asked for (minutes ago)."""
+    speaker = ctx.speaker.get("id") or ctx.elder_id
+    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - RIDE_PIN_ASK_FOR,
+                                           kinds=["ride_pin_asked"]) if (e.payload or {}).get("speaker") == speaker]
+    return str((asked[-1].payload or {}).get("pickup") or "") if asked else ""
+
+
+async def _ride_pin_first(ctx: TurnCtx, a: dict) -> dict | None:
+    """Founder 2026-10-12: a ride's pickup is asked as a WhatsApp location (its exact point) unless a saved place already
+    has one. Asked once per ride request: their next message goes ahead, with the pin, or with the saved address or their
+    words when they would rather."""
+    if (ctx.is_system or a.get("pickup_shared") or (a.get("pickup_place") or {}).get("precision") == "user"
+            or not (a.get("pickup") and a.get("drop"))):
+        return None  # a scheduled turn, a pin already, an exact saved point, or a ride still missing its ends
+    speaker = ctx.speaker.get("id") or ctx.elder_id
+    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - RIDE_PIN_ASK_FOR,
+                                           kinds=["ride_pin_asked"]) if (e.payload or {}).get("speaker") == speaker]
+    if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
+        return None
+    ctx.location_request = True
+    if not asked:
+        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="ride_pin_asked",
+                                 summary=f"Asked for the pickup as a location: {a['goal']}", actor_id=speaker,
+                                 payload={"speaker": speaker, "ref": ctx.message_ref, "pickup": str(a.get("pickup") or "")[:200]})
+    return {"status": "not started yet", "ask_location": "pickup",
+            "next": "Nothing is searched yet. In one short line, ask them to share the pickup with the 'Send location' button "
+                    "under your message (if they are not there now, they can pick the spot on the map). When it comes, call "
+                    "start_task again with the same ride and pickup_shared true. If they would rather use the saved address or "
+                    "their words, call start_task again as it is."}
 
 
 async def _ride_end_place(ctx: TurnCtx, words: str) -> dict | None:
@@ -1317,7 +1463,8 @@ async def _ride_end_place(ctx: TurnCtx, words: str) -> dict | None:
         return None
     if not got or not got.get("matched") or not got.get("full"):
         return None
-    return {k: got.get(k) for k in ("nickname", "full", "pincode", "lat", "lng") if got.get(k) is not None}
+    out = {k: got.get(k) for k in ("nickname", "full", "pincode", "lat", "lng") if got.get(k) is not None}
+    return {**out, **({"precision": got["geoPrecision"]} if got.get("geoPrecision") else {})}
 
 
 async def saved_place_args(ctx_host, words: str, *, family_id: str, subject_id: str, actor_id: str) -> dict:
@@ -1382,6 +1529,7 @@ async def places(ctx: TurnCtx, a: dict) -> dict:
         "receiver_name": {"type": "string"},
         "receiver_phone": {"type": "string"},
         "make_default": {"type": "boolean"},
+        "use_shared_location": {"type": "boolean", "description": "The place's exact point is the WhatsApp location they shared (for rides and deliveries)"},
     },
     [],
 )
@@ -1391,7 +1539,28 @@ async def save_place(ctx: TurnCtx, a: dict) -> dict:
     if not ctx.is_caregiver and not ctx.speaker_is_elder:
         raise ToolRefused("Only the person themselves or a caregiver can save or change places.")
     args = {k: a[k] for k in ("address", "name", "place", "receiver_name", "receiver_phone", "make_default") if a.get(k) not in (None, "")}
+    if a.get("use_shared_location"):
+        pin = await _shared_pin(ctx)
+        if pin is None:
+            raise ToolRefused("No location was shared yet: ask for it with ask_location.")
+        args = {**args, "lat": float(pin["lat"]), "lng": float(pin["lng"])}
     return await ctx.host.call("save_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+
+
+@tool(
+    "ask_location",
+    "Ask them to share a place as a WhatsApp location: your reply goes with WhatsApp's 'Send location' button. For a ride's "
+    "pickup when no saved place has its exact point (start_task asks for it itself), a drop that is not a clear landmark, "
+    "or a place to save. Write the question in your reply in one short line (they can also pick the spot on the map). On a "
+    "scheduled turn use send_message with ask_location instead.",
+    {"purpose": {"type": "string", "enum": ["pickup", "drop", "place"]}},
+    ["purpose"],
+)
+async def ask_location(ctx: TurnCtx, a: dict) -> dict:
+    if ctx.is_system:
+        raise ToolRefused("On a scheduled turn, send_message with ask_location true.")
+    ctx.location_request = True
+    return {"ok": True, "next": f"Your reply goes with a 'Send location' button; ask for the {a['purpose']} in one short line."}
 
 
 @tool(
@@ -1419,11 +1588,16 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
     "(target), more (target: they want to see that item's options; the list comes back in a task update), keep (value yes: a "
     "caregiver says keep trying when asked about a slow order), resend (the login code did not come: the store is asked for "
     "a new one; never promise a new code without calling this), only (while several stores are looked at, they named one of "
-    "them: task_id = that store's task; the others are dropped; never say you are checking one store without calling this). "
+    "them: task_id = that store's task; the others are dropped; never say you are checking one store without calling this), "
+    "later (their answer to the one question for a booking set for later: value yes with max_amount, or no_max; or value no), "
+    "fare (a booking set for later costs more than their limit now: value yes to book it at the new amount, or no). "
     "You read their words; pass data, never their raw words. The new cart and total come back for the one confirm.",
     {
         "task_id": {"type": "string"},
-        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep", "resend", "only"]},
+        "kind": {"type": "string", "enum": ["go", "otp", "confirm", "fee", "choice", "swap", "approve", "more", "change", "add", "remove", "keep", "resend", "only",
+                                            "later", "fare"]},
+        "max_amount": {"type": "number", "description": "later: the most they will pay in rupees (their number, or the suggested one when they just say yes)"},
+        "no_max": {"type": "boolean", "description": "later: they said any amount is fine (no limit)"},
         "value": {"type": "string", "description": "confirm / approve / fee / keep: exactly 'yes' or 'no' (you decide from their words, any language); go: the number(s) of the option(s) they picked, as listed (e.g. '2' or '1, 5'), 'yes' for the suggested one, or 'no' for none; choice (a ride's fare): its number as listed, or 'yes' for the one they picked before; otp: the digits; swap: the option as listed"},
         "items": {"type": "array", "items": {"type": "object", "properties": {
                     "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},
@@ -1443,7 +1617,7 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
     task = await _task(ctx, a["task_id"])
     outcome = await runtime.provide_input(
         ctx.session, task, kind=a["kind"], value=str(a.get("value") or ""), by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
-        items=a.get("items"), target=a.get("target"),
+        items=a.get("items"), target=a.get("target"), max_amount=a.get("max_amount"), no_max=bool(a.get("no_max")),
     )
     return {"result": outcome, "task": runtime.describe(task), **(_tell_who_cancelled(ctx, task) if task.status == "cancelled" else {})}
 
@@ -2035,8 +2209,9 @@ async def log_outcome(ctx: TurnCtx, a: dict) -> dict:
     "Attach one-tap answers to your reply. kind 'feedback' (👍/👎) after you mention a pattern, with key "
     "'pattern:<pattern key>:subj=<person id>' as given in PATTERNS NOTICED; kind 'outcome' (all fine / saw doctor / "
     "hospital) or 'visit' (no change / medicine changed / later) when you ask how something turned out; kind 'order' (yes / "
-    "change / cancel) with key = the task id when you ask the one confirm of an order in your reply.",
-    {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order"]}, "key": {"type": "string"}},
+    "change / cancel) with key = the task id when you ask the one confirm of an order in your reply; kind 'later' (yes / any "
+    "amount / no) with key = the task id when you ask the one question of a booking set for later.",
+    {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order", "later"]}, "key": {"type": "string"}},
     ["kind", "key"],
 )
 async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
@@ -2053,6 +2228,13 @@ async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
             raise ToolRefused(f"This order is not waiting for a yes any more ({runtime.describe(task)}). Do not ask to confirm "
                               "it; say where it stands.")
         a = {**a, "key": f"{task.id}:{fp[:8]}"}  # the buttons carry the cart check, so a tap never places another cart
+    if a["kind"] == "later":
+        from app.tasks import later
+
+        task = await _task(ctx, str(a["key"]).partition(":")[0])
+        if task.input_needed != "later":
+            raise ToolRefused(f"This is not waiting for the question for later ({runtime.describe(task)}).")
+        a = {**a, "key": f"{task.id}:{later.suggest_max(runtime._later_amount(task)) or ''}"}  # yes = up to the suggested limit
     ctx.buttons = outcomes.buttons(a["kind"], a["key"], ctx.profiles.get(ctx.speaker.get("id")))
     ctx.buttons_spec = (a["kind"], a["key"])  # titled again in the reply's own script when it is final (loop)
     return {"attached": [b["title"] for b in ctx.buttons]}

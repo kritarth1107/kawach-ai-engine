@@ -17,6 +17,18 @@ from app.brain import policy
 from app.specialists.contract import Limits
 
 PRICE_TOLERANCE = 10.0  # ₹ the placed total may differ from the confirmed total (rounding, tiny fees)
+# How far a price may move after the person's yes (or above the most they said they would pay) and still go ahead without
+# asking again (founder 2026-10-12: "if they said 900 ... it can book for 902 or 920 or 912"): one constant pair.
+LEEWAY_PCT, LEEWAY_MIN = 0.025, 10.0
+
+
+def leeway(agreed: float | None) -> float:
+    return max((agreed or 0.0) * LEEWAY_PCT, LEEWAY_MIN)
+
+
+def within_leeway(now: float | None, agreed: float | None) -> bool:
+    """A price that moved after the yes: still fine (no new question) when it is at most the agreed amount plus the leeway."""
+    return now is not None and agreed is not None and now <= agreed + leeway(agreed)
 
 
 def qty(value) -> int:
@@ -90,6 +102,12 @@ def cart_fingerprint(report: dict) -> str:
     items = sorted((str(i.get("name", "")).strip().lower(), qty(i.get("qty"))) for i in report.get("items") or [])
     raw = json.dumps({"items": items, "total": rupees(report.get("total"))}, sort_keys=True)
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def items_fingerprint(report: dict) -> str:
+    """The cart's products and quantities only: the same cart whose total moved (within the leeway it goes on the yes)."""
+    items = sorted((str(i.get("name", "")).strip().lower(), qty(i.get("qty"))) for i in report.get("items") or [])
+    return hashlib.sha256(json.dumps(items).encode()).hexdigest()[:16]
 
 
 UNIT_WORDS = {"pack", "packet", "pouch", "bottle", "strip", "tablet", "tablets", "box", "fresh", "with", "and", "the"}
@@ -222,6 +240,6 @@ def check_placed(kind: str, report: dict, confirmed_total: float | None) -> Verd
     if kind == "order" and method and not re.search(r"cash|cod|pay on delivery|deliver", method, re.I):
         v.warn.append(f"payment shows '{method}', not cash on delivery: tell the caregiver now")
     total = rupees(report.get("total"))
-    if kind == "order" and confirmed_total and total and abs(total - confirmed_total) > PRICE_TOLERANCE:
+    if kind == "order" and confirmed_total and total and abs(total - confirmed_total) > leeway(confirmed_total):
         v.warn.append(f"placed total ₹{total:.0f} differs from the confirmed ₹{confirmed_total:.0f}: tell the caregiver now")
     return v
