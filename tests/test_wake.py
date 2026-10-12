@@ -98,7 +98,10 @@ class TaskBrain:
 
 async def test_task_update_reaches_elder_before_she_answers(db, at, monkeypatch):
     """Live 2026-10-08: 'Order diet coke' → 'I'll tell you when the cart is ready' → the login-code and timeout updates were
-    both blocked by the unanswered-message cooldown, so she never heard back. Task updates must go out; nudges still wait."""
+    both blocked by the unanswered-message cooldown, so she never heard back. Task updates must go out; a scheduled question
+    waits while the order waits for her answer (without using up its wake), then goes."""
+    from app.tasks.models import Task
+
     router.register_provider("fake", TaskBrain())
     monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
     router.reset_breakers()
@@ -113,16 +116,42 @@ async def test_task_update_reaches_elder_before_she_answers(db, at, monkeypatch)
         await db.commit()
         host = SimHost()
         at("2026-10-08 14:47")
+        db.add(Task(family_id=FAM, subject_id=ELDER["id"], requested_by=ELDER["id"], service="blinkit", kind="order", goal="diet coke",
+                    status="needs_input", phase="otp", input_needed="otp", created_at=now, updated_at=clock.now(), deadline_at=now + timedelta(minutes=30)))
+        await db.commit()
         await wake.system_turn(sessions, host, FAM, "[Task update] [t-1] Blinkit order: Diet Coke, waiting for otp. The service sent a login code to phone; ask the person who has that phone for it.", "task:abc123")
         # mid-conversation (Saheli wrote 4 minutes ago): straight to the point, no name opener
         assert [m["text"] for m in host.world.sent] == ["Blinkit ne login code bheja hai, bata dijiye."]
         at("2026-10-08 14:54")
+        stats = await wake.wake_due(sessions, lambda fid: host)
+        assert len(host.world.sent) == 1 and stats["deferred"] == 1, "the BP question waits while the order waits for her login code"
+        await db.refresh(loop)
+        assert (loop.detail or {}).get("wakes", 0) == 0 and clock.ist(loop.wake_at).strftime("%H:%M") == "15:24"
+        at("2026-10-08 15:25")  # the order has waited 38 minutes for her: it no longer holds her questions back
         await wake.wake_due(sessions, lambda fid: host)
-        assert len(host.world.sent) == 1, "a nudge still waits for her answer"
+        assert len(host.world.sent) == 2 and "BP check kiya?" in host.world.sent[-1]["text"]
         await db.refresh(loop)
         assert loop.detail["wakes"] == 1
     finally:
         router._providers.pop("fake", None)
+
+
+async def test_urgent_follow_up_is_not_held_back_by_an_order(db, at, fake_brain):
+    """A follow-up whose rule alerts the caregiver (a health worry) wakes on time even while an order is being placed."""
+    from app.tasks.models import Task
+
+    sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+    now = at("2026-10-02 10:00")
+    await store.save_roster(db, FAM, ELDER, [ELDER, DAUGHTER])
+    db.add(Task(family_id=FAM, subject_id=ELDER["id"], requested_by=DAUGHTER["id"], service="blinkit", kind="order", goal="atta",
+                status="running", phase="place", created_at=now, updated_at=now, deadline_at=now + timedelta(minutes=30)))
+    await store.open_loop(db, family_id=FAM, subject_id=ELDER["id"], kind="question", title="Ask Kamla ji if the chest pain has eased",
+                          wake_at=now + timedelta(minutes=10), alert_rule="alert_caregiver")
+    await db.commit()
+    host = SimHost()
+    at("2026-10-02 10:11")
+    stats = await wake.wake_due(sessions, lambda fid: host)
+    assert stats["ran"] == 1 and stats["deferred"] == 0 and len(host.world.sent) == 1
 
 
 class PlainTextBrain:

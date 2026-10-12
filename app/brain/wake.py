@@ -310,6 +310,14 @@ async def _send(sessions: async_sessionmaker, host: ToolHost, roster, family_id:
         return False
 
 
+async def _order_moving_for(session: AsyncSession, loop: OpenLoop) -> bool:
+    from app.care.checkins import moving_for
+    from app.tasks import runtime
+
+    person = loop.owner_id or loop.subject_id
+    return bool(person) and moving_for(await runtime.live_tasks(session, loop.family_id), person, clock.now())
+
+
 async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolHost], *, limit: int = 50) -> dict:
     stats = {"due": 0, "ran": 0, "deferred": 0, "expired": 0, "failed": 0}
     async with sessions() as session:
@@ -348,6 +356,15 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 loop.wake_at = clock.now() + timedelta(hours=1)
                 await session.commit()
                 stats["failed"] += 1
+                continue
+            if loop.kind != "delivery" and loop.alert_rule != "alert_caregiver" and await _order_moving_for(session, loop):
+                # An order or ride is under way for them and may wait for their answer: a new question waits, the way
+                # check-ins do (live 2026-10-08: "BP check kiya?" right after "send me the login code"). It is not used up.
+                from app.care.checkins import MOVING_WAIT
+
+                loop.wake_at = clock.now() + MOVING_WAIT
+                await session.commit()
+                stats["deferred"] += 1
                 continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
             kind = loop.kind

@@ -294,3 +294,20 @@ async def test_nudges_follow_their_own_day(db, at):
                            text="Sleeps around 21:00", source_kind="caregiver_said")
     await db.commit()
     assert await checkins.awake(db, FAM, early["id"], at("2026-10-12 19:30")) and not await checkins.awake(db, FAM, early["id"], at("2026-10-12 20:15"))
+
+
+async def test_a_reply_in_a_chat_they_ended_does_not_hold_back_a_nudge(db, at):
+    """Live 2026-10-12: he said "Thanks", Saheli answered "You're welcome!" at 15:34, and every 16:30 nudge was refused as
+    'messaged them and they have not answered'. Only her own nudges wait for an answer."""
+    from app.brain import tools
+
+    at("2026-10-12 15:33")
+    await store.save_roster(db, FAM, MAA, [MAA, SON])
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="user", text="Thanks", speaker_id=SON["id"])
+    at("2026-10-12 15:34")
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="assistant", text="You're welcome!", meta={"model": "gemini"})
+    await db.commit()
+    at("2026-10-12 16:30")
+    nudge = tools.TurnCtx(session=db, host=None, family_id=FAM, elder=MAA, speaker={"id": "saheli-scheduler", "role": "system"},
+                          members=[MAA, SON], message_ref="checkin:follow_up:son-ck:2026-10-12")
+    assert not [p for p in await tools.send_problems(nudge, SON["id"], "How did the call with Yash go?") if "give them time" in p]
