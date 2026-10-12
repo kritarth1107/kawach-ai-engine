@@ -176,6 +176,13 @@ async def wake_job() -> dict:
 
     out = await wake_due(SessionLocal, host_for)
     try:
+        from app.care import careteam
+
+        # alerts to the Kavach care team that waited a few minutes (or a send that failed) go as one update
+        out["care_team"] = await careteam.flush(SessionLocal, host_for)
+    except Exception:  # noqa: BLE001
+        logger.exception("care team flush failed")
+    try:
         # Saheli's own check-ins (today's unmarked schedule after a chat, how they feel, readings, reports, weight)
         out["checkins"] = await checkins.run(SessionLocal, host_for)
     except Exception:  # noqa: BLE001 — loops above already ran

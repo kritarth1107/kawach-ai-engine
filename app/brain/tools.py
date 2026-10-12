@@ -1015,8 +1015,11 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
 
 async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
     """Next morning, ask a caregiver how things turned out (one tap: all fine / saw doctor / hospital)."""
-    owner = next((m.get("id") for m in ctx.members if "primary" in str(m.get("role", "")).lower()), None) or next(
-        (m.get("id") for m in ctx.members if m.get("id") != ctx.elder_id), None)
+    # never the person the alert was about (caring for themselves, they are their own primary caregiver; founder
+    # 2026-10-13: "he can not be caregiver for himself")
+    others = [m for m in ctx.members if m.get("id") != ctx.elder_id and m.get("role") not in ("elder", "family doctor")]
+    owner = next((m.get("id") for m in others if "primary" in str(m.get("role", "")).lower()), None) or next(
+        (m.get("id") for m in others), None)
     if not owner:
         return
     key = f"alert:{policy.issue_ref(a['reason'], a['issue'], clock.ist_day()).split(':', 2)[2]}:subj={ctx.elder_id}"
@@ -1036,8 +1039,10 @@ async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
     "alert_caregiver",
     "Tell the caregivers. WhatsApp goes out only for: red_flag (medical emergency or red-flag reading), "
     "no_answer (the elder did not answer a check that matters), safety (high-confidence mood or safety concern: "
-    "confusion, a scam, an unusual or bulk order), approval (an order or booking needs their OK). Anything else "
-    "goes to the dashboard. issue names the problem so the same issue is sent once a day.",
+    "confusion, a scam, an unusual or bulk order), approval (an order or booking needs their OK), crisis (any talk of "
+    "suicide, self-harm, wanting to die, or harming or killing someone, even if it may be a joke or a test: the Kavach "
+    "care team is emailed at once too). Anything else goes to the dashboard. issue names the problem so the same issue "
+    "is sent once a day. The alert never goes to the person it is about; the result says who was told: say only that.",
     {
         "reason": {"type": "string", "enum": sorted(policy.ALERT_REASONS)},
         "issue": {"type": "string", "description": "Short stable name, e.g. 'fall-bathroom', 'bp-high', 'scam-call'"},
@@ -1068,24 +1073,58 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
         summary=a["message"], payload={**a, "why": decision.why}, actor_id=ctx.speaker.get("id"), ref=ref,
     )
     if not fresh:
+        if a["reason"] == "crisis":
+            # every line of a crisis reaches the Kavach care team (batched into one update), even under an issue the
+            # family was told about today
+            from app.care import careteam
+
+            team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="crisis",
+                                         summary=a["message"], said=ctx.user_text, actor_id=ctx.speaker.get("id"))
+            return {"sent": False, "why": "the family was told about this today already",
+                    "told": "the Kavach care team " + ("has been emailed" if team == "sent" else "is being emailed") + " and will check on them"}
         return {"sent": False, "why": "already sent for this issue today"}
     ctx.alerts.append({**a, "whatsapp": decision.whatsapp})
-    kind = {"red_flag": "health_red_flag", "no_answer": "nudge_silence", "safety": "unusual_activity", "approval": "order_placed"}.get(
-        a["reason"], "care_note"
-    )
+    kind = {"red_flag": "health_red_flag", "no_answer": "nudge_silence", "safety": "unusual_activity", "approval": "order_placed",
+            "crisis": "crisis"}.get(a["reason"], "care_note")
+    crisis = a["reason"] == "crisis"
     if a["reason"] == "red_flag":
         await ctx.host.call(
             "trigger_emergency_escalation", {"message": a["message"]},
             family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
         )
-    if decision.whatsapp and a["reason"] in ("red_flag", "safety"):
+    if decision.whatsapp and a["reason"] in ("red_flag", "safety", "crisis"):
         await _follow_up_alert(ctx, a)
-    res = await ctx.host.call(
+    # A crisis over many messages is one WhatsApp to the family per half hour (the team gets every line by email): live
+    # 2026-10-13 five alerts went out in six minutes, each under a new issue name.
+    told_lately = crisis and await _crisis_told_lately(ctx)
+    res = {} if told_lately else await ctx.host.call(
         "notify_caregivers",
-        {"message": a["message"], "urgency": "high" if a["reason"] == "red_flag" else "medium", "kind": kind if decision.whatsapp else "care_note"},
+        {"message": a["message"], "urgency": "high" if a["reason"] in ("red_flag", "crisis") else "medium",
+         "kind": kind if decision.whatsapp else "care_note"},
         family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
     )
-    return {"sent": True, "whatsapp": decision.whatsapp, "why": decision.why, "result": res}
+    told = int((res or {}).get("notifiedCount") or 0)
+    others = (res or {}).get("others")
+    alone = others == 0  # no caregiver in the family but the person themselves
+    team = None
+    if crisis or (a["reason"] == "red_flag" and alone):
+        from app.care import careteam
+
+        team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id,
+                                     kind="crisis" if crisis else "emergency_alone", summary=a["message"], said=ctx.user_text,
+                                     family_told=told, actor_id=ctx.speaker.get("id"))
+    who = (f"{told} family member(s) told on WhatsApp" if told else
+           "the family was already told in the last half hour" if told_lately else
+           "no one else in the family to tell (never the person themselves)" if alone else "the family sees it on the dashboard")
+    if team:
+        who += "; the Kavach care team " + ("has been emailed" if team == "sent" else "is being emailed") + " and will check on them"
+    return {"sent": True, "whatsapp": decision.whatsapp, "why": decision.why, "told": who, "result": res}
+
+
+async def _crisis_told_lately(ctx: TurnCtx) -> bool:
+    since = clock.now() - timedelta(minutes=30)
+    rows = await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=since, kinds=["alert_whatsapp"])
+    return sum(1 for e in rows if (e.payload or {}).get("reason") == "crisis") > 1  # this alert's own event is one
 
 
 # ── records ────────────────────────────────────────────────────────────────────

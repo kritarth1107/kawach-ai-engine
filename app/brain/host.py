@@ -46,6 +46,7 @@ WRITE_TOOLS = {
     "claim_schedule_rows",
     "send_whatsapp",
     "send_template",
+    "alert_care_team",
     "send_song",
 }
 

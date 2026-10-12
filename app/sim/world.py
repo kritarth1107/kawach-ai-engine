@@ -22,6 +22,8 @@ class World:
     alerts: list[dict] = field(default_factory=list)
     sent: list[dict] = field(default_factory=list)  # proactive WhatsApp messages Saheli started
     templates: list[dict] = field(default_factory=list)  # template notices sent to people whose chat was closed
+    team_alerts: list[dict] = field(default_factory=list)  # emails to the Kavach care team
+    other_caregivers: int = 1  # caregivers other than the person an alert is about (0: someone caring for themselves)
     closed: set[str] = field(default_factory=set)  # people whose WhatsApp chat is closed (no message from them in 24 h)
     emergencies: list[dict] = field(default_factory=list)
     orders: list[dict] = field(default_factory=list)
@@ -95,8 +97,9 @@ class SimHost:
             w.reminders.append(args)
             return {"ok": True, "reminderId": f"rem-{len(w.reminders)}"}
         if tool == "notify_caregivers":
+            # the backend never alerts the person the alert is about: a self-care family has no one else (others 0)
             w.alerts.append({**args, "at": clock.now().isoformat()})
-            return {"notifiedCount": 1}
+            return {"notifiedCount": 1 if w.other_caregivers else 0, "others": w.other_caregivers}
         if tool == "trigger_emergency_escalation":
             w.emergencies.append({**args, "at": clock.now().isoformat()})
             return {"escalated": True}
@@ -144,6 +147,9 @@ class SimHost:
                 return {"delivered": True, "via": "template", "waiting": True}
             w.sent.append({**args, "at": clock.now().isoformat()})
             return {"delivered": True}
+        if tool == "alert_care_team":
+            w.team_alerts.append({**args, "at": clock.now().isoformat()})
+            return {"sent": True, "to": 1}
         if tool == "whatsapp_window":
             return {"open": args.get("to") not in w.closed}
         if tool == "send_template":

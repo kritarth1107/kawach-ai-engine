@@ -17,6 +17,8 @@ ALERT_REASONS = {
     "no_answer": "The elder did not answer a check",
     "safety": "High-confidence mood or safety concern",
     "approval": "An order or booking needs a caregiver's approval",
+    # founder 2026-10-13: talk of suicide, self-harm or harming someone; the Kavach care team is emailed too
+    "crisis": "Talk of suicide, self-harm, wanting to die or harming someone",
 }
 
 # Below this, a mood or safety concern goes to the dashboard instead of WhatsApp.
