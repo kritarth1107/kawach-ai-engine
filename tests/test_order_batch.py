@@ -1,6 +1,8 @@
 """Order improvements of 2026-10-10 night: confirm buttons, family tastes for the matcher, delivery tracking after placing,
 the daily store health check and the product-page hint for the browser agent."""
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -73,8 +75,9 @@ async def test_connector_order_is_told_on_the_way_once_and_delivered_moves_to_ho
     await db.refresh(t)
     assert t.result["delivered"] is True and t.details["tracking"]["done"]
     loop = (await db.execute(select(OpenLoop).where(OpenLoop.dedupe_key == f"delivery:{t.id}"))).scalar_one()
-    assert loop.status == "open" and loop.detail["stage"] == "feedback", "next: how was it"
-    assert loop.wake_at.isoformat().startswith("2026-10-10T17:45"), "groceries: asked 3 hours after it came (IST 23:15 → deferred by quiet hours)"
+    # founder 2026-10-12: "has it come?" is asked once (here, in the update); "how was it?" only after her own "it came"
+    assert loop.status == "open" and loop.detail["stage"] == "arrival" and loop.detail["arrival_asked"]
+    assert loop.wake_at == datetime.fromisoformat(loop.detail["expire_at"]), "not asked again: it closes by itself"
     at("2026-10-10 20:30")
     assert await tracking.sweep(sessions, None, notify, host_for=lambda f: host) == 0, "finished: no more looks"
 

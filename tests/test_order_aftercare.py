@@ -27,12 +27,18 @@ def sessions(db):
     return async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
 
 
-async def _placed(db, *, service="blinkit", eta="10 min", items=None, requested_by=ELDER, members=(E, S), talks=True):
+async def _placed(db, *, service="blinkit", eta="10 min", items=None, requested_by=ELDER, members=(E, S), talks=True, subject=ELDER,
+                  for_set=True, home_of=None):
+    """A placed order. for_set: whom it is for was named (start_task for_whom); False = an order from before that field,
+    which always named the care recipient. home_of: whose home the delivery place is (the address book's defaults)."""
     await store.save_roster(db, FAM, E, list(members))
     if talks:
         await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="user", text="doodh mangwa do", meta={})
-    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=requested_by, service=service, kind="order",
-                             goal="Milk and khakhra", details={"items": [{"name": "milk", "qty": 2}, {"name": "methi khakhra"}]})
+    t = await runtime.create(db, family_id=FAM, subject_id=subject, requested_by=requested_by, service=service, kind="order",
+                             goal="Milk and khakhra", details={"items": [{"name": "milk", "qty": 2}, {"name": "methi khakhra"}],
+                                                               **({"for_set": True} if for_set else {})})
+    if home_of is not None:
+        t.details = {**t.details, "limits": {**t.details["limits"], "place": {"nickname": "Home", "addressId": "a1", "defaultFor": home_of}}}
     t.status, t.phase = "done", "place"
     t.result = {"placed": True, "order_id": "OD1", "total": "₹136", "eta": eta, "items": items or CART}
     await runtime.delivery_followup(db, t)
@@ -64,17 +70,51 @@ async def test_every_order_gets_an_arrival_question_after_the_stores_time(db, at
     assert "1. Amul Taaza Toned Milk x2; 2. Charliee Methi Khakhra" in loop.title and f"[task {t.id}]" in loop.title
     at("2026-10-11 10:30")
     prompt = await wake.wake_prompt(db, loop, ELDER)
-    assert prompt.startswith("[Order follow-up] The Blinkit order for person elder-ac")
+    assert prompt.startswith("[Order follow-up] The Blinkit order: 1. Amul Taaza Toned Milk x2")
     assert "placed at 10:00; the store said it would come by about 10:10" in prompt and "has it come all right?" in prompt
+    assert "ONE short question" in prompt and "Nothing else in that message" in prompt
     assert f"order_feedback with task_id {t.id}" in prompt and "This store gives no live status." in prompt
 
 
 async def test_the_person_it_is_for_is_asked_if_they_talk_to_saheli(db, at):
     at("2026-10-11 10:00")
-    t = await _placed(db, requested_by=SON)
-    assert (await _loop(db, t)).owner_id == ELDER, "Mohan ordered it; Maa receives it and talks to Saheli"
+    t = await _placed(db, requested_by=SON, home_of=[ELDER])
+    assert (await _loop(db, t)).owner_id == ELDER, "Mohan ordered it for Maa, to her home; she talks to Saheli"
     loop = await _loop(db, t)
-    assert "(Mohan ordered it for them)" in await wake.wake_prompt(db, loop, ELDER)
+    assert "(person son-ac, Mohan, ordered it for person elder-ac, Shanti)" in await wake.wake_prompt(db, loop, ELDER)
+
+
+async def test_a_caregivers_own_order_is_never_asked_of_the_care_recipient(db, at):
+    """Founder 2026-10-12: his own Karachi Bakery biscuits, ordered from his chat to his own home, were recorded as his
+    mother's, and she was asked twice whether they came. His own order: only he is asked, though she talks to Saheli."""
+    at("2026-10-11 21:17")
+    t = await _placed(db, requested_by=SON, subject=SON, home_of=[SON])
+    loop = await _loop(db, t)
+    assert loop.owner_id == SON
+    prompt = await wake.wake_prompt(db, loop, ELDER)
+    assert "Ask person son-ac ONE short question" in prompt and "elder-ac" not in prompt
+    assert "Mohan's own" in runtime.describe(t) or "person son-ac's own" in runtime.describe(t)
+
+
+async def test_an_older_order_that_named_the_care_recipient_asks_whoever_ordered_it(db, at):
+    """The founder's data: before for_whom, every order named the care recipient (his biscuits were "for" his mother). Such
+    an order's follow-up asks whoever ordered it, even an already open one that named her, at its next wake."""
+    at("2026-10-11 21:17")
+    t = await _placed(db, requested_by=SON, for_set=False)
+    loop = await _loop(db, t)
+    assert loop.owner_id == SON
+    loop.owner_id = ELDER  # opened before this rule
+    await db.commit()
+    prompt = await wake.wake_prompt(db, loop, ELDER)
+    assert "Ask person son-ac ONE short question" in prompt and loop.owner_id == SON
+    assert "speak of it that way, never as if it were for them" in prompt
+
+
+async def test_ordered_for_her_but_to_someone_elses_home_asks_whoever_ordered_it(db, at):
+    """For Maa, but delivered to Mohan's own home: she does not receive it, so she is not asked whether it came."""
+    at("2026-10-11 10:00")
+    t = await _placed(db, requested_by=SON, home_of=[SON])
+    assert (await _loop(db, t)).owner_id == SON
 
 
 async def test_someone_who_never_writes_is_not_asked(db, at):
@@ -253,29 +293,32 @@ async def test_feedback_needs_a_placed_order(db, at):
     assert err and "remember (domain preference)" in out
 
 
-async def test_the_store_saying_delivered_moves_on_and_asks_the_right_person(db, at):
+async def test_the_store_saying_delivered_asks_the_right_person_once_and_only_whether_it_came(db, at):
+    """Founder 2026-10-12: one question per message; "how was it?" only after their own "it came"."""
     at("2026-10-11 10:00")
     t = await _placed(db)
     assert await aftercare.store_delivered(db, t, clock.now()) is True, "she ordered it for herself: asked in the update"
     loop = await _loop(db, t)
-    assert loop.detail["stage"] == "feedback" and "store_delivered_at" in loop.detail
-    t2 = await _placed(db, requested_by=SON, service="instamart")
-    assert await aftercare.store_delivered(db, t2, clock.now()) is False, "Mohan asked; Maa is asked later with how was it"
+    assert loop.detail["stage"] == "arrival" and loop.detail["arrival_asked"] and "store_delivered_at" in loop.detail
+    assert await wake.wake_prompt(db, loop, ELDER) is None, "asked in the update: never again by a wake"
+    t2 = await _placed(db, requested_by=SON, service="instamart", home_of=[ELDER])
+    assert await aftercare.store_delivered(db, t2, clock.now()) is False, "Mohan ordered it for Maa: she is asked soon"
     loop2 = await _loop(db, t2)
-    at("2026-10-11 13:10")
+    assert loop2.owner_id == ELDER and loop2.wake_at == clock.now() + timedelta(minutes=15)
     prompt = await wake.wake_prompt(db, loop2, ELDER)
-    assert "The store said it was delivered, but they have not said they got it" in prompt
+    assert "has it come all right?" in prompt and "how it was" not in prompt and "liked" not in prompt
 
 
-async def test_an_unanswered_follow_up_asks_once_more_with_how_was_it_then_closes_itself(db, at, sessions):
+async def test_an_unanswered_follow_up_is_never_asked_again_and_closes_itself(db, at, sessions):
+    """Founder 2026-10-12: the 11:30 message repeated "did it come" together with "how did it taste". No answer to the one
+    question: nothing more is sent; it closes by itself."""
     at("2026-10-11 10:00")
     t = await _placed(db)
     loop = await _loop(db, t)
+    assert loop.detail["max_wakes"] == 1
     loop.detail = {**loop.detail, "wakes": 1}
     await db.commit()
-    prompt = await wake.wake_prompt(db, loop, ELDER)
-    assert "they did not answer whether it came" in prompt and "whether it came all right and how" in prompt
-    loop.detail = {**loop.detail, "wakes": 2}
+    assert await wake.wake_prompt(db, loop, ELDER) is None, "no second question"
     loop.wake_at = clock.now() - timedelta(minutes=1)
     await db.commit()
     at("2026-10-13 10:30")  # past expire_at (2 days)
@@ -313,8 +356,8 @@ async def test_usual_buys_are_not_asked_about_again(db, at):
     assert aftercare.next_question(t, {"answers": 1, "items": {"1": {"liked": "yes"}, "2": {"liked": "yes", "usual": "new"}}}, bought) == \
         "whether to get Charliee Methi Khakhra again next time.", "a liked first try: get it again?"
     assert "Amul Taaza Toned Milk is something they usually have" not in (aftercare.next_question(t, fb, bought) or "")
+    await _say(db, {"task_id": str(t.id), "arrived": "yes"})  # her own "it came": then "how was it?" later
     loop = await _loop(db, t)
-    await aftercare.store_delivered(db, t, clock.now())
     prompt = await wake.wake_prompt(db, loop, ELDER)
     assert "Known already, do not ask: Amul Taaza Toned Milk x2 was ordered 2 times before" in prompt or \
            "Amul Taaza Toned Milk was ordered 2 times before (a usual buy)" in prompt
@@ -323,9 +366,9 @@ async def test_usual_buys_are_not_asked_about_again(db, at):
 async def test_food_asks_sooner_and_about_the_restaurant(db, at):
     at("2026-10-11 13:00")
     t = await _placed(db, service="swiggy", eta="35 mins", items=[{"name": "Paneer Butter Masala", "qty": 1, "restaurant": "Haldiram's"}])
+    await _say(db, {"task_id": str(t.id), "arrived": "yes"})
     loop = await _loop(db, t)
-    await aftercare.store_delivered(db, t, clock.now())
-    assert loop.wake_at == clock.now() + timedelta(minutes=40)
+    assert loop.wake_at == clock.now() + timedelta(minutes=40), "food: how was it, 40 minutes after their own 'it came'"
     r = await _say(db, {"task_id": str(t.id), "items": [{"item": 1, "liked": "yes", "usual": "usual"}]})
     assert "whether they would like food from Haldiram's again" in r["next"]
     r = await _say(db, {"task_id": str(t.id), "order_again": "yes"})

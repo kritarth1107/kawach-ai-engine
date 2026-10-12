@@ -377,6 +377,9 @@ async def test_a_caregiver_asking_has_the_store_cancel_it_and_a_free_cancel_is_n
     after = [p for who, p in told[before:]]
     assert len(after) == 1 and "Cancelled on Swiggy Instamart" in after[0] and "costs" not in after[0], "one result, no fee question"
     assert not [p for _, p in told if p.startswith("[Order needs you]")]
+    from app.tasks import aftercare
+
+    assert await aftercare.loop_for(db, t) is None, "cancelled: no 'has it come?' left open (live 2026-10-12)"
 
 
 async def test_a_real_cancellation_fee_is_asked_once_with_its_amount(db, at, sessions, monkeypatch):

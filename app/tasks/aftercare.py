@@ -6,11 +6,13 @@ they like it, is it something they usually have or a first try, should she get i
 memory and the product picker, so the next order picks what they like and never what they did not.
 
 The steps live on the order's "delivery" open loop (detail.stage):
-- arrival: woken a little after the store's delivery time, or moved on by the store's own status saying it was delivered.
-  No answer → once more later, together with "how was it?".
-- feedback: a while after it came (food sooner, groceries later): the first question. Each answer comes back through the
-  order_feedback tool, whose result says what is still worth asking (from data: what was bought before, what is not known
-  yet), at most MAX_QUESTIONS answers, then it closes.
+- arrival: woken a little after the store's delivery time (sooner when the store's own status says it was delivered):
+  "has it come?", asked once, one question. No answer: never asked again (founder 2026-10-12: a second message repeated it
+  together with "how did it taste?"); it closes by itself, and if they bring it up their answer still counts.
+- feedback: only after they said it came (only a person's own answer counts), a while later (food sooner, groceries later):
+  the first question. Each answer comes back through the order_feedback tool, whose result says what is still worth asking
+  (from data: what was bought before, what is not known yet), one question per message, at most MAX_QUESTIONS answers.
+Who is asked: someone who knows about the order (who_to_ask): never the care recipient about a caregiver's own order.
 Medicines and rides stop after the arrival step. Code only checks data (times, the store's status, earlier orders); the
 brain reads people's words into the tool's fields.
 """
@@ -121,12 +123,24 @@ def store_says(task: Task) -> str:
 
 
 async def who_to_ask(session: AsyncSession, task: Task) -> str:
-    """The person the order is for, if they talk to Saheli; else whoever asked for it."""
-    if task.subject_id == task.requested_by:
-        return task.subject_id
+    """Who is asked whether an order came and how it was: someone who knows about it (founder 2026-10-12: his mother was
+    asked about biscuits he had ordered for himself, to his own home). Whoever asked for it; the person it is for only when
+    the order named them (for_whom), it went to their own place (or a place that is nobody's home in particular), and they
+    talk to Saheli. An older order (before for_whom) always named the care recipient: only whoever asked surely knows."""
+    if task.subject_id == task.requested_by or not (task.details or {}).get("for_set"):
+        return task.requested_by
+    if task.kind == "order" and not to_their_place(task):
+        return task.requested_by
     talks = await session.scalar(select(func.count()).select_from(Turn).where(
         Turn.family_id == task.family_id, Turn.thread_id == task.subject_id, Turn.role == "user", Turn.at >= clock.now() - TALKS_WITHIN))
     return task.subject_id if talks else task.requested_by
+
+
+def to_their_place(task: Task) -> bool:
+    """The order went to a home of the person it is for, or to a place that is nobody's home in particular (whose default
+    place it is, from the address book)."""
+    owners = (((task.details or {}).get("limits") or {}).get("place") or {}).get("defaultFor") or []
+    return not owners or task.subject_id in owners
 
 
 def title(task: Task, stage: str) -> str:
@@ -150,9 +164,8 @@ async def open_followup(session: AsyncSession, task: Task) -> OpenLoop:
     task.result = {**r, "placed_at": r.get("placed_at") or now.isoformat()}
     detail = {"stage": "arrival", "task_id": str(task.id), "placed_at": now.isoformat(), "next_action": NEXT["arrival"],
               "order_id": r.get("order_id") or r.get("ride_id"),
-              # no answer to "has it come?": once more later, together with "how was it?" (kinds with that step)
-              "max_wakes": 2 if kind in FEEDBACK_AFTER else 1,
-              "rewake_minutes": int(FEEDBACK_AFTER.get(kind, timedelta(hours=1)).total_seconds() // 60),
+              # "has it come?" once: no answer is not asked again (founder 2026-10-12: one question, never a repeat)
+              "max_wakes": 1,
               "expire_at": (now + KEEP_ARRIVAL).isoformat()}
     return await store.open_loop(
         session, family_id=task.family_id, subject_id=task.subject_id, kind="delivery", title=title(task, "arrival"),
@@ -172,20 +185,23 @@ def _to_feedback(loop: OpenLoop, task: Task, at: datetime, *, chatting: bool = F
 
 
 async def store_delivered(session: AsyncSession, task: Task, at: datetime) -> bool:
-    """The store says it was delivered. True when the update to the person who asked should also ask whether they got
-    it all right (it is for them); otherwise the person it is for is asked later, with "how was it?"."""
+    """The store says it was delivered. True when the update to the person who asked should ask whether they got it all
+    right (they are the one asked); otherwise the one asked hears "has it come?" soon. Asked once either way; "how was it?"
+    only after they say it came (founder 2026-10-12: only a person's own answer counts, one question per message)."""
     loop = await loop_for(session, task)
     if not loop:
         return False
-    asks_now = loop.owner_id == task.requested_by and (loop.detail or {}).get("stage") != "feedback"
-    loop.detail = {**(loop.detail or {}), "store_delivered_at": at.isoformat()}
-    if (loop.detail or {}).get("stage") == "feedback":
-        return False  # they already said it came
-    if kind_of(task) in FEEDBACK_AFTER:
-        _to_feedback(loop, task, at)
-    else:
-        loop.wake_at = None if asks_now else at + timedelta(minutes=15)
-    return asks_now
+    d = dict(loop.detail or {})
+    loop.detail = {**d, "store_delivered_at": at.isoformat()}
+    if d.get("stage") == "feedback" or int(d.get("wakes") or 0) >= 1 or d.get("arrival_asked"):
+        return False  # they said it came, or "has it come?" was asked already: not again
+    loop.owner_id = owner = await who_to_ask(session, task)
+    if owner == task.requested_by:
+        loop.detail = {**loop.detail, "arrival_asked": at.isoformat(), "wakes": 1}  # the update asks it
+        loop.wake_at = datetime.fromisoformat(d["expire_at"]) if d.get("expire_at") else None
+        return True
+    loop.wake_at = at + timedelta(minutes=15)
+    return False
 
 
 async def bought_before(session: AsyncSession, task: Task) -> dict[str, int]:
@@ -248,47 +264,47 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop) -> str | None:
         task = None
     if not task or task.status == "cancelled" or (task.result or {}).get("store_cancelled"):
         return None
-    r, kind, owner = task.result or {}, kind_of(task), loop.owner_id or task.subject_id
+    r, kind = task.result or {}, kind_of(task)
+    # asked again by the rule at every wake (an older follow-up may have named the care recipient for someone else's order)
+    owner = await who_to_ask(session, task)
+    if loop.owner_id != owner:
+        loop.owner_id = owner
     fb = r.get("feedback") or {}
     label = SKILLS[task.service]["label"]
     names = await _names(session, task.family_id)
-    for_whom = "" if task.requested_by == owner else f" ({names.get(task.requested_by) or 'the family'} ordered it for them)"
+    for_whom = ("" if task.subject_id == task.requested_by else
+                f" (person {task.requested_by}, {names.get(task.requested_by) or 'family'}, ordered it for person {task.subject_id}, "
+                f"{names.get(task.subject_id) or 'family'})")
     placed, promised, _ = times(task, d)
     if d.get("stage") == "feedback":
-        if fb.get("answers"):
-            return None  # they already talked about it
+        if fb.get("answers") or fb.get("arrived") not in ("yes", "partly"):
+            return None  # they already talked about it, or never said it came (only their own answer counts)
         bought = await bought_before(session, task)
         first = next_question(task, fb, bought)
         if not first:
             return None
         came = datetime.fromisoformat(d.get("feedback_from") or d.get("store_delivered_at") or placed.isoformat())
-        check = ("" if fb.get("arrived") in ("yes", "partly") else
-                 " The store said it was delivered, but they have not said they got it: make sure of that in the same message.")
         known = _known(task, bought)
-        return (f"[Order feedback] The {label} order for person {owner}{for_whom} ({_numbered(task)}) came at {_hm(came)}.{check} "
+        return (f"[Order feedback] The {label} order{for_whom} ({_numbered(task)}) came at {_hm(came)}. "
                 f"Learn what they think of it, for next time: send person {owner} one short, warm question with send_message: {first} "
                 f"It starts a short chat: whenever they answer, save it with order_feedback (task_id {task.id}; items by their "
                 "number) and ask only what its result suggests, one question per message, while they are happy to talk."
                 + (f" Known already, do not ask: {known}." if known else "") + " Reply none.")
     if fb.get("arrived") in ("yes", "partly"):
         return None
-    wakes = int(d.get("wakes") or 0)
+    if int(d.get("wakes") or 0) >= 1 or d.get("arrival_asked"):
+        return None  # "has it come?" was asked already: never a repeat (founder 2026-10-12)
     total = f", {r['total']}" if r.get("total") else ""
-    if wakes == 0:
-        q = {"ride": "did the cab come, and was the ride all right?",
-             "medicine": "has it come, and is it the right medicine and strength?"}.get(kind, "has it come all right?")
-        return (f"[Order follow-up] The {label} {'ride' if kind == 'ride' else 'order'} for person {owner}{for_whom}: {_numbered(task)}"
-                f"{total}, placed at {_hm(placed)}; the store said it would come by about {_hm(promised)}. {store_says(task)} "
-                f"Ask person {owner} one short question in their language with send_message: {q} When they answer, call "
-                f"order_feedback with task_id {task.id} (arrived yes / no / partly, and any problem in their words). Reply none.")
-    if kind not in FEEDBACK_AFTER:
-        return None
-    # they did not answer "has it come?": once, together with how it was
-    first = next_question(task, fb, await bought_before(session, task)) or "how it was."
-    return (f"[Order follow-up] The {label} order for person {owner}{for_whom} ({_numbered(task)}), placed at {_hm(placed)}: they "
-            f"did not answer whether it came. {store_says(task)} Send person {owner} one short, warm message with send_message "
-            f"asking whether it came all right and {first} When they answer, save it with order_feedback (task_id {task.id}; "
-            "arrived; items by their number) and ask only what its result suggests. Reply none.")
+    q = {"ride": "did the cab come, and was the ride all right?",
+         "medicine": "has it come, and is it the right medicine and strength?"}.get(kind, "has it come all right?")
+    about = ("" if owner == task.subject_id else
+             f" It is the {'ride' if kind == 'ride' else 'order'} they asked for, for {names.get(task.subject_id) or 'someone else'}: "
+             "speak of it that way, never as if it were for them.")
+    return (f"[Order follow-up] The {label} {'ride' if kind == 'ride' else 'order'}{for_whom}: {_numbered(task)}"
+            f"{total}, placed at {_hm(placed)}; the store said it would come by about {_hm(promised)}. {store_says(task)} "
+            f"Ask person {owner} ONE short question in their language with send_message: {q} Nothing else in that message.{about} "
+            f"When they answer, call order_feedback with task_id {task.id} (arrived yes / no / partly, and any problem in their "
+            "words). Reply none.")
 
 
 def _sentence(name: str, s: dict, label: str) -> str:
@@ -425,7 +441,7 @@ async def record(session: AsyncSession, task: Task, *, by: str, source_kind: str
     # Where the follow-up goes next. "How was it?" is asked now only once that part has begun (its question went out, or
     # they are already saying how it was); right after it arrives they have not tried it yet.
     wakes = int(d.get("wakes") or 0)
-    talking = answered or (wakes >= 1 if d.get("stage") == "feedback" else wakes >= 2)
+    talking = answered or (wakes >= 1 and d.get("stage") == "feedback")
     if loop and fb.get("arrived") in ("yes", "partly") and d.get("stage") != "feedback":
         if kind in FEEDBACK_AFTER:
             _to_feedback(loop, task, now, chatting=talking)

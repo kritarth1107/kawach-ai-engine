@@ -421,10 +421,10 @@ async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
     e = {"id": ELDER, "name": "Shanti", "role": "elder"}
     ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=e, speaker=e, members=[e])
     with pytest.raises(tools.ToolRefused):
-        await tools.start_task(ctx, {"kind": "ride", "goal": "Cab to the clinic"})
+        await tools.start_task(ctx, {"kind": "ride", "goal": "Cab to the clinic", "for_whom": ELDER})
     old = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="Atta",
                                details={"items": [{"name": "Atta", "qty": 1}]})
-    ask = {"kind": "order", "category": "grocery", "goal": "Diet Coke for Shanti ji", "items": [{"name": "Diet Coke"}]}
+    ask = {"kind": "order", "category": "grocery", "goal": "Diet Coke for Shanti ji", "items": [{"name": "Diet Coke"}], "for_whom": ELDER}
     ctx.message_ref = "wamid.1"
     first = await tools.start_task(ctx, ask)
     assert "confirm_address" in first and first["status"] == "not started yet", "the address is confirmed before any search"
@@ -1440,7 +1440,7 @@ async def test_the_stores_they_named_are_each_looked_at_and_kept_through_the_add
     e = {"id": ELDER, "name": "Shanti", "role": "elder"}
     ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=e, speaker=e, members=[e])
     ask = {"kind": "order", "goal": "Karachi Bakery biscuits", "items": [{"name": "Karachi Bakery fruit biscuits"}],
-           "services": ["blinkit", "zepto", "blinkit"]}
+           "services": ["blinkit", "zepto", "blinkit"], "for_whom": ELDER}
     ctx.message_ref = "wamid.10"
     first = await tools.start_task(ctx, ask)
     assert first["status"] == "not started yet" and "services blinkit, zepto" in first["next"]

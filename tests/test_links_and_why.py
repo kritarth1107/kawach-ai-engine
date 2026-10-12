@@ -430,7 +430,8 @@ async def test_one_whatsapp_order_is_one_trace(db, at, model):
     at("2026-10-11 10:00")
     host = Host()
     sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
-    order = {"kind": "order", "service": "instamart", "goal": "Atta for Kamla", "items": [{"name": "Aashirvaad Atta 5kg", "qty": 1}]}
+    order = {"kind": "order", "service": "instamart", "goal": "Atta for Kamla", "items": [{"name": "Aashirvaad Atta 5kg", "qty": 1}],
+             "for_whom": ELDER}
     model([say("", ("start_task", order)), say("Ghar ke address pe bhejun?"),
            say("", ("start_task", order)), say("Ji, dekh rahi hoon.")])
     await run_turn(db, host, turn("atta mangwa do", "wamid.A1"))

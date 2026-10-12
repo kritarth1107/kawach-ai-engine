@@ -287,13 +287,14 @@ async def test_the_brain_sets_a_ride_for_later_with_a_time(db, at):
     at("2026-10-12 10:00")
     await store.save_roster(db, FAM, E, [E, S])
     ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=S, members=[E, S], message_ref="m1")
-    ride = {"kind": "ride", "goal": "Cab to the airport", "pickup": "Home", "drop": "Airport", "service": "ola", "at": "2026-10-16T06:00"}
+    ride = {"kind": "ride", "goal": "Cab to the airport", "pickup": "Home", "drop": "Airport", "service": "ola", "at": "2026-10-16T06:00",
+            "for_whom": ELDER}
     assert (await tools.start_task(ctx, ride))["ask_location"] == "pickup", "the pickup as a location first, for later too"
     ctx.message_ref = "m2"
     out = await tools.start_task(ctx, ride)
     t = (await runtime.shown_tasks(db, FAM))[0]
     assert later.of(t)["book_at"] == "2026-10-16T05:50:00+05:30" and later.of(t)["means"] == "arrive"
-    out, err = await tools.run(ctx, "start_task", {"kind": "ride", "goal": "cab", "pickup": "Home", "drop": "Station", "service": "uber",
+    out, err = await tools.run(ctx, "start_task", {"kind": "ride", "goal": "cab", "pickup": "Home", "drop": "Station", "service": "uber", "for_whom": ELDER,
                                                     "at": "2026-10-11T06:00"})
     assert err and "has passed" in out
 

@@ -70,16 +70,16 @@ async def test_only_a_caregiver_removes_a_place_and_the_yes_is_passed_on(db, at)
 async def test_an_order_to_a_place_that_is_not_saved_asks_for_it(db, at):
     at("2026-10-10 18:05")
     host = Host()
-    out, err = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    out, err = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                    "items": [{"name": "milk"}], "area": "Clinic"})
     r = json.loads(out)
     assert not err and r["unknown_place"] == "Clinic" and "save_place" in r["next"] and "Arjun's Home" in r["saved_places"]
     assert "confirm_address" not in r
-    out, _ = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    out, _ = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                  "items": [{"name": "milk"}], "area": "Arjun ka ghar"})
     assert json.loads(out)["confirm_address"].startswith("Arjun's Home: 21, Jayanagar")
     at("2026-10-10 18:30")  # a later order asks for its address again
-    out, _ = await tools.run(c(db, ELDER, host, ref="m3"), "start_task", {"kind": "order", "service": "instamart", "goal": "bread",
+    out, _ = await tools.run(c(db, ELDER, host, ref="m3"), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "instamart", "goal": "bread",
                                                                            "items": [{"name": "bread"}]})
     assert json.loads(out)["confirm_address"].startswith("Home: 12")
 
@@ -103,11 +103,11 @@ async def test_a_named_place_is_never_ordered_to_when_the_saved_places_cannot_be
             return await super().call(tool, args, **kw)
 
     host = Down()
-    out, err = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    out, err = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                    "items": [{"name": "milk"}], "area": "Clinic"})
     r = json.loads(out)
     assert not err and r["status"] == "not started yet" and "try again" in r["next"] and "confirm_address" not in r
-    out, _ = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    out, _ = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                            "items": [{"name": "milk"}], "area": "Clinic"})
     assert "task_id" not in json.loads(out), "still nothing started on the next turn"
 
@@ -117,12 +117,12 @@ async def test_a_place_named_after_the_address_was_confirmed_must_still_be_saved
     order would have gone to the default place."""
     at("2026-10-10 19:00")
     host = Host()
-    await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
-    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
+    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                              "items": [{"name": "milk"}], "area": "Clinic"})
     r = json.loads(out)
     assert not err and r.get("unknown_place") == "Clinic" and "task_id" not in r
-    out, _ = await tools.run(c(db, ELDER, host, ref="m3"), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk",
+    out, _ = await tools.run(c(db, ELDER, host, ref="m3"), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk",
                                                                            "items": [{"name": "milk"}], "area": "Arjun ka ghar"})
     r = json.loads(out)
     assert r.get("task_id"), r
@@ -136,9 +136,9 @@ async def test_the_store_they_named_stays_with_the_order_after_the_address_quest
     were searched instead of Blinkit."""
     at("2026-10-11 10:30")
     host = Host()
-    out, _ = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
+    out, _ = await tools.run(c(db, ELDER, host), "start_task", {"kind": "order", "for_whom": ELDER["id"], "service": "blinkit", "goal": "milk", "items": [{"name": "milk"}]})
     assert "service blinkit" in json.loads(out)["next"]
-    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "category": "grocery", "goal": "milk",
+    out, err = await tools.run(c(db, ELDER, host, ref="m2"), "start_task", {"kind": "order", "for_whom": ELDER["id"], "category": "grocery", "goal": "milk",
                                                                              "items": [{"name": "milk"}]})
     r = json.loads(out)
     assert not err and r.get("task_id") and "looking_on" not in r, r

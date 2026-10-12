@@ -52,7 +52,7 @@ async def _ctx(db, host, *, ref, location=None):
     return tools.TurnCtx(session=db, host=host, family_id=FAM, elder=E, speaker=S, members=[E, S], message_ref=ref, location=location)
 
 
-RIDE = {"kind": "ride", "goal": "Cab to the station", "pickup": "home", "drop": "Raipur railway station", "service": "ola"}
+RIDE = {"kind": "ride", "goal": "Cab to the station", "pickup": "home", "drop": "Raipur railway station", "service": "ola", "for_whom": SON}
 
 
 async def test_the_pickup_is_asked_as_a_location_then_the_pin_is_used_and_saved_to_home(db, at):

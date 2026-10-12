@@ -932,7 +932,10 @@ def describe(task: Task) -> str:
         if task.kind == "ride":
             # where the app set the ends, if it showed them (nothing else may be claimed about the address)
             head += f"; {_trip(task)}" + ("" if (r.get("pickup_used") or not placed) else " [the app has not shown the pickup it set]")
-    bits = [head, f"status {task.status}/{task.phase}"]
+    # whom it is for (founder 2026-10-12): never tell or ask the care recipient about someone else's own order
+    whose = (f"for person {task.subject_id}, asked by person {task.requested_by}" if task.subject_id != task.requested_by
+             else f"person {task.subject_id}'s own")
+    bits = [head, whose, f"status {task.status}/{task.phase}"]
     if d.get("channel"):
         bits.append(f"via {d['channel']}")
     if task.input_needed:
@@ -1338,11 +1341,14 @@ async def _approval_gate(session: AsyncSession, task: Task, amount: float | None
     policy = await boundaries.get(session, task.family_id)
     roster = await store.roster(session, task.family_id)
     allowed = boundaries.approvers(policy, roster)
+    if not allowed:
+        return None  # nobody but the person themselves (self care): nobody to ask, so nothing waits for an approval
+    elder = ((roster.elder or {}).get("id") if roster else None) or task.subject_id
     why = await boundaries.reasons(session, family_id=task.family_id, service=task.service, kind=task.kind, amount=amount,
-                                   requested_by=task.requested_by, elder_id=task.subject_id, policy=policy)
+                                   requested_by=task.requested_by, elder_id=elder, policy=policy)
     # what the cart check found that needs a caregiver (the old fixed-budget line is now the family's own limit, above)
     why += [r for r in d.get("approval") or [] if "limit" not in r and r not in why]
-    if not why or boundaries.may_approve(allowed, by, task.subject_id):
+    if not why or boundaries.may_approve(allowed, by, elder):
         return None
     names = {m.get("id"): (m.get("name") or "").split(" ")[0] for m in (roster.members if roster else [])}
     task.details = {**d, "approval_needed": {"reasons": why, "approvers": allowed, "asked_by": by, "amount": amount, "choice": choice,
@@ -1640,7 +1646,8 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         return ("asking the store for a new login code now (NOT ordered); a task update comes when it is sent. Say only that a "
                 "new code is coming to the same phone in a minute")
     if kind in ("confirm", "choice", "swap", "go", "approve", "later", "fare") and _is_no(value) and not placed:
-        if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id):
+        if kind == "approve" and not may_approve((d.get("approval_needed") or {}).get("approvers") or [], by,
+                                                 await _care_recipient(session, task.family_id) or task.subject_id):
             return "only the family's approver can decline this"
         task.status, task.cancel_requested = "cancelled", True
         note(task, f"declined by {by}" + (" (approver)" if kind == "approve" else ""))
@@ -1656,7 +1663,8 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         if kind == "approve":
             return f"declined; nothing was {ordered}. Tell person {task.requested_by} kindly with send_message, in one line."
         return f"declined; nothing was {ordered}"
-    may = may_approve((d.get("approval_needed") or {}).get("approvers") or [], by, task.subject_id)
+    may = may_approve((d.get("approval_needed") or {}).get("approvers") or [], by,
+                      await _care_recipient(session, task.family_id) or task.subject_id)
     if task.input_needed == "approve" and kind == "confirm" and may:
         kind = "approve"  # the approver saying "yes, confirm" is the approval
     if task.input_needed and kind != task.input_needed and not (kind in EDIT_KINDS and task.input_needed in ("go", "confirm", "swap")):
@@ -1935,7 +1943,7 @@ async def _provide_input(session: AsyncSession, task: Task, *, kind: str, value:
         ap = d.get("approval_needed") or {}
         if not ap:
             return "nothing is waiting for approval"
-        if not may_approve(ap.get("approvers") or [], by, task.subject_id):
+        if not may_approve(ap.get("approvers") or [], by, await _care_recipient(session, task.family_id) or task.subject_id):
             return "only the family's approver can approve this; it was sent to them"
         if not _is_yes(value):
             return "pass value yes to approve or no to decline"
@@ -2013,7 +2021,7 @@ async def _cancel_after_placed(session: AsyncSession, task: Task, *, by: str, re
     label = SKILLS[task.service]["label"]
     ask = dict(d.get("cancel_ask") or {})
     carers = [c for c in await _carers(session, task) if c != by]
-    elder = by == task.subject_id and bool(carers)
+    elder = by == (await _care_recipient(session, task.family_id) or task.subject_id) and bool(carers)
     if ask.get("state") in ("cancelling", "fee") or (ask.get("state") == "pending" and not ask.get("elder")):
         return (f"NOT cancelled yet: {label} is " + ("asked to cancel it the moment it is placed" if ask.get("state") == "pending" else
                 "already being asked to cancel it") + (" (it is waiting for their yes or no to the cancellation fee of "
@@ -3386,14 +3394,25 @@ def _waiting_for(task: Task) -> str:
     return f"an answer ({task.input_needed or 'from the family'})"
 
 
+async def _care_recipient(session: AsyncSession, family_id: str) -> str | None:
+    """The family's care recipient. An order's subject is the person it is for, who may be a caregiver (founder 2026-10-12)."""
+    roster = await store.roster(session, family_id)
+    return ((roster.elder or {}).get("id") if roster else None) or None
+
+
 async def _carers(session: AsyncSession, task: Task) -> list[str]:
-    """Who is asked about a stuck order: the family's approvers (caregivers), else the person who asked (self care)."""
+    """Who hears about trouble with an order (stuck, late, came wrong, the care recipient asked to cancel it): for an order of
+    the care recipient (for or by them), the family's approvers (caregivers); for anyone else's own order, the person who
+    asked (and the person it is for), never the care recipient about it (founder 2026-10-12). Self care: the person."""
     from app.care import boundaries
 
     roster = await store.roster(session, task.family_id)
-    people = [a for a in boundaries.approvers(await boundaries.get(session, task.family_id), roster)
-              if a != boundaries.ANYONE and a != task.subject_id]
-    return people or [task.requested_by]
+    elder = ((roster.elder or {}).get("id") if roster else None) or task.subject_id
+    if elder in (task.subject_id, task.requested_by):
+        people = [a for a in boundaries.approvers(await boundaries.get(session, task.family_id), roster)
+                  if a != boundaries.ANYONE and a != elder]
+        return people or [task.requested_by]
+    return list(dict.fromkeys(p for p in (task.requested_by, task.subject_id) if p and p != elder))
 
 
 async def cancel_properly(session: AsyncSession, agent: BrowserAgent, task: Task, why: str) -> None:
@@ -3882,6 +3901,14 @@ async def tick(
                 if task.status == "done" and ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
                     await delivery_followup(session, task)
                     tracking.start(task)
+                elif task.status == "cancelled" and ((task.result or {}).get("placed") or (task.result or {}).get("booked")):
+                    # cancelled on the store after it was placed: its "has it come?" is closed now (live 2026-10-12: a
+                    # cancelled order's follow-up stayed open, in the care recipient's name, until its next wake)
+                    from app.tasks import aftercare
+
+                    loop = await aftercare.loop_for(session, task)
+                    if loop:
+                        await store.close_loop(session, loop.id, note="the order was cancelled")
                 if (task.details or {}).get("claim"):
                     task.details = {**task.details, "claim": None}  # this runner is done with it
                 await session.commit()

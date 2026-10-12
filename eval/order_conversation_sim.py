@@ -117,7 +117,7 @@ class Store:
         total = sum(int(l["price"][1:]) for l in lines) + 15
         self.carts.append(lines)
         return {"items": lines, "total": f"₹{total}", "fees": "₹15", "cod_available": True, "logged_in": True, "cart_id": "c1",
-                "address_used": self.address, "eta": "10 min",
+                "address_used": f"{place['nickname']}: {place['full']}" if (place or {}).get("full") else self.address, "eta": "10 min",
                 "place_check": {"count": sum(l["qty"] for l in lines), "prices": sorted(int(l["price"][1:]) for l in lines), "total": total,
                                 "address": "12 Civil Lines"}}
 
@@ -210,7 +210,7 @@ class Browser:
             chosen = [{**byname.get(c.get("name"), {}), **c, "qty": channels._qty_for(d.get("items") or [], c)}
                       for c in d.get("chosen") or []]
             chosen = [{**c, "store_id": c.get("store_id") or byname.get(c.get("name"), {}).get("store_id")} for c in chosen]
-            cart = await self.shop.cart(service, None, chosen)
+            cart = await self.shop.cart(service, None, chosen, place=(d.get("limits") or {}).get("place"))
             cart.pop("place_check", None)
             return {**base, **cart}
         if phase == "place":
@@ -241,8 +241,9 @@ class Family:
     """A family of the test set: who writes, in which city and language, and its saved place (with or without a map point)."""
 
     def __init__(self, label: str, *, elder: dict, carer: dict | None, speaker: str, place: dict, heal: dict | None = None,
-                 home_words: tuple[str, ...] = ()):
+                 home_words: tuple[str, ...] = (), carer_place: dict | None = None):
         self.label, self.elder, self.carer, self.place, self.heal = label, elder, carer, place, heal
+        self.carer_place = carer_place  # the caregiver's own home (their default), when they live elsewhere
         self.speaker = carer if speaker == "carer" and carer else elder
         self.members = [elder] + ([carer] if carer else [])
         # the fake backend's own way of knowing the saved place in its words (production asks the brain to name it)
@@ -261,6 +262,16 @@ class StoreHost(SimHost):
 
     async def call(self, tool, args, *, family_id, subject_id, actor_id):
         f = self.family
+        if tool == "delivery_place" and f.carer_place:
+            # two homes: the care recipient's and the caregiver's own; each person's default is their own (whose home: defaultFor)
+            homes = {f.place["nickname"].lower(): {**f.place, "defaultFor": [f.elder["id"]]},
+                     f.carer_place["nickname"].lower(): {**f.carer_place, "defaultFor": [f.carer["id"]]}}
+            words = str(args.get("words") or "").lower()
+            if not words:
+                mine = f.carer_place if subject_id == (f.carer or {}).get("id") else f.place
+                return {**homes[mine["nickname"].lower()], "matched": None}
+            hit = homes.get(words) if args.get("exact") else None
+            return {**hit, "matched": True} if hit else {"matched": False, "saved": [p["nickname"] for p in (f.place, f.carer_place)]}
         if tool == "delivery_place":
             words = str(args.get("words") or "").lower()
             if args.get("exact") and words and words != f.place["nickname"].lower():  # the engine's AI sent an exact name
@@ -276,6 +287,10 @@ class StoreHost(SimHost):
             self.saves.append(args)
             return {"ok": True}
         if tool == "list_places":
+            if f.carer_place:
+                his = subject_id == (f.carer or {}).get("id")
+                return {"places": [{"name": f.place["nickname"], "address": f.place["full"], "isDefault": not his},
+                                   {"name": f.carer_place["nickname"], "address": f.carer_place["full"], "isDefault": his}]}
             return {"places": [{"name": f.place["nickname"], "address": f.place["full"], "isDefault": True}]}
         if tool == "browser_profile":
             return {"profileId": f"prof-{family_id}-{args.get('partner')}", "loginPhone": "9000011111"}
@@ -674,6 +689,16 @@ KOLKATA = Family("Kolkata, Bengali, elder with a caregiver daughter, one store s
                  home_words=("বাড়ি", "বাড়িতে", "bari", "gariahat"))
 
 
+PUNE = Family("Pune, English, a son ordering for himself; his mother in Nagpur talks to Saheli too",
+              elder={"id": "elder-ngp", "name": "Sudha", "role": "elder"},
+              carer={"id": "son-pnq", "name": "Nikhil", "role": "primary caregiver"}, speaker="carer",
+              place={"addressId": "addr-ngp", "nickname": "Ghar", "pincode": "440010", "full": "7 Sample Nagar, Nagpur, Maharashtra 440010",
+                     "lat": 21.13, "lng": 79.07, "geoPrecision": "address"},
+              carer_place={"addressId": "addr-pnq", "nickname": "Pune flat", "pincode": "411038",
+                           "full": "B-402 Sample Heights, Kothrud, Pune, Maharashtra 411038", "lat": 18.50, "lng": 73.81,
+                           "geoPrecision": "address"})
+
+
 def _script(text: str, lo: int, hi: int) -> bool:
     return any(lo <= ord(ch) <= hi for ch in text)
 
@@ -691,10 +716,11 @@ def _points_sent(c: Conversation) -> None:
 
 
 async def bangalore_ritebite_no_store_named(c: Conversation):
-    """The order of 2026-10-11: Saheli went quiet for 6 minutes. Every store's options come in one update; he picks."""
+    """The order of 2026-10-11: Saheli went quiet for 6 minutes. Every store's options come in one update; he picks. Whom
+    it is for is not in his first words: asked with the address in one line (2026-10-12), so the answer says both."""
     await c.setup()
     await c.say("Hey can u order a rite bite choco berry")
-    await c.say("Yes please order 4 of it")
+    await c.say("Yes please order 4 of it, it's for Amma")
     t = await _options_then_confirm(c, "the first one please", want="1", stores=("Blinkit", "Swiggy Instamart", "Zepto"))
     _points_sent(c)
     cart = c.shop.carts[-1] if c.shop.carts else []
@@ -967,6 +993,40 @@ async def mumbai_milk_for_7_tomorrow(c: Conversation):
     c.check("SIM1" in placed or "1" in _digits(placed), f"no order details: {placed}")
 
 
+async def pune_son_orders_for_himself_maa_hears_nothing(c: Conversation):
+    """Founder 2026-10-12, from his mother's phone: his own Karachi Bakery biscuits, ordered from his own chat to his own
+    home, were recorded as hers and she was asked twice whether they came ("it's confusing"). A Pune son orders biscuits for
+    himself; his mother in Nagpur talks to Saheli too. The order is his, to his own flat; the follow-up asks him; she hears
+    nothing about it at any point."""
+    await c.setup()
+    maa = c.family.elder["id"]
+    await c.say("Namaste beta, aaj thandi hai", who=c.family.elder)  # she talks to Saheli (the old rule then asked her)
+    heard = len(c.messages_to(maa))
+    await c.say("Order 2 packs of Karachi Bakery fruit biscuits for me from Instamart")
+    await c.say("yes, my Pune flat")
+    t = await _options_then_confirm(c, "the first one")
+    son = c.family.carer["id"]
+    c.check(t is not None and t.subject_id == son and t.requested_by == son, f"not recorded as his own order: {t.subject_id if t else None}")
+    place = (((t.details or {}).get("limits") or {}).get("place") or {}) if t else {}
+    c.check(place.get("nickname") == c.family.carer_place["nickname"], f"not to his own flat: {place.get('nickname')}")
+    ids = confirm_buttons(c)
+    if not ids:
+        return
+    await c.say(ids[0])
+    t = await c.ticks(lambda t: t.status == "done", most=8)
+    oid = (t.result or {}).get("order_id")
+    c.shop.status[oid] = {"status": "DELIVERED", "text": "Delivered at your door"}
+    clock.set_now(clock.now() + timedelta(minutes=20))
+    await c.ticks(lambda t: (t.result or {}).get("delivered"), most=2)
+    clock.set_now(clock.now() + timedelta(hours=4))
+    await c.wake()
+    clock.set_now(clock.now() + timedelta(hours=4))
+    await c.wake()
+    c.check(len(c.messages_to(maa)) == heard, f"his mother heard about his own order: {[m.get('text') for m in c.messages_to(maa)[heard:]]}")
+    asks = [m.get("text") for m in c.messages_to(son) if "?" in str(m.get("text"))]
+    c.check(bool(asks), "nobody was asked whether it came")
+
+
 async def bangalore_food_two_apps_named_caregiver_cancels_in_app(c: Conversation):
     """Food and a caregiver: the two apps he named are both reported (dishes from restaurants as options); he picks the
     Zomato one; after it is placed he asks to cancel: he is pointed to the Zomato app and nobody else is messaged."""
@@ -1149,6 +1209,7 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
              # the founder's rules everywhere: one regression per root cause, across services, store mixes and people
              ("Delhi: Hindi ride, cheapest app, cancel after booking", delhi_ride_cheapest_then_cancel_after_booking, DELHI,
               ("uber:browse", "ola:browse", "rapido:browse", "ola:prepare", "ola:place", "uber:prepare", "uber:place")),
+             ("Pune: a son orders for himself, his mother hears nothing", pune_son_orders_for_himself_maa_hears_nothing, PUNE, ()),
              ("Bangalore: food on the two apps he named, Zomato will not cancel: he is sent to its app",
               bangalore_food_two_apps_named_caregiver_cancels_in_app, BANGALORE,
               ("zomato:prepare", "zomato:place", "zomato:cancel", "swiggy:prepare", "swiggy:place", "swiggy:cancel")),

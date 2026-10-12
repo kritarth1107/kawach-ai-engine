@@ -142,6 +142,12 @@ class ToolRefused(Exception):
 
 
 ABOUT = {"type": "string", "description": "Person id this is about. Leave out for the care recipient."}
+# Who an order or a ride is for (founder 2026-10-12: a caregiver's own biscuits, ordered to his own home, were recorded as his
+# mother's and she was asked whether they came). Always filled by the brain, never a default.
+FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this order or ride is for: who will receive and use it (whose "
+            "groceries, food or medicine it is; who rides). Read it from their words and the conversation; never assume the care "
+            "recipient: a caregiver ordering something for themselves gives their own id. If it is not clear, give \"\": for an order, "
+            "start_task then asks whom it is for in the same line as the delivery address."}
 
 
 # ── memory ─────────────────────────────────────────────────────────────────────
@@ -1215,6 +1221,7 @@ async def _task(ctx: TurnCtx, task_id: str):
         "drop": {"type": "string"},
         "vehicle": {"type": "string", "description": "auto, mini, sedan, bike, or omit for cheapest car"},
         "area": {"type": "string", "description": "Delivery area or pincode if known"},
+        "for_whom": FOR_WHOM,
         "pickup_shared": {"type": "boolean", "description": "Ride: the pickup is the WhatsApp location they shared (this message or a recent one)"},
         "drop_shared": {"type": "boolean", "description": "Ride: the drop is the WhatsApp location they shared"},
         "at": {"type": "string", "description": "Only when they want it at a later time ('kal subah 6 baje cab', 'order milk at 7 tomorrow'): "
@@ -1222,11 +1229,23 @@ async def _task(ctx: TurnCtx, task_id: str):
         "at_means": {"type": "string", "enum": ["arrive", "book"], "description": "With at: arrive (default) = the cab should come / the "
                      "order should arrive by then; book = they want it booked or placed exactly then"},
     },
-    ["kind", "goal"],
+    ["kind", "goal", "for_whom"],
 )
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
+    if a.get("kind") not in ("order", "ride"):
+        raise ToolRefused("Give kind: order (groceries, food, medicines) or ride.")
+    if not str(a.get("goal") or "").strip():
+        # the model left the goal out (lang eval 2026-10-12: a KeyError, not an answer): the items name it, else ask for it
+        named = ", ".join(str(i["name"]) for i in a.get("items") or [] if isinstance(i, dict) and i.get("name"))
+        if not named:
+            raise ToolRefused("Give goal: in a few words, what to order or where the ride goes.")
+        a = {**a, "goal": named}
+    who = _person(ctx, a)
+    if not who and (a["kind"] != "order" or ctx.is_system):
+        _for_whom(ctx, a)  # refused: they are asked whom it is for
+    a = {**a, "for_whom": who}
     kind_of = {s: ("ride" if c == "ride" else "order") for c, stores in runtime.COMPARE_STORES.items() for s in stores}
     named = list(dict.fromkeys(s for s in a.get("services") or [] if kind_of.get(s) == a["kind"]))
     if len(named) == 1 and not a.get("service"):
@@ -1236,6 +1255,8 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         ask = await _confirm_address_first(ctx, a)
         if ask:
             return ask
+        if not a["for_whom"]:
+            _for_whom(ctx, a)  # the address was answered, not whom it is for: asked now
         if not a.get("service") and not a.get("services"):
             # The store(s) they named stay with the order through the address question (sim 2026-10-11: "Blinkit se …",
             # then "haan ghar" → the second call left the store out and three stores were searched).
@@ -1261,7 +1282,7 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         # The ride's ends as places: a saved place they meant (an AI decision) goes to the app as its full address (live
         # 2026-10-12: a saved home went to the app as words, the app set the city and the ride was booked from there).
         ends = [e for e in ("pickup", "drop") if a.get(e) and not a.get(f"{e}_place")]
-        found = await asyncio.gather(*(_ride_end_place(ctx, str(a[e])) for e in ends))
+        found = await asyncio.gather(*(_ride_end_place(ctx, str(a[e]), a["for_whom"]) for e in ends))
         a = {**a, **{f"{e}_place": f for e, f in zip(ends, found) if f}}
         saved = {e: dict(a[f"{e}_place"]) for e in ("pickup", "drop") if a.get(f"{e}_place")}
         for end in ("pickup", "drop"):
@@ -1281,12 +1302,12 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
                 if end == "pickup" and not saved.get("pickup"):
                     # the place they named when the pin was asked for ("from home"), even if this call names the pin itself
                     words = await _pickup_words_asked(ctx)
-                    found = await _ride_end_place(ctx, words) if words else None
+                    found = await _ride_end_place(ctx, words, a["for_whom"]) if words else None
                     if found:
                         saved["pickup"] = found
                 a = {**a, f"{end}_place": _pin_place(pin), end: _pin_place(pin)["full"]}
                 if end == "pickup" and saved.get("pickup") and not a.get("later"):
-                    a = {**a, "pin_saved_to": await _save_pin(ctx, saved["pickup"], pin)}
+                    a = {**a, "pin_saved_to": await _save_pin(ctx, saved["pickup"], pin, a["for_whom"])}
         ask = await _ride_pin_first(ctx, a)
         if ask:
             return ask
@@ -1299,6 +1320,12 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         problem = _named_place_problem(a, place)
         if problem:
             return problem
+    if a["kind"] == "order" and not ctx.is_system:
+        # whose home it goes to, against whom it is for (asked once; their answer goes ahead)
+        place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
+        ask = await _not_their_place(ctx, a, place)
+        if ask:
+            return ask
     if a.get("services"):
         # Several stores or apps they named: exactly those are searched, and every one is reported (founder 2026-10-11).
         return {**(await _start_compare(ctx, a, tuple(a["services"]), place=place, named=True)), **pin_note}
@@ -1331,27 +1358,111 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     since = clock.now() - ADDRESS_OK_FOR
     asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=since, kinds=["order_address_asked"])
              if (e.payload or {}).get("speaker") == speaker]
-    if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
-        return None
-    if asked:  # asked in this same turn already: they have not answered yet
+    earlier = [e.payload or {} for e in asked if (e.payload or {}).get("ref") != ctx.message_ref]
+    if asked and not earlier:  # asked in this same turn already: they have not answered yet
         return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
-    place = await _delivery_place(ctx, a, keep_miss=True)
+    if earlier and not await _moved(ctx, a, earlier[-1]):
+        return None
+    who = a["for_whom"]
+    # whom it is for not known yet: the address of the person asking, and whom it is for asked in the same line
+    place = await _delivery_place(ctx, {**a, "for_whom": who or speaker}, keep_miss=True)
     problem = _named_place_problem(a, place)
     if problem:
         return problem
     where = (f"{place.get('nickname') or 'Home'}: {place.get('full')}" if place.get("full") else
              f"pincode {place.get('pincode')}" if place.get("pincode") else
              f"near {a['area']}" if a.get("area") else "the address saved in the store account")
+    names = _names(ctx)
+    owners = [o for o in place.get("defaultFor") or [] if o and o != who]
+    elsewhere = bool(who and owners) and who not in (place.get("defaultFor") or []) and await _own_home_elsewhere(ctx, a, place)
     await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_address_asked",
                              summary=f"Asked to confirm the delivery address for: {a['goal']}", actor_id=speaker,
                              payload={"speaker": speaker, "ref": ctx.message_ref, "where": where, "service": a.get("service"),
-                                      "services": a.get("services")})
-    same = (f" (service {a['service']}, the same items)" if a.get("service") else
-            f" (services {', '.join(a['services'])}, the same items)" if a.get("services") else "")
-    return {"status": "not started yet", "confirm_address": where,
+                                      "services": a.get("services"), "addressId": place.get("addressId"), "for_whom": who})
+    whom = who or "the person they say"
+    same = (f" (service {a['service']}, the same items, for_whom {whom})" if a.get("service") else
+            f" (services {', '.join(a['services'])}, the same items, for_whom {whom})" if a.get("services") else
+            f" (the same items, for_whom {whom})")
+    for_line = ("" if who == speaker else
+                f" Say it is for {names.get(who) or 'them'}, so they can correct it if it is for someone else.")
+    if not who:
+        others = [names.get(p) or "a family member" for p in names if p != speaker]
+        for_line = f" In the same line, ask whom it is for: them or {' or '.join(others)}."
+    if elsewhere:
+        for_line = (f" {place.get('nickname') or 'This place'} is the home of {_and(owners, names)}, not {names.get(who) or 'their'}'s: "
+                    f"ask in the same line whether the order is for {names.get(who) or 'them'} or for {_and(owners, names)}.")
+    return {"status": "not started yet", "confirm_address": where, "for_whom": names.get(who) or who or "not known yet: ask",
             "next": "Nothing is searched yet. In one short line, ask them to confirm this delivery address (say the place name "
-                    f"and the area, not the full line). When they say yes, call start_task again with the same order{same}; if they "
-                    "name another saved place, pass it as area."}
+                    f"and the area, not the full line).{for_line} When they say yes, call start_task again with the same order{same}; if "
+                    "they name another saved place, pass it as area; if it is for someone else, pass that person as for_whom."}
+
+
+def _names(ctx: TurnCtx) -> dict[str, str]:
+    return {p.get("id"): (p.get("name") or "").split(" ")[0] for p in [ctx.elder, *ctx.members] if p.get("id")}
+
+
+def _and(ids: list[str], names: dict[str, str]) -> str:
+    return " and ".join(names.get(i) or "a family member" for i in ids)
+
+
+async def _moved(ctx: TurnCtx, a: dict, asked: dict) -> bool:
+    """The address was asked before whom it is for was known (at the place of the person asking); their answer names
+    someone whose own default place is another one: that place is confirmed once before any search."""
+    if asked.get("for_whom") or not a.get("for_whom") or a.get("area") or not asked.get("addressId"):
+        return False
+    place = await _delivery_place(ctx, a)
+    return bool(place.get("addressId")) and place["addressId"] != asked["addressId"]
+
+
+async def _own_home_elsewhere(ctx: TurnCtx, a: dict, place: dict) -> bool:
+    """The person it is for has a home of their own on record (a default place for them) and it is not this place. Someone
+    with no place of their own (living with the family) is not asked whose home it is."""
+    own = await _delivery_place(ctx, {**a, "area": None})
+    return (bool(own.get("addressId")) and a["for_whom"] in (own.get("defaultFor") or [])
+            and own["addressId"] != place.get("addressId"))
+
+
+def _person(ctx: TurnCtx, a: dict) -> str | None:
+    """The household member for_whom names; with only one person in the household, them."""
+    names = _names(ctx)
+    who = str(a.get("for_whom") or "").strip()
+    return who if who in names else next(iter(names)) if len(names) == 1 else None
+
+
+def _for_whom(ctx: TurnCtx, a: dict) -> str:
+    """The person an order or a ride is for, from the brain's structured field (founder 2026-10-12): never a default."""
+    names = _names(ctx)
+    who = str(a.get("for_whom") or "").strip()
+    if who not in names:
+        listed = "; ".join(f"{pid} ({name or 'no name'})" for pid, name in names.items())
+        raise ToolRefused("Say whom this is for: for_whom = the id of the person who will receive or use it (" + listed + "). Read it "
+                          "from their words and the conversation; never assume the care recipient. If it is not clear, ask them in a "
+                          "few words first.")
+    return who
+
+
+async def _not_their_place(ctx: TurnCtx, a: dict, place: dict) -> dict | None:
+    """An order going to the home of other people, not of the person it is for (data: whose default place it is): asked once
+    (founder 2026-10-12: his own biscuits to his own home were recorded as his mother's). Their answer goes ahead."""
+    who, owners = a["for_whom"], [o for o in place.get("defaultFor") or [] if o]
+    if not place.get("addressId") or not owners or who in owners or not await _own_home_elsewhere(ctx, a, place):
+        return None
+    speaker = ctx.speaker.get("id") or ctx.elder_id
+    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - ADDRESS_OK_FOR,
+                                           kinds=["order_address_asked", "order_for_whom_asked"])
+             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("addressId") == place["addressId"]]
+    if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
+        return None  # asked about this place already: this is their answer
+    names = _names(ctx)
+    if not asked:
+        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_for_whom_asked",
+                                 summary=f"Asked whom the order is for: {a['goal']}", actor_id=speaker,
+                                 payload={"speaker": speaker, "ref": ctx.message_ref, "addressId": place["addressId"], "for_whom": who})
+    return {"status": "not started yet", "check_for_whom": True,
+            "next": f"Nothing is searched yet. {place.get('nickname') or 'That place'} is the home of {_and(owners, names)}, not "
+                    f"{names.get(who) or 'the person it is for'}'s. Ask in one short line whether this order is for "
+                    f"{names.get(who) or 'them'} (delivered there) or for {_and(owners, names)}; then call start_task again with the same "
+                    "order and place and for_whom set to the person they say."}
 
 
 async def _store_named_with_address(ctx: TurnCtx) -> str | list[str] | None:
@@ -1416,16 +1527,19 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
 
     if not place or not place.get("addressId"):
         place = await _delivery_place(ctx, a)
+    who = a.get("for_whom") or _for_whom(ctx, a)
+    # the care recipient's own spending limit needs someone to approve; a self-care person has nobody (and is not stopped)
+    carers = any(m.get("id") and m.get("id") != ctx.elder_id for m in ctx.members)
     limits = await build_limits(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind=a["kind"], agent=specialist_for(service).name,
-        requester_is_elder=ctx.speaker_is_elder, place=place,
+        ctx.session, family_id=ctx.family_id, subject_id=who, kind=a["kind"], agent=specialist_for(service).name,
+        requester_is_elder=ctx.speaker_is_elder and carers, place=place,
     )
     try:
         return await runtime.create(
-            ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, requested_by=ctx.speaker.get("id") or ctx.elder_id,
+            ctx.session, family_id=ctx.family_id, subject_id=who, requested_by=ctx.speaker.get("id") or ctx.elder_id,
             service=service, kind=a["kind"], goal=a["goal"],
             details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place", "later") if a.get(k)},
-                     **(extra or {})}, limits=limits,
+                     "for_set": True, **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
         raise ToolRefused(f"{exc}. Tell them kindly and offer something safe.") from exc
@@ -1464,7 +1578,7 @@ def _km(a: dict, b: dict) -> float:
     return 6371.0 * 2 * math.asin(math.sqrt(h))
 
 
-async def _save_pin(ctx: TurnCtx, place: dict, pin: dict) -> str | None:
+async def _save_pin(ctx: TurnCtx, place: dict, pin: dict, who: str | None = None) -> str | None:
     """The pin they shared for a saved place they named ("from home") becomes that place's exact point for next time,
     when it is near where the place was thought to be (they may share where they are, not the place); else nothing."""
     if place.get("precision") == "user" or not place.get("nickname"):
@@ -1473,7 +1587,7 @@ async def _save_pin(ctx: TurnCtx, place: dict, pin: dict) -> str | None:
         return None
     try:
         got = await ctx.host.call("save_place", {"place": place["nickname"], "lat": float(pin["lat"]), "lng": float(pin["lng"])},
-                                  family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id)
+                                  family_id=ctx.family_id, subject_id=who or ctx.elder_id, actor_id=ctx.actor_id)
     except Exception:  # noqa: BLE001 — the ride goes on with the pin either way
         return None
     return place["nickname"] if (got or {}).get("ok") else None
@@ -1511,15 +1625,16 @@ async def _ride_pin_first(ctx: TurnCtx, a: dict) -> dict | None:
                     "their words, call start_task again as it is."}
 
 
-async def _ride_end_place(ctx: TurnCtx, words: str) -> dict | None:
+async def _ride_end_place(ctx: TurnCtx, words: str, rider: str | None = None) -> dict | None:
     """A ride's pickup or drop: the family's saved place when the words mean one (an AI decision), with its full address and
-    map point; None for a landmark or an address they spelt out (the app finds it)."""
+    map point; None for a landmark or an address they spelt out (the app finds it). "Home" is the rider's own home."""
     who = ctx.speaker.get("id") or ctx.elder_id
+    rider = rider or ctx.elder_id
     try:
-        args = await saved_place_args(ctx.host, words, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+        args = await saved_place_args(ctx.host, words, family_id=ctx.family_id, subject_id=rider, actor_id=who)
         if not args.get("exact"):
             return None  # no saved places, or the AI could not answer: the words go to the app as they are
-        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=rider, actor_id=who)
     except Exception:  # noqa: BLE001 — the words go to the app as they are
         return None
     if not got or not got.get("matched") or not got.get("full"):
@@ -1555,8 +1670,10 @@ async def _delivery_place(ctx: TurnCtx, a: dict, keep_miss: bool = False) -> dic
         return {}
     try:
         who = ctx.speaker.get("id") or ctx.elder_id
-        args = await saved_place_args(ctx.host, a.get("area") or "", family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
-        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=who)
+        # the places (and the default place) of the person it is for: their home, not the care recipient's by default
+        to = a.get("for_whom") or ctx.elder_id
+        args = await saved_place_args(ctx.host, a.get("area") or "", family_id=ctx.family_id, subject_id=to, actor_id=who)
+        got = await ctx.host.call("delivery_place", args, family_id=ctx.family_id, subject_id=to, actor_id=who)
         if keep_miss and got.get("matched") is False:
             return got
         return got if got.get("addressId") else {}
