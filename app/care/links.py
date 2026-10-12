@@ -91,13 +91,19 @@ def is_health(link: CareLink) -> bool:
     return domain_of(link.from_ref) in HEALTH_DOMAINS
 
 
-def label_of(link: CareLink) -> str:
-    return (link.label or "").strip() or name_of(link.to_ref)
+def label_of(link: CareLink, names: dict[str, str] | None = None) -> str:
+    """names: household ids → names, so a link to a person reads 'Kritarth', never their id."""
+    label = (link.label or "").strip()
+    if (link.to_ref or "").startswith("person:") and names is not None:
+        pid = link.to_ref.split(":", 1)[1]
+        if not label or label == pid:  # the label was the id itself (live 2026-10-13)
+            return names.get(pid) or "a family member"
+    return label or name_of(link.to_ref)
 
 
-def phrase(link: CareLink) -> str:
+def phrase(link: CareLink, names: dict[str, str] | None = None) -> str:
     """How the link reads after the thing it starts from: 'for diabetes', 'prescribed by Dr Sharma'."""
-    lab = label_of(link)
+    lab = label_of(link, names)
     if link.relation == "for":
         return f"for {lab}"
     if link.relation == "prescribed_by":
@@ -110,9 +116,9 @@ def phrase(link: CareLink) -> str:
     return f"{lab} ({rel})" if rel else f"related to {lab}"
 
 
-def short(link: CareLink) -> str:
+def short(link: CareLink, names: dict[str, str] | None = None) -> str:
     """The medicine card's words: 'for diabetes', 'Dr Sharma', 'from the 3 Sep prescription'."""
-    return label_of(link) if link.relation in ("prescribed_by", "with_doctor") else phrase(link)
+    return label_of(link, names) if link.relation in ("prescribed_by", "with_doctor") else phrase(link, names)
 
 
 def readable(link: CareLink, from_name: str | None = None) -> str:

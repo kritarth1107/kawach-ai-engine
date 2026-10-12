@@ -54,10 +54,13 @@ def fact_json(f: CareFact) -> dict:
     }
 
 
-def links_json(rows: list | None) -> list[dict]:
-    """A fact's links for the medicine card (read-only): 'for diabetes', 'Dr Sharma', 'from the 3 Sep prescription'."""
-    return [{"relation": ln.relation, "to": ln.to_ref, "label": links.label_of(ln), "text": links.short(ln), "phrase": links.phrase(ln),
-             "status": ln.status, "source": ln.source_kind} for ln in rows or [] if not (ln.detail or {}).get("end")]
+def links_json(rows: list | None, names: dict[str, str] | None = None) -> list[dict]:
+    """A fact's links for the medicine card (read-only): 'for diabetes', 'Dr Sharma', 'from the 3 Sep prescription'.
+    names: household ids → names (a link to a person showed their id on the dashboard)."""
+    names = names if names is not None else {}
+    return [{"relation": ln.relation, "to": ln.to_ref, "label": links.label_of(ln, names), "text": links.short(ln, names),
+             "phrase": links.phrase(ln, names), "status": ln.status, "source": ln.source_kind}
+            for ln in rows or [] if not (ln.detail or {}).get("end")]
 
 
 def event_json(e: CareEvent) -> dict:
@@ -103,11 +106,14 @@ async def overview(family_id: str, elder_id: str, session: DB, day: str | None =
     notes = await store.notes(session, family_id, [elder_id, "family"])
     meds = [f for f in facts if f.domain == "medicine" and f.status == "active"]
     linked = links.by_from(await links.links_for(session, family_id, elder_id))
+    roster = await store.roster(session, family_id)
+    names = {m.get("id"): m.get("name") for m in [*([roster.elder] if roster and roster.elder else []), *((roster.members or []) if roster else [])]
+             if m.get("id") and m.get("name")}
     return {
         "day": day,
         "doses": _day_doses(meds, list(events), day),
         "domains": DOMAINS,
-        "facts": [{**fact_json(f), "links": links_json(linked.get(f.key))} for f in facts],
+        "facts": [{**fact_json(f), "links": links_json(linked.get(f.key), names)} for f in facts],
         "pending": [fact_json(f) for f in facts if f.status == "pending"],
         "loops": [loop_json(o) for o in loops],
         "events": [event_json(e) for e in events],

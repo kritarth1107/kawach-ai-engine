@@ -41,7 +41,7 @@ async def test_portrait_holds_the_person_mood_learned_words_people_day_and_doses
     assert p["person"]["city"] == "Jodhpur" and p["person"]["name"] == "Kamla Devi"
     assert [d["word"] for d in p["mood"]["days"]] == ["worried", "calm"] and p["mood"]["now"]["word"] == "calm"
     bday = next(x for x in p["learned"] if x["key"] == "occasion:pihu_birthday")
-    assert bday["said"]["text"] == "Pihu ki birthday 12 November ko hai" and bday["statedBy"] == "Kamla Devi"
+    assert bday["said"]["text"] == "Pihu ki birthday 12 November ko hai" and bday["statedBy"] == "Kamla Devi" and bday["said"]["heard"] is False
     assert any(x["name"] == "Rohit" and x["kind"] == "member" for x in p["people"])
     assert any(x["name"] == "Ramesh" and x["phone"] == "+919000000001" for x in p["people"])
     assert [d["time"] for d in p["day"]] == ["07:00"], "only routine with a time is on the day line"
@@ -82,3 +82,24 @@ async def test_the_emergency_card_never_shows_has_none_as_an_item_and_carries_th
     assert card["allergies"] == [] and card["medicines"] == []
     assert card["none"] == {"allergy": True, "condition": False, "medicine": True}
     assert card["home"] == "14 Shastri Nagar, Jodhpur"
+
+
+async def test_words_the_re_read_heard_are_marked_heard_and_a_link_to_a_person_reads_their_name(db, at, api_names=None):
+    """Live 2026-10-13: a re-read fact showed its evidence as if the person had said it, and a family link showed an id."""
+    from app.api.dash import links_json
+    from app.care import links
+    from app.care.models import CareFact
+
+    at("2026-10-13 09:00")
+    await store.save_roster(db, FAM, ELDER, [ELDER, SON])
+    w = await store.write_fact(db, family_id=FAM, subject_id=ELDER["id"], domain="family", key="family:son_rohit", value={"relation": "son"},
+                               text="Rohit is her son.", source_kind="inferred", note='heard: "mera beta Rohit"')
+    p = await portrait.build(db, FAM, ELDER["id"])
+    son = next(x for x in p["learned"] if x["key"] == "family:son_rohit")
+    assert son["said"] == {"text": "mera beta Rohit", "at": son["said"]["at"], "voice": False, "heard": True} and son["statedBy"] is None
+    await links.save_many(db, family_id=FAM, subject_id=ELDER["id"], from_ref=w.fact.key,
+                          items=[{"relation": "related_to", "to_domain": "person", "to_name": SON["id"], "as": "son"}],
+                          source_kind="caregiver_said", stated_by=SON["id"], source_ref=None)
+    rows = links.by_from(await links.links_for(db, FAM, ELDER["id"]))[w.fact.key]
+    shown = links_json(rows, {SON["id"]: "Rohit"})
+    assert shown and "Rohit" in shown[0]["text"] and SON["id"] not in shown[0]["text"]

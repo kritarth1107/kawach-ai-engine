@@ -61,12 +61,13 @@ async def _said(session: AsyncSession, family_id: str, facts: list[CareFact]) ->
         )).all()
         for ref, text, at, meta in rows:
             if text and not text.startswith("["):
-                out[str(refs[ref].id)] = {"text": text[:280], "at": at.isoformat(), "voice": bool((meta or {}).get("media"))}
+                out[str(refs[ref].id)] = {"text": text[:280], "at": at.isoformat(), "voice": bool((meta or {}).get("media")), "heard": False}
     for f in facts:
         if str(f.id) not in out and (f.note or "").startswith("heard: "):
             heard = f.note[len("heard: "):].strip().strip('"').strip()
             if heard:
-                out[str(f.id)] = {"text": heard[:280], "at": f.recorded_at.isoformat(), "voice": False}
+                # the re-read's own pick of words: shown as heard in the chat, never as the message a fact was saved from
+                out[str(f.id)] = {"text": heard[:280], "at": f.recorded_at.isoformat(), "voice": False, "heard": True}
     return out
 
 
