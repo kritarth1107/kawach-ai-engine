@@ -17,6 +17,8 @@ OTP = {"logged_in": False, "needs_otp": True, "otp_sent_to": "+91 ******2002", "
 CANCELLED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "cancelled": True}
 FARES = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "options": [{"type": "Auto", "fare": "₹142", "eta": "4 min"}, {"type": "Uber Go", "fare": "₹236", "eta": "6 min"}], "surge": False}
 BOOKED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "booked": True, "ride_id": "UB-9921", "driver": "Ramesh, KA01AB1234", "status": "driver assigned"}
+# the store's own list, read after a run before the confirm was stopped: nothing of this task there
+CHECKED = {"logged_in": True, "needs_otp": False, "blocked": False, "problem": "", "this_task": False}
 
 
 @dataclass
@@ -38,7 +40,7 @@ class FakeAgent:
         tid = f"t{next(self._ids)}"
         phase = metadata.get("phase", "prepare")
         # "browse:zepto" scripts one store; "browse" every store
-        queue = self.script.get(f"{phase}:{metadata.get('service')}") or self.script.get(phase) or [CART]
+        queue = self.script.get(f"{phase}:{metadata.get('service')}") or self.script.get(phase) or [CHECKED if phase == "check" else CART]
         out = queue.pop(0) if len(queue) > 1 else queue[0]
         self._out[tid] = out
         self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm,

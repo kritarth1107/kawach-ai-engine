@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import hashlib
 import json
 import logging
@@ -30,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.care import store
 from app.core import clock, trace
 from app.specialists import channels, guard, metrics
-from app.specialists.agents import specialist_for
+from app.specialists.agents import BEFORE_CONFIRM_RULE, specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
 from app.tasks.browser_use import AgentRun, BrowserAgent
 from app.tasks import fastpath, later, practice, sandbox, tracking
@@ -1049,14 +1050,42 @@ def _goal(task: Task) -> str:
     return specialist_for(task.service).goal(task)
 
 
+def _guest_run(task: Task) -> bool:
+    """The task's browser is a look-up's own, with no login: nothing can be booked or placed in it."""
+    d = task.details or {}
+    return bool(task.agent_session) and d.get("guest_session") == task.agent_session
+
+
+async def _drop_session(agent: BrowserAgent, task: Task, why: str) -> None:
+    sid, task.agent_session = task.agent_session, None
+    note(task, why)
+    if sid and hasattr(agent, "stop_session"):
+        try:
+            await agent.stop_session(sid)
+        except Exception:  # noqa: BLE001 — the sweeper stops a browser nobody uses
+            logger.warning("stop session failed task=%s", task.id)
+
+
 async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for: Callable[[Task], Awaitable[str | None]], extra: str = "") -> None:
     spec = specialist_for(task.service)
     goal = _goal(task) + (f"\n{extra}" if extra else "")
+    d0 = task.details or {}
+    if task.phase in guard.BEFORE_CONFIRM:
+        goal += "\n" + BEFORE_CONFIRM_RULE + (f"\n{d0['guard_extra']}" if d0.get("guard_extra") else "")
     learned, skill_ids = await _skills_and_notes(session, task.service, task.phase)
     task.details = {**(task.details or {}), "skills_used": skill_ids}
     profile_id = None
     got = None
-    if not task.agent_session:
+    guest = task.phase == "browse"
+    if guest and task.agent_session and not _guest_run(task):
+        # A look-up never runs where the family is logged in (founder 2026-10-12: a look-up with a live login can book):
+        # the fast look-up's browser is on the family's profile, so the agent looks in a browser of its own.
+        await _drop_session(agent, task, "the look-up runs in a browser without the family's login")
+    elif not guest and _guest_run(task):
+        await _drop_session(agent, task, "the look-up's browser had no login: this step opens the family's own")
+    if guest:
+        pass  # no profile: not logged in anywhere, so nothing can be booked or placed in this run
+    elif not task.agent_session:
         got = await profile_for(task)
         # The host answers {profileId, loginPhone}; older callers (bench, tests) give just the profile id.
         profile_id = got.get("profileId") if isinstance(got, dict) else got
@@ -1131,9 +1160,10 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             raise
         note(task, "the earlier browser had closed; starting a fresh one")
         task.agent_session = None
-        got = got if got is not None else await profile_for(task)
-        profile_id = got.get("profileId") if isinstance(got, dict) else got
-        await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
+        if not guest:
+            got = got if got is not None else await profile_for(task)
+            profile_id = got.get("profileId") if isinstance(got, dict) else got
+            await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
         if extra:
             # The code was for a login page that is gone: typing it into a new one fails (live 2026-10-09 the agent typed
             # the code as the phone number). Log in again; the store sends a new code and the person is told why.
@@ -1144,7 +1174,9 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     # so a failure later in this tick cannot roll back the only record of it (the sweeper stops what the ledger knows).
     task.agent_session, task.agent_task = run.session_id, run.task_id
     task.status, task.input_needed, task.runs = "running", None, task.runs + 1
-    task.details = {**(task.details or {}), "run_started": clock.now().isoformat(), "channel": "browser"}
+    task.details = {**(task.details or {}), "run_started": clock.now().isoformat(), "channel": "browser",
+                    **({"guest_session": run.session_id} if guest else
+                       {"login_runs": int((task.details or {}).get("login_runs") or 0) + 1} if task.phase in guard.BEFORE_CONFIRM else {})}
     await sandbox.started(session, session_id=run.session_id, task_id=str(task.id), family_id=task.family_id, service=task.service,
                           profile_id=profile_id)
     await session.commit()
@@ -2068,6 +2100,139 @@ async def _cancel_after_placed(session: AsyncSession, task: Task, *, by: str, re
             "short line; never say it is cancelled before that update.")
 
 
+def _placed_by_mistake(task: Task, *, ref: str | None, how: str, already_cancelled: bool = False) -> tuple[str, str]:
+    """A run before the confirm booked or placed it (founder 2026-10-12, 21:52 IST: a fare look-up on Ola booked an auto,
+    the driver came to his door, and he heard "nothing was booked"). Recorded as it is, said at once and owned, and the
+    store is asked to cancel it under the cancel rule (free: no second ask; a fee: asked once with the amount; refused:
+    said plainly, use its app). Already cancelled on the store: recorded and said so."""
+    d = task.details or {}
+    done, thing, _ = _words(task)
+    label = SKILLS[task.service]["label"]
+    idk = "ride_id" if task.kind == "ride" else "order_id"
+    r = {**(task.result or {}), ("booked" if task.kind == "ride" else "placed"): True, "by_mistake": True}
+    if ref and not r.get(idk):
+        r[idk] = ref
+    task.result = r
+    ref = r.get(idk) or ref
+    now = clock.now().isoformat()
+    ask = {"by": task.requested_by, "at": now, "reason": f"{done} by mistake before anyone said yes", "mistake": True}
+    task.details = {**d, "unauthorized_place": True, "confirm_token": None, "check": None, "guard_extra": None,
+                    "mistake": {"at": now, "how": how[:160], "ref": ref, "phase": task.phase}}
+    what = f"the {thing} on {label}" + (f" ({ref})" if ref else "")
+    if already_cancelled:
+        task.details = {**task.details, "cancel_ask": {**ask, "state": "cancelled", "told_by": "update"}}
+        note(task, f"{done} by mistake before anyone said yes ({how}); {label} shows it cancelled already")
+        metrics.on_milestone(task, "cancelled")
+        return "cancelled", (f"MISTAKE, yours: while only looking it up, {what} was {done} before anyone said yes; {label} now shows it "
+                             f"cancelled. Tell them at once, plainly, in one or two short lines: it was {done} by mistake and it is "
+                             f"cancelled; say sorry once. Never say nothing was {done}.")
+    task.details = {**task.details, "cancel_ask": {**ask, "state": "cancelling"}}
+    _start_store_cancel(task)
+    note(task, f"{done} by mistake before anyone said yes ({how}): asking {label} to cancel it")
+    return task.status, (f"MISTAKE, yours: while only looking it up, {what} was {done} before anyone said yes. Tell them at once, "
+                         f"plainly, in one or two short lines: it was {done} by mistake, you are cancelling it on {label} right now, "
+                         f"and the next update brings the result (if {label} wants a fee to cancel, they are asked first). Say sorry "
+                         f"once. Never say nothing was {done}.")
+
+
+def _start_check(task: Task, *, then: str, why: str, held: dict | None = None) -> tuple[str, None]:
+    """Look at the store's own list (read only) before anyone hears "nothing was booked": then = what follows a clean
+    check ("cancelled": they asked to stop; "retry": the step once more, told to keep away from that page; "fail": stop
+    and say so; "outcome": the run's own report goes on)."""
+    d = task.details or {}
+    done, _, _ = _words(task)
+    task.details = {**d, "check": {"then": then, "why": why[:160], "from": task.phase, "since": d.get("run_started") or clock.now().isoformat(),
+                                   "run": task.agent_task, **({"held": held} if held is not None else {})}}
+    task.phase, task.status, task.input_needed = "check", "queued", None
+    note(task, f"checking {SKILLS[task.service]['label']} that nothing was {done} ({why})")
+    return "queued", None
+
+
+GUARD_LINE = ("The last run of this step went to {page}, a page this step must never open (it carries the final book / place "
+              "button, or only comes after it). Never open it: what this step needs is on the pages before it{wait}.")
+
+
+def _check_outcome(task: Task, out: dict) -> tuple[str, str | None]:
+    """The store's own list after a run before the confirm went where it must not, or was stopped. The agent judges the
+    list (this ride or order, cancelled or not); the code acts on its fields."""
+    d = task.details or {}
+    chk = dict(d.get("check") or {})
+    done, thing, _ = _words(task)
+    label = SKILLS[task.service]["label"]
+    if out.get("this_task"):
+        ref = out.get("ride_id") if task.kind == "ride" else out.get("order_id")
+        task.phase = chk.get("from") or "prepare"
+        return _placed_by_mistake(task, ref=ref, how=f"{label}'s own list after: {chk.get('why') or 'a stop'}",
+                                  already_cancelled=bool(out.get("cancelled")))
+    if out.get("logged_in") is False or out.get("blocked") or out.get("problem") and out.get("this_task") is None:
+        task.details = {**d, "check": None, "check_failed": True}
+        task.phase = chk.get("from") or "prepare"
+        note(task, f"could not read {label}'s own list ({out.get('problem') or 'not logged in'})")
+        return "failed", (f"It is NOT known whether anything was {done}: {label}'s own list could not be read. Tell them plainly in "
+                          f"one short line to look in the {label} app for a {thing} made just now (and cancel it there if it is "
+                          f"there), and say sorry. Never say nothing was {done}.")
+    then = chk.get("then")
+    task.phase = chk.get("from") or "prepare"
+    task.details = {**d, "check": None}
+    if then == "cancelled":
+        note(task, f"stopped before anything was {done} (checked on {label}: nothing there)")
+        metrics.on_milestone(task, "cancelled")
+        return "cancelled", (f"Checked on {label}: nothing was {done}; it is stopped. Tell them in one short line.")
+    if then == "retry":
+        page = (chk.get("why") or "").split("page ", 1)[-1] or "that page"
+        wait = "; fares and prices that show as grey placeholders are still loading: wait for them" if task.kind == "ride" else ""
+        task.details = {**task.details, "guard_retried": True, "guard_extra": GUARD_LINE.format(page=page, wait=wait)}
+        note(task, f"checked on {label}: nothing was {done}; this step runs once more, kept away from {page}")
+        return "queued", None
+    note(task, f"stopped at the page with the final button twice; checked on {label}: nothing was {done}")
+    what = "fares" if task.kind == "ride" else "cart"
+    return "failed", (f"Could not get the {what} on {label} without opening its {'booking' if task.kind == 'ride' else 'payment'} "
+                      f"page, so it was stopped there; checked on {label}: nothing was {done}. Tell them plainly in one short line "
+                      "and offer another app or store.")
+
+
+def _after_check(task: Task, out: dict) -> tuple[tuple[str, str | None] | None, dict]:
+    """A finished check: (status, message) when it decides the step (owned and cancelled, stopped, run again, failed, or
+    not readable), else (None, the step's own held report, which goes on as it would have)."""
+    chk = dict((task.details or {}).get("check") or {})
+    if chk.get("then") == "outcome" and chk.get("held") is not None and not out.get("this_task") and out.get("logged_in") is not False \
+            and not out.get("blocked") and not (out.get("problem") and out.get("this_task") is None):
+        task.phase = chk.get("from") or "prepare"
+        task.details = {**(task.details or {}), "check": None, "checked_run": task.agent_task}  # its report goes on, not checked again
+        note(task, f"checked on {SKILLS[task.service]['label']}: nothing was {_words(task)[0]}")
+        return None, chk["held"]
+    return _check_outcome(task, out), out
+
+
+def _needs_store_check(task: Task, out: dict) -> bool:
+    """After a run with the family's login before the confirm: the store's own list is read before its result goes to the
+    person (founder 2026-10-12: "after every run that must not place, check the store's live state"). Not for a run that
+    had no login (it asked for a code, or saw a login wall), nor twice for the same run."""
+    d = task.details or {}
+    return (task.phase in ("prepare", "otp", "browse") and not _guest_run(task) and bool(task.agent_session)
+            and d.get("checked_run") != task.agent_task and not out.get("needs_otp") and out.get("logged_in") is not False
+            and not out.get("blocked") and os.getenv("STORE_CHECK_AFTER_RUNS", "on") == "on")
+
+
+def _before_confirm_guard(task: Task, path: list[str], out: dict) -> tuple[str, str | None] | None:
+    """A run before the confirm, at its end (or stopped by the guard): booked or placed on the store's own after-order
+    page or in its own report → owned and cancelled; on the page with the final button, or a page shaped like an
+    after-order one → the store's own list is checked first. None: nothing wrong."""
+    if task.phase not in guard.BEFORE_CONFIRM or task.phase == "check" or _guest_run(task):
+        return None
+    d = task.details or {}
+    hit = guard.past_confirm(task.service, path)
+    said = out.get("placed") or out.get("booked") or out.get("order_id") or out.get("ride_id") or out.get("pressed_place")
+    if said or (hit and hit[0] == "after"):
+        ref = out.get("order_id") or out.get("ride_id") or (guard.ref_in(hit[1]) if hit else None)
+        return _placed_by_mistake(task, ref=str(ref) if ref else None, how="its own report" if said else f"the page {hit[1]}")
+    if not hit:
+        return None
+    if hit[0] == "suspect" and out.get("problem") != "stopped" and not out.get("blocked"):
+        return _start_check(task, then="outcome", why=f"{hit[0]} page {hit[1]}", held=out)
+    return _start_check(task, then="retry" if not d.get("guard_retried") else "fail", why=f"{hit[0]} page {hit[1]}")
+
+
 def _after_cancel_ask(task: Task, status: str, message: str | None) -> str | None:
     """The place or booking step finished after they asked to cancel it. Placed or booked: a caregiver's (or a self-care
     person's) ask goes to the store now (its one result comes after that); the care recipient's ask: ONE message, it cannot
@@ -2211,23 +2376,61 @@ async def _request_cancel(session: AsyncSession, agent: BrowserAgent, task: Task
     if compare_group(task) and not placed and task.phase in ("prepare", "browse"):
         for t in await siblings(session, task):  # the whole look-up stops, not just one store of it
             if t.id != task.id and t.status in LIVE and t.phase in ("prepare", "browse"):
-                if t.status == "running" and t.agent_task:
-                    try:
-                        await agent.stop(t.agent_task, end_session=True)
-                    except Exception:  # noqa: BLE001
-                        logger.warning("stop failed task=%s", t.id)
-                t.status, t.cancel_requested, t.input_needed = "cancelled", True, None
-                note(t, f"cancelled with the rest of the look-up by {by}")
-    if task.status == "running" and task.agent_task:
-        try:
-            await agent.stop(task.agent_task, end_session=True)
-        except Exception:  # noqa: BLE001
-            logger.warning("stop failed task=%s", task.id)
+                if await _stop_before_confirm(agent, t) is None:
+                    t.status, t.cancel_requested, t.input_needed = "cancelled", True, None
+                    note(t, f"cancelled with the rest of the look-up by {by}")
+                else:
+                    t.cancel_requested = True
+    checked = await _stop_before_confirm(agent, task)
+    if checked is not None:
+        # A run with the family's login has run: the store's own list is read before anyone hears "nothing was booked"
+        # (founder 2026-10-12: "nothing was booked" was said while an auto he never asked for was at his door).
+        done_, label_ = _words(task)[0], SKILLS[task.service]["label"]
+        if task.agent_session:
+            sandbox.audit(task, phase=task.phase, status="stopped", steps=0, path=[], cost=0,
+                          error=f"cancelled by the family: {reason}; checking the store"[:120])
+        if checked[1]:  # its pages already show it booked or placed: owned, and the store is asked to cancel it
+            ref_ = (task.result or {}).get("ride_id") or (task.result or {}).get("order_id")
+            return (f"It WAS {done_} by mistake before anyone said yes{f' ({ref_})' if ref_ else ''}: asking {label_} to cancel it "
+                    f"now; ONE update comes with the result (a fee, if {label_} wants one, is asked first). Tell them that plainly, "
+                    f"own the mistake and say sorry once; never say nothing was {done_}.")
+        return (f"STOPPED; checking on {SKILLS[task.service]['label']} now that nothing was {_words(task)[0]} by mistake (the result "
+                f"comes in an update in a minute). Tell them only that, in one short line; never say nothing was {_words(task)[0]} "
+                "before that update.")
     task.status = "cancelled"
-    note(task, "stopped before placing")
+    note(task, "stopped before placing" + (" (looked up without the family's login: nothing can be booked or placed there)"
+                                          if _guest_run(task) else ""))
     if task.agent_session:
         sandbox.audit(task, phase=task.phase, status="stopped", steps=0, path=[], cost=0, error=f"cancelled by the family: {reason}"[:120])
     return "stopped; nothing was placed" if task.kind != "ride" else "stopped; nothing was booked"
+
+
+async def _stop_before_confirm(agent: BrowserAgent, task: Task) -> tuple[str, str | None] | None:
+    """Stop a task before its confirm. Nothing ran with the family's login (a look-up runs without it): its run is stopped
+    and None comes back (it can be called cancelled). Otherwise the browser stays: the run's own pages so far decide
+    (booked or placed → owned and cancelled on the store), else the store's own list is checked; (status, message)."""
+    d = task.details or {}
+    if task.phase == "check":  # already reading the store's list: it goes on, and a clean list now means stopped
+        task.details = {**d, "check": {**(d.get("check") or {}), "then": "cancelled"}}
+        return "queued", None
+    logged = int(d.get("login_runs") or 0) > 0 and task.phase in guard.BEFORE_CONFIRM and not _guest_run(task)
+    path: list[str] = []
+    if task.status == "running" and task.agent_task:
+        if logged:
+            try:
+                path = (await agent.poll(task.agent_task)).path or []
+            except Exception:  # noqa: BLE001 — the check reads the store's list instead
+                logger.warning("poll before stop failed task=%s", task.id)
+        try:
+            await agent.stop(task.agent_task, end_session=not logged)
+        except Exception:  # noqa: BLE001
+            logger.warning("stop failed task=%s", task.id)
+    if not logged:
+        return None
+    hit = guard.past_confirm(task.service, path)
+    if hit and hit[0] == "after":
+        return _placed_by_mistake(task, ref=guard.ref_in(hit[1]), how=f"the page {hit[1]}")
+    return _start_check(task, then="cancelled", why="they asked to stop it")
 
 
 def _outcome(task: Task, out: dict) -> tuple[str, str]:
@@ -2236,6 +2439,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     d = task.details or {}
     limits = Limits.from_dict(d.get("limits"))
     spec = specialist_for(task.service)
+    if task.phase == "check":
+        return _check_outcome(task, out)
     if task.phase == "browse":
         if out.get("blocked"):
             return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
@@ -2270,11 +2475,10 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     if out.get("blocked"):
         return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
     if task.phase in ("prepare", "otp") and (out.get("placed") or out.get("booked") or out.get("order_id") or out.get("ride_id")):
-        # The agent went past the cart without anyone's yes (a bad hint, a misread page). Never place again on top of it.
-        task.details = {**d, "unauthorized_place": True, "confirm_token": None}
-        ref = out.get("order_id") or out.get("ride_id") or "no id shown"
-        return "failed", (f"The agent reports it {'booked' if task.kind == 'ride' else 'placed'} this on {SKILLS[task.service]['label']} before anyone "
-                          f"said yes ({ref}). Nothing more will be placed. Tell the caregiver now to check the app and cancel it if it is not wanted.")
+        # The agent went past the cart without anyone's yes (a bad hint, a misread page). Never place again on top of it:
+        # it is owned and the store is asked to cancel it (founder 2026-10-12).
+        ref = out.get("order_id") or out.get("ride_id")
+        return _placed_by_mistake(task, ref=str(ref) if ref else None, how="its own report")
     if task.phase in ("prepare", "otp"):
         if task.kind == "ride":
             if not out.get("options"):
@@ -3781,6 +3985,18 @@ async def tick(
                 elif task.status == "running":
                     run: AgentRun = await agent.poll(task.agent_task)
                     stats["polled"] += 1
+                    hit = (guard.past_confirm(task.service, run.path)
+                           if task.phase in guard.BEFORE_CONFIRM and not _guest_run(task) and run.status not in ("finished", "failed", "stopped")
+                           else None)
+                    if hit and (task.phase != "check" or hit[0] == "final"):
+                        # On every look, a run before the confirm on a page it must never be on is stopped at once (founder
+                        # 2026-10-12: the look-up pressed "Confirm & Book"); the browser stays for the check or the cancel.
+                        try:
+                            await agent.stop(task.agent_task)
+                        except Exception:  # noqa: BLE001 — the run's own end comes next look; the guard acts on its pages
+                            logger.warning("guard stop failed task=%s", task.id)
+                        note(task, f"stopped by the guard on {hit[1]} ({hit[0]})")
+                        run = dataclasses.replace(run, status="stopped")
                     if run.status in ("finished", "failed", "stopped"):
                         before = float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0))
                         metrics.on_browser_run(task, run.steps)
@@ -3793,7 +4009,7 @@ async def tick(
                         if (task.details or {}).get("otp_entered") and out.get("problem"):
                             out = {**out, "problem": re.sub(r"\b\d{4,8}\b", "••••", str(out["problem"]))}  # never store a login code
                         retries = int((task.details or {}).get("retries", 0))
-                        if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("browse", "prepare", "otp"):
+                        if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("browse", "prepare", "otp", "check"):
                             # A crash or timeout of the browser run, not an answer from the store: try once more.
                             task.details = {**(task.details or {}), "retries": retries + 1}
                             task.status = "queued"
@@ -3817,13 +4033,23 @@ async def tick(
                                 note(task, "practice check of the order list: " + ("unreadable" if new is None else f"{len(new)} new orders"))
                             except Exception as exc:  # noqa: BLE001 — the agent's own report still stands
                                 logger.warning("practice order-list check failed task=%s: %s", task.id, exc)
-                        task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
-                        if task.phase == "browse":
-                            await _ai_pick(task, task.result, session)
-                            out = task.result
-                        status, message = await _ride_ends_check(task, out) or _outcome(task, out)
-                        status, message = await _check_address(task, out, status, message)
-                        status, message = await _later_step(session, task, status, message)
+                        guarded = _before_confirm_guard(task, run.path or [], out)
+                        if not guarded and task.phase == "check":
+                            # the store's own list: owned and cancelled, or the step's own report goes on as it would have
+                            guarded, out = _after_check(task, out)
+                        if not guarded and _needs_store_check(task, out):
+                            guarded = _start_check(task, then="outcome", why="every run with the family's login is checked", held=out)
+                        if not guarded:  # a check's report is about the store's list, not this task's result
+                            task.result = {**(task.result or {}), **{k: v for k, v in out.items() if v not in (None, "", [])}}
+                        if guarded:
+                            status, message = guarded
+                        else:
+                            if task.phase == "browse":
+                                await _ai_pick(task, task.result, session)
+                                out = task.result
+                            status, message = await _ride_ends_check(task, out) or _outcome(task, out)
+                            status, message = await _check_address(task, out, status, message)
+                            status, message = await _later_step(session, task, status, message)
                         if task.phase == "place" and status == "failed" and (task.details or {}).get("place_unclear") and not practice.on(task):
                             found = await _order_on_store_list(task, agent, host_for(task.family_id) if host_for else None)
                             if found:
@@ -3866,6 +4092,9 @@ async def tick(
                         sandbox.audit(task, phase=task.phase, status="timeout", steps=run.steps, path=run.path, cost=0)
                         task.status = "failed"
                         message = {
+                            "check": (f"Checking {SKILLS[task.service]['label']} took too long, so it is NOT known whether anything was "
+                                      f"{_words(task)[0]} by mistake. Tell them plainly in one short line to look in the app for one made "
+                                      "just now; never say nothing was booked or placed."),
                             "cancel": "Cancel took too long; tell the caregiver.",
                             "place": "Placing took too long and was stopped. It is not clear whether it went through: do not order again; tell the caregiver to check the app.",
                         }.get(task.phase, "The service took too long and the task was stopped; nothing was placed.")

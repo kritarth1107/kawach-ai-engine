@@ -243,3 +243,61 @@ def check_placed(kind: str, report: dict, confirmed_total: float | None) -> Verd
     if kind == "order" and confirmed_total and total and abs(total - confirmed_total) > leeway(confirmed_total):
         v.warn.append(f"placed total ₹{total:.0f} differs from the confirmed ₹{confirmed_total:.0f}: tell the caregiver now")
     return v
+
+
+# ── Nothing is booked or placed before the final confirm (founder 2026-10-12, 21:52 IST) ──
+# A fare look-up on Ola, with the account still logged in, pressed "Confirm & Book" "to make the login appear"; an auto came
+# to his door, the agent's report left the booking out, and he heard "nothing was booked". A run before the confirm is
+# watched on every look at it: on a page that carries the final book / place button it is stopped before it can press it;
+# on a page that only exists once something was placed or booked it is stopped and the store is asked to cancel it. Store
+# data from real runs' page paths (Browser Use steps, 2026-10-08 … 12); a store not mapped yet is covered by the after-order
+# page shapes every store uses (checked on the store before anyone hears "placed").
+BEFORE_CONFIRM = ("browse", "prepare", "otp", "check")
+FINAL_PAGES = {
+    "ola": ("/confirm-ride",),  # "Confirm & Book" (fares show on the main page once they load)
+    "1mg": ("/cart/payment",),  # the place button; the cart run ends at the summary page
+}
+AFTER_PAGES = {
+    "ola": ("/ride-detail", "/cancel-ride"),
+    "uber": ("/go/trip", "/trips/"),
+    "blinkit": ("/payment-status", "/account/orders/track"),
+    "1mg": ("/cart/checkout/success", "/trackorder"),
+    "swiggy": ("/order-details", "/my-account/order-details", "/track-order"),
+    "instamart": ("/order-details", "/my-account/order-details", "/track-order"),
+}
+# Path segments that, on any store, only follow a placed order or a booked ride (whole segments, so a product called
+# "fitness tracker" is not one): a store not mapped yet stops on these and the store is checked.
+AFTER_SEGMENTS = ("success", "order-success", "ordersuccess", "thank-you", "thankyou", "thanks", "order-placed", "placed",
+                  "order-confirmed", "order-confirmation", "booking-confirmed", "booking-confirmation", "order-details",
+                  "order-status", "payment-status", "ride-detail", "trip-details", "track", "track-order", "trackorder",
+                  "tracking", "cancel-ride", "cancel-order")
+
+
+def _path(url: str) -> str:
+    from urllib.parse import urlparse
+
+    return (urlparse(url or "").path or "/").lower().rstrip("/") or "/"
+
+
+def past_confirm(service: str, urls: list[str]) -> tuple[str, str] | None:
+    """Where a run before the confirm went that it must not: ("after", path) on the store's own page that follows a placed
+    order or a booked ride, ("suspect", path) on a page shaped like one (a store not mapped yet: checked on the store),
+    ("final", path) on the page with the final book / place button. None when every page is fine."""
+    paths = [_path(u) for u in urls or [] if u]
+    after = [p for p in paths if any(p.startswith(m) for m in AFTER_PAGES.get(service, ()))]
+    if after:
+        return "after", after[0]
+    suspect = [p for p in paths if any(seg in AFTER_SEGMENTS for seg in p.split("/"))]
+    if suspect:
+        return "suspect", suspect[0]
+    final = [p for p in paths if any(p.startswith(m) for m in FINAL_PAGES.get(service, ()))]
+    return ("final", final[0]) if final else None
+
+
+def ref_in(path: str) -> str | None:
+    """The order or ride id a store puts in its after-order page path (Ola: /ride-detail/CRN11420826289), if any."""
+    segs = [s for s in (path or "").split("/") if s]
+    for s in reversed(segs):
+        if len(s) >= 6 and any(c.isdigit() for c in s) and s.replace("-", "").replace("_", "").isalnum():
+            return s.upper() if s[:3].isalpha() else s
+    return None

@@ -95,7 +95,15 @@ async def test_cancel_before_placing_stops_agent(db, at, sessions):
     await db.refresh(t)
     assert t.status == "running"
     msg = await runtime.request_cancel(db, agent, t, by=ELDER, reason="changed mind")
-    assert msg == "stopped; nothing was placed" and t.status == "cancelled" and agent.stopped
+    # the cart run had the family's login: the store's own list is read before "nothing was placed" (founder 2026-10-12)
+    assert msg.startswith("STOPPED; checking on Swiggy Instamart") and t.phase == "check" and agent.stopped
+    assert "never say nothing was placed" in msg
+    await db.commit()
+    agent.finish_after_polls = 1
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    assert t.status == "cancelled" and agent.runs[-1]["phase"] == "check"
+    assert any("checked on swiggy instamart: nothing" in h_["note"].lower() for h_ in t.history[-2:])
 
 
 async def test_a_self_care_ride_cancel_is_done_on_the_app_and_a_free_one_is_not_asked_again(db, at, sessions):
@@ -460,7 +468,9 @@ async def test_go_ahead_after_the_look_up_browser_closed_starts_a_fresh_one(db, 
     await h.tick()
     await db.refresh(t)
     assert t.status == "running" and agent.runs[-1]["phase"] == "prepare" and agent.runs[-1]["session"] is None
-    assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and "fresh one" in t.history[-2]["note"]
+    # the look-up ran without the family's login; the go-ahead's step opens the family's own browser (founder 2026-10-12)
+    assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and any("opens the family's own" in h_["note"] or "fresh one" in h_["note"]
+                                                                       for h_ in t.history[-3:])
 
 
 async def test_code_for_a_closed_login_page_asks_for_a_new_one_and_is_not_kept(db, at, sessions):

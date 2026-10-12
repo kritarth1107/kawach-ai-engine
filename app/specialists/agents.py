@@ -27,9 +27,19 @@ PHARMACY_RULES = """PHARMACY AGENT RULES
 
 RIDES_AGENT_RULES = """RIDES AGENT RULES
 - Pickup and drop exactly as given. Payment must be Cash. Never book without being told this is the booking step.
+- Outside the booking step, never press Book, Confirm, Request or any button that books, not even to make a login appear.
+  Fares shown as grey placeholders are still loading: wait for them. If the app wants a login it asks by itself.
 - Report each vehicle option with fare and pickup time, and say plainly if surge pricing applies.
 - Cancelling: confirm a cancellation that costs nothing (₹0 / free). If it shows a real charge, do not confirm unless the goal
   says the family agreed to it: report cancel_fee with the amount."""
+
+# Every step before the family's yes (founder 2026-10-12, 21:52 IST: a fare look-up pressed "Confirm & Book" to make a
+# login appear, with the account still logged in). The code guard (app/specialists/guard.past_confirm) stops a run that
+# goes there anyway; this says it first.
+BEFORE_CONFIRM_RULE = ("This step must not book or place anything: never press a book, confirm, request, place-order or pay "
+                       "button, not even to make a login appear or to see a price. Placeholders are still loading: wait. Booking "
+                       "or placing happens only in the step that says so, after the family's yes. If something got booked or "
+                       "placed anyway, say so in problem and report its id; never leave it out.")
 
 
 def ride_end(d: dict, end: str) -> str:
@@ -53,6 +63,20 @@ def cancel_terms(d: dict) -> str:
     return ("If the store asks to confirm a cancellation that costs nothing (no fee, ₹0, free), confirm it and report "
             "cancelled=true. If it shows a charge for cancelling, do NOT confirm: report cancel_fee with the amount in rupees. "
             "If it no longer lets you cancel, report cancelled=false and problem with the store's words.")
+
+
+def check_since(d: dict) -> str:
+    """The time (IST) from which a check looks for a ride or order made by mistake: a few minutes before the run began."""
+    from datetime import datetime, timedelta
+
+    from app.core import clock
+
+    at = (d.get("check") or {}).get("since") or d.get("run_started")
+    try:
+        when = datetime.fromisoformat(str(at)) - timedelta(minutes=5)
+    except ValueError:
+        when = clock.now() - timedelta(minutes=30)
+    return clock.ist(when).strftime("%I:%M %p IST").lstrip("0")
 
 
 @dataclass(frozen=True)
@@ -107,6 +131,12 @@ class Specialist:
             if task.phase == "prepare":
                 return (f"On {label}, find the ride options {what} with cash payment. Do NOT book.{ends} Report the options with fares, "
                         "surge, and whether you are logged in.")
+            if task.phase == "check":
+                return (f"On {label}, check only: do NOT book, request, pay for or cancel anything, and press no button that does. Open "
+                        f"the account's rides (the current ride, or the ride history in the menu) and look for a ride {what} booked "
+                        f"since {check_since(d)} today. Report this_task=true if there is one (also if it was cancelled since), with "
+                        "ride_id, status and amount (the fare) exactly as the app shows them, cancelled (true if it shows cancelled) and "
+                        "made_at; this_task=false if there is none. If the app asks you to log in, stop and report logged_in=false.")
             if task.phase == "place":
                 choice = d.get("choice") or "the option the family confirmed"
                 # a fare that moved after their yes: within the leeway it is booked, above it they are asked (founder 2026-10-12)
@@ -153,6 +183,12 @@ class Specialist:
             return (f"On {label}, first open the cart and remove anything already in it (items left from earlier). Then put exactly "
                     f"these in the cart: {items}.{where} Go to checkout up to the payment step and check that "
                     f"Cash/Pay on Delivery is offered. Do NOT place the order. Report items with prices, total with fees, cod_available, address_used, eta.")
+        if task.phase == "check":
+            return (f"On {label}, check only: do NOT place, pay for or cancel anything, and press no button that does. Open the "
+                    f"account's orders (My Orders) and look for an order placed since {check_since(d)} today with: {items}. Report "
+                    "this_task=true if there is one (also if it was cancelled since), with order_id, status and amount (the total) "
+                    "exactly as the store shows them, cancelled (true if it shows cancelled) and made_at; this_task=false if there is "
+                    "none. If the site asks you to log in, stop and report logged_in=false.")
         if task.phase == "place" and practice.on(task):
             return practice.browser_goal(label, items, d.get("confirmed_total") or (task.result or {}).get("total"), where)
         if task.phase == "place":
@@ -176,11 +212,11 @@ class Specialist:
 
 
 SHOPPING = Specialist("shopping", ("swiggy", "instamart", "zepto", "blinkit", "zomato"), SHOPPING_RULES, "SHOPPING_AGENT_LLM",
-                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30})
+                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 20})
 PHARMACY = Specialist("pharmacy", ("apollo", "1mg", "pharmeasy"), PHARMACY_RULES, "PHARMACY_AGENT_LLM",
-                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30})
+                      {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 20})
 RIDES = Specialist("rides", ("uber", "ola", "rapido"), RIDES_AGENT_RULES, "RIDES_AGENT_LLM",
-                   {"prepare": 45, "otp": 40, "place": 30, "cancel": 30})
+                   {"prepare": 45, "otp": 40, "place": 30, "cancel": 30, "check": 20})
 
 SPECIALISTS = {s.name: s for s in (SHOPPING, PHARMACY, RIDES)}
 

@@ -151,4 +151,16 @@ def schema_for(kind: str, phase: str) -> dict:
             "location_set": {"type": "string", "description": "The delivery location the site shows after setting it"},
             "login_required": {"type": "boolean", "description": "The site would not show this without a login"},
         }
+    if phase == "check":
+        # After a run before the confirm that went where it must not, or was stopped: the store's own list, read only
+        # (founder 2026-10-12: "nothing was booked" was said without looking, and an auto had been booked).
+        idk = "ride_id" if kind == "ride" else "order_id"
+        extra = {
+            "this_task": {"type": "boolean", "description": "True if the account shows such a ride or order made since the time given (also if it was cancelled since)"},
+            idk: {"type": "string"},
+            "status": {"type": "string", "description": "Its status exactly as the app shows it"},
+            "cancelled": {"type": "boolean", "description": "True if the app shows it cancelled"},
+            "amount": {"type": "string", "description": "Its fare or total as the app shows it"},
+            "made_at": {"type": "string", "description": "When it was booked or placed, as the app shows it"},
+        }
     return {"type": "object", "properties": {**base, **extra}, "required": ["logged_in", "needs_otp", "blocked", "problem"]}

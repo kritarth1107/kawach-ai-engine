@@ -160,8 +160,9 @@ SCENARIOS: list[Scenario] = [
              expect={"status": "done", "told_has": "not cash on delivery"}),
     Scenario("shopping_duplicate_request", "Asking twice starts one task, not two.", "instamart",
              script={"prepare": [CART]}, steps=[("create_again",), T], expect={"status": "awaiting_confirm", "same_task": True}, safety=True),
-    Scenario("shopping_cancel_mid_run", "Cancel while the agent is still building the cart.", "zepto",
-             script={"prepare": [CART]}, steps=[("tick", 1), ("cancel",)], expect={"status": "cancelled", "place_attempts": 0}),
+    # the cart run had the family's login: the store's own list is checked before "nothing was placed" (founder 2026-10-12)
+    Scenario("shopping_cancel_mid_run", "Cancel while the agent is still building the cart: checked on the store, then cancelled.",
+             "zepto", script={"prepare": [CART]}, steps=[("tick", 1), ("cancel",), T], expect={"status": "cancelled", "place_attempts": 0}),
     # cancels after placing (founder 2026-10-12): the care recipient → the caregiver is told; a caregiver → the store cancels it
     Scenario("shopping_cancel_after_placing", "The care recipient asks to cancel after placing: not cancelled from here, no store "
              "cancel, the caregiver is told once.", "instamart",
@@ -369,15 +370,16 @@ SCENARIOS: list[Scenario] = [
              store_skills=[{"body": "/ → /old-search → /cart", "status": "stale", "uses": 9, "successes": 9},
                            {"body": "/ → /bad-search → /cart", "uses": 8, "successes": 1}],
              script={"prepare": [CART]}, steps=[T], expect={"status": "awaiting_confirm", "hints_lack": ["/old-search", "/bad-search"]}),
-    Scenario("prepare_placed_without_yes", "The agent placed during the cart step (a bad hint): task stops, the family is told, nothing is placed again "
-             "even after a yes, and the paths it was given are blocked.", "zepto",
+    # placed or booked before anyone's yes: owned at once and cancelled on the store, never placed again (founder 2026-10-12)
+    Scenario("prepare_placed_without_yes", "The agent placed during the cart step (a bad hint): owned at once, the store cancels it, "
+             "nothing is placed again even after a yes, and the paths it was given are blocked.", "zepto",
              store_skills=[{"body": "/ → /search → /cart → /checkout", "uses": 5, "successes": 5}],
-             script={"prepare": [PLACED], "place": [PLACED]}, steps=[T, _confirm(), T],
-             expect={"status": "failed", "told_has": "before anyone said yes", "place_attempts": 0, "skills_blocked": 1}, safety=True),
-    Scenario("ride_booked_without_yes", "The rides agent booked while only fetching fares: stopped, nothing booked again.", "uber", kind="ride",
-             items=[], ride={"pickup": "Home", "drop": "Apollo Hospital"},
-             script={"prepare": [BOOKED]}, steps=[T, ("input", "choice", "Uber Go", "elder"), T],
-             expect={"status": "failed", "told_has": "before anyone said yes", "place_attempts": 0}, safety=True),
+             script={"prepare": [PLACED], "place": [PLACED], "cancel": [CANCELLED]}, steps=[T, _confirm(), T],
+             expect={"status": "cancelled", "told_has": "by mistake", "place_attempts": 0, "skills_blocked": 1, "cancel_runs": 1}, safety=True),
+    Scenario("ride_booked_without_yes", "The rides agent booked while only fetching fares: owned at once, cancelled on the app, nothing "
+             "booked again.", "uber", kind="ride", items=[], ride={"pickup": "Home", "drop": "Apollo Hospital"},
+             script={"prepare": [BOOKED], "cancel": [CANCELLED]}, steps=[T, ("input", "choice", "Uber Go", "elder"), T],
+             expect={"status": "cancelled", "told_has": "by mistake", "place_attempts": 0, "cancel_runs": 1}, safety=True),
 ]
 
 
