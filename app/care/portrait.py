@@ -77,6 +77,36 @@ async def _activities(session: AsyncSession, family_id: str, subject_id: str) ->
     return await activities.status(session, family_id, subject_id)
 
 
+GAPS = ("medicine", "allergy", "condition", "blood_group", "emergency_contact", "doctor", "hospital", "address", "routine",
+        "weight", "enjoys", "language")
+
+
+async def _gaps(session: AsyncSession, family_id: str, subject_id: str, active: list[CareFact], others: int) -> dict:
+    """What Saheli does not know yet about them, in order of how much it helps (the dashboard asks for the missing ones).
+    A "has none" answer counts as known."""
+    domains = {f.domain for f in active}
+    keys = {f.key for f in active}
+    weighed = (await session.execute(select(func.count()).select_from(CareEvent).where(
+        CareEvent.family_id == family_id, CareEvent.subject_id == subject_id, CareEvent.kind == "vital",
+        CareEvent.at >= clock.now() - timedelta(days=45), CareEvent.payload["kind"].astext == "weight"))).scalar_one()
+    known = {
+        "medicine": "medicine" in domains,
+        "allergy": "allergy" in domains,
+        "condition": "condition" in domains,
+        "blood_group": "profile:blood_group" in keys,
+        "emergency_contact": others > 0 or any(f.domain in ("contact", "family") and _value_text(f.value, "phone") for f in active),
+        "doctor": "doctor" in domains,
+        "hospital": "hospital" in domains,
+        "address": any(f.domain == "home" and _value_text(f.value, "address") for f in active),
+        "routine": bool(domains & {"routine", "activity"}),
+        "weight": weighed > 0,
+        "enjoys": bool(domains & {"preference", "dish", "occasion"}),
+        "language": "language" in domains,
+    }
+    items = [{"key": k, "known": known[k]} for k in GAPS]
+    return {"known": sum(known.values()), "total": len(GAPS), "items": items}
+
+
 async def week_doses(session: AsyncSession, family_id: str, subject_id: str, days: int = 7) -> list[dict]:
     from app.api.dash import _day_doses  # the one dose list Home and the Day page show
 
@@ -183,5 +213,6 @@ async def build(session: AsyncSession, family_id: str, subject_id: str, *, names
         "avoid": avoid[:6],
         "week": await week_doses(session, family_id, subject_id),
         "activities": await _activities(session, family_id, subject_id),
+        "gaps": await _gaps(session, family_id, subject_id, active, sum(1 for m in members if m.get("id") and m.get("id") != subject_id)),
         "knownSince": first_turn.isoformat() if first_turn else None,
     }

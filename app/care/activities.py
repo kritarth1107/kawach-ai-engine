@@ -363,7 +363,7 @@ async def adopt(session: AsyncSession, host, family_id: str, subject_id: str) ->
     lines = "\n".join(f"- {f.text} | {_json.dumps(f.value, ensure_ascii=False)}" for f in facts)
     try:
         reply = await router.complete("extract", system_stable=ADOPT_PROMPT.format(catalog=catalog_line()),
-                                      messages=[{"role": "user", "content": [{"type": "text", "text": lines}]}], max_tokens=1500, effort="low")
+                                      messages=[{"role": "user", "content": [{"type": "text", "text": lines}]}], max_tokens=3000, effort="low")
     except Exception:  # noqa: BLE001
         return []
     m = _re.search(r"\{.*\}", reply.text or "", _re.S)

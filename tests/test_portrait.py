@@ -103,3 +103,21 @@ async def test_words_the_re_read_heard_are_marked_heard_and_a_link_to_a_person_r
     rows = links.by_from(await links.links_for(db, FAM, ELDER["id"]))[w.fact.key]
     shown = links_json(rows, {SON["id"]: "Rohit"})
     assert shown and "Rohit" in shown[0]["text"] and SON["id"] not in shown[0]["text"]
+
+
+async def test_gaps_list_what_saheli_does_not_know_yet_and_a_none_answer_counts(db, at):
+    """Home asks for the missing pieces (founder 2026-10-13: "if some data are missing, motivate them to fill")."""
+    at("2026-10-13 10:00")
+    me = {"id": "self-g", "name": "Arjun", "role": "primary caregiver"}
+    await store.save_roster(db, "fam-gaps", me, [me])
+    host = SimHost()
+    c = tools.TurnCtx(session=db, host=host, family_id="fam-gaps", elder=me, speaker=me, members=[me])
+    g = (await portrait.build(db, "fam-gaps", me["id"]))["gaps"]
+    assert g["known"] == 0 and g["total"] == len(portrait.GAPS) and not any(i["known"] for i in g["items"])
+    await tools.run(c, "remember", {"domain": "medicine", "name": "none", "details": {"none": True}, "sentence": "Takes no regular medicines"})
+    await tools.run(c, "remember", {"domain": "profile", "name": "blood_group", "details": {"blood_group": "A+"}, "sentence": "Blood group A+"})
+    await tools.run(c, "log_vital", {"kind": "weight", "value": "73.5", "unit": "kg"})
+    await tools.run(c, "activity", {"action": "add", "type": "gym", "start": "20:00"})
+    g = (await portrait.build(db, "fam-gaps", me["id"]))["gaps"]
+    known = {i["key"] for i in g["items"] if i["known"]}
+    assert known == {"medicine", "blood_group", "weight", "routine"} and g["known"] == 4

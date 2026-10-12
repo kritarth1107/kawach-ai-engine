@@ -100,8 +100,8 @@ async def test_readings_kept_only_in_notes_are_recovered_once(db, at, monkeypatc
     await tools.run(ctx(db, host), "log_vital", {"kind": "weight", "value": "73.5", "unit": "kg", "taken_on": "2026-10-11"})
     use(monkeypatch, {"readings": [
         {"kind": "weight", "value": "73.5", "unit": "kg", "taken_on": "2026-10-11"},
-        {"kind": "bmi", "value": "25.4", "taken_on": "2026-10-11"},
-        {"kind": "body_fat", "value": "23.2", "unit": "%", "taken_on": "2026-10-11"},
+        {"kind": "BMI", "value": "25.4", "taken_on": "2026-10-11"},  # live: the model wrote its own labels
+        {"kind": "body fat", "value": "23.2", "unit": "%", "taken_on": "2026-10-11"},
     ]})
     try:
         listed = await readings.recover(db, FAM, ME["id"], apply=False)

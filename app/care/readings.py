@@ -49,7 +49,7 @@ async def _seen(session: AsyncSession, family_id: str, subject_id: str, r: dict,
 
 async def save(session: AsyncSession, host, family_id: str, subject_id: str, r: dict, *, source: str) -> bool:
     """Log one reading (engine ledger + backend Health Records) unless it is already there. host None: the live backend."""
-    kind = str(r.get("kind") or "")
+    kind = str(r.get("kind") or "").strip().lower().replace(" ", "_")  # the model's own label, tidied
     if kind not in KINDS or _num(r.get("value")) is None or (kind == "other" and not str(r.get("name") or "").strip()):
         return False
     at = clock.now()
@@ -84,11 +84,17 @@ async def save(session: AsyncSession, host, family_id: str, subject_id: str, r: 
 
 
 RECOVER_PROMPT = """You find measurements of a person's body that were kept only as words, so they can go to their health
-records. Below are what is saved about them (facts and notes, each with the day it was written) and the readings already
-in their records. List every measurement that is NOT already in the readings: weight, height, BMI, body fat, muscle mass,
-waist, BP, sugar, pulse, SpO2, temperature, or other with its name (e.g. visceral fat). Height in cm (5 ft 3 in is 160
-cm; "5.3ft" means 5 ft 3 in). taken_on is the day it was measured if said, else the day it was written. Only what is
-written there; nothing guessed. JSON only:
+records. Below are what is saved about them (facts with the day each was told, and notes) and the readings already in their
+records. List every body measurement that is NOT already in the readings and that the person or family told or measured
+themselves (a scale, BP monitor, glucometer, thermometer, an InBody or body-composition scan). Skip lab test results and
+anything read from a lab report, prescription or document: those are in the records already. kind is exactly one of: weight,
+height, bmi, body_fat, muscle_mass, waist, bp, sugar, pulse, spo2, temperature. Height in cm (5 ft 3 in is 160 cm; "5.3ft"
+means 5 ft 3 in).
+When it was measured matters (a reading dated wrongly misleads the family):
+- A fact: taken_on is the day it was told, unless it names another day.
+- A note: only values on a dated line ("- 2026-10-11: InBody scan ...") or with a date written next to them; taken_on is that
+  date. Skip values in a summary, profile or copied document with no date of their own (they may be years old).
+Only what is written there; nothing guessed. JSON only:
 {"readings": [{"kind": "weight", "name": null, "value": "73.5", "unit": "kg", "taken_on": "YYYY-MM-DD"}]}"""
 
 
@@ -104,7 +110,7 @@ async def recover(session: AsyncSession, family_id: str, subject_id: str, *, app
     if not saved.strip():
         return []
     readings = "\n".join(f"[{clock.ist(a).date()}] {s}" for a, s in have) or "(none)"
-    reply = await router.complete("extract", system_stable=RECOVER_PROMPT, max_tokens=1500, effort="low",
+    reply = await router.complete("extract", system_stable=RECOVER_PROMPT, max_tokens=4000, effort="low",  # thinking counts
                                   messages=[{"role": "user", "content": [{"type": "text", "text": f"SAVED\n{saved}\n\nREADINGS ALREADY IN THEIR RECORDS\n{readings}"}]}])
     m = re.search(r"\{.*\}", reply.text or "", re.S)
     try:
@@ -113,9 +119,12 @@ async def recover(session: AsyncSession, family_id: str, subject_id: str, *, app
         return []
     out = []
     for r in found[:20]:
+        r = {**r, "kind": str(r.get("kind") or "").strip().lower().replace(" ", "_")}
+        if r["kind"] == "other":
+            continue  # named lab values belong to reports, which Health Records already shows
         if apply:
             if await save(session, host, family_id, subject_id, r, source="saved notes"):
                 out.append(r)
-        elif str(r.get("kind")) in KINDS and _num(r.get("value")) is not None:
+        elif r["kind"] in KINDS and _num(r.get("value")) is not None:
             out.append(r)
     return out
