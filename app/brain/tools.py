@@ -836,7 +836,10 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     dup = guards.duplicate_message(text, sent, near=0.9 if task_update else 0.6)
     if dup:
         problems.append(f"you already sent them this today and they have not answered yet: \"{dup[:120]}\". Do not send it again")
-    last_out = next((t for t in reversed(recent) if t.role == "assistant"), None)
+    # Only Saheli's own unanswered nudge asks for patience: an order's update or follow-up answers their order (live
+    # 2026-10-12: a 08:30 "has it come?" held back Maa's 10:30 check-in).
+    last_out = next((t for t in reversed(recent) if t.role == "assistant"
+                     and not str((t.meta or {}).get("ref") or (t.meta or {}).get("fallback_delivery") or "").startswith("task:")), None)
     answered = last_out is not None and any(t.role == "user" and t.at > last_out.at for t in recent)
     if ctx.is_system and not task_update and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
@@ -2604,27 +2607,37 @@ async def sing(ctx: TurnCtx, a: dict) -> dict:
     "language_preference",
     "The language, dialect and script Saheli uses with a person. Use when someone tells you how they or their parent "
     "speak ('Maa Marwari bolti hain', 'Papa ko Maithili mein bolo', 'amma speaks Tamil', 'English letters mein likho', "
-    "'Hindi mein likho'), or when a person clearly writes in a dialect that is not saved yet. language: hi, en, bn, mr, "
-    "ta, te, gu, kn, ml, pa, or, as, ur, ne, kok (or the name). dialect: Marwari, Mewari, Shekhawati, Haryanvi, Bhojpuri, "
+    "'Hindi mein likho'), or when a person clearly writes in a dialect that is not saved yet. about: whose setting it is "
+    "(the speaker's own id for 'talk to me in…', the care recipient's id for 'Maa ko … mein bolo'). language: hi, en, bn, "
+    "mr, ta, te, gu, kn, ml, pa, or, as, ur, ne, kok (or the name); a language named without a dialect means it as usually "
+    "spoken, so 'Hindi mein baat karo' clears an old dialect. dialect: Marwari, Mewari, Shekhawati, Haryanvi, Bhojpuri, "
     "Maithili, Magahi, Angika, Awadhi, Bundeli, Bagheli, Chhattisgarhi, Braj, Malvi, Nimadi, Garhwali, Kumaoni, Pahari, "
     "Dogri, Sadri, Varhadi, Malvani, Ahirani, Tulu, Kodava, Sylheti, Sambalpuri, Kathiawadi, or 'none'. script: 'native' "
-    "(the language's own script, the default) or 'roman' (only if they ask for English/Roman letters). Leave everything "
-    "out to read the current setting. Voice notes follow it too.",
-    {"language": {"type": "string"}, "dialect": {"type": "string"}, "script": {"type": "string", "enum": ["native", "roman"]}, "about": ABOUT},
-    [],
+    "(the language's own script, the default) or 'roman' (only if they ask for English/Roman letters); to change only the "
+    "script, give only script. Leave language, dialect and script out to read the current setting. Voice notes follow it "
+    "too.",
+    {"language": {"type": "string"}, "dialect": {"type": "string"}, "script": {"type": "string", "enum": ["native", "roman"]},
+     "mix": {"type": "string", "enum": ["light", "full"],
+             "description": "With a dialect: light = mostly the main language with a few dialect words ('thodi Marwari wali Hindi', "
+                            "'Hindi with a slight Marwari touch'); full = the dialect itself (the default)"},
+     "about": {"type": "string", "description": "Whose setting: a person id from HOUSEHOLD (the speaker's own id when they mean themselves)"}},
+    ["about"],
 )
 async def language_preference(ctx: TurnCtx, a: dict) -> dict:
     from app.care import language
 
     if ctx.is_system:
         raise ToolRefused("Only the family sets how Saheli speaks.")
+    if not str(a.get("about") or "").strip() and any(a.get(k) for k in ("language", "dialect", "script", "mix")):
+        # whose setting is never assumed (live 2026-10-12: a caregiver's own wish must not change the elder's setting)
+        raise ToolRefused("Say whose setting it is: about = the speaker's own id when they mean themselves, else that person's id.")
     subject = ctx.subject(a.get("about"))
     if not ctx.is_caregiver and (not ctx.speaker_is_elder or subject != ctx.elder_id):
         raise ToolRefused("You can choose this for yourself only; a caregiver can set it for others.")
     facts = await store.facts(ctx.session, ctx.family_id, subject)
     current = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
     now = language.normalise(current.value if current else {})
-    if not any(a.get(k) for k in ("language", "dialect", "script")):
+    if not any(a.get(k) for k in ("language", "dialect", "script", "mix")):
         return {**now, "label": language.label(now)}
     new = language.merge(now, a)
     if not new.get("language"):

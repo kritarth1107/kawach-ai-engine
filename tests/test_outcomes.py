@@ -152,7 +152,9 @@ async def test_elder_sets_only_her_own_language(db, at):
     at("2026-10-02 10:00")
     _, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "ta", "about": CG})
     assert err
-    out, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "Tamil"})
+    _, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "Tamil"})
+    assert err, "whose setting is always said"
+    out, err = await tools.run(ctx(db, speaker=E), "language_preference", {"language": "Tamil", "about": ELDER})
     assert not err and '"ta"' in out
     _, err = await tools.run(ctx(db), "language_preference", {"language": "Klingon", "about": ELDER})
     assert err

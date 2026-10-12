@@ -164,6 +164,17 @@ async def in_their_words(sessions: async_sessionmaker, family_id: str, person: s
         return text
 
 
+async def saved_language_line(session, family_id: str, person: str | None) -> str:
+    """For a message to one person that Saheli starts herself: write it in their saved language setting."""
+    if not person:
+        return ""
+    from app.care import language
+
+    row = next((f for f in await store.facts(session, family_id, person, domains=["language"]) if f.status == "active"), None)
+    line = language.write_in(row.value) if row else ""
+    return f"\n\n{line}" if line else ""
+
+
 async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None,
                       still_true=None) -> None:
     """Let the brain act on something that happened without a person writing (a due loop, a task update).
@@ -182,6 +193,7 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
     wrote after the update was written, and was answered, may the brain decide on the retry that they already heard it."""
     async with sessions() as session:
         roster = await store.roster(session, family_id)
+        speak = await saved_language_line(session, family_id, deliver_to) if roster else ""
     if not roster:
         logger.warning("system turn skipped, no roster family=%s", family_id)
         return
@@ -218,7 +230,7 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
             logger.exception("task update turn failed family=%s ref=%s", family_id, ref_)  # the news still goes below
             return None
 
-    result = await turn(prompt, ref)
+    result = await turn(prompt + speak, ref)
     if result is not None and (result.stale or result.duplicate):
         return
     text = (result.reply or "").strip() if result else ""
@@ -234,7 +246,7 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
                  if soft else
                  f"Person {deliver_to} has NOT heard this. Write the message for them now, in their language, as your final reply "
                  "(only the message, no notes).")
-        retry = await turn(f"{prompt}\n\nYour last turn on this update sent NOTHING, so person {deliver_to} heard nothing from it. {again}",
+        retry = await turn(f"{prompt}{speak}\n\nYour last turn on this update sent NOTHING, so person {deliver_to} heard nothing from it. {again}",
                            f"{ref}:again")
         if retry is not None and retry.stale:
             return
@@ -339,6 +351,8 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
             kind = loop.kind
+            if prompt is not None and loop.owner_id:
+                prompt += await saved_language_line(session, family_id, loop.owner_id)  # the one person it is for
             if prompt is None:
                 loop.status, loop.closed_note, loop.updated_at = "done", "nothing left to ask", clock.now()
                 await session.commit()

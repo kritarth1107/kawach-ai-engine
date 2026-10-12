@@ -106,10 +106,12 @@ async def next_send_at(session: AsyncSession, family_id: str, person: str, situa
 
 
 async def quiet_reason(session: AsyncSession, family_id: str, person: str, situation: str) -> str | None:
-    """Why Saheli should not start a non-urgent conversation with this person now, or None."""
+    """Why Saheli should not start a non-urgent conversation with this person now, or None. Only conversations Saheli
+    started on her own count (check-ins, follow-ups): updates on an order or ride they asked for answer them (live
+    2026-10-12: eleven ride and order updates in the night used up his limit of four, so no check-in could go all day)."""
     if situation not in TIMED:
         return None
-    rows = await _person_rows(session, family_id, person, days=28)
+    rows = [r for r in await _person_rows(session, family_id, person, days=28) if r.situation in TIMED]
     from app.care.models import Turn
 
     last_user = (await session.execute(

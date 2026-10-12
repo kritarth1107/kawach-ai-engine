@@ -68,6 +68,8 @@ def tag(*, text: str, role: str, tools: list[str], prompt: str = "") -> str:
     used = set(tools or [])
     if role == "system":
         p = prompt or t
+        if p.lstrip().startswith(("[Order follow-up]", "[Order feedback]", "[Order needs you]")):
+            return "order"  # about an order they asked for: not one of Saheli's own conversation starters
         for key, words in (("followup", "follow-up"), ("checkin", "check-in"), ("appointment", "appointment"), ("refill", "refill"),
                            ("order", "task update"), ("followup", "wake-up")):
             if words in p.lower():

@@ -110,13 +110,16 @@ def normalise(value: dict | None) -> dict:
             out["language"] = lang
     if v.get("script") in ("roman", "native"):
         out["script"] = v["script"]
+    if out.get("dialect") and v.get("mix") == "light":
+        out["mix"] = "light"  # mostly the base language with a touch of the dialect ("thodi Marwari wali Hindi")
     return out
 
 
 def merge(current: dict | None, asked: dict | None) -> dict:
-    """What was said ('Tamil', 'Marwari', 'Roman letters') on top of what is saved. A new language without a dialect
-    drops the old dialect (Marwari is a way of speaking Hindi, not Tamil); 'none' / 'standard' clears it; the script
-    choice stays unless they change it."""
+    """What was said ('Tamil', 'Marwari', 'Roman letters') on top of what is saved. A language named without a dialect
+    means that language as it is usually spoken: the old dialect goes, also for the same language (live 2026-10-12: "talk
+    to Mummy in Hindi" kept her Marwari, and her next message came in Marwari). 'none' / 'standard' clears it too. A
+    change of script only keeps the language and the dialect."""
     now = normalise(current)
     a = asked or {}
     said = normalise({"language": a.get("language")}) if a.get("language") else {}
@@ -128,9 +131,23 @@ def merge(current: dict | None, asked: dict | None) -> dict:
         out["dialect"] = a["dialect"]
     elif said.get("dialect"):
         out["dialect"] = said["dialect"]
-    elif not clear and (not said.get("language") or said["language"] == now.get("language")):
-        out["dialect"] = now.get("dialect")
+    elif not clear and not said:
+        out["dialect"] = now.get("dialect")  # only the script (or how much of the dialect) changed
+    # how much of the dialect: as asked; a new dialect without it is the dialect itself; otherwise it stays
+    if a.get("mix") in ("light", "full"):
+        out["mix"] = a["mix"]
+    elif not (a.get("dialect") or said.get("dialect")) and out.get("dialect") == now.get("dialect"):
+        out["mix"] = now.get("mix")
     return normalise(out)
+
+
+def write_in(speech: dict | None) -> str:
+    """The line for a message Saheli starts herself: the person's saved setting decides, not the language of an older chat
+    (live 2026-10-12: a follow-up came in the dialect of a chat from the night before, against her saved setting)."""
+    s = normalise(speech)
+    if not s.get("language"):
+        return ""
+    return f"Write it in {label(s)}: their saved setting (not the language of an older chat)."
 
 
 def script_for(speech: dict | None) -> str | None:
@@ -145,7 +162,10 @@ def script_for(speech: dict | None) -> str | None:
 def label(speech: dict | None) -> str:
     """'Marwari (मारवाड़ी, Hindi family)' or 'Tamil (தமிழ்)'."""
     s = speech or {}
-    if s.get("dialect") in DIALECTS:
+    if s.get("dialect") in DIALECTS and s.get("mix") == "light":
+        name, native, base, _ = DIALECTS[s["dialect"]]
+        out = f"{LANGUAGES[base][0]} with a light {name} touch ({native})"
+    elif s.get("dialect") in DIALECTS:
         name, native, base, _ = DIALECTS[s["dialect"]]
         out = f"{name} ({native}, {LANGUAGES[base][0]} family)"
     elif s.get("language") in LANGUAGES:

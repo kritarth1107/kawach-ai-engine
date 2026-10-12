@@ -185,7 +185,11 @@ def describe(p: dict | None) -> str:
     saved = p.get("saved") or {}
     t = target(p)
     dialect = ""
-    if saved.get("dialect"):
+    if saved.get("dialect") and saved.get("mix") == "light":
+        hello = language.greeting(saved)
+        dialect = (f"; speaks {language.label(saved)}: write the plain main language with only a few of the dialect's words and "
+                   "greetings, never full dialect" + (f" (greeting like '{hello}')" if hello else ""))
+    elif saved.get("dialect"):
         hello = language.greeting(saved)
         dialect = (f"; speaks {language.label(saved)}: talk to them in that dialect the way people at home speak it"
                    + (f" (greeting like '{hello}')" if hello else ""))

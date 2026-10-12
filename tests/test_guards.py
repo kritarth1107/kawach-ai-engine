@@ -95,7 +95,19 @@ def test_urdu_script_and_language_merge():
     assert language.merge({"language": "hi", "dialect": "mwr", "script": "roman"}, {"script": "native"}) == {"language": "hi", "dialect": "mwr", "script": "native"}
     assert language.merge({"language": "hi", "dialect": "bho"}, {"language": "marwari"}) == {"language": "hi", "dialect": "mwr"}
     assert language.merge({"language": "hi", "dialect": "mwr"}, {"dialect": "none"}) == {"language": "hi"}
-    assert language.merge({"language": "hi", "dialect": "mwr"}, {"language": "hindi"}) == {"language": "hi", "dialect": "mwr"}
+    # "Hindi mein baat karo" is plain Hindi: the old dialect goes (live 2026-10-12: it stayed)
+    assert language.merge({"language": "hi", "dialect": "mwr"}, {"language": "hindi"}) == {"language": "hi"}
+    # a light touch of a dialect ("thodi Marwari wali Hindi"): saved, labelled, kept when only the script changes
+    light = language.merge({"language": "hi"}, {"language": "hi", "dialect": "Marwari", "mix": "light"})
+    assert light == {"language": "hi", "dialect": "mwr", "mix": "light"}
+    assert language.label(light) == "Hindi with a light Marwari touch (मारवाड़ी)"
+    assert language.merge(light, {"script": "roman"}) == {**light, "script": "roman"}
+    assert language.merge(light, {"dialect": "Bhojpuri"}) == {"language": "hi", "dialect": "bho"}, "a new dialect is the dialect itself"
+    assert language.merge(light, {"mix": "full"}) == {"language": "hi", "dialect": "mwr"}
+    assert language.normalise({"language": "hi", "mix": "light"}) == {"language": "hi"}, "a light touch needs a dialect"
+    assert "never full dialect" in g.describe({"script": "devanagari", "saved": light})
+    assert language.write_in(light) == "Write it in Hindi with a light Marwari touch (मारवाड़ी): their saved setting (not the language of an older chat)."
+    assert language.write_in({}) == ""
 
 
 def test_repeats_and_openers():
