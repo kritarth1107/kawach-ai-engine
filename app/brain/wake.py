@@ -336,8 +336,15 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
             text, sent = (retry.reply or "").strip(), _sent_to(retry, deliver_to)
     delivered = "brain" if sent else ""
     if not delivered and deliver_to in known and not _silent(text):
+        night = False
+        if not must:
+            async with sessions() as session:
+                night, _ = await quiet_for(session, family_id, deliver_to)
         if any(w in text for w in ("task_input", "task_id", "[Task", "[task ", "send_message")):
             logger.error("system turn reply not delivered (reads like notes) family=%s ref=%s", family_id, ref)
+        elif night:
+            # send_message refuses at their night; its final reply must not slip out by this side door (2026-10-14)
+            logger.warning("system turn reply held: their night family=%s ref=%s", family_id, ref)
         elif await _send(sessions, host, roster, family_id, deliver_to, text, ref):
             delivered = "reply"
     if must and not delivered and not soft and update is not None:

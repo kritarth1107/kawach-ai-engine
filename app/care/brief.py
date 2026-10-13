@@ -84,10 +84,13 @@ async def brief_time(session: AsyncSession, family_id: str, caregiver: str, elde
     if chosen:
         return chosen
     at = await default_time(session, family_id, elder)
-    from app.brain.wake import _inside, own_night
+    from app.brain.wake import QUIET_END, QUIET_START, _inside, own_night
 
-    night = await own_night(session, family_id, caregiver)
-    if not night or not _inside(at.hour * 60 + at.minute, night):
+    # Their own night, or the default quiet hours when Saheli doesn't know it: the same night send_message refuses to write
+    # in (live 2026-10-13: a caregiver with no sleep time got the 22:00 default, her brief was refused as night, and the
+    # raw data went out instead).
+    night = await own_night(session, family_id, caregiver) or (QUIET_START * 60, QUIET_END * 60)
+    if not _inside(at.hour * 60 + at.minute, night):
         return at
     before = night[0] - 30
     if 18 * 60 <= before < 24 * 60:
@@ -235,17 +238,26 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
 
     now = now or clock.now()
     fid, cg = roster.family_id, caregiver["id"]
+    if cg == (roster.elder or {}).get("id") or cg not in {m["id"] for m in caregivers(roster)}:
+        # The brief is about the person cared for and goes only to their caregivers, never to them.
+        logger.error("brief refused: not a caregiver family=%s to=%s", fid, cg)
+        return "empty"
+    name = roster.elder.get("name") or "them"
+
+    async def wait_for_them(session: AsyncSession, text: str, why: str) -> None:
+        await store.open_loop(session, family_id=fid, subject_id=cg, kind="brief", owner_id=cg,
+                              title=f"Daily brief about {name} for {day}: goes to {caregiver.get('name') or 'the caregiver'} when they next write on WhatsApp",
+                              detail={"day": day, "text": text[:6000], "max_wakes": 0}, alert_rule="dashboard",
+                              dedupe_key=f"brief:{cg}:{day}")
+        await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
+                                 summary=f"Daily brief for {day} waiting for {caregiver.get('name') or cg} ({why})",
+                                 payload={"to": cg, "day": day, "waiting": True, "why": why})
+
     async with sessions() as session:
         text = await digest(session, host, fid, roster.elder, day, now=now)
         open_now = on_request or await chat_open(host, session, fid, cg, now)
         if not open_now:
-            name = roster.elder.get("name") or "them"
-            await store.open_loop(session, family_id=fid, subject_id=cg, kind="brief", owner_id=cg,
-                                  title=f"Daily brief about {name} for {day}: goes to {caregiver.get('name') or 'the caregiver'} when they next write on WhatsApp",
-                                  detail={"day": day, "text": text[:6000], "max_wakes": 0}, alert_rule="dashboard",
-                                  dedupe_key=f"brief:{cg}:{day}")
-            await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
-                                     summary=f"Daily brief for {day} waiting for {caregiver.get('name') or cg}", payload={"to": cg, "day": day, "waiting": True})
+            await wait_for_them(session, text, "chat closed")
             await session.commit()
             # the approved "daily summary is ready" template tells them now; their tap opens the chat and the brief goes
             saved = (await language_setting(session, fid, cg)) or {}
@@ -256,24 +268,32 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
             except Exception:  # noqa: BLE001 — the brief still waits for their next message
                 logger.warning("brief template failed family=%s", fid)
             return "waiting"
-        await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
-                                 summary=f"Daily brief for {day} to {caregiver.get('name') or cg}", payload={"to": cg, "day": day})
-        await session.commit()
     ref = f"brief:{cg}:{day}" + (f":{now.strftime('%H%M')}" if on_request else "")
-    started = clock.now()
-    await system_turn(sessions, host, fid, prompt_for(caregiver, roster.elder, day, text), ref, deliver_to=cg)
+    from app.brain.wake import quiet_for
+
+    for attempt in range(2):
+        started = clock.now()
+        prompt = prompt_for(caregiver, roster.elder, day, text)
+        if attempt:
+            prompt = "(Your last try sent nothing: write the brief now with send_message, in plain words.)\n" + prompt
+        await system_turn(sessions, host, fid, prompt, ref, deliver_to=cg)
+        async with sessions() as session:
+            if await checkins.went_out(session, fid, cg, ref, started - timedelta(seconds=5)):
+                await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
+                                         summary=f"Daily brief for {day} to {caregiver.get('name') or cg}", payload={"to": cg, "day": day})
+                await session.commit()
+                return "sent"
+            night, _ = await quiet_for(session, fid, cg)
+        if night and not on_request:
+            break  # it is their night: the brief waits for their next message rather than waking them
+    # She sent nothing (their night, or the writer failed twice). The brief waits for their next message and stays on the
+    # dashboard. The raw data block is never sent: it is written for the writer, not for a person (live 2026-10-13).
     async with sessions() as session:
-        if await checkins.went_out(session, fid, cg, ref, started - timedelta(seconds=5)):
-            return "sent"
-    # she sent nothing: the digest itself goes, so a brief is never lost
-    res = await host.call("send_whatsapp", {"to": cg, "text": f"Daily brief: {roster.elder.get('name') or ''}\n\n{text}"[:3900],
-                                            "kind": "brief", "ref": f"{ref}:plain"},
-                          family_id=fid.removeprefix("shadow:"), subject_id=roster.elder["id"], actor_id=roster.elder["id"])
-    async with sessions() as session:
-        await store.add_turn(session, family_id=fid, thread_id=cg, role="assistant", text=f"Daily brief ({day})",
-                             meta={"proactive": True, "delivered": (res or {}).get("delivered"), "ref": f"{ref}:plain"})
+        await wait_for_them(session, text, "their night" if night else "not written")
         await session.commit()
-    return "sent"
+    if not night:
+        logger.error("daily brief not written family=%s to=%s day=%s", fid, cg, day)
+    return "waiting"
 
 
 def caregivers(roster) -> list[dict]:

@@ -57,7 +57,10 @@ async def test_the_default_time_is_after_the_care_recipients_bedtime(db, at):
     await _family(db)
     assert (await brief.default_time(db, FAM, MAA["id"])).strftime("%H:%M") == "22:00", "no bedtime saved"
     await _sleep(db, {"time": "21:30"})
-    assert (await brief.brief_time(db, FAM, SON["id"], MAA["id"])).strftime("%H:%M") == "22:00"
+    assert (await brief.default_time(db, FAM, MAA["id"])).strftime("%H:%M") == "22:00"
+    # a caregiver whose night Saheli doesn't know: the default quiet hours (21:00-08:00) count, so the brief goes before
+    # them instead of being refused as night (live 2026-10-13)
+    assert (await brief.brief_time(db, FAM, SON["id"], MAA["id"])).strftime("%H:%M") == "20:30"
     await _sleep(db, {"times": ["23:30", "00:30"]})
     assert (await brief.default_time(db, FAM, MAA["id"])).strftime("%H:%M") == "23:45", "never past midnight by default"
     await _sleep(db, {"time": "01:00"})
@@ -100,9 +103,9 @@ async def test_the_brief_holds_the_whole_day_as_data(db, at):
 
 
 async def test_each_caregiver_gets_it_once_and_a_closed_window_keeps_it_waiting(db, at, sessions, monkeypatch):
-    now = at("2026-10-12 22:31")
+    now = at("2026-10-12 20:01")
     await _family(db, (MAA, SON, NIECE, DOC))
-    await _sleep(db, {"time": "22:00"})
+    await _sleep(db, {"time": "19:30"})
     await _wrote(db, SON["id"], now - timedelta(hours=3))  # inside WhatsApp's window; the niece last wrote two days ago
     await _wrote(db, NIECE["id"], now - timedelta(days=2))
     sent: list[tuple[str, str]] = []
@@ -131,21 +134,85 @@ async def test_each_caregiver_gets_it_once_and_a_closed_window_keeps_it_waiting(
     assert "DAILY BRIEF IS WAITING" not in (await loop.turn_context(db, elder_req))[0]
 
 
-async def test_if_saheli_sends_nothing_the_data_itself_goes(db, at, sessions, monkeypatch):
+async def test_if_saheli_sends_nothing_the_raw_data_never_goes(db, at, sessions, monkeypatch):
+    """Live 2026-10-13: the writer's message was refused and the raw data block went out as the brief. It is written for
+    the writer, never for a person: she is asked once more, then the brief waits for their next message."""
+    now = at("2026-10-12 20:31")
+    await _family(db)
+    await _wrote(db, SON["id"], now - timedelta(hours=1))
+    from app.brain import wake
+
+    tries: list[str] = []
+
+    async def silent(sessions_, host, family_id, prompt, ref, deliver_to=None, still_true=None):
+        tries.append(prompt[:60])
+
+    monkeypatch.setattr(wake, "system_turn", silent)
+    host = Host()
+    roster = await store.roster(db, FAM)
+    assert await brief.send(sessions, host, roster, SON, "2026-10-12", now=now) == "waiting"
+    assert len(tries) == 2 and tries[1].startswith("(Your last try sent nothing")
+    assert not [args for tool, args in host.calls if tool == "send_whatsapp"], "no raw data on WhatsApp"
+    waiting = await brief.waiting_for(db, FAM, SON["id"])
+    assert len(waiting) == 1 and "DAY: 2026-10-12" in waiting[0].detail["text"]
+    assert await brief.sent_already(db, FAM, SON["id"], "2026-10-12"), "not tried again every five minutes"
+
+
+async def test_at_their_night_the_brief_waits_instead_of_waking_them(db, at, sessions, monkeypatch):
     now = at("2026-10-12 22:31")
     await _family(db)
     await _wrote(db, SON["id"], now - timedelta(hours=1))
     from app.brain import wake
 
-    async def silent(*a, **kw):
-        return None
+    tries: list[str] = []
 
-    monkeypatch.setattr(wake, "system_turn", silent)
+    async def refused(sessions_, host, family_id, prompt, ref, deliver_to=None, still_true=None):
+        tries.append(ref)  # send_message refuses at night, so nothing goes out
+
+    monkeypatch.setattr(wake, "system_turn", refused)
     host = Host()
     roster = await store.roster(db, FAM)
-    assert await brief.send(sessions, host, roster, SON, "2026-10-12", now=now) == "sent"
-    plain = [args for tool, args in host.calls if tool == "send_whatsapp"]
-    assert plain and plain[0]["to"] == SON["id"] and "DAY: 2026-10-12" in plain[0]["text"]
+    assert await brief.send(sessions, host, roster, SON, "2026-10-12", now=now) == "waiting"
+    assert len(tries) == 1, "no second try at night"
+    assert not [a for t, a in host.calls if t in ("send_whatsapp", "send_template")]
+    assert len(await brief.waiting_for(db, FAM, SON["id"])) == 1
+
+
+async def test_the_brief_never_goes_to_the_person_it_is_about(db, at, sessions, monkeypatch):
+    now = at("2026-10-12 20:31")
+    await _family(db, (MAA, SON))
+    from app.brain import wake
+
+    called: list[str] = []
+
+    async def turn(sessions_, host, family_id, prompt, ref, deliver_to=None, still_true=None):
+        called.append(deliver_to)
+
+    monkeypatch.setattr(wake, "system_turn", turn)
+    host = Host()
+    roster = await store.roster(db, FAM)
+    assert await brief.send(sessions, host, roster, MAA, "2026-10-12", now=now) == "empty"
+    assert not called and not host.calls
+
+
+async def test_a_brief_time_the_caregiver_chose_is_not_refused_as_night(db, at):
+    from app.brain import tools as brain_tools
+
+    now = at("2026-10-12 21:20")
+    await _family(db)
+    await _wrote(db, SON["id"], now - timedelta(hours=1))
+    host = Host()
+    sys_ctx = brain_tools.TurnCtx(session=db, host=host, family_id=FAM, elder=MAA, speaker={"id": "saheli-scheduler", "name": "Saheli", "role": "system"},
+                                  members=[MAA, SON], message_ref=f"brief:{SON['id']}:2026-10-12")
+    out, _ = await brain_tools.run(sys_ctx, "send_message", {"to": SON["id"], "text": "Here is Babli ji's day: morning tablets taken."})
+    assert "night for them" in out, "without a chosen time 21:20 is inside the default quiet hours"
+    ctx = tools.TurnCtx(session=db, host=host, family_id=FAM, elder=MAA, speaker=SON, members=[MAA, SON])
+    await tools.run(ctx, "daily_brief", {"action": "set", "time": "21:15"})
+    await db.commit()
+    sys_ctx = brain_tools.TurnCtx(session=db, host=host, family_id=FAM, elder=MAA, speaker={"id": "saheli-scheduler", "name": "Saheli", "role": "system"},
+                                  members=[MAA, SON], message_ref=f"brief:{SON['id']}:2026-10-12")
+    out, err = await brain_tools.run(sys_ctx, "send_message", {"to": SON["id"], "text": "Here is Babli ji's day: morning tablets taken."})
+    assert "night for them" not in out, out
 
 
 async def test_a_caregiver_sets_their_own_time_turns_it_off_or_asks_now(db, at):

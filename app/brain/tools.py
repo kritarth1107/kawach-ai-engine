@@ -1095,6 +1095,11 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
         night, morning = await quiet_for(ctx.session, ctx.family_id, to)
         if night and await _no_answer_alert_loop(ctx):
             night = False  # founder: only a no-answer alert may go out at night (wake_due lets those loops run)
+        if night and str(ctx.message_ref or "").startswith(f"brief:{to}:"):
+            from app.care import brief as care_brief
+
+            if (await care_brief.setting(ctx.session, ctx.family_id, to)).get("time"):
+                night = False  # the caregiver chose this time for their brief themselves
         if night:
             problems.append(f"it is night for them now (their morning starts {clock.ist(morning).strftime('%H:%M') if morning else 'later'}); "
                             "do not message them now, reply none")
