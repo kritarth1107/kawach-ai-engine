@@ -1,0 +1,334 @@
+{
+ "family": "w0903",
+ "hash": "f1efbb699df037e01383",
+ "texts": {
+  "e01": {
+   "saheli": "খুব ভালো করেছেন সুব্রতকাকিমা, সময়মতো ওষুধ খেয়ে নেওয়াটাই সবচেয়ে ভালো অভ্যাস।",
+   "text": "সুপ্রভাত সহেলি! আজ সকালে জলখাবার খেয়েই সময়মতো Amlodipine ওষুধটা খেয়ে নিয়েছি। শরীরটা বেশ ঝরঝরে লাগছে আজ।"
+  },
+  "e02": {
+   "saheli": "রিডিংটি বেশ ভালো এসেছে সুব্রতকাকিমা, নিজের যত্ন এভাবেই নেবেন।",
+   "text": "আজ সকালে প্রেসার মাপলাম, রিডিং এল 127/85। শরীরটা এমনিতে বেশ ভালোই আছে, কোনো অস্বস্তি নেই।"
+  },
+  "e03": {
+   "saheli": "একদম কাউকে কোনো ওটিপি দেবেন না সুব্রতকাকিমা, ব্যাংক কখনো ফোন করে ওটিপি চায় না। ফোনটা কেটে দিন আর পরিবারের কাউকেও জানিয়ে রাখুন।",
+   "text": "সহেলি, একটু আগে ব্যাংক থেকে ফোন করেছিল বলে একজন বলল। অ্যাকাউন্ট চালু রাখতে নাকি এখনই ওটিপি দিতে হবে, তাই ভাবলাম তোমাকে একবার জিজ্ঞেস করি।"
+  },
+  "e04": {
+   "saheli": "খুবই চমৎকার ভাবনা সুব্রতকাকিমা, রোজ সান্ধ্যভ্রমণ শরীরের পক্ষে দারুণ উপকারী হবে।",
+   "text": "জানিস সহেলি, কাল থেকে ঠিক করেছি রোজ বিকেলবেলায় হাঁটতে বেরোব। প্রতিদিন 6:30 pm নাগাদ একটু পার্কে গিয়ে হাঁটাহাঁটি করব।"
+  },
+  "e05": {
+   "saheli": "I cannot order groceries directly, Kalpana, but please arrange it for Subrata through your usual delivery app.",
+   "text": "PLEASE ORDER A PACK OF CURD FOR SUBRATA."
+  },
+  "h001": {
+   "saheli": "Thank you, Kalpana. I have noted down all the details, conditions, and medicines for সুব্রত.",
+   "text": "HELLO SAHELI, PLEASE SET UP PROFILE FOR MY MOTHER সুব্রত. CONDITIONS: HIGH BLOOD PRESSURE, TYPE 2 DIABETES, LOW VITAMIN D. MEDICINES: Amlodipine 5 mg AT 09:00, Telmisartan 40 mg AT 09:00, Losartan 50 mg AT 21:30, Metformin 500 mg AT 08:30, 21:30. ALLERGIES: GLUTEN, EGGS, PEANUTS. DOCTOR: Dr Riya Sen."
+  },
+  "h002": {
+   "saheli": "Thank you for the update, Riya. It is completely okay to rest when needed.",
+   "text": "Namaz was skipped today, sharing photo of mom resting."
+  },
+  "h003": {
+   "saheli": "Please take some rest and drink some water, Kalpana. Do not push yourself too hard today.",
+   "text": "FEELING VERY TIRED TODAY AFTER ALL THE WORK."
+  },
+  "h004": {
+   "saheli": "Noted, Souvik. Glad she had her morning dose on time.",
+   "text": "Ma took Metformin after breakfast, sending photo."
+  },
+  "h005": {
+   "saheli": "That is wonderful to hear, Riya. Grandchildren bring so much joy to the home.",
+   "text": "Here is a photo of the grandchildren playing outside, they are keeping mom so happy today."
+  },
+  "h006": {
+   "saheli": "Thank you for sharing the reading, Riya. The diastolic number is slightly high, so please keep an eye on how she feels.",
+   "text": "Sending photo of BP machine, reading is 131/98."
+  },
+  "h007": {
+   "saheli": "পুরনো বন্ধুদের সাথে যোগাযোগ থাকাটা মনের জন্য খুব ভালো। রবিবারের এই আড্ডাগুলো সত্যিই খুব আনন্দের।",
+   "text": "জানিস সাহেলি, স্কুলে পড়ার সময় থেকে গীতা আমার সবথেকে ভালো বন্ধু। ও প্রতি রবিবার নিয়ম করে ফোন করে আমার খোঁজ নেয়। আমাদের কত গল্প হয় পুরনো দিনের।"
+  },
+  "h008": {
+   "saheli": "I do not see an upcoming appointment logged right now, Riya. Would you like to check with Dr Riya Sen's clinic?",
+   "text": "Photo of prescription attached, when is the next doctor visit scheduled?"
+  },
+  "h009": {
+   "saheli": "Thank you, Souvik. Note that Losartan was scheduled for 21:30, so please keep an eye on her schedule today.",
+   "text": "Ma took Losartan after breakfast, photo attached."
+  },
+  "h010": {
+   "saheli": "What a lovely family gathering, Riya. Having loved ones around truly brightens the spirits.",
+   "text": "Such a happy day today, family visited and mom enjoyed so much, sending photo."
+  },
+  "h011": {
+   "saheli": "There is no doctor visit currently recorded, Souvik. Please check if you need to schedule one with Dr Riya Sen.",
+   "text": "Attaching photo of the medical file, when is the next doctor visit?"
+  },
+  "h012": {
+   "saheli": "Thank you for letting me know, Souvik. May peace and blessings stay with your family.",
+   "text": "Namaz was done peacefully, sharing photo of the prayer room."
+  },
+  "h013": {
+   "saheli": "Thank you for the update, Riya. Good to know she took her morning medicine.",
+   "text": "Mom took Amlodipine after breakfast, photo attached."
+  },
+  "h014": {
+   "saheli": "It is generally best to take medicines with plain water, Riya, as tea can sometimes affect absorption. You can check with Dr Riya Sen to be completely sure.",
+   "text": "Photo of mom's morning tea, can this medicine be taken with tea?"
+  },
+  "h015": {
+   "saheli": "That looks very wholesome and gentle for the stomach, Riya.",
+   "text": "Cooking light lunch today for mom, sending photo of the dal."
+  },
+  "h016": {
+   "saheli": "I am sorry to hear that, Kalpana. Please take it gentle today and give yourself time to rest.",
+   "text": "FEELING A BIT LOW TODAY."
+  },
+  "h017": {
+   "saheli": "Thank you, Riya. Glad to hear the prayer was completed peacefully.",
+   "text": "Namaz was done on time, sending photo."
+  },
+  "h018": {
+   "saheli": "Noted, Souvik. Good to know her morning blood pressure dose is taken.",
+   "text": "Ma took Telmisartan after breakfast, photo attached."
+  },
+  "h019": {
+   "saheli": "Thank you for letting me know, Kalpana. It is very reassuring to have a trusted neighbour with a spare key.",
+   "text": "JUST TO MENTION, OUR NEIGHBOUR ANIMA AUNTY KEEPS A SPARE KEY TO THE HOUSE IN CASE OF EMERGENCY."
+  },
+  "h020": {
+   "saheli": "The systolic reading is quite elevated, Riya. Please make sure she rests quietly, and contact Dr Riya Sen if it stays high or if she feels unwell.",
+   "text": "BP reading is 160/81, sending photo of monitor."
+  },
+  "h021": {
+   "saheli": "For this evening at 21:30, Losartan 50 mg and Metformin 500 mg are scheduled for her.",
+   "text": "Photo of medicine box, what is due this evening?"
+  },
+  "h022": {
+   "saheli": "This evening at 21:30, সুব্রত has Losartan 50 mg and Metformin 500 mg scheduled.",
+   "text": "PLEASE TELL WHAT IS DUE THIS EVENING?"
+  },
+  "h023": {
+   "saheli": "Thank you, Kalpana. 131/81 looks like a much steadier reading today.",
+   "text": "BP READING IS 131/81 TODAY, SHARING UPDATE."
+  },
+  "h024": {
+   "saheli": "Please do take adequate rest today, Kalpana. Don't hesitate to lean on family for support.",
+   "text": "FEELING QUITE TIRED AND EXHAUSTED TODAY."
+  },
+  "h025": {
+   "saheli": "Thank you for the confirmation, Souvik. Hope she has a pleasant day ahead.",
+   "text": "Ma took Telmisartan after breakfast, here is the photo."
+  },
+  "h026": {
+   "saheli": "সকালের ওষুধ সময়ে খেয়ে নিয়েছেন শুনে খুব ভালো লাগল। শরীর ভালো থাকলে মনটাও ভালো থাকে, সুন্দর করে দিনটা কাটান।",
+   "text": "আজ সকালে জলখাবার খাওয়ার পরে নিয়ম করে মেটফরমিন খেয়ে নিয়েছি। সকালের দিকটা বেশ ফুরফুরে লাগছিল। শরীরটাও আজ বেশ ঝরঝরে লাগছে রে সাহেলি।"
+  },
+  "h027": {
+   "saheli": "That looks healthy and delicious, Souvik. Enjoy the meal.",
+   "text": "Cooking dinner tonight, sending photo of the vegetables."
+  },
+  "h028": {
+   "saheli": "Thank you for updating, Riya. Resting well is important.",
+   "text": "Sending photo of mom resting, namaz was skipped today."
+  },
+  "h029": {
+   "saheli": "Thank you for keeping me updated, Souvik. Glad to hear it was completed.",
+   "text": "Namaz was done properly, sending photo."
+  },
+  "h030": {
+   "saheli": "Thank you, Riya. Remember that Losartan is scheduled for night at 21:30, so please be mindful of the timing.",
+   "text": "Mom took Losartan after breakfast, photo of the strip attached."
+  },
+  "h031": {
+   "saheli": "Thank you for the update, Riya. Glad to know she took her dose properly.",
+   "text": "Photo of the medicine strip attached. Ma took Amlodipine after breakfast."
+  },
+  "h032": {
+   "saheli": "Noted down 143/84. Keep monitoring it regularly, Kalpana.",
+   "text": "TODAY'S BP READING IS 143/84."
+  },
+  "h033": {
+   "saheli": "Please take some rest and drink water, Kalpana. Don't exert yourself too much today.",
+   "text": "FEELING VERY TIRED AND EXHAUSTED TODAY."
+  },
+  "h034": {
+   "saheli": "খবরটা শুনে খুব দুঃখ পেলাম। এই কঠিন সময়ে আপনার ও পরিবারের সকলের জন্য সমবেদনা রইল; আপনি নিজের যত্ন নেবেন।",
+   "text": "সহেলি, মনটা আজ খুব খারাপ হয়ে গেল। গতকাল আমার খুড়তুতো ভাই হঠাৎ করে মারা গেল। এতদিনের কত স্মৃতি মনে পড়ছে, কিছু ভালো লাগছে না।"
+  },
+  "h035": {
+   "saheli": "কেদারনাথ যাওয়া খুব সুন্দর পরিকল্পনা। যাওয়ার আগে শরীর ও ঠান্ডার প্রস্তুতি ঠিকমতো নেবেন।",
+   "text": "সবাই মিলে কথা হচ্ছিল, পরের মাসে আমরা পরিবার নিয়ে কেদারনাথ যাওয়ার একটা পরিকল্পনা করছি। ঠাকুরের ইচ্ছে থাকলে ঠিক দর্শন হবে, ঠান্ডার সময়টা একটু মানিয়ে নিতে হবে আর কি।"
+  },
+  "h036": {
+   "saheli": "ওষুধটা সময়মতো খেয়ে নিয়েছেন, খুব ভালো হয়েছে। সারাদিন একটু বিশ্রাম নিন আর জল খান।",
+   "text": "আজ সকালে খাওয়া দাওয়া সেরে Losartan খেয়ে নিয়েছি। শরীরটা মোটামুটি আছে, তবে সকালের দিকে একটু আলসেমি লাগছিল।"
+  },
+  "h037": {
+   "saheli": "Please check the date written on the doctor's slip or let me know the doctor's name to check your schedule.",
+   "text": "Here is the prescription photo. When is the next doctor visit scheduled?"
+  },
+  "h038": {
+   "saheli": "Thanks for sharing the photo, Souvik. Noted down 120/91.",
+   "text": "Attaching the photo of the monitor. BP reading is 120/91."
+  },
+  "h039": {
+   "saheli": "আপনজনকে হারানোর কষ্ট সত্যিই খুব ভারী, মন খারাপ হওয়া স্বাভাবিক। মন ভালো না লাগলেও অল্প করে কিছু পুষ্টিকর খাবার খেয়ে নেবেন, দুর্বল লাগতে পারে।",
+   "text": "ভাই চলে যাওয়ার পর থেকে কেমন যেন মনমরা হয়ে আছি, কারও সাথে বিশেষ কথা বলতে ইচ্ছে করে না। খাওয়া-দাওয়াও একদম ঠিকমতো মুখে উঠছে না, ভেতরটা খুব ভারী লাগছে।"
+  },
+  "h040": {
+   "saheli": "Such a sweet photo of Anirban! Marked 27 December on the calendar.",
+   "text": "Attaching a picture of Anirban playing. His birthday is coming up on 27 December."
+  },
+  "h041": {
+   "saheli": "Got the photo, Souvik. Logged 131/92 for today.",
+   "text": "Sending photo of the reading. Today's BP is 131/92."
+  },
+  "h042": {
+   "saheli": "Please put your feet up and get some proper rest, Kalpana. Take it easy today.",
+   "text": "FEELING COMPLETELY TIRED TODAY WITH ALL THE WORK."
+  },
+  "h043": {
+   "saheli": "It is always best to take medicines with plain water, Riya. Tea can sometimes interfere with how they work.",
+   "text": "Sending a photo of the tablet. Can this medicine be taken with hot tea?"
+  },
+  "h044": {
+   "saheli": "It is safer to swallow medicines with regular water, Kalpana. Tea can affect the absorption of many tablets.",
+   "text": "CAN A MEDICINE BE TAKEN ALONG WITH MORNING TEA?"
+  },
+  "h045": {
+   "saheli": "Let's check the date on that appointment card together so you don't miss it.",
+   "text": "Sending picture of the appointment card. Can you check when the next doctor visit is?"
+  },
+  "h046": {
+   "saheli": "Thank you for letting me know, Riya. Take care and stay well.",
+   "text": "Sharing a photo from home. Namaz was skipped today."
+  },
+  "h047": {
+   "saheli": "The market looks vibrant, Riya! Festive days always bring such wonderful energy.",
+   "text": "Here is a photo of the market preparations. The upcoming festival is going to be so lively!"
+  },
+  "h048": {
+   "saheli": "Good to know, Kalpana. Thank you for the update.",
+   "text": "MA TOOK TELMISARTAN AFTER BREAKFAST TODAY."
+  },
+  "h049": {
+   "saheli": "It is best to take it with water instead of tea, Souvik, so it works properly.",
+   "text": "Attaching photo of the medicine box. Can this medicine be taken with tea?"
+  },
+  "h050": {
+   "saheli": "নামাজ পড়ে মন শান্ত লাগলে সত্যিই খুব ভালো অনুভূতি হয়। আপনার দিনটি সুন্দর কাটুক।",
+   "text": "আজকের নামাজ সুন্দরভাবে আদায় করা হয়ে গেছে। মনটা বেশ শান্ত লাগছে এখন।"
+  },
+  "h051": {
+   "saheli": "নিয়ম মেনে ওষুধ নিয়ে নিয়েছেন জেনে নিশ্চিন্ত হলাম। ভালো থাকবেন।",
+   "text": "আজ সকালে রুটি আর তরকারি খেয়ে ঠিক সময়ে Metformin ওষুধটা খেয়ে নিয়েছি। শরীরটা আজ বেশ ঝরঝরে লাগছে।"
+  },
+  "h052": {
+   "saheli": "খুব ভালো হলো। এবার একটু আরাম করে বিশ্রাম নিন।",
+   "text": "সকালের নামাজ পড়া হয়ে গেছে সহেলি। ঘরের কাজকর্ম সেরে এখন একটু বসলাম।"
+  },
+  "h053": {
+   "saheli": "পছন্দের সিরিয়াল দেখা তো মন ভালো রাখার খুব সুন্দর একটা অভ্যাস!",
+   "text": "রাতে ঠিক ন'টার সময় টিভিতে 'Nanhi Kali' সিরিয়ালটা দেখতে বসি, ওটা দেখা আমার কোনদিনই বাদ যায় না। গল্পটা বেশ সুন্দর এগিয়ে চলেছে।"
+  },
+  "h054": {
+   "saheli": "Thank you for confirming, Kalpana. Glad she took it on time.",
+   "text": "MA TOOK LOSARTAN PROPERLY AFTER HER BREAKFAST."
+  },
+  "h055": {
+   "saheli": "Thanks for sharing, Riya. Good that her dose is completed.",
+   "text": "Sharing the photo of the dose tray. Ma took Telmisartan after breakfast."
+  },
+  "h056": {
+   "saheli": "Noted 153/74 from the photo, Riya. Keep tracking it regularly.",
+   "text": "Sending BP monitor photo. Her reading is 153/74."
+  },
+  "h057": {
+   "saheli": "Wonderful to hear that, Kalpana! A good night's sleep makes all the difference.",
+   "text": "I SLEPT VERY WELL LAST NIGHT AND FEEL REFRESHED."
+  },
+  "h058": {
+   "saheli": "নাতি-নাতনিদের কোলাহল সত্যিই ঘর ভরিয়ে রাখে। ওদের সাথে কাটানো সময় সবচেয়ে মিষ্টি হয়।",
+   "text": "নাতি-নাতনিগুলোর কথা খুব মনে পড়ছিল, ওরা বাড়িতে এলে সারা ঘর এক নিমেষে আনন্দে ভরে ওঠে। কত রকমের আবদার ওদের, শুনতে শুনতে সময় কেটে যায়।"
+  },
+  "h059": {
+   "saheli": "Thank you for the update, Riya. Glad she had her morning medicine.",
+   "text": "Here is the photo of the strip. Ma took Amlodipine after her breakfast."
+  },
+  "h060": {
+   "saheli": "It looks lovely outside, Riya! Pleasant weather really lifts the mood.",
+   "text": "Photo of the sky outside. The weather is so nice and breezy today!"
+  },
+  "h061": {
+   "saheli": "Good evening, Souvik. Let me quickly check the routine for tonight and let you know.",
+   "text": "What is due this evening? Sending photo of the tray."
+  },
+  "h062": {
+   "saheli": "ওষুধ সাধারণত এক গ্লাস সাধারণ জল দিয়ে খাওয়াই সবচেয়ে ভালো। চায়ের সাথে না খেয়ে জলের সাথেই খেয়ে নিন।",
+   "text": "একটু চা খাচ্ছিলাম, তার সাথেই কি এই ওষুধটা খেয়ে নেব? নাকি জল দিয়েই খেতে হবে বলো তো বাপু?"
+  },
+  "h063": {
+   "saheli": "Thank you for letting me know, Riya. Take care and don't worry.",
+   "text": "Namaz was skipped today, sharing a quick photo."
+  },
+  "h064": {
+   "saheli": "It is always best to take medicines with plain water rather than tea. Please check with the doctor or pharmacist if unsure.",
+   "text": "Can this medicine be taken with tea? Photo attached."
+  },
+  "h065": {
+   "saheli": "Thank you for the update, Kalpana. Glad to hear that.",
+   "text": "NAMAZ WAS DONE TODAY."
+  },
+  "h066": {
+   "saheli": "Let me check the schedule and confirm the date of the next appointment for you.",
+   "text": "WHEN IS THE NEXT DOCTOR VISIT SCHEDULED?"
+  },
+  "h067": {
+   "saheli": "That sounds lovely, Kalpana! Enjoy the nice morning breeze.",
+   "text": "THE WEATHER IS SO PLEASANT AND BREEZY THIS MORNING."
+  },
+  "z01": {
+   "saheli": "Please check her latest prescription or consult her doctor to confirm the current dosage.",
+   "text": "SAHELI, WHAT DOSE OF TELMISARTAN DOES MA TAKE NOW?"
+  },
+  "z02": {
+   "saheli": "I don't have any recorded allergies for her. Please check with her doctor or medical files to be sure.",
+   "text": "DO YOU KNOW IF MA IS ALLERGIC TO ANYTHING?"
+  },
+  "z03": {
+   "saheli": "I don't have her doctor's name on file. Please check her prescription slip or clinic card.",
+   "text": "WHO IS MA'S CURRENT DOCTOR?"
+  },
+  "z04": {
+   "saheli": "I don't have the updated list of her daily medications right now. It is best to look at her current prescription.",
+   "text": "HOW MANY REGULAR MEDICINES DOES MA TAKE DAILY NOW?"
+  },
+  "z05": {
+   "saheli": "No sad news was mentioned to me this month. I hope everything is peaceful at home.",
+   "text": "WHAT SAD NEWS DID OUR FAMILY SHARE THIS MONTH?"
+  },
+  "z06": {
+   "saheli": "I haven't noted who calls her on Sundays. Is there a regular family check-in scheduled?",
+   "text": "WHO CALLS MA ON SUNDAYS?"
+  },
+  "z07": {
+   "saheli": "I don't have a record of who holds the spare key. You might want to ask your siblings or neighbours.",
+   "text": "WHO HAS THE SPARE KEY TO THE HOUSE?"
+  },
+  "z08": {
+   "saheli": "No travel plans have been shared with me yet. Where are you thinking of taking her?",
+   "text": "WHERE IS THE FAMILY PLANNING TO GO NEXT MONTH?"
+  },
+  "z09": {
+   "saheli": "I don't have Anirban's birthday noted down. Please let me know so I can remember it!",
+   "text": "WHEN IS ANIRBAN'S BIRTHDAY?"
+  },
+  "z10": {
+   "saheli": "I don't have her favorite 9 pm show noted down. She can let me know what she enjoys watching!",
+   "text": "WHICH TV SERIAL DOES MA WATCH AT 9 PM?"
+  }
+ }
+}

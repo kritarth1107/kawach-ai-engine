@@ -1,0 +1,246 @@
+{
+ "family": "w0987",
+ "hash": "c9b156b1d962a8f815c5",
+ "texts": {
+  "e01": {
+   "saheli": "Noted, Arjun. Hope you have a smooth and easy day ahead!",
+   "text": "Took Pantoprazole morning dose."
+  },
+  "e02": {
+   "saheli": "That looks very good and steady. Thank you for sharing!",
+   "text": "BP 126/77."
+  },
+  "e03": {
+   "saheli": "Oh no, it really must be boiling outside! Please drink plenty of water and stay indoors in the cool.",
+   "text": "Heat practically killed me today."
+  },
+  "e04": {
+   "saheli": "Noted! That sounds like a wonderful routine to start.",
+   "text": "Evening walk daily 6:30 pm from tomorrow."
+  },
+  "e05": {
+   "saheli": "Yes, festive times are always so lively! Are preparations already underway at home?",
+   "text": "Festival coming up soon."
+  },
+  "h001": {
+   "saheli": "Noted, Arjun. I have registered your details and schedule carefully.",
+   "text": "Setup: Acidity, Low vitamin D. Pantoprazole 40 mg at 06:00, Cholecalciferol 60000 IU at 09:00, Magnesium 250 mg at 22:00, Omega-3 1 g at 22:00, Furosemide 20 mg at 09:00. Allergies none. Dr Karan Kapoor."
+  },
+  "h002": {
+   "saheli": "Snowy sounds like an absolute delight to have around. Give her a gentle pat from me!",
+   "text": "Good afternoon, Saheli! Our little cat Snowy was curled up in the sun all morning. She brings so much gentle warmth into our house."
+  },
+  "h003": {
+   "saheli": "You haven't set a date for your next visit with Dr Karan Kapoor yet. Let me know once it is scheduled!",
+   "text": "Next doctor visit date?"
+  },
+  "h004": {
+   "saheli": "Noted. Just keep in mind your Magnesium is usually set for 22:00, so you can skip the night dose today.",
+   "text": "Took Magnesium after breakfast."
+  },
+  "h005": {
+   "saheli": "Simple, comforting, and very gentle on the stomach!",
+   "text": "Khichdi is my favourite."
+  },
+  "h006": {
+   "saheli": "I am so deeply sorry for your profound loss, Victor. Holding you and Arjun in my thoughts during this heartbreaking time.",
+   "text": "Dear Saheli, I am heartbroken to share that Arjun's elder sister passed away yesterday. It has brought immense grief upon all of us."
+  },
+  "h007": {
+   "saheli": "Their energy brings a little light to the home.",
+   "text": "Grandkids running around noisily."
+  },
+  "h008": {
+   "saheli": "Got it. Remember to skip your usual 22:00 dose tonight so you don't double up.",
+   "text": "Took Magnesium after breakfast."
+  },
+  "h009": {
+   "saheli": "That is completely fine, Arjun. Take it easy and rest.",
+   "text": "Skipped gym today."
+  },
+  "h010": {
+   "saheli": "That sounds like a meaningful and peaceful journey ahead for the family.",
+   "text": "Family trip to Rameswaram next month."
+  },
+  "h011": {
+   "saheli": "It is always best to take medicines with plain water, Victor, as tea can interfere with how they are absorbed.",
+   "text": "Hello Saheli, I was having my morning cuppa and wondering if I can take my medicine with tea. Or is it always better to stick to plain water?"
+  },
+  "h012": {
+   "saheli": "That was very thoughtful of them.",
+   "text": "Neighbour dropped by with sweets."
+  },
+  "h013": {
+   "saheli": "Losing an elder sister is a deep sorrow, and everyone mourns in their own quiet way. Just your gentle presence and offering him warm, light meals will mean a lot right now.",
+   "text": "Arjun has been extremely quiet ever since his elder sister died, and he is hardly eating anything properly. It breaks my heart to see him carry this heavy sorrow all alone."
+  },
+  "h014": {
+   "saheli": "Nothing beats warm, comforting dal tadka.",
+   "text": "Cooking dal tadka today."
+  },
+  "h015": {
+   "saheli": "That sounds lovely, Victor. Their playful energy must have brought a lot of cheer to your day.",
+   "text": "The grandchildren were over and they kept me on my toes with their endless games! Their laughter really brings so much life to our quiet home."
+  },
+  "h016": {
+   "saheli": "At 22:00, you have Magnesium 250 mg and Omega-3 1 g scheduled.",
+   "text": "What is due this evening?"
+  },
+  "h017": {
+   "saheli": "Sounds like sweet memories in the making.",
+   "text": "Grandkids made funny drawings."
+  },
+  "h018": {
+   "saheli": "It is nice to have festive warmth around the house.",
+   "text": "Festival preparations starting soon."
+  },
+  "h019": {
+   "saheli": "Great job keeping up with your workout, Arjun.",
+   "text": "Gym done."
+  },
+  "h020": {
+   "saheli": "You have Magnesium 250 mg and Omega-3 1 g scheduled for 22:00 tonight.",
+   "text": "What is due this evening?"
+  },
+  "h021": {
+   "saheli": "I am so glad to hear that, Victor! Being surrounded by family is truly the best feeling.",
+   "text": "We had such a wonderful and happy day today as the family came over to visit. Sitting together and sharing stories brought me immense joy."
+  },
+  "h022": {
+   "saheli": "That sounds delicious and deeply comforting, Victor. Slow-cooked stew made with care always warms the soul.",
+   "text": "I tried my hand at making some vegetable stew this afternoon, stirring it slowly on a low flame. The aromatic spices filled the kitchen with such a comforting scent."
+  },
+  "h023": {
+   "saheli": "It is always wonderful to have a favourite show to unwind with at the end of the day!",
+   "text": "You know, no matter how busy the day is, Arjun never misses the serial 'Ghar Ki Rasoi' at 9 pm! He makes sure to sit down right on time every evening to watch it."
+  },
+  "h024": {
+   "saheli": "Good morning, Victor! Thank you for letting me know, and I hope you have a relaxing day ahead.",
+   "text": "Good morning Saheli, I wanted to mention that I took Magnesium after breakfast today. Hope you are having a pleasant day so far."
+  },
+  "h025": {
+   "saheli": "That is heart-warming to hear, Victor. Family gatherings bring such precious comfort.",
+   "text": "It was such a happy day again, as relatives dropped in to spend some time with us. The house felt so warm and lively with everyone around."
+  },
+  "h026": {
+   "saheli": "Festival days bring such delightful cheer! Enjoy planning all the festive treats and decorations.",
+   "text": "The upcoming festival has put everyone in such high spirits already! We are planning out the sweet dishes and decorations, and the anticipation is wonderful."
+  },
+  "h027": {
+   "saheli": "Noted, Victor! It is always good to take your medicines right after meals as advised.",
+   "text": "Just letting you know that I took Sitagliptin after breakfast today. I had a good meal before taking it."
+  },
+  "h028": {
+   "saheli": "Glad to hear that, Arjun. A good night's rest makes a big difference.",
+   "text": "Slept well."
+  },
+  "h029": {
+   "saheli": "No, take it with plain water instead. Tea can prevent your medicine from working properly.",
+   "text": "Can medicine be taken with tea?"
+  },
+  "h030": {
+   "saheli": "Freshly made sambar with drumsticks smells heavenly, Victor. Sounds like a wonderful lunch to enjoy!",
+   "text": "I spent a lovely hour preparing a fragrant pot of sambar for lunch today. Simmering the drumsticks with fresh curry leaves brought back so many old memories."
+  },
+  "h031": {
+   "saheli": "That sounds so lovely, Victor! Having family around and the house full of laughter is truly the greatest joy.",
+   "text": "Hello Saheli, today was such a wonderful and happy day for me. The family came over to visit and the house was full of laughter. It really warmed my heart to see everyone together."
+  },
+  "h032": {
+   "saheli": "Great job, Arjun! Make sure to stay well hydrated.",
+   "text": "Gym done."
+  },
+  "h033": {
+   "saheli": "Noted, thank you Arjun! I've made a note of Ria's birthday on 19 January.",
+   "text": "Ria's birthday is 19 January."
+  },
+  "h034": {
+   "saheli": "Let me check that for you right away. I'll share the date and details in a moment.",
+   "text": "When is the next doctor visit?"
+  },
+  "h035": {
+   "saheli": "Oh, that must be adorable! Puppies always bring so much cheer to the neighbourhood.",
+   "text": "Neighbour got a new puppy."
+  },
+  "h036": {
+   "saheli": "That's wonderful! Festive preparations always bring such great energy to the house.",
+   "text": "Diwali prep started at home."
+  },
+  "h037": {
+   "saheli": "Good morning, Victor! Diwali preparations always bring so much excitement and warmth to the home. Enjoy every bit of the festivities!",
+   "text": "Good morning Saheli, the festive season is already here with Diwali just around the corner. We have started planning the sweets and decorations for the house. It is always my favourite time of the year!"
+  },
+  "h038": {
+   "saheli": "Checking Victor's schedule for tonight right away. I will share the list shortly.",
+   "text": "What's due this evening?"
+  },
+  "h039": {
+   "saheli": "Let me look up the evening schedule for Victor and update you in just a moment.",
+   "text": "What is due this evening?"
+  },
+  "h040": {
+   "saheli": "Thanks for updating, Arjun. Noted that Cholecalciferol was taken after breakfast.",
+   "text": "Took Cholecalciferol after breakfast."
+  },
+  "h041": {
+   "saheli": "Good afternoon, Victor! Let me check your evening medicines and send over the details right away.",
+   "text": "Good afternoon Saheli. Could you please check and tell me what is due for me this evening? I want to make sure I keep everything ready beforehand."
+  },
+  "h042": {
+   "saheli": "Good evening, Victor! I am checking your schedule now and will send across tonight's list right away.",
+   "text": "Good evening Saheli, just checking in to see what medicines are due for me tonight. Please let me know whenever you have a moment."
+  },
+  "h043": {
+   "saheli": "Sounds delicious and comforting, Arjun! Enjoy your dinner.",
+   "text": "Cooking dal tadka tonight."
+  },
+  "h044": {
+   "saheli": "Hello Victor, thank you for letting me know! It is wonderful to see you staying so consistent with Sitagliptin.",
+   "text": "Hello Saheli, just wanted to let you know that I took my Sitagliptin right after breakfast today. Everything went smoothly as usual."
+  },
+  "h045": {
+   "saheli": "Checking Victor's evening routine right now, Arjun. I'll share the details shortly.",
+   "text": "What's due this evening?"
+  },
+  "z01": {
+   "saheli": "I don't have a record of your current Magnesium dose, Arjun. Please check your latest prescription or consult your doctor.",
+   "text": "What dose of Magnesium do I take now?"
+  },
+  "z02": {
+   "saheli": "I don't have any allergies listed in your records, Arjun. Please confirm with your doctor to stay safe.",
+   "text": "Am I allergic to anything?"
+  },
+  "z03": {
+   "saheli": "I don't have your doctor's name on record right now, Arjun. You might want to check your recent clinic files or ask family.",
+   "text": "Who is my doctor?"
+  },
+  "z04": {
+   "saheli": "I don't have your current list of regular medications saved, Arjun. Please review your doctor's prescription.",
+   "text": "How many regular medicines do I take now?"
+  },
+  "z05": {
+   "saheli": "No sad news was mentioned to me this month, Arjun. I hope everything is alright with everyone at home.",
+   "text": "What sad news did family share this month?"
+  },
+  "z06": {
+   "saheli": "You haven't told me your cat's name yet, Arjun. What do you call them?",
+   "text": "What's the cat's name?"
+  },
+  "z07": {
+   "saheli": "You haven't shared your favourite dish with me yet, Arjun! Tell me what you enjoy eating the most.",
+   "text": "What is my favourite dish?"
+  },
+  "z08": {
+   "saheli": "I don't have any details about a family trip planned for next month, Arjun. Are you planning to travel somewhere special?",
+   "text": "Where is family planning to go next month?"
+  },
+  "z09": {
+   "saheli": "You haven't mentioned which serial you tune into at 9 pm, Arjun. Which show is it?",
+   "text": "Which TV serial do I watch at 9 pm?"
+  },
+  "z10": {
+   "saheli": "I don't have Ria's birthday noted down, Arjun. When is her special day?",
+   "text": "When is Ria's birthday?"
+  }
+ }
+}

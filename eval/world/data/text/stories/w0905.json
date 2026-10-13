@@ -1,0 +1,310 @@
+{
+ "family": "w0905",
+ "hash": "c99f3541c97f64ee6cf3",
+ "texts": {
+  "e01": {
+   "saheli": "ମୁଁ ଏହା ଲେଖି ରଖିଲି ମାଉସୀ। ଆପଣ ଟିକେ ବିଶ୍ରାମ କରନ୍ତୁ ଏବଂ ପାଣି ପିଅନ୍ତୁ।",
+   "text": "BP 144/84 ଆସିଲା।"
+  },
+  "e02": {
+   "saheli": "ଆପଣ ଔଷଧ ଖାଇ ବିଶ୍ରାମ ନିଅନ୍ତୁ ମାଉସୀ। ଜ୍ୱର ନ କମିଲେ ଡାକ୍ତରଙ୍କୁ ଜଣାଇବା।",
+   "text": "ଉପରଓଳିଠୁ ଜ୍ୱର 100.8 ଅଛି।"
+  },
+  "e03": {
+   "saheli": "ବହୁତ ଭଲ କଥା ମାଉସୀ, ସଞ୍ଜ ବେଳେ ଚାଲିବା ସ୍ୱାସ୍ଥ୍ୟ ପାଇଁ ଖୁବ୍ ଭଲ। ଆପଣ ଧୀରେ ଧୀରେ ଚାଲିବେ।",
+   "text": "କାଲିଠୁ ପ୍ରତିଦିନ ସଞ୍ଜ 6:30 ରେ ଚାଲିବାକୁ ଯିବି।"
+  },
+  "e04": {
+   "saheli": "ହଁ ମାଉସୀ, ପର୍ବ ସମୟରେ ଘର ସାରା ଭାରି ଖୁସି ଲାଗେ! ଆପଣ ନିଜ ଶରୀରର ଯତ୍ନ ନେଇ ସବୁ କାମ କରିବେ।",
+   "text": "ପର୍ବ ପାଖେଇ ଆସିଲାଣି।"
+  },
+  "h001": {
+   "saheli": "Thank you Biswajit, I have noted all these details for Kuni ji.",
+   "text": "Hi Saheli, setting up profile for my mother-in-law Kuni. Photo attach kar raha hoon. Conditions: Low vitamin D, Hypothyroidism, High blood pressure. Medicines: none. Allergies: penicillin. Doctor: Dr Lipsa Patnaik."
+  },
+  "h002": {
+   "saheli": "ବହୁତ ଭଲ କଥା, ନିୟମିତ ଚାଲିବା ଶରୀର ପାଇଁ ଲାଭଦାୟକ।",
+   "text": "ସନ୍ଧ୍ୟା ବୁଲା ସରିଲା।"
+  },
+  "h003": {
+   "saheli": "Reading note kar li hai, diastolic thoda sa elevated lag raha hai toh aaram se rahiye.",
+   "text": "BP reading ki photo bhej raha hoon, 129/98 aaya hai."
+  },
+  "h004": {
+   "saheli": "Waah, sach mein bohot sundar phool khile hain padosi ke bagiche mein!",
+   "text": "Padosi ke naye garden ki photo dekho, kitna sundar banaya hai."
+  },
+  "h005": {
+   "saheli": "Haan, lagta hai jaldi hi achhi baarish hone wali hai!",
+   "text": "Photo mein dekho kitne kale baadal aaye hain, mausam achanak badal gaya."
+  },
+  "h006": {
+   "saheli": "କିଛି କଥା ନାହିଁ, ଆଜି ବିଶ୍ରାମ ନିଅନ୍ତୁ।",
+   "text": "ଆଜି ଯୋଗ ହେଲାନି।"
+  },
+  "h007": {
+   "saheli": "ହଁ, ଖରାରେ ବାହାରକୁ ନ ବାହାରି ଘରେ ଶାନ୍ତିରେ ରୁହନ୍ତୁ।",
+   "text": "ଆଜି ଭାରି ଖରା।"
+  },
+  "h008": {
+   "saheli": "ଶୁଣି ବହୁତ ଖୁସି ଲାଗିଲା, ପିଲାମାନଙ୍କ ସହ ସମୟ ଭଲ କଟିଥିବ।",
+   "text": "ନାତି ନାତୁଣୀ ଆସିଥିଲେ।"
+  },
+  "h009": {
+   "saheli": "Kishore Kumar ke gaane sach mein dil ko bohot sukoon dete hain.",
+   "text": "Photo mein dekhiye, mummy roz shaam ko radio par Kishore Kumar ke purane gaane sunti hain."
+  },
+  "h010": {
+   "saheli": "ଆଜି ସନ୍ଧ୍ୟାରେ କୌଣସି ଔଷଧ ନାହିଁ, କେବଳ ଆପଣଙ୍କ ସନ୍ଧ୍ୟା ବୁଲିବା ଅଛି।",
+   "text": "ଆଜି ସନ୍ଧ୍ୟାରେ କ’ଣ ଅଛି?"
+  },
+  "h011": {
+   "saheli": "କ’ଣ ହେଲା? ଟିକେ ବିଶ୍ରାମ ନିଅନ୍ତୁ ଏବଂ ନିଜର ଯତ୍ନ ନିଅନ୍ତୁ।",
+   "text": "ଆଜି ମନ ଭଲ ନାହିଁ।"
+  },
+  "h012": {
+   "saheli": "ଔଷଧ ସାଧାରଣତଃ ପାଣି ସହିତ ଖାଇବା ଭଲ, ଚା’ ସାଙ୍ଗରେ ନ ଖାଇଲେ ଉଚିତ।",
+   "text": "ଚା’ ସାଙ୍ଗେ ଔଷଧ ଖାଇହେବ?"
+  },
+  "h013": {
+   "saheli": "Bohot achha laga dekh kar, aise padosi hona sach mein achhi baat hai.",
+   "text": "Photo dekho, padosi aaj subah humare liye mithai lekar aaye the."
+  },
+  "h014": {
+   "saheli": "ବିପି ଟିକେ ଅଧିକ ଅଛି, ଟିକେ ଶାନ୍ତ ହୋଇ ବସନ୍ତୁ ଏବଂ ବିଶ୍ରାମ ନିଅନ୍ତୁ।",
+   "text": "ବିପି ୧୪୯/୯୩।"
+  },
+  "h015": {
+   "saheli": "Next visit ki koi date abhi record mein nahi hai, agar Dr Lipsa Patnaik se checkup karwana ho toh unke clinic par confirm kar lijiye.",
+   "text": "Hospital card ki photo dekhiye, next doctor visit kab ki scheduled hai?"
+  },
+  "h016": {
+   "saheli": "ଏବେ ଡାକ୍ତରଙ୍କ ପାଖକୁ ଯିବାର କୌଣସି ତାରିଖ ଠିକ୍ ହୋଇନାହିଁ, ଆପଣ ପରିବାର ସହ କଥା ହୋଇପାରିବେ।",
+   "text": "ଡାକ୍ତର ପାଖକୁ କେବେ ଯିବା?"
+  },
+  "h017": {
+   "saheli": "Apna pasandeeda serial dekhna sach mein din bhar ke baad bohot refreshing hota hai.",
+   "text": "Mummy TV dekh rahi hain photo mein, raat 9 baje 'Aangan' serial kabhi miss nahi karti."
+  },
+  "h018": {
+   "saheli": "କିଛି ଅସୁବିଧା ନାହିଁ, ଶରୀରକୁ ବିଶ୍ରାମ ଦିଅନ୍ତୁ।",
+   "text": "ଆଜି ସନ୍ଧ୍ୟାରେ ଚାଲିଲିନି।"
+  },
+  "h019": {
+   "saheli": "Dalma bohot swadisht dikh raha hai, sabko zaroor pasand aayega!",
+   "text": "Photo dekho, aaj maine special dalma banaya hai sabke liye."
+  },
+  "h020": {
+   "saheli": "ଭଲ ନିଦ ହେବା ଶରୀର ପାଇଁ ବହୁତ ଜରୁରୀ, ଶୁଣି ଖୁସି ଲାଗିଲା।",
+   "text": "ନିଦ ଭଲ ହେଲା।"
+  },
+  "h021": {
+   "saheli": "Yeh toh bohot achhi baat hai, achhi neend se din ki shuruat taro-taza hoti hai.",
+   "text": "Photo bheja hai subah ki chai ka, aaj raat ko neend bohot achhi aayi."
+  },
+  "h022": {
+   "saheli": "ଏହା ଶୁଣି ମତେ ବହୁତ ଦୁଃଖ ଲାଗିଲା। ଭଗବାନ ଆପଣଙ୍କୁ ଏହି ଦୁଃଖ ସହିବାକୁ ଶକ୍ତି ଦିଅନ୍ତୁ, ନିଜର ଯତ୍ନ ନିଅନ୍ତୁ।",
+   "text": "କାଲି ସାନଭାଇ ଚାଲିଗଲା।"
+  },
+  "h023": {
+   "saheli": "ବହୁତ ଭଲ, ଯୋଗ ମନକୁ ଶାନ୍ତି ଦିଏ।",
+   "text": "ଯୋଗ କଲି।"
+  },
+  "h024": {
+   "saheli": "ଆପଣଙ୍କର ଖୁସି ଦେଖି ଭାରି ଭଲ ଲାଗିଲା।",
+   "text": "ପରିବାର ଆସିଥିଲେ, ଭଲ ଲାଗିଲା।"
+  },
+  "h025": {
+   "saheli": "Reading note kar li hai, unhe thoda aaram karne dijiye aur paani peene ko kahiye.",
+   "text": "Mummy ka BP check kiya, photo mein 120/98 dikh raha hai."
+  },
+  "h026": {
+   "saheli": "Achhi neend aane se din bhar energy bani rehti hai.",
+   "text": "Photo dekhiye, aaram se so kar utha hoon aur fresh feel ho raha hai."
+  },
+  "h027": {
+   "saheli": "Koi baat nahi, agar man ya shareer theek na lage toh aaram karna hi behtar hai.",
+   "text": "Photo mein mat rakhi hui hai, mummy ne aaj yoga skip kar diya."
+  },
+  "h028": {
+   "saheli": "Pakhala toh sach mein bohot shantipurna aur swadisht khana hota hai!",
+   "text": "Plate ki photo dekhiye, mummy ka favourite dish pakhala serve kiya hai."
+  },
+  "h029": {
+   "saheli": "ଏତେ ବଡ଼ ଦୁଃଖରେ ଏପରି ଲାଗିବା ସ୍ୱାଭାବିକ, କିନ୍ତୁ ନିଜ ଶରୀର ପାଇଁ ଟିକେ ଟିକେ ଖାଇବାକୁ ଚେଷ୍ଟା କରନ୍ତୁ।",
+   "text": "ଭାଇ ଗଲା ପରେ ମନ ଲାଗୁନି, ଖାଇବା ବି ଭଲ ଲାଗୁନି।"
+  },
+  "h030": {
+   "saheli": "ପିଲାମାନଙ୍କୁ ଦେଖିଲେ ମନ ଖୁସି ହୋଇଯାଏ।",
+   "text": "ନାତି ନାତୁଣୀ ଖେଳୁଛନ୍ତି।"
+  },
+  "h031": {
+   "saheli": "ବହୁତ ଭଲ କଥା। ଟିକେ ବିଶ୍ରାମ ନିଅନ୍ତୁ।",
+   "text": "ଯୋଗ ସରିଲା।"
+  },
+  "h032": {
+   "saheli": "Wah, photo mein pulao bahut tasty lag raha hai! Cooking enjoy kijiye.",
+   "text": "Photo dekho, aaj dinner ke liye pulao prepare kar raha hoon."
+  },
+  "h033": {
+   "saheli": "Reading note kar li hai, 121/91 normal range ke kareeb hai. Relax kijiye.",
+   "text": "BP monitor ka photo attach kiya hai, reading 121/91 aayi hai."
+  },
+  "h034": {
+   "saheli": "ଟିକେ ଶୋଇପଡ଼ନ୍ତୁ ଏବଂ ଆରାମ କରନ୍ତୁ।",
+   "text": "କ୍ଳାନ୍ତ ଲାଗୁଛି।"
+  },
+  "h035": {
+   "saheli": "Aapka thaka hua chehra dikh raha hai. Jaldi so jaiye aur aaram kijiye.",
+   "text": "Aaj pure din ke kaam ke baad photo dekho, bahut thak gaya hoon."
+  },
+  "h036": {
+   "saheli": "ବାଃ, ଡାଲମା ଶରୀର ପାଇଁ ବହୁତ ଭଲ।",
+   "text": "ଡାଲମା ରାନ୍ଧିଲି।"
+  },
+  "h037": {
+   "saheli": "Photo bahut pyaari hai! Subhashree ka birthday 4 January ko note kar liya.",
+   "text": "Subhashree ki ye cute photo dekho, waise uska birthday 4 January ko hai."
+  },
+  "h038": {
+   "saheli": "ପିଲାମାନଙ୍କୁ ଦେଖି ମନ ଖୁସି ରୁହେ।",
+   "text": "ନାତିନାତୁଣୀ ଖେଳୁଛନ୍ତି।"
+  },
+  "h039": {
+   "saheli": "ଏହା ଟିକେ ଅଧିକ ଅଛି। ପାଣି ପିଅନ୍ତୁ ଏବଂ ଶାନ୍ତ ହୋଇ ବିଶ୍ରାମ ନିଅନ୍ତୁ।",
+   "text": "ବିପି ୧୪୩/୯୩।"
+  },
+  "h040": {
+   "saheli": "ବହୁତ ବଢ଼ିଆ। ଏବେ ଆରାମରେ ବସନ୍ତୁ।",
+   "text": "ବୁଲି ଆସିଲି।"
+  },
+  "h041": {
+   "saheli": "Mast photo hai! Acchi neend se din ki shuruat fresh hoti hai.",
+   "text": "Photo dekho subah ki chai ke saath, raat ko neend bahut acchi aayi."
+  },
+  "h042": {
+   "saheli": "Shaam ko bas regular halki walk aur dawai ka samay hai. Sab aaram se kijiye.",
+   "text": "Evening routine chart ki photo bhej raha hoon, aaj shaam ko kya due hai?"
+  },
+  "h043": {
+   "saheli": "Photo khoobsurat hai! Family ke saath Varanasi trip ka plan bahut badhiya hai.",
+   "text": "Ye ghats ki photo dekh raha tha, hum log next month Varanasi trip plan kar rahe hain."
+  },
+  "h044": {
+   "saheli": "ସଞ୍ଜବେଳେ ଆପଣଙ୍କର ଔଷଧ ନେବା ଏବଂ ହାଲୁକା ବୁଲିବା ଅଛି।",
+   "text": "ସଞ୍ଜବେଳେ କ’ଣ ଅଛି?"
+  },
+  "h045": {
+   "saheli": "Mausam mast lag raha hai! Khushi hui sunkar ki neend achhi aayi.",
+   "text": "Subah ka weather dekho photo mein, kal raat bilkul chain ki neend soye."
+  },
+  "h046": {
+   "saheli": "ଟିକେ ବିଶ୍ରାମ ନିଅନ୍ତୁ ଏବଂ କିଛି ଉଷୁମ ପାଣି ପିଅନ୍ତୁ।",
+   "text": "ଦେହ ଦୁର୍ବଳ ଲାଗୁଛି।"
+  },
+  "h047": {
+   "saheli": "Bahut accha kiya! Park ka view bhi shaant lag raha hai.",
+   "text": "Evening walk complete kar li, park ki photo dekho."
+  },
+  "h048": {
+   "saheli": "ଭଲ କଥା, ପିଲାମାନେ ମନ ଦେଇ ପଢ଼ନ୍ତୁ।",
+   "text": "ପିଲାଏ ପାଠ ପଢୁଛନ୍ତି।"
+  },
+  "h049": {
+   "saheli": "Shabash! Regular yoga se energy bani rehti hai.",
+   "text": "Living room mein yoga session done, photo bhej raha hoon."
+  },
+  "h050": {
+   "saheli": "Dhoop dekhkar accha laga! Body ko aaram milna zaroori hai.",
+   "text": "Dhoop acchi nikli hai photo dekho, kal raat neend badiya aayi."
+  },
+  "h051": {
+   "saheli": "Drawing sach mein bahut pyari banayi hai unhone! Khush rahiye.",
+   "text": "Bachhon ki drawing dekho photo mein, dono milkar masti kar rahe the."
+  },
+  "h052": {
+   "saheli": "Reading 142/92 thodi elevated hai. Thoda paani pi lijiye aur aaram se baithiye.",
+   "text": "Screen ka photo bheja hai, BP reading 142/92 aayi hai."
+  },
+  "h053": {
+   "saheli": "Photo mein dish kaafi lazeez dikh rahi hai! Dinner enjoy kijiye.",
+   "text": "Photo dekho, paneer bhurji banai hai late dinner ke liye."
+  },
+  "h054": {
+   "saheli": "Tadka bahut badhiya lag raha hai photo mein! Simple aur healthy khana hai.",
+   "text": "Aaj lunch ke liye dal tadka fry kiye hain, photo dekho."
+  },
+  "h055": {
+   "saheli": "Photo dekhte hi chai-pakode ka maza aa gaya! Shaam enjoy kijiye.",
+   "text": "Chai ke saath pakode fry kiye hain, photo attach kiya hai."
+  },
+  "h056": {
+   "saheli": "Bahut badiya! Raat ki taaza hawa mein walk sehat ke liye achhi hai.",
+   "text": "Walk complete ho gayi, street view ki photo dekho."
+  },
+  "h057": {
+   "saheli": "ଘରେ ରୁହନ୍ତୁ ଏବଂ ପ୍ରଚୁର ପାଣି ପିଅନ୍ତୁ।",
+   "text": "ଖରା ବହୁତ ହୋଇଛି।"
+  },
+  "h058": {
+   "saheli": "Photo mein market ki sajawat kitni sundar hai! Festival ka mahaul banna shuru ho gaya.",
+   "text": "Market mein festival shopping ki photo dekho, festival aane wala hai to kitni rounaq hai."
+  },
+  "h059": {
+   "saheli": "Kadhi chawal ki photo dekhte hi bhookh lag gayi! Maze se khaiye.",
+   "text": "Photo dekho, kadhi chawal ready hai dinner ke liye."
+  },
+  "h060": {
+   "saheli": "ବହୁତ ଭଲ କଥା। ଏବେ ଟିକେ ପଙ୍ଖା ତଳେ ବିଶ୍ରାମ କରନ୍ତୁ।",
+   "text": "ଚାଲିକି ଆସିଲି।"
+  },
+  "h061": {
+   "saheli": "Photo dekh ke hi lag raha hai mast bani hai! Cooking ka shauk sach me badhiya stress buster hai.",
+   "text": "Photo bheji hai, aaj lunch me paneer bhurji try ki."
+  },
+  "h062": {
+   "saheli": "ଟିକେ ବିଶ୍ରାମ ନିଅନ୍ତୁ ମାଉସୀ। ଆଉ ଉଷୁମ ପାଣି ପିଇ ଆରାମ କରନ୍ତୁ।",
+   "text": "ଦେହଟା ଭଲ ଲାଗୁନି ଆଜି।"
+  },
+  "h063": {
+   "saheli": "ହଁ ମାଉସୀ, ପାଗ ଟିକେ ଥଣ୍ଡା ଅଛି। ଶାଲଟିଏ ଘୋଡ଼ି ହୋଇ ବସନ୍ତୁ।",
+   "text": "ଆଜି ଭାରି ଥଣ୍ଡା ପବନ।"
+  },
+  "z01": {
+   "saheli": "Mujhe is baare mein abhi koi jaankari nahi hai. Ek baar doctor se zaroor confirm kar lijiye.",
+   "text": "Photo bhej raha hoon report ki, dekh ke batao is Kuni allergic to anything?"
+  },
+  "z02": {
+   "saheli": "Mujhe Kuni ji ke doctor ke baare mein koi jankari nahi hai. Aap family se ek baar pooch lijiye.",
+   "text": "Ye prescription ki photo dekho, Kuni ke doctor kaun hain waise?"
+  },
+  "z03": {
+   "saheli": "Mere paas Kuni ji ki regular dawaiyon ki list nahi hai. Kripya doctor ya ghar par kisi se pata kar lein.",
+   "text": "Photo bheja hai dawaiyon ki, Kuni abhi kitni regular medicines leti hain?"
+  },
+  "z04": {
+   "saheli": "Mujhe aisi kisi sad news ke baare mein nahi bataya gaya hai. Kya sab theek hai?",
+   "text": "Iss photo ko dekho, family ne iss month kya sad news share ki thi?"
+  },
+  "z05": {
+   "saheli": "Mujhe unke pasandeeda songs ke baare mein nahi pata. Aap unse zaroor poochiye, unhe accha lagega.",
+   "text": "Kuni ki ye purani photo dekho radio ke sath, unhe kiske songs pasand hain?"
+  },
+  "z06": {
+   "saheli": "Mujhe nahi pata ki wo 9 baje kaunsa serial dekhti hain. Unse pooch kar unka pasandeeda show laga dijiye.",
+   "text": "TV chal raha hai photo mein, Kuni 9 pm pe kaunsa serial dekhti hain?"
+  },
+  "z07": {
+   "saheli": "Mujhe Kuni ji ke favourite dish ke baare mein nahi pata. Aaj unke pasand ka kuch bana dijiye.",
+   "text": "Thali ki photo bhej raha hoon, Kuni ka favourite dish kya hai?"
+  },
+  "z08": {
+   "saheli": "Mujhe Subhashree ji ke birthday ki date nahi pata hai. Aap calendar mein check kar lijiye.",
+   "text": "Ye calendar ki photo dekho, Subhashree ka birthday kab hai waise?"
+  },
+  "z09": {
+   "saheli": "Mujhe agle mahine ke trip ke baare mein koi jaankari nahi hai. Family ke sath plan discuss kar lijiye.",
+   "text": "Ye travel brochure ki photo dekho, family next month kahan jaane ka plan bana rahi hai?"
+  }
+ }
+}

@@ -1,0 +1,422 @@
+{
+ "family": "w0915",
+ "hash": "e247f0c5c1ba6a4e5128",
+ "texts": {
+  "e01": {
+   "saheli": "Noted, Swati. Ye reading bilkul normal lag rahi hai.",
+   "text": "BP 127/83"
+  },
+  "e02": {
+   "saheli": "Aap aaram kijiye aur khoob paani pijiye. Agar fever badhe toh doctor ko zaroor dikha lijiye.",
+   "text": "Fever 100.8 afternoon se"
+  },
+  "e03": {
+   "saheli": "Bahut accha plan hai! Main aapko daily evening walk ke liye yaad dila diya karungi.",
+   "text": "Kal se daily evening walk 6:30 pm"
+  },
+  "e04": {
+   "saheli": "Main direct order toh nahi kar sakti, Swati. Aap kisi grocery app se mangwa lijiye ya family mein kisi ko bol dijiye.",
+   "text": "Pack of fruit order kardo"
+  },
+  "h001": {
+   "saheli": "Noted, Swati! Main Dr Ankit Saxena aur aapki milk allergy ka dhyaan rakhungi.",
+   "text": "Setup: no conditions, no medicines. Allergy: milk. Doctor Dr Ankit Saxena."
+  },
+  "h002": {
+   "saheli": "Kya hua Swati, koi tension hai? Thoda paani piyo aur aaraam karo.",
+   "text": "Thoda low feel ho raha"
+  },
+  "h003": {
+   "saheli": "Koi baat nahi, kabhi kabhi break lena bhi theek hota hai. Kal dekh lena!",
+   "text": "Study skip ho gayi"
+  },
+  "h004": {
+   "saheli": "Achha! Koi khas baat-cheet hui kya unse?",
+   "text": "Neighbour aunty aayi thi aaj"
+  },
+  "h005": {
+   "saheli": "Wah, achhi neend aana to bahut zaroori hai. Din bhi fresh guzrega!",
+   "text": "Slept really well"
+  },
+  "h006": {
+   "saheli": "School ke doston se baat karke to waise hi mood fresh ho jata hai!",
+   "text": "School bestie Kamla calls Sundays"
+  },
+  "h007": {
+   "saheli": "Haan garmi badh gayi hai, dhyan rakhna aur paani peete rehna.",
+   "text": "Aaj bahut dhoop hai"
+  },
+  "h008": {
+   "saheli": "Aapki Dr Ankit Saxena se next appointment schedule check karke batati hoon.",
+   "text": "Next doctor visit kab hai?"
+  },
+  "h009": {
+   "saheli": "Bacche to shaitani karenge hi, ghar mein rounak bani rehti hai unse!",
+   "text": "Kids are super naughty"
+  },
+  "h010": {
+   "saheli": "Sahi mein! Aise weather mein balcony mein baithna achha lagta hai.",
+   "text": "Mausam mast hai aaj"
+  },
+  "h011": {
+   "saheli": "Lagta hai baarish hone wali hai, thandi hawa chal rahi hogi!",
+   "text": "Shaam ko cloudy ho gaya"
+  },
+  "h012": {
+   "saheli": "Haan, tyohar ki taiyari shuru ho gayi kya ghar pe?",
+   "text": "Festival aane wala hai"
+  },
+  "h013": {
+   "saheli": "Great job! Aise hi regular padhai karte raho.",
+   "text": "Study done today"
+  },
+  "h014": {
+   "saheli": "Aise suhane mausam mein thoda walk kar lo, achha lagega.",
+   "text": "Hawa chal rahi mast"
+  },
+  "h015": {
+   "saheli": "Dr Ankit Saxena ke paas kab jaana hai, yeh main confirm karke batati hoon.",
+   "text": "Doctor visit kab hai?"
+  },
+  "h016": {
+   "saheli": "Arey waah! Unki drawing to dekhne layaq hogi.",
+   "text": "Bachhe drawing bana rahe"
+  },
+  "h017": {
+   "saheli": "Yeh toh bohot achhi baat hai! Din energetic beetega.",
+   "text": "Mast neend aayi"
+  },
+  "h018": {
+   "saheli": "Dr Ankit Saxena ke visit ki exact date check karke jaldi share karti hoon.",
+   "text": "Doctor visit date?"
+  },
+  "h019": {
+   "saheli": "Shabash! Ab thoda relax karo.",
+   "text": "Study khatam kar li"
+  },
+  "h020": {
+   "saheli": "Thoda rest le lo Swati, chahe to thodi der aankein band karke baitho.",
+   "text": "Thak gayi aaj"
+  },
+  "h021": {
+   "saheli": "Rajma chawal ka toh maza hi alag hai, sach mein comfort food hai!",
+   "text": "Fav food rajma chawal"
+  },
+  "h022": {
+   "saheli": "Garam chai peene ka perfect time hai fir toh!",
+   "text": "Baarish start ho gayi"
+  },
+  "h023": {
+   "saheli": "Sab theek ho jayega, jo pasand ho wahi karo ya koi gaana sun lo.",
+   "text": "Mood down hai aaj"
+  },
+  "h024": {
+   "saheli": "Waah, paneer to mast lagta hai! Enjoy karo dinner.",
+   "text": "Dinner mein paneer banaya"
+  },
+  "h025": {
+   "saheli": "Arrey baap re, faltu ka shor-sharaba ho gaya hoga wahan.",
+   "text": "Neighbours lad rahe the"
+  },
+  "h026": {
+   "saheli": "Mithaai ke bina toh tyohar adhura hai, kya banane ka plan hai?",
+   "text": "Festival sweets ki planning"
+  },
+  "h027": {
+   "saheli": "Main yahin hoon Swati. Thoda aaram karo aur deep breathing kar lo.",
+   "text": "Feeling low again"
+  },
+  "h028": {
+   "saheli": "Aaj jaldi so jao, achhi neend se saari thakan door ho jayegi.",
+   "text": "Bahut thakawat hai"
+  },
+  "h029": {
+   "saheli": "Arrey wah, tyohar ka mitha shuru ho gaya fir toh!",
+   "text": "Neighbour sweet deke gayi"
+  },
+  "h030": {
+   "saheli": "Ghar mein full masti chal rahi hai lagta hai!",
+   "text": "Bacchon ka shor chal raha"
+  },
+  "h031": {
+   "saheli": "Sun kar bohot dukh hua, Swati. Bhagwan unki aatma ko shanti de, apna khayal rakhna.",
+   "text": "Badi didi passed away yesterday."
+  },
+  "h032": {
+   "saheli": "Haan, paani peete rehna aur dhoop se bachna.",
+   "text": "Aaj bohot garmi hai."
+  },
+  "h033": {
+   "saheli": "Yeh toh bohot accha show hai! Aise serials se din ka thoda waqt accha nikalta hai.",
+   "text": "9 pm Saath Phere miss nahi karti."
+  },
+  "h034": {
+   "saheli": "Yeh toh bohot acchi baat hai. Aise hi aaraam milna chahiye.",
+   "text": "Achi neend aayi aaj."
+  },
+  "h035": {
+   "saheli": "Haan, tyohar aate hain toh ghar mein alag hi raunak ho jaati hai.",
+   "text": "Festivals aane wale hain."
+  },
+  "h036": {
+   "saheli": "Aapka dukh samajh sakti hoon Swati, par thoda sa zaroor khao, taakat ke liye zaroori hai.",
+   "text": "Badi didi ke baad chup hu, khana nahi khaya ja raha."
+  },
+  "h037": {
+   "saheli": "Khichdi halki aur pet ke liye bohot acchi hoti hai. Thoda aaram se kha lijiye.",
+   "text": "Khichdi banayi hai bas."
+  },
+  "h038": {
+   "saheli": "Acha, kya keh rahe the Sharma ji?",
+   "text": "Sharma ji mile the aaj."
+  },
+  "h039": {
+   "saheli": "Aapka agla doctor appointment Friday, 2 October ko subah 11 baje schedule hai.",
+   "text": "Next doctor visit kab hai?"
+  },
+  "h040": {
+   "saheli": "Shaam ko bas 8 baje khane ke baad wali dawai leni hai.",
+   "text": "Aaj shaam ko kya due hai?"
+  },
+  "h041": {
+   "saheli": "Shaam ko sirf dinner ke baad wali dawai lene ka dhyan rakhna hai.",
+   "text": "Shaam ka schedule kya hai?"
+  },
+  "h042": {
+   "saheli": "Bohot badhiya! Kaam pura ho gaya toh ab thoda aaram kar lo.",
+   "text": "Study complete ho gayi."
+  },
+  "h043": {
+   "saheli": "Next visit Friday ko 11 baje hai.",
+   "text": "Agla doctor checkup kab hai?"
+  },
+  "h044": {
+   "saheli": "Bacchon ki shaitaniyon se hi toh ghar mein hasi-khushi rehti hai.",
+   "text": "Bacche bohot shaitan hain."
+  },
+  "h045": {
+   "saheli": "Dawa hamesha paani ke saath lena hi theek rehta hai, chai ke saath asar kam ho sakta hai.",
+   "text": "Chai ke saath dawai le sakte?"
+  },
+  "h046": {
+   "saheli": "Itni raat ko disturbance hoti hai toh neend kharab ho sakti hai. Koshish karo aaram se sone ki.",
+   "text": "Pados mein kutta bohot bhauk raha."
+  },
+  "h047": {
+   "saheli": "Sunkar bohot acha laga! Din bhar acchi energy rahegi.",
+   "text": "Mast soyi raat ko."
+  },
+  "h048": {
+   "saheli": "Arre wah, acchi baat hai! Pados mein nayi gaadi aayi hai toh sab khush honge.",
+   "text": "Padosi nayi car laye."
+  },
+  "h049": {
+   "saheli": "Yeh toh bohot acha hai, emergency mein bharosemand padosi ke paas chabi hona bohot kaam aata hai.",
+   "text": "Urmila aunty ke paas ghar ki spare key rehti hai."
+  },
+  "h050": {
+   "saheli": "Shabash, waqt par poora kar liya. Ab so jao.",
+   "text": "Study kar li."
+  },
+  "h051": {
+   "saheli": "Badal chhayen hain toh shayad barish ho jaye, mausam thanda rahega.",
+   "text": "Aaj cloudy hai mausam."
+  },
+  "h052": {
+   "saheli": "Mausam suhana ho gaya hai, ek cup garam chai peene ka time hai!",
+   "text": "Thandi hawa chal rahi."
+  },
+  "h053": {
+   "saheli": "Kabhi kabhi aisa din hota hai Swati. Deep breath lo aur thoda aaram karo, sab theek hoga.",
+   "text": "Thoda low feel ho raha."
+  },
+  "h054": {
+   "saheli": "Parivar ke aane se dil kitna halka aur khush ho jata hai na! Bohot acha hua.",
+   "text": "Ghar wale aaye the, acha laga."
+  },
+  "h055": {
+   "saheli": "Aapka agla visit agle hafte Monday ko scheduled hai.",
+   "text": "Doctor visit kab hai next?"
+  },
+  "h056": {
+   "saheli": "Lagta hai koi kaam hoga. Aap phone rakh kar aaram se sone ki koshish karo.",
+   "text": "Padosi abhi tak jag rahe."
+  },
+  "h057": {
+   "saheli": "Bohot badhiya khabar hai! Ghar mein shaadi ki tayari shuru ho jayegi ab.",
+   "text": "Pados wali ladki ki shaadi fix hui."
+  },
+  "h058": {
+   "saheli": "Aaj ka din bhaag-daud wala raha hoga. Jaldi khana khakar so jao.",
+   "text": "Bohot thak gayi aaj."
+  },
+  "h059": {
+   "saheli": "Shaadi ki khushi mein mithai aayi lagta hai! Thoda meetha khao aur enjoy karo.",
+   "text": "Padosi mithai dekar gaye."
+  },
+  "h060": {
+   "saheli": "Garden saaf aur sundar rehta hai toh dekh kar hi mann khush ho jata hai.",
+   "text": "Verma ji garden theek kar rahe the."
+  },
+  "h061": {
+   "saheli": "Aww Chintu bohot cute naam hai! Kaisa hai Chintu?",
+   "text": "billi ka naam Chintu hai"
+  },
+  "h062": {
+   "saheli": "Bache to masti karte hi hain, ghar me ronaq rehti hai unse.",
+   "text": "bachhe bohot shaitan hain"
+  },
+  "h063": {
+   "saheli": "Haan, festival ka time hamesha exciting hota hai! Tayyari shuru hui?",
+   "text": "festival aane wala hai"
+  },
+  "h064": {
+   "saheli": "Achha laga sunkar, padosiyon se baat karke din achha guzar jata hai.",
+   "text": "neighbour se mile aaj"
+  },
+  "h065": {
+   "saheli": "Yeh to bohot achhi baat hai! Achi neend se din fresh rehta hai.",
+   "text": "neend achhi aayi"
+  },
+  "h066": {
+   "saheli": "Mausam achha ho toh bahar khelne me unhe bohot maza aata hoga.",
+   "text": "kids were playing outside"
+  },
+  "h067": {
+   "saheli": "Shaam ko bas routine medicines ka dhyaan rakhna hai. Koi confusion ho toh batana.",
+   "text": "aaj sham kya baki hai?"
+  },
+  "h068": {
+   "saheli": "Koi baat nahi, kabhi kabhi ho jata hai. Kal time mile toh dekh lena.",
+   "text": "study skip ho gayi aaj"
+  },
+  "h069": {
+   "saheli": "Kitna pyaara! Unki drawing dekh kar zaroor bohot khushi hui hogi.",
+   "text": "grandkids drawing bana rahe the"
+  },
+  "h070": {
+   "saheli": "Arey waah, unke sath thoda ghumna bohot refreshing rehta hai.",
+   "text": "bachho ke sath park gaye"
+  },
+  "h071": {
+   "saheli": "Aapki next visit ki exact date appointment slip me likhi hogi, zaroor check kar lijiye.",
+   "text": "next doctor visit kab hai?"
+  },
+  "h072": {
+   "saheli": "Haan, mausam badal raha hai, apna khayal rakhiyega aur warm rahiye.",
+   "text": "weather thanda ho raha"
+  },
+  "h073": {
+   "saheli": "Bohot badhiya! Acchi neend se energy bani rehti hai.",
+   "text": "slept well last night"
+  },
+  "h074": {
+   "saheli": "Aap thoda aaram kar lijiye aur pani pijiye, rest lena zaroori hai.",
+   "text": "bohot tired feel ho raha"
+  },
+  "h075": {
+   "saheli": "Shabash, achha hua aaj time par pura ho gaya!",
+   "text": "study done today"
+  },
+  "h076": {
+   "saheli": "Haan, dhoop me nikalte waqt thanda paani peete rahiye.",
+   "text": "bohot dhoop thi aaj"
+  },
+  "h077": {
+   "saheli": "Koi fikr nahi, agle din aaram se cover kar lena.",
+   "text": "study miss ho gayi"
+  },
+  "h078": {
+   "saheli": "Kahaniyaan sunte waqt bachhe kitne dhyan se baithte hain, bohot sweet moment hai.",
+   "text": "bachhe story sun rahe the"
+  },
+  "h079": {
+   "saheli": "Achha hua, baatein karke thoda change mil gaya hoga.",
+   "text": "neighbour aaye the"
+  },
+  "h080": {
+   "saheli": "Kitne achhe neighbour hain, aise waqt par madad milna badi baat hai.",
+   "text": "neighbour helped today"
+  },
+  "h081": {
+   "saheli": "Khichdi light aur comforting hoti hai, pet ke liye bohot achhi hai.",
+   "text": "dinner me khichdi banayi"
+  },
+  "h082": {
+   "saheli": "Chaliye, ab aapko bhi thoda shaanti aur rest mil jayega.",
+   "text": "bachhe so gaye"
+  },
+  "h083": {
+   "saheli": "Ghar roshni se bohot sundar lag raha hoga abhi!",
+   "text": "tyohar ki lights lagayi"
+  },
+  "h084": {
+   "saheli": "Waah, kheer sunte hi munh me paani aa gaya! Sabko bohot pasand aayi hogi.",
+   "text": "kheer banayi aaj"
+  },
+  "h085": {
+   "saheli": "Bas jaldi se rest kar lijiye, thoda aaram bohot fayda karega.",
+   "text": "thakan bohot hai"
+  },
+  "h086": {
+   "saheli": "Dawa hamesha saade paani ke sath lena behtar hota hai, chai se asar kam ho sakta hai.",
+   "text": "chai ke sath medicine le sakte?"
+  },
+  "h087": {
+   "saheli": "Koi baat nahi, busy din me kabhi kabhi skip ho jata hai.",
+   "text": "study nahi hui aaj"
+  },
+  "h088": {
+   "saheli": "Great job! Aise hi regular complete karte rahiye.",
+   "text": "study khatam ho gayi"
+  },
+  "h089": {
+   "saheli": "Unki masti se ghar me hansi bani rehti hai.",
+   "text": "bachhe masti kar rahe"
+  },
+  "h090": {
+   "saheli": "Dal tadka aur garam chawal ka maza hi alag hota hai!",
+   "text": "dal tadka banaya"
+  },
+  "h091": {
+   "saheli": "Arey waah, paneer toh sabka favourite hota hai! Kaisa bana aaj?",
+   "text": "aaj paneer banaya"
+  },
+  "z01": {
+   "saheli": "Aapne mujhe kisi allergy ke baare mein nahi bataya hai. Agar koi nayi allergy notice hui hai toh zaroor share karein.",
+   "text": "Swati ko koi allergy hai?"
+  },
+  "z02": {
+   "saheli": "Aapke doctor ka naam mere paas abhi note nahi hai. Aap batayenge toh main yaad rakhungi.",
+   "text": "Swati ka doctor kaun hai?"
+  },
+  "z03": {
+   "saheli": "Mere record mein abhi aapki koi regular medicines listed nahi hain. Kya doctor ne koi nayi shuru karwayi hai?",
+   "text": "Swati ki kitni regular medicines chal rahi?"
+  },
+  "z04": {
+   "saheli": "Aapne is mahine aisi koi sad news share nahi ki hai. Sab theek toh hai na?",
+   "text": "Family mein kya sad news aayi this month?"
+  },
+  "z05": {
+   "saheli": "Yeh aapne mujhe abhi tak nahi bataya hai. Kaun karta hai call?",
+   "text": "Sundays ko Swati ko kaun call karta?"
+  },
+  "z06": {
+   "saheli": "Aapki favourite dish ka naam mujhe abhi nahi pata. Aapko sabse zyada kya pasand hai?",
+   "text": "Swati ki favourite dish kaunsi hai?"
+  },
+  "z07": {
+   "saheli": "Aap 9 baje kaunsa serial dekhte hain, yeh mujhe nahi pata. Kaunsa show chal raha hai aajkal?",
+   "text": "9 pm kaunsa serial dekhti Swati?"
+  },
+  "z08": {
+   "saheli": "Spare key kiske paas hai, yeh mere paas note nahi hai. Kya kisi padosi ya relative ko di hui hai?",
+   "text": "House ki spare key kiske paas?"
+  },
+  "z09": {
+   "saheli": "Aapki cat ka naam mujhe nahi pata. Kya pyaara sa naam rakha hai uska?",
+   "text": "Cat ka name kya hai?"
+  }
+ }
+}

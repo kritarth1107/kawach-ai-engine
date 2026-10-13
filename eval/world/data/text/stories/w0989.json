@@ -1,0 +1,374 @@
+{
+ "family": "w0989",
+ "hash": "131f6d7a57af0cb0e7b4",
+ "texts": {
+  "e01": {
+   "saheli": "घणी चोखी बात है भंवरी जी, बगत पर दवाई ले ली। आप आराम करो सा।",
+   "text": "सहेली, आज सबेरे म्हैं मेरी Metformin ले लीनी सा। बगत सर दवाई लेवण री आदत अब तो पक्की पड़गी है। थारो घणो-घणो आभार म्हारी चिंता राखण सारु।"
+  },
+  "e02": {
+   "saheli": "बीपी रो नाप चोखो लाग रियो है भंवरी जी। आपरो ध्यान राखजो और पानी पीवता रहिजो।",
+   "text": "सहेली, आज बीपी नपायो तो 120/88 आयो है सा। म्हारी तबियत एकदम ठीक लाग री है, कोई तकलीफ कोनी। थूं बता कसीक बात है?"
+  },
+  "e03": {
+   "saheli": "साची बात है, गरमी घणी पड़ री है। आप धूप मांय मती निकळजो और ठंडक मांय आराम करो सा।",
+   "text": "अरे सहेली, आज तो इण तावड़े मार ही नाख्या सा! इतनी घणी गरमी पड़ी है के हाल बेहाल होयग्यो। पंखो चालतो रहे तो ही सांस आवे।"
+  },
+  "e04": {
+   "saheli": "सांझरे टहलण रो विचार घणो ही बढ़िया है भंवरी जी। म्हैं थांने याद दिराय देसूं।",
+   "text": "सहेली, म्हैं सोच्यो है के काल सूं रोज सांझरे 6:30 pm घूमुन जाया करुंला। सांझ री ठंडी हवा मांय टहलणो घणो चोखो रहवेला। थे म्हाने याद दिवा दीजो सा।"
+  },
+  "e05": {
+   "saheli": "Photo dekh li maine, par main order nahi kar sakti Kavita. Aap kisi delivery app se ya local shop se order kar lijiye.",
+   "text": "Saheli, photo bhej rahi hoon fresh fruit basket ki. Please Maa ke liye ek fruit pack order kar dena."
+  },
+  "h001": {
+   "saheli": "Namaste Kavita ji, Bhanwari ji ka schedule note kar liya hai. Sabhi medicines aur timings update ho gaye hain.",
+   "text": "Hi Saheli, sending photo of mummy's prescription. Set up care for Bhanwari: Type 2 diabetes, High blood pressure. Medicines: Metformin 500 mg at 08:30, 21:30; Glimepiride 1 mg at 09:00; Sitagliptin 100 mg at 09:00; Amlodipine 5 mg at 08:30; Magnesium 250 mg at 22:00. Allergies: dust, aspirin. Doctor: Dr Komal Rathore."
+  },
+  "h002": {
+   "saheli": "Jai Shree Krishna Ratan Singh ji, bohot accha kiya jo update kar diya. Bhanwari ji ka khayal rakhne ke liye shukriya.",
+   "text": "Jai Shree Krishna Saheli. Mummy ne breakfast ke baad time pe Glimepiride le li thi, maine abhi call pe poocha tha."
+  },
+  "h003": {
+   "saheli": "Ghar ke khane ki baat hi alag hoti hai Ratan Singh ji, mummy ke hath ka swad toh hamesha yaad rehta hai.",
+   "text": "Aaj yahan UAE mein maine traditional dal bati banayi thi. Mummy ki recipe yaad aa rahi thi, bilkul waisa swad to nahi aaya par koshish ki."
+  },
+  "h004": {
+   "saheli": "Noted Dinesh ji, update karne ke liye shukriya.",
+   "text": "Maa took Glimepiride after breakfast."
+  },
+  "h005": {
+   "saheli": "Jodhpur mein bhi dhoop rehti hai Ratan Singh ji, aap bhi garmi mein paani khoob peete rahiye.",
+   "text": "Yahan Dubai mein aajkal dhoop bohot tez hai aur garmi badh gayi hai. Jodhpur mein mausam kaisa chal raha hai abhi?"
+  },
+  "h006": {
+   "saheli": "Kavita ji, record ke mutabik Dr Komal Rathore ke sath agla visit scheduled nahi dikh raha hai.",
+   "text": "Sharing photo of clinic card. Next doctor visit kab scheduled hai mummy ki?"
+  },
+  "h007": {
+   "saheli": "Theek hai Dinesh ji, note kar liya hai ki emergency ke liye Gulab aunty ke paas spare key rehti hai.",
+   "text": "Gulab aunty next door keeps spare key."
+  },
+  "h008": {
+   "saheli": "Ratan Singh ji, dawai hamesha taaze paani ke sath lena hi sabse behtar hota hai, chai ke sath lene se uska asar kam ho sakta hai.",
+   "text": "Saheli, ek baat poochhni thi. Kya mummy apni dawai chai ke sath le sakti hain ya pani se hi lena theek rahega?"
+  },
+  "h009": {
+   "saheli": "भंवरी जी, दवाई हमेशा सादे पाणी रे साथे ही लेवणी चाहिजे। चाय रे साथे दवाई लेवण सूं बचो।",
+   "text": "सहेली, म्हैं पूछूं थी कि दवाई चाय रे साथे ले सकां कांई? सुण्यो है कि चाय सूं नहीं लेणी चाहिजे।"
+  },
+  "h010": {
+   "saheli": "Ratan Singh ji, filhal Dr Komal Rathore ke sath kisi agle visit ki date note nahi hai.",
+   "text": "Mummy ka routine theek chal raha hai. Dr Komal Rathore ke paas next doctor visit kab ki hai kuch update hai?"
+  },
+  "h011": {
+   "saheli": "Bilkul Ratan Singh ji, subah ke samay bina dhoop ke ghoomna Bhanwari ji ki sehat ke liye bohot accha rahega.",
+   "text": "Aaj yahan halki hawa chal rahi hai par dhoop tez hai. Mummy ko kehna subah dhoop aane se pehle hi tahal liya karein."
+  },
+  "h012": {
+   "saheli": "Hawa band hone se garmi lagti hai Kavita ji, dhyan rakhein aur paani peete rahein.",
+   "text": "Photo of Bikaner sky. Mausam aaj thoda ajeeb hai, hawa bilkul band hai."
+  },
+  "h013": {
+   "saheli": "Tyohar ki raunak shuru ho gayi hai Kavita ji, tayyariyan khoob dhoom-dham se kijiyega!",
+   "text": "Photo of the market decorations. Aage festival aa raha hai toh bazaar mein bheed shuru ho gayi hai."
+  },
+  "h014": {
+   "saheli": "Tyohar par parivar ki yaad aana bilkul laazmi hai Ratan Singh ji, parivar ki khushiyan sath bani rahein.",
+   "text": "Aage festival aa raha hai to ghar ki bohot yaad aati hai. Mummy bhi tyohar par pooja aur pakwan ki tayyari karti hain."
+  },
+  "h015": {
+   "saheli": "Theek hai Dinesh ji, Metformin note kar li hai.",
+   "text": "Maa took Metformin after breakfast."
+  },
+  "h016": {
+   "saheli": "राम राम भंवरी जी, घणी चोखी बात है कि आप टैम पर दवाई ले ली। आपरो ध्यान राखजो।",
+   "text": "राम राम सहेली, आज म्हैं कलेवो कर’र Glimepiride ले लीनी ही। तूं म्हारी चिंता मती करजे, तबीयत चोखी है।"
+  },
+  "h017": {
+   "saheli": "Shukriya Kavita ji, Sitagliptin lene ka note kar liya hai.",
+   "text": "Photo of mummy's strip. Breakfast ke baad mummy ne Sitagliptin le li."
+  },
+  "h018": {
+   "saheli": "Note kar liya Dinesh ji, par Magnesium aamtaur par raat 22:00 ke liye scheduled hai.",
+   "text": "Maa took Magnesium after breakfast."
+  },
+  "h019": {
+   "saheli": "Bohot sundar darshan hain Kavita ji, pooja shanti se sampann hui yeh jaan kar accha laga.",
+   "text": "Mummy ke mandir ki photo bheji hai. Aaj ki pooja ache se ho gayi."
+  },
+  "h020": {
+   "saheli": "Kedarnath yatra ka plan sunkar bohot accha laga Ratan Singh ji, bas Bhanwari ji ki tabiyat aur aaram ka poora dhyan rakhiyega.",
+   "text": "Hum sab parivar wale plan kar rahe hain ki next month mummy ko lekar Kedarnath ki yatra par jayein. Sabhi taiyariyan dheere dheere dekh rahe hain."
+  },
+  "h021": {
+   "saheli": "Dinesh ji, aaj raat Metformin 500 mg (21:30) aur Magnesium 250 mg (22:00) scheduled hain.",
+   "text": "Doses due this evening?"
+  },
+  "h022": {
+   "saheli": "Noted Dinesh ji, update ke liye shukriya.",
+   "text": "Maa took Glimepiride after breakfast."
+  },
+  "h023": {
+   "saheli": "घणी अच्छी बात है भंवरी जी, रोज सबेरे चालण सूं शरीर एकदम तंदुरुस्त रहवे है।",
+   "text": "सहेली, आज सबेरे म्हैं सैर पूरी कर लीनी, ठंडी बयार चालती ही। चालण सूं मन घणो प्रसन्न रह्यो।"
+  },
+  "h024": {
+   "saheli": "राम राम भंवरी जी, आपरी यह आदत बहुत चोखी है, सेहत खातिर सैर जरूरी है।",
+   "text": "राम राम, आज सबेरे भी म्हैं बगीचे में चक्कर लगाय लियो। घूम’र आयी तो घणी ताजगी लागी।"
+  },
+  "h025": {
+   "saheli": "Noted Kavita ji, Cholecalciferol lene ka update darj kar liya hai.",
+   "text": "Photo of mummy's medicine cup. Mummy took Cholecalciferol after breakfast."
+  },
+  "h026": {
+   "saheli": "Bohot pyari baat hai Dinesh ji, bacchon ko sath padhte dekh bohot khushi hoti hai.",
+   "text": "Kids doing homework together."
+  },
+  "h027": {
+   "saheli": "Theek hai Dinesh ji, note kar liya hai.",
+   "text": "Maa took Magnesium after breakfast."
+  },
+  "h028": {
+   "saheli": "Ratan Singh ji, abhi record mein agla doctor visit schedule nahi dikh raha hai.",
+   "text": "Saheli, mummy ko Dr Komal Rathore ke paas dubara kab dikhana hai? Agli appointment ki koi date set hai kya?"
+  },
+  "h029": {
+   "saheli": "Kolkata ki humidity kafi thaka deti hai Dinesh ji, thande paani ka sevan karte rahein.",
+   "text": "Kolkata weather very humid."
+  },
+  "h030": {
+   "saheli": "Ji Kavita ji, reports dekh li hain aur Low vitamin D ke liye Cholecalciferol 60000 IU daily subah 09:00 schedule mein add kar di hai.",
+   "text": "Lab reports photo attached. Tests came back, mummy has Low vitamin D. Dr started Cholecalciferol 60000 IU at 09:00."
+  },
+  "h031": {
+   "saheli": "Paani ke saath lena sabse safe rehta hai. Chai dawai ke asar par farak daal sakti hai.",
+   "text": "chai ke sath dawai le sakte?"
+  },
+  "h032": {
+   "saheli": "Haan, paani khoob peete rahiye aur dhoop se bachiye.",
+   "text": "kolkata mein bohot garmi aaj"
+  },
+  "h033": {
+   "saheli": "Sun kar bohot sukoon mila, Ratan Singh ji. Subah ki pooja se pura din shant aur accha beetta hai.",
+   "text": "Hello Saheli, Maaji ne subah pooja ache se kar li hai. Mandir mein thodi der shaanti se baithi bhi theen."
+  },
+  "h034": {
+   "saheli": "Kitna pyaara lag raha hai Chintu! Maaji ke paas aakar so gaya hai.",
+   "text": "Chintu ki photo bheji hai, humari billi kitne maze se so rahi hai Maaji ke paas."
+  },
+  "h035": {
+   "saheli": "Noted, Dinesh ji. Shukriya update dene ke liye.",
+   "text": "breakfast ke baad maaji took Metformin"
+  },
+  "h036": {
+   "saheli": "घणी चोखी बात है माजी, पड़ोसियां सागे बैठ'र बतियावण सूं मन एकदम खुश रैवे।",
+   "text": "म्हारी पड़ोसन कमला आज सवेरे मिलने आई ही। घणी देर बैठ'र बातां करी, मन हलको लाग्यो।"
+  },
+  "h037": {
+   "saheli": "Bohot accha kiya Ratan Singh ji, Maaji ka dhyan rakhne ke liye shukriya.",
+   "text": "Maaji ne breakfast ke baad Amlodipine le li hai. Maine abhi phone karke confirm kiya tha."
+  },
+  "h038": {
+   "saheli": "घणी बढ़िया बात है माजी, सवेरै री ठंडी हवा में टहलणो सेहत खातर घणो फायेमंद है।",
+   "text": "आज सवेरे उठ'र बागीचे में सैर कर ली ही। ठंडी हवा चालै ही तो घणो आनंद आयो।"
+  },
+  "h039": {
+   "saheli": "Bacchon ki raunak se ghar hamesha khushhaal lagta hai!",
+   "text": "kids masti full on today"
+  },
+  "h040": {
+   "saheli": "Paani ke sath lena hi theek rehta hai. Chai se dawai ka asar kam ho sakta hai.",
+   "text": "tea ke sath medicine chalegi?"
+  },
+  "h041": {
+   "saheli": "घणी चोखी बात है माजी, ठाकुरजी री कृपा आप पर सदा बणी रैवे।",
+   "text": "म्हैं आज सवेरे री पूजा पूरी कर ली है। ठाकुरजी री आरती करी और भोग भी लगा दियो।"
+  },
+  "h042": {
+   "saheli": "Photo mein daal baati bohot swadist lag rahi hai! Sabne khoob maze se khayi hogi.",
+   "text": "Maine daal baati banayi thi aaj, photo bheji hai dekho kaisi bani hai."
+  },
+  "h043": {
+   "saheli": "Bahut accha kiya Ratan Singh ji, time par dawai lene se Maaji ki tabiyat acchi rahegi.",
+   "text": "Maaji ne breakfast ke baad Cholecalciferol le li hai. Maine abhi Dubai se call karke pooch liya tha."
+  },
+  "h044": {
+   "saheli": "Kitni anmol dosti hai, itne saalon baad bhi har Ravivaar baat hona bohot pyari baat hai.",
+   "text": "Maaji ke school friend Mangilal ji ki purani photo mili, har Sunday phone karte hain unhe."
+  },
+  "h045": {
+   "saheli": "Photo dekh kar dil khush ho gaya, apno se milkar Maaji bhi bohot khush hui hongi!",
+   "text": "Aaj sab rishtedaar ghar aaye the, sabki photo bheji hai bohot khushi ka din raha."
+  },
+  "h046": {
+   "saheli": "वाह माजी, बाजरे री रोटी और काचरे री चटनी रो तो स्वाद ही न्यारो होवे है!",
+   "text": "आज म्हैं बाजरे री रोटी और काचरे री चटनी बणाई। सबने घणी सुआद लागी और चाव सूं खाई।"
+  },
+  "h047": {
+   "saheli": "Achi neend aane se din ki shuruaat kitni taro-taza hoti hai, bohot badhiya!",
+   "text": "Raat ko sab bohot chain se soye, subah fresh uthe sab photo dekho."
+  },
+  "h048": {
+   "saheli": "घणी बढ़िया बात माजी, लापसी रो परसाद तो सबने घणो मीठो लाग्यो होसी।",
+   "text": "आज रसोई में मीठा लापसी बणाई ही। काना जी ने भोग लगा'र सबने परसादी बांटी।"
+  },
+  "h049": {
+   "saheli": "Namaste Ratan Singh ji, shaam ko doctor ke nirdesh anusaar Maaji ki regular shaam wali dawai leni hai.",
+   "text": "Hello Saheli, Maaji ki shaam ki dawaiyon ka schedule kya hai aaj? Zara batayein toh main unhe yaad dila doon."
+  },
+  "h050": {
+   "saheli": "घणी चोखी बात है माजी, टैम पर दवाई ले ली, आप री तबियत बढ़िया रैवेली।",
+   "text": "म्हैं आज सवेरे कलेवे रे बाद आपणो Magnesium ले लियो हो। थे चिंता मती करजो।"
+  },
+  "h051": {
+   "saheli": "Aisa kabhi kabhi lag sakta hai Ratan Singh ji, thoda aaram kijiye aur Maaji ya parivaar se baat karke man halka kar lijiye.",
+   "text": "Aaj pata nahi kyun thoda man udaas sa hai aur energy kam lag rahi hai. Bas aise hi akelapan sa mehsoos ho raha tha."
+  },
+  "h052": {
+   "saheli": "Mausam badalta rehta hai Ratan Singh ji, aap apna poora dhyan rakhein aur paani khoob piyein.",
+   "text": "Yahan UAE mein aaj hawa thodi tez hai par dhoop bhi kaafi hai. Mausam thoda alag hi chal raha hai."
+  },
+  "h053": {
+   "saheli": "Koi baat nahi Ratan Singh ji, Maaji ko pehle aaram karne dein, shanti aur aaram sabse zaroori hai.",
+   "text": "Aaj Maaji thoda thaki hui theen toh subah ki pooja nahi kar paayin. Kal aaram se karengi."
+  },
+  "h054": {
+   "saheli": "Shukriya batane ke liye Ratan Singh ji, Maaji ki dawai ka dhyan rakhna bohot achi baat hai.",
+   "text": "Maaji ne aaj subah naashte ke baad Glimepiride le li hai. Maine check kar liya hai sab theek hai."
+  },
+  "h055": {
+   "saheli": "Dawai hamesha saada paani ke sath lena hi sabse behtar hota hai, chai se asar kam ho sakta hai.",
+   "text": "Ek baat poochhni thi Saheli, kya koi dawai garam chai ke saath li ja sakti hai? Maaji poochh rahi theen."
+  },
+  "h056": {
+   "saheli": "Bohot badhiya! Subah ki tazi hawa aur tehalna dono bohot faaydemand hain.",
+   "text": "Morning walk complete ho gayi aaj, ye dekho park ki photo."
+  },
+  "h057": {
+   "saheli": "Din bhar ki bhaag-daud ke baad aaram zaroori hai, aap sab achi neend lijiye.",
+   "text": "Din bhar kaam mein thak gaye, dekho sab bas sofe par so gaye photo bheji."
+  },
+  "h058": {
+   "saheli": "Noted Dinesh ji, update dene ke liye shukriya.",
+   "text": "breakfast ke baad maaji took Cholecalciferol"
+  },
+  "h059": {
+   "saheli": "सही कर्यो माजी, तेज धूप और लू सूं बच'र घरै ही रैवणो चोखो है, पाणी पीवता रैइजो।",
+   "text": "आज जोधपुर में धूप घणी तेज ही, दुपहरी में लू चालै ही। म्हैं तो घर रा किवाड़ बंद राखिया।"
+  },
+  "h060": {
+   "saheli": "Koi baat nahi, kabhi kabhi thoda extra so lena bhi shareer ke liye zaroori hota hai.",
+   "text": "Aaj morning walk skip ho gayi aalas ki wajah se, late uthe photo dekho."
+  },
+  "h061": {
+   "saheli": "Theek hai Dinesh ji, note kar liya.",
+   "text": "Mummy took Sitagliptin after breakfast."
+  },
+  "h062": {
+   "saheli": "Noted Dinesh ji, Pankaj ka birthday 22 January ko yaad rakhungi.",
+   "text": "Pankaj bday 22 January."
+  },
+  "h063": {
+   "saheli": "Acha, naye padosi aane se thoda mahaul badal jata hai.",
+   "text": "Neighbour Sharma ji shifted today."
+  },
+  "h064": {
+   "saheli": "घणी चोखी बात है माँजी, टाबरां री आवाज सुण’र मन एकदम हरख जावे।",
+   "text": "आज तो टाबरिया फोन कियो हो, घणी देर बात करी। सुण'र म्हारो जीव घणो राजी हुयो।"
+  },
+  "h065": {
+   "saheli": "Kya hua Dinesh ji? Thoda aaram kijiye aur garam chai lijiye, sab theek ho jayega.",
+   "text": "Feeling low today."
+  },
+  "h066": {
+   "saheli": "Bahut badiya, halka aur aasan khana sabse best hota hai.",
+   "text": "Made khichdi today."
+  },
+  "h067": {
+   "saheli": "Photo dekh kar accha laga Kavita ji, acchi neend aana bahut zaroori hai.",
+   "text": "Dekho photo, raat ko badiya neend aayi sabko."
+  },
+  "h068": {
+   "saheli": "साचै ही घणी खुशी री बात है माँजी, सगळा भेळा हुवै तो घर रो रोणक ही अलग हुवै।",
+   "text": "आज घरोघर टाबर-टोली आई, घणी मौज रही। सब साथे बैठ'र चाय-पानी पीधो, म्हारो दिन घणो सुख पायो।"
+  },
+  "h069": {
+   "saheli": "Bahut badhiya Ratan Singh ji, acchi neend se poora din accha gujarta hai.",
+   "text": "Saheli ji, kal raat sab log bahut chain se soye. Subah sabhi log ekdum fresh mehsoos kar rahe hain."
+  },
+  "h070": {
+   "saheli": "Wah Kavita ji, photo bahut sundar hai aur morning walk se din ki shuruat badhiya hoti hai.",
+   "text": "Subah ki walk done, photo dekho park ki."
+  },
+  "h071": {
+   "saheli": "Sun kar accha laga Kavita ji, achhi neend se tabiyat hamesha taaza rehti hai.",
+   "text": "Aaram se soye sab, ye dekho fresh morning photo."
+  },
+  "h072": {
+   "saheli": "Photo mein gatte ki sabzi bahut lazeez lag rahi hai Kavita ji!",
+   "text": "Gatta curry banayi hai aaj, dekho photo."
+  },
+  "h073": {
+   "saheli": "माँजी, त्यौहारां रो तो रंग ही न्यारो हुवै, आप आपरी तबियत रो भी ध्यान राखजो।",
+   "text": "अबै त्यौहार आवाळा है, घर में साफ-सफाई री तैयारी चालै है। म्हारै तो मन में ओळूं अर चाव दोनों है।"
+  },
+  "h074": {
+   "saheli": "Ji Ratan Singh ji, Amlodipine ka samay par lena bahut accha hai, dhyan rakhne ke liye shukriya.",
+   "text": "Saheli ji, Mummy ji ne nashta karne ke baad Amlodipine le li hai. Unki tabiyat abhi theek lag rahi hai."
+  },
+  "h075": {
+   "saheli": "Aap file mein check kar lijiye ya clinic mein confirm kar lijiye Dinesh ji.",
+   "text": "Next doctor visit kab?"
+  },
+  "h076": {
+   "saheli": "Badiya Dinesh ji, swadisht aur paushtik khana hamesha accha hota hai.",
+   "text": "Dal tadka prepared."
+  },
+  "h077": {
+   "saheli": "Dinesh ji, doctor ki pichhli parchi dekh lijiye ya clinic par call karke pata kar lijiye.",
+   "text": "Doctor visit date?"
+  },
+  "z01": {
+   "saheli": "Aapki photo dekh li hai. Main check karke batati hoon ki Maaji abhi Cholecalciferol ki kaunsi dose le rahi hain.",
+   "text": "Photo bhej rahi hoon parchi ki, dekh ke batao what dose of Cholecalciferol does Bhanwari take now?"
+  },
+  "z02": {
+   "saheli": "Maine photo dekh li hai. Records dekh kar batati hoon agar Maaji ko kisi cheez se allergy hai toh.",
+   "text": "Photo bhej di hai file ki, check karo is Bhanwari allergic to anything?"
+  },
+  "z03": {
+   "saheli": "Photo mil gayi hai Kavita ji. Main dekh kar batati hoon ki Maaji ke doctor kaun hain.",
+   "text": "Clinic ki photo dekho, who is Bhanwari's doctor?"
+  },
+  "z04": {
+   "saheli": "Box ki photo dekh li hai. Main jald hi confirm karti hoon ki Maaji regular kitni dawaiyan le rahi hain.",
+   "text": "Medicine box ki photo dekho, how many regular medicines does Bhanwari take now?"
+  },
+  "z05": {
+   "saheli": "Reports ki photo mil gayi hai. Main dekh kar batati hoon ki is mahine ke tests mein kya aaya hai.",
+   "text": "Report ki photo bheji hai, what did the tests show for Bhanwari this month?"
+  },
+  "z06": {
+   "saheli": "Photo mil gayi hai. Main check karke batati hoon ki ghar ki spare key kiske paas hai.",
+   "text": "Darwaze ki photo bheji hai, who has the spare key to the house?"
+  },
+  "z07": {
+   "saheli": "Calendar dekh liya hai. Main batati hoon ki agle mahine parivaar kahan jaane ka plan bana raha hai.",
+   "text": "Calendar ki photo bheji hai, where is the family planning to go next month?"
+  },
+  "z08": {
+   "saheli": "Badi pyaari photo hai! Main dekh kar batati hoon cat ka kya naam hai.",
+   "text": "Cat ki photo bheji hai, what is the cat's name?"
+  },
+  "z09": {
+   "saheli": "Photo mil gayi hai. Main check karke batati hoon ki Sundays ko Maaji ko kaun phone karta hai.",
+   "text": "Call log ki photo bheji hai, who calls Bhanwari on Sundays?"
+  },
+  "z10": {
+   "saheli": "Diary ki photo dekh li hai. Main dekh kar batati hoon ki Pankaj ka birthday kab aata hai.",
+   "text": "Purani diary ki photo dekho, when is Pankaj's birthday?"
+  }
+ }
+}

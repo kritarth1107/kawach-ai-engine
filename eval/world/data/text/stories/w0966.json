@@ -1,0 +1,382 @@
+{
+ "family": "w0966",
+ "hash": "1ae262407e1a4426e3e9",
+ "texts": {
+  "e01": {
+   "saheli": "Ji Sushila ji, reading kaafi theek hai. Bas apna dhyan rakhiye aur regular check karte rahiye.",
+   "text": "haan beta abhi subah BP check kiya tha toh reading aayi hai 135/81 matlab theek hi hai na"
+  },
+  "e02": {
+   "saheli": "Arre dhyan rakhiye Sushila ji, chot par halki baraf laga lijiye. Agar dard badhe ya chalne mein takleef ho toh aaram kariyega.",
+   "text": "are suno thoda sa bathroom mein pair fisal gaya tha ghutne pe halki si chot aayi hai bruise hai par chalne mein dikkat nahi hai"
+  },
+  "e03": {
+   "saheli": "Bahut accha faisla hai Sushila ji. Shaam ko aaram se walk kariyega aur comfortable joote pehniyega.",
+   "text": "woh socha hai maine ki kal se na roz shaam ko evening walk par jaungi wahi 6:30 pm ke aas paas"
+  },
+  "e04": {
+   "saheli": "Tyohar ki taiyariyon ki alag hi raunak hoti hai! Par kaam ke beech thoda aaram zaroor karte rahiye.",
+   "text": "ab aage tyohar aa raha hai na toh bas wahi sab taiyari ka soch rahi thi ghar mein kaafi safai aur sab chal raha hai"
+  },
+  "h001": {
+   "saheli": "Namaste Abhishek, noted with care. Main Ma ka poora dhyaan rakhungi.",
+   "text": "hi saheli seting up for my mother Sushila she has Type 2 diabetes and Depression / anxiety no medicines right now no allergies her doc is Dr Manish Saxena pls call her Ma"
+  },
+  "h002": {
+   "saheli": "Theek hai, note kar liya ki Vitamin B12 le li.",
+   "text": "took Vitamin B12 after bfast today"
+  },
+  "h003": {
+   "saheli": "Aisa kabhi kabhi lag sakta hai. Thoda aaram kijiye aur deep breaths lijiye.",
+   "text": "feeling a bit low today man bas aese hi"
+  },
+  "h004": {
+   "saheli": "Ma, aaj shaam ke liye koi medicine scheduled nahi hai. Aap aaram se rahiye.",
+   "text": "haan beta suno aaj shaam ko kya lena hai matlab koi medicine schedule hai kya"
+  },
+  "h005": {
+   "saheli": "Bahut achha, Tamsulosin note ho gaya.",
+   "text": "took Tamsulosin after bfast"
+  },
+  "h006": {
+   "saheli": "Arre wah, Pooja ka birthday 24 January ko yaad rakhungi!",
+   "text": "pooja birthday is on 24 January btw my daughter"
+  },
+  "h007": {
+   "saheli": "Bahut badhiya reading hai. Maine 122/85 note kar liya.",
+   "text": "bp reading is 122/85 just checked"
+  },
+  "h008": {
+   "saheli": "Nahi Ma, shaam ke liye koi dawai nahi hai. Aap bilkul befikr rahiye.",
+   "text": "arre saheli shaam ko kuch lena hai kya beta batao"
+  },
+  "h009": {
+   "saheli": "Theek hai Abhishek, Vitamin B12 note kar li hai.",
+   "text": "took Vitamin B12 after bfast"
+  },
+  "h010": {
+   "saheli": "Samajh gayi, Tamsulosin lene ka update note ho gaya.",
+   "text": "took Tamsulosin after bfast just now"
+  },
+  "h011": {
+   "saheli": "BP 134/75 note kar liya hai, shukriya batane ke liye.",
+   "text": "bp 134/75 noted now"
+  },
+  "h012": {
+   "saheli": "Tyohar ki tayari ka alag hi maza hota hai! Ghar par sabko dher saari shubhkaamnayein.",
+   "text": "festival is coming up soon ghar pe sab tayari shuru ho rahi"
+  },
+  "h013": {
+   "saheli": "Bahut badhiya! Daily walk se body active rehti hai.",
+   "text": "walk done for today"
+  },
+  "h014": {
+   "saheli": "Nahi Ma, aaj shaam ke liye koi dawa scheduled nahi hai.",
+   "text": "saheli aaj shaam ko koi dawai hai kya lene ko"
+  },
+  "h015": {
+   "saheli": "131/80 BP note kar liya hai.",
+   "text": "bp is 131/80"
+  },
+  "h016": {
+   "saheli": "Theek hai, BP 129/93 maine record kar liya.",
+   "text": "bp right now 129/93"
+  },
+  "h017": {
+   "saheli": "Yeh BP reading kaafi achhi hai. Note kar liya.",
+   "text": "bp reading 123/77"
+  },
+  "h018": {
+   "saheli": "Ma, aaj shaam ke liye koi dawa nahi hai. Sab theek hai.",
+   "text": "suno beta aaj shaam ko kya lena hai kuch hai kya"
+  },
+  "h019": {
+   "saheli": "Aise suhane mausam mein ek cup garam chai ke saath baithna kitna achha lagta hai, Ma.",
+   "text": "aaj mausam thoda thanda lag raha hai hawa chal rahi hai achhi"
+  },
+  "h020": {
+   "saheli": "Jagjit Singh ji ki aawaaz to sach mein dil ko sukoon deti hai, Ma. Shaam ko unke gaane sunna sach mein bahut pyara routine hai.",
+   "text": "humein toh bas Jagjit Singh ke purane gaane bahut pasand hain har shaam sunte hain hum aaram se baith ke"
+  },
+  "h021": {
+   "saheli": "Koi baat nahi, Tamsulosin note kar liya hai.",
+   "text": "took Tamsulosin after bfast forgot to update"
+  },
+  "h022": {
+   "saheli": "Ma, agle doctor visit ki date abhi scheduled nahi hai. Main Abhishek se confirm kar lungi.",
+   "text": "doctor ke paas kab jaana hai agla checkup kab hai"
+  },
+  "h023": {
+   "saheli": "Theek hai, Rosuvastatin note ho gayi.",
+   "text": "took Rosuvastatin after bfast"
+  },
+  "h024": {
+   "saheli": "Noted, Vitamin B12 le li gayi hai.",
+   "text": "took Vitamin B12 after bfast"
+  },
+  "h025": {
+   "saheli": "Achha hua bata diya, main Priyanka ke messages ka bhi dhyaan rakhungi.",
+   "text": "priyanka will also look after Sushila from now she might msg u too"
+  },
+  "h026": {
+   "saheli": "Koi baat nahi, kal regular kar lijiyega.",
+   "text": "walk was skiped today time nahi mila"
+  },
+  "h027": {
+   "saheli": "Yeh toh bahut achhi baat hai! Apno ke aane se ghar mein sach mein raunak aa jaati hai.",
+   "text": "very hapy day today relatives visited and it was fun"
+  },
+  "h028": {
+   "saheli": "Abhishek, abhi Dr Manish Saxena ke saath koi agla visit scheduled nahi hai.",
+   "text": "whn is the next dr visit for ma"
+  },
+  "h029": {
+   "saheli": "Poto-poti ki hansi se to ghar khil uthta hai, Ma. Unka saath hamesha dil khush kar deta hai.",
+   "text": "bachhe aaye the toh ghar mein itni rounak thi bas unki baatein khatam hi nahi hoti"
+  },
+  "h030": {
+   "saheli": "Haan Ma, dhoop tez hai toh andar hi aaram kijiye aur paani peete rahiye.",
+   "text": "aaj dhoop bohot tez hai bahar garmi lag rahi hai"
+  },
+  "h031": {
+   "saheli": "Bachon ki raunak se ghar me jaan aa jaati hai Sushila ji. Unki shararat hi to asli khushi hoti hai.",
+   "text": "arre Saheli suno na bache log aaye the kal itni shararat kar rahe the pura ghar sar pe utha liya tha par unke bina mann bhi nahi lagta bilkul sunsaan ho jata hai ghar"
+  },
+  "h032": {
+   "saheli": "Subah ki thandi hawa me chai peene ka alag hi maza hai Sushila ji. Bas apna dhyan rakhiyega aur garam kapde nikal lijiye.",
+   "text": "haan good morning Saheli aaj subah se na thodi thandi hawa chal rahi hai mausam kaafi badal gaya hai lagta hai ab kambal nikalna padega"
+  },
+  "h033": {
+   "saheli": "Munnar ki trip ka plan sunkar bahut accha laga. Sushila ji ke sath ye safar bahut suhana rahega.",
+   "text": "we r planning a trip to Munnar nxt month mom also comin with us"
+  },
+  "h034": {
+   "saheli": "Lauki ki sabzi bilkul sahi rahegi Sushila ji, pachan ke liye halki aur sehatmand bhi hoti hai.",
+   "text": "Saheli main soch rahi thi ki dopahar ke khane me na thodi lauki ki sabzi bana lu thoda halka khana theek rahega pet ke liye kya kehti ho"
+  },
+  "h035": {
+   "saheli": "Moong dal ke cheele to bahut hi lazeez aur paushtik hote hain Sushila ji. Abhishek ko zaroor maza aaya hoga.",
+   "text": "arre suno aaj shaam ko na thode moong dal ke cheele banaye the Abhishek ko bade pasand hain garam garam khilaye usko"
+  },
+  "h036": {
+   "saheli": "Bahut badiya Abhishek. Sushila ji ki regular walk unki sehat ke liye kaafi acchi hai.",
+   "text": "walk is done mom did 20 mins today"
+  },
+  "h037": {
+   "saheli": "Aap chupchap aaram kijiye Sushila ji, koi jaldbaazi mat kariyega. Thoda paani pi lijiye aur aaram se letiye.",
+   "text": "hmmm aaj na dopahar se kaafi thakan lag rahi hai pata nahi kyu sharir bilkul toot raha hai aaram hi kar rahi hu bistar pe"
+  },
+  "h038": {
+   "saheli": "Shaam ko Sushila ji ki BP aur sugar ki regular dawaiyan hoti hain. Ek baar unka prescription chart zaroor check kar lijiye.",
+   "text": "wat medicine is due dis evng"
+  },
+  "h039": {
+   "saheli": "Bahut accha kiya Abhishek, time se dawa lena hamesha faydemand hota hai.",
+   "text": "took Vitamin B12 aftr bfast"
+  },
+  "h040": {
+   "saheli": "Sushila ji, shaam ko aapki roz wali niyamit dawa lene ka time hota hai. Abhishek se bolkar dabbi par check karwa lijiye.",
+   "text": "arre Saheli zara dekh ke batao na aaj shaam ko konsi dawai leni hai mujhe yaad nahi aa raha theek se"
+  },
+  "h041": {
+   "saheli": "Kabhi kabhi aisa din hota hai Sushila ji, mann thoda bhari ho jata hai. Thoda gehre saans lijiye ya Abhishek se baat kar lijiye.",
+   "text": "kuch khas nahi Saheli bas pata nahi kyu aaj mann thoda udaas sa hai kuch accha nahi lag raha bas yunhi baithi hui hu"
+  },
+  "h042": {
+   "saheli": "Reading 132/83 bilkul theek aur stable lag rahi hai Abhishek. Aise hi dhyan rakhte rahiye.",
+   "text": "mom bp 132/83 rite now"
+  },
+  "h043": {
+   "saheli": "133/80 kaafi acchi aur normal range me hai. Regular check rakhna bohot helpful rehta hai.",
+   "text": "mom bp check today 133/80"
+  },
+  "h044": {
+   "saheli": "Padosiyon se milkar do baatein ho jayein to mann halka ho jata hai Sushila ji.",
+   "text": "wo Sharma ji ki bahu aayi thi milne abhi bata rahi thi ki unka beta bahar se aaya hai kaafi der baatein karti rahi bechari"
+  },
+  "h045": {
+   "saheli": "Sushila ji, jab mann udaas ho to thodi der balcony me baith kar taazi hawa le lijiye. Dil chhota mat kijiye, sab theek ho jayega.",
+   "text": "aaj fir se na mann bada bujha bujha sa lag raha hai kisi kaam me mann nahi lag raha bas akele baithne ka mann kar raha hai"
+  },
+  "h046": {
+   "saheli": "Tyohar ki tayyariyon ka to alag hi utsah hota hai Sushila ji! Bas aap zyada bhaag-daud mat kariyega, aaram se kijiye.",
+   "text": "haan suno na Saheli aage ab tyohar aane wale hain poore ghar ki safai karwani padegi mithaiyan bhi sochna hai kya banegi"
+  },
+  "h047": {
+   "saheli": "Bilkul sahi tareeka hai Sushila ji, namak lagane se methi ka kadwapan kaafi kam ho jata hai.",
+   "text": "main na aaj methi ki subzi banane ki soch rahi thi par kadwi ho jati hai thoda namak laga ke rakh diya hai pehle"
+  },
+  "h048": {
+   "saheli": "Roz ka apna pasandeeda serial dekhna to unka relaxing time hota hoga Abhishek.",
+   "text": "mom watchin tv serial Aangan daily at 9 pm never misses it"
+  },
+  "h049": {
+   "saheli": "Dhoop-chhaon ka mausam aisa hi chal raha hai Sushila ji. Aise me paani peete rahiye aur dhoop se bachiye.",
+   "text": "aaj dhoop bohot tez nikal aayi thi dopahar me achanak garmi badh gayi hai pankha tez karna pada mujhe"
+  },
+  "h050": {
+   "saheli": "Aaj thoda aaram kar lijiye Abhishek, kaam ke beech me khud ko rest dena bhi zaroori hai.",
+   "text": "feeling so tired today full body ache"
+  },
+  "h051": {
+   "saheli": "Kitni acchi khabar hai Sushila ji, pados me khushi aaye to dekh kar accha lagta hai.",
+   "text": "wo Verma ji the na unke ghar me nayi car aayi hai subah pooja chal rahi thi to prasad dene aaye the thoda sa"
+  },
+  "h052": {
+   "saheli": "Bohot accha kiya Abhishek, nashte ke baad lena hi sabse best rehta hai.",
+   "text": "gave mom Vitamin B12 after breakfast today"
+  },
+  "h053": {
+   "saheli": "Theek hai Abhishek, dawa time se le li ye bohot acchi baat hai.",
+   "text": "mom took Tamsulosin after breakfast"
+  },
+  "h054": {
+   "saheli": "Aapke pichle appointment slip par next follow-up ki date likhi hogi Abhishek, ek baar check kar lijiye.",
+   "text": "wen is next dr visit schedule"
+  },
+  "h055": {
+   "saheli": "Mausam to kafi thanda aur suhana ho gaya hoga Abhishek, garma-garam chai enjoy kariye.",
+   "text": "weather so cloudy 2day looks like rain"
+  },
+  "h056": {
+   "saheli": "Kabhi kabhi energy kaafi down feel hoti hai Abhishek. Thodi der break lijiye aur relax kariye.",
+   "text": "feeling a bit low n exhausted 2day"
+  },
+  "h057": {
+   "saheli": "Noted Abhishek, nashte ke baad niyam se dawa lene me madad karne ke liye shukriya.",
+   "text": "gave Tamsulosin after breakfast 2day"
+  },
+  "h058": {
+   "saheli": "Ye sun kar sach me dil khush ho gaya Abhishek! Parivar ke sath waqt bitana sabse badi khushi hoti hai.",
+   "text": "happy day 2day family visitd us mom was so hapy"
+  },
+  "h059": {
+   "saheli": "Purane school ke doston ki baat hi alag hoti hai, Sushila ji ko har Sunday unke call ka intezar rehta hoga.",
+   "text": "moms skool best friend is Ved Prakash he calls on sundays regularly"
+  },
+  "h060": {
+   "saheli": "Dawaein humesha sade paani ke sath lena hi sabse theek rehta hai Abhishek, chai ke sath lene se parhez karein.",
+   "text": "can medicin b taken with hot tea"
+  },
+  "h061": {
+   "saheli": "Achha, Sharma ji toh bahut khush honge! Ghar me alag hi raunak hogi abhi.",
+   "text": "saheli wo sharma ji jo bagal me rehte unka beta US se aya h"
+  },
+  "h062": {
+   "saheli": "Aapke paas doctor ki pichhli parchi ya koi tareekh likhi hai toh batayein, main yaad rakhne me madad karungi.",
+   "text": "saheli nxt doc visit kab h mummy ka"
+  },
+  "h063": {
+   "saheli": "Reading thodi si badhi hui hai. Unhe thodi der aaram se baithne dein aur zaroorat lage toh doctor se consult kar lijiye.",
+   "text": "mummy ka bp reading 156/90 aya"
+  },
+  "h064": {
+   "saheli": "Aise padosiyon se mil-baat kar man halka aur achha ho jata hai, Sushila ji.",
+   "text": "haan beta wo humari padosan Gupta ji ki bahu aayi thi subah matlab kaafi time baad aayi thi toh thodi baatcheet ho gayi"
+  },
+  "h065": {
+   "saheli": "Yeh toh bohot achhi baat hai! Achhi neend se poora din taza rehta hai.",
+   "text": "aaj neend achi aai bhot din baad"
+  },
+  "h066": {
+   "saheli": "Dawai hamesha sadhe paani ke saath lena hi behtar hota hai, Sushila ji. Chai se asar kam ho sakta hai, toh doctor ya pharmacist se zaroor confirm kar lein.",
+   "text": "arrey Saheli wo main puchh rahi thi ki kya hum dawaai chai ke saath le sakte hain matlab subah wali jo hai"
+  },
+  "h067": {
+   "saheli": "Nahi, aam taur par dawai saaf paani ke saath hi leni chahiye. Chai ke saath lene se pehle doctor se zaroor pooch lein.",
+   "text": "sunno kya koi medicine chai k sath le sakte mummy bol rahi thi"
+  },
+  "h068": {
+   "saheli": "Bohot badhiya menu hai, Sushila ji! Garma-garam phulke aur arbi ka khana waise bhi bohot swadisht lagta hai.",
+   "text": "aaj socha hai ki thoda arbi ki sabzi aur phulke bana loon matlab halka khana hi theek rehta hai dopahar mein"
+  },
+  "h069": {
+   "saheli": "Tyohar ki tayyari toh achhi baat hai, par aaram se kijiyega aur zyada thakiye mat.",
+   "text": "haan beta wo aage tyohar aa raha hai na toh bas wahi soch rahi thi thoda saaf safai aur tayyari karni padegi"
+  },
+  "h070": {
+   "saheli": "Poto-poti ki baatein sunkar toh sari thakan door ho jati hai, Sushila ji.",
+   "text": "wo bachhe kal video call pe the matlab itni baatein karte hain dono shararat bhi poori karte hain dekh ke bada sukoon milta hai"
+  },
+  "h071": {
+   "saheli": "Tyohar ki taiyariyon ka alag hi maza hai, bas sab log aaram se aur sambhal kar kaam karein.",
+   "text": "aage festvl aa rha h ghar me abhi se safai suru ho gayi"
+  },
+  "h072": {
+   "saheli": "Niche ka number thoda zyada lag raha hai. Unhe paani peene dein, thodi der shaant baithayein aur zaroorat ho toh doctor se baat karein.",
+   "text": "bp reading 146/97 h abhi liya"
+  },
+  "h073": {
+   "saheli": "Bahut badiya, nashte ke baad Vitamin B12 lena bilkul sahi aadat hai.",
+   "text": "mummy took Vitamin B12 after breakfast aaj"
+  },
+  "h074": {
+   "saheli": "Sach me, bachho ki choti-choti khushiyan sunkar din ban jata hai.",
+   "text": "beta wo sham ko bachhon ka phone aaya tha school se aakar bata rahe the ki unhone drawing banayi hai bohot pyari"
+  },
+  "h075": {
+   "saheli": "Apno ka aana sabke chehre par khushi le aata hai, bohot achhi baat hai!",
+   "text": "aaj din bhot acha rha family wale aae the sab"
+  },
+  "h076": {
+   "saheli": "Aise me ghar ke andar hi aaram karein Sushila ji, aur paani peete rahiye.",
+   "text": "aaj dhoop bohot tez hai matlab subah toh theek tha abhi dopahar ko bilkul bahar nikalne ka man nahi karta"
+  },
+  "h077": {
+   "saheli": "Halki khichdi pet ke liye sabse achhi rehti hai, maze se khayein Sushila ji.",
+   "text": "aaj maine moong dal ki khichdi banayi hai matlab thoda jeere ka tadka laga ke bilkul halki aur badiya bani hai"
+  },
+  "h078": {
+   "saheli": "Sab apno ke saath waqt bitane se man bilkul khush ho jata hai, bohot pyari baat hai.",
+   "text": "arrey kal toh sara parivar aaya hua tha itna hasi mazaak hua matlab bohot hi khushi ka din beeta sabke sath"
+  },
+  "h079": {
+   "saheli": "Ghar ke bane besan ke laddu ka swad hi alag hota hai, bas banate waqt zyada mat thakiye ga.",
+   "text": "tyohar aane wala hai na beta toh bas mithai ki recipe soch rahi thi thoda besan ke laddu banane ka man hai"
+  },
+  "h080": {
+   "saheli": "Shabash! Subah ki sair se din bhar taazgi bani rehti hai.",
+   "text": "subah ki walk done ho gyi aaj"
+  },
+  "h081": {
+   "saheli": "Mausam badal raha hai toh thoda sambhal kar rahiye Sushila ji, aur apna khayal rakhiye.",
+   "text": "aaj hawa me thodi thandak si lag rahi hai matlab mausam badal raha hai dheere dheere"
+  },
+  "z01": {
+   "saheli": "Mujhe abhi Sushila ji ki kisi allergy ke baare mein jaankari nahi hai. Kya unhe kisi cheez se pareshani hui hai?",
+   "text": "saheli mummy ko kisi cheez se allergy hai kya"
+  },
+  "z02": {
+   "saheli": "Mujhe abhi unke doctor ka naam nahi pata hai. Aap bata denge toh main yaad rakhungi.",
+   "text": "sushila ka doctor kon hai"
+  },
+  "z03": {
+   "saheli": "Mere paas abhi unki regular dawaiyon ki poori list nahi hai. Aap list share kar dein toh main track rakh sakti hoon.",
+   "text": "sushila abhi kitni regular medicines le rahi hai"
+  },
+  "z04": {
+   "saheli": "Mujhe is baare mein abhi koi jaankari nahi mili hai. Kya koi naya caregiver ya family member aaya hai?",
+   "text": "is month unka khyal rakhne aur kon aya hai"
+  },
+  "z05": {
+   "saheli": "Mujhe Pooja ke birthday ki date abhi nahi pata hai. Aap bata dein toh main note kar loongi.",
+   "text": "pooja ka bday kab hai"
+  },
+  "z06": {
+   "saheli": "Mujhe unke favourite singer ke baare mein abhi nahi pata. Unhe kiske gaane sunna pasand hai?",
+   "text": "sushila ko kiske songs pasand hai"
+  },
+  "z07": {
+   "saheli": "Mujhe aapke next month ke trip ke baare mein abhi jaankari nahi hai. Kahan jaane ki planning chal rahi hai?",
+   "text": "family next month kaha jane ka plan kar rahi"
+  },
+  "z08": {
+   "saheli": "Mujhe unke 9 baje waale serial ka naam abhi nahi pata hai. Woh konsa show dekhti hain?",
+   "text": "sushila raat ko 9 baje konsa serial dekhti"
+  },
+  "z09": {
+   "saheli": "Mujhe abhi nahi pata ki Sunday ko unhe kaun phone karta hai. Kya koi khaas call aati hai?",
+   "text": "sushila ko sundays ko kon call karta hai"
+  }
+ }
+}

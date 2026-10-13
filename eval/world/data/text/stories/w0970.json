@@ -1,0 +1,330 @@
+{
+ "family": "w0970",
+ "hash": "5f4224367e5726bbf696",
+ "texts": {
+  "e01": {
+   "saheli": "Bahut accha Ramesh ji. Nashta bhi time se kar lijiyega.",
+   "text": "Metformin le li"
+  },
+  "e02": {
+   "saheli": "BP thoda high lag raha hai Ramesh ji. Thodi der aaram karke phir check kariye aur dhyan rakhiye.",
+   "text": "BP 148/91"
+  },
+  "e03": {
+   "saheli": "Ramesh ji, aap aaram kijiye aur khoob paani pijiye. Agar bukhar na utre toh doctor ko dikha lijiyega.",
+   "text": "Fever 100.8 afternoon se"
+  },
+  "e04": {
+   "saheli": "Yeh toh bahut acchi aadat hai Ramesh ji. Walk ke waqt aaram se chaliyega aur paani sath rakhiyega.",
+   "text": "Kal se daily evening walk 6:30 pm"
+  },
+  "e05": {
+   "saheli": "Haan Ramesh ji, tyohar ki taiyariyan shuru ho gayi hongi! Khush rahiye aur acche se manaiye.",
+   "text": "Festival aa raha hai"
+  },
+  "h001": {
+   "saheli": "Namaste Neha ji, maine Bauji ke saare details note kar liye hain. Hum unka achhe se dhyan rakhenge.",
+   "text": "hi saheli seting up for bauji Ramesh condishuns Type 2 diabetes High blood pressure Osteoarthritis knees meds Metformin 500 mg at 08:00, 22:00 alergy eggs doc Dr Amit Gupta pls cal him Bauji"
+  },
+  "h002": {
+   "saheli": "Bahut achha kiya Bauji, dawai samay par lene ke liye shukriya.",
+   "text": "Metformin li breakfast baad"
+  },
+  "h003": {
+   "saheli": "Reading note kar li hai Shalini ji, bilkul theek lag rahi hai.",
+   "text": "BP 123/85"
+  },
+  "h004": {
+   "saheli": "Sun kar dil khush ho gaya, bachhon ki rounak se ghar me kitni khushi aa jati hai!",
+   "text": "bachhe aye the aj bhot masti kia bauji k sth"
+  },
+  "h005": {
+   "saheli": "Neha ji, Bauji ko raat 22:00 baje Metformin 500 mg leni hai.",
+   "text": "aj sham ko kya lena h bauji ko"
+  },
+  "h006": {
+   "saheli": "Bauji, upar wala BP thoda badha hua hai. Thoda aaram kijiye aur zaroorat lage toh Dr Amit Gupta ji ko batayein.",
+   "text": "BP 155/75 aaya"
+  },
+  "h007": {
+   "saheli": "Arre wah, unka apna manpasand show dekhna toh bilkul banta hai!",
+   "text": "bauji roz rat 9 pm Ghar Ki Rasoi serial dekhte h ek bhi episode miss ni krte"
+  },
+  "h008": {
+   "saheli": "Theek hai Sushila ji, maine note kar liya hai ki Bauji ne dawai le li.",
+   "text": "bauji ne Metformin le li bfast k bad"
+  },
+  "h009": {
+   "saheli": "Wah Bauji, padosiyon se milkar baat karne se mann halka ho jata hai.",
+   "text": "Sharma ji mile park me"
+  },
+  "h010": {
+   "saheli": "Dawai hamesha paani ke saath lena behtar hota hai Shalini ji. Kuch dawaiyon par chai ka asar pad sakta hai, isliye doctor se zaroor confirm kar lein.",
+   "text": "Chai ke sath dawa le sakte hain?"
+  },
+  "h011": {
+   "saheli": "Tyohar ki tayariyon ki baat hi alag hoti hai Neha ji, par apna aur Bauji ka khayal rakhte hue kaam kijiyega.",
+   "text": "tyohar ane wala h ghr me safai shuru ho gyi"
+  },
+  "h012": {
+   "saheli": "Yeh reading bilkul achhi aur normal range mein hai Neha ji.",
+   "text": "bauji ka BP 124/83 aya h"
+  },
+  "h013": {
+   "saheli": "Bauji, raat 22:00 baje aapki Metformin 500 mg lene ka samay hai.",
+   "text": "shaam ko kya dawa?"
+  },
+  "h014": {
+   "saheli": "Bauji ka BP bilkul theek hai Shalini ji, reading note kar li hai.",
+   "text": "BP 118/76"
+  },
+  "h015": {
+   "saheli": "Ghantasala ji ke puraane gaane toh sach mein mann ko bahut shaanti dete hain.",
+   "text": "Bauji roz shaam Ghantasala ke gaane sunte hain."
+  },
+  "h016": {
+   "saheli": "Bahut badhiya Bauji, maine note kar liya hai.",
+   "text": "breakfast baad Metformin kha li thi"
+  },
+  "h017": {
+   "saheli": "Yeh toh badi khushi ki khabar hai, pados mein ab dhoom-dhaam rahegi!",
+   "text": "sharma ji k bete ki shadi fix ho gyi subh bta rhe the"
+  },
+  "h018": {
+   "saheli": "Achhi baat hai Sushila ji, padosiyon se mil-jul kar din achha guzar jata hai.",
+   "text": "verma aunty ayi thi subh bhot bat kiye"
+  },
+  "h019": {
+   "saheli": "Shukriya batane ke liye Sushila ji, record kar liya hai.",
+   "text": "bauji took Metformin after breakfast"
+  },
+  "h020": {
+   "saheli": "Bauji, dawai sada paani se lena hi sabse achha rehta hai, chai ke saath na lein.",
+   "text": "chai se le lu dawa?"
+  },
+  "h021": {
+   "saheli": "Arre wah Shalini ji, kadhi chawal toh sabka pasandeeda hota hai!",
+   "text": "Aaj kadhi chawal banaya."
+  },
+  "h022": {
+   "saheli": "Kya baat hai Bauji? Thoda aaram kijiye ya bachhon se baat karke mann halka kijiye, hum sab aapke saath hain.",
+   "text": "mann udas hai aaj"
+  },
+  "h023": {
+   "saheli": "Neha ji, upar ka BP kaafi badha hua hai. Bauji ko shaant baithne dein aur Dr Amit Gupta ji se salaah zaroor lein.",
+   "text": "bp 159/81 aya bauji ka"
+  },
+  "h024": {
+   "saheli": "Bahut achha kiya Bauji, note kar liya hai.",
+   "text": "Metformin nashte baad li"
+  },
+  "h025": {
+   "saheli": "Haan Bauji, tyoharon ka mausam shuru hone se har taraf kitni rounak ho jati hai!",
+   "text": "dussehra aane wala hai"
+  },
+  "h026": {
+   "saheli": "Theek hai Neha ji, maine Bauji ki dawai note kar li hai.",
+   "text": "bauji ne Metformin breakfast k bad le li thi"
+  },
+  "h027": {
+   "saheli": "Shukriya Bauji, subah ki dose maine note kar li hai.",
+   "text": "subah Metformin le li thi"
+  },
+  "h028": {
+   "saheli": "Apno ke saath waqt bita kar sach mein din ban jata hai Bauji, sun kar bahut achha laga.",
+   "text": "sab aaye the, achha laga"
+  },
+  "h029": {
+   "saheli": "Bahut badiya Bauji, maine note kar liya.",
+   "text": "Metformin breakfast ke baad li"
+  },
+  "h030": {
+   "saheli": "Varanasi ka trip toh bahut sundar rahega Sushila ji, sabke liye ek pavitra yatra!",
+   "text": "agle mahine family ka trip plan ho rha Varanasi jane ka"
+  },
+  "h031": {
+   "saheli": "Yeh toh bohot achhi baat hai. Achhi neend se sharir ko poora aaram milta hai.",
+   "text": "aaj ache se soye sab neend achi aayi"
+  },
+  "h032": {
+   "saheli": "Koi baat nahi Shalini ji. Jab suvidha ho tab kar lijiye ga.",
+   "text": "aaj pooja nahi hui"
+  },
+  "h033": {
+   "saheli": "Reading note kar li hai. Ramesh ji ko aaram se baithne dein aur paani pilayein.",
+   "text": "papaka bp 130 94 aya"
+  },
+  "h034": {
+   "saheli": "Yeh sunkar chinta hui, Neha ji. Lifeline Multispeciality, Jaipur mein doctors Ramesh ji ki achhi dekhbhal karenge, aap apna bhi khayal rakhein.",
+   "text": "papa Lifeline Multispeciality, Jaipur me admit h kal rat se pneumonia hua h"
+  },
+  "h035": {
+   "saheli": "Theek hai Shalini ji, update ke liye shukriya.",
+   "text": "Metformin li breakfast baad"
+  },
+  "h036": {
+   "saheli": "Bahut badhiya Shalini ji, dawa samay par dena zaroori hai.",
+   "text": "Metformin breakfast ke baad dedi"
+  },
+  "h037": {
+   "saheli": "Haan Sushila ji, tyohar ki taiyari mein hamesha bohot maza aata hai. Bas beech mein aaram bhi karte rahein.",
+   "text": "agla festival aa rha h taiyari karni padegi"
+  },
+  "h038": {
+   "saheli": "Bachpan ke doston se baat karke mann hamesha khush ho jata hai.",
+   "text": "school friend Krishna ka call aata h sundays ko"
+  },
+  "h039": {
+   "saheli": "Bohot achha Ramesh ji, din shant aur shubh rahe.",
+   "text": "pooja ho gayi"
+  },
+  "h040": {
+   "saheli": "Yeh toh bohot sukoon ki baat hai Neha ji ki Ramesh ji ghar aa gaye. Unhein achhe se aaram karne dein.",
+   "text": "papa discharge ho gye h ghar agye"
+  },
+  "h041": {
+   "saheli": "Padosiyon ka haal-chaal puchhne aana achha lagta hai, Ramesh ji ka mann behal gaya hoga.",
+   "text": "sharma uncle aye the subah milne papa se"
+  },
+  "h042": {
+   "saheli": "Aap chupchap aaram kijiye Ramesh ji, zyaada bhag-daud mat kijiye.",
+   "text": "bahut thak gaya"
+  },
+  "h043": {
+   "saheli": "Achha hua Sushila ji, samay par dawa lena bohot zaroori hai.",
+   "text": "papa ne Metformin leli thi breakfast ke baad"
+  },
+  "h044": {
+   "saheli": "Ramesh ji, dawai hamesha sade paani ke saath hi leni chahiye, chai ke saath nahi.",
+   "text": "chai ke sath dawa le sakte?"
+  },
+  "h045": {
+   "saheli": "Bahut badhiya Ramesh ji, aise hi samay par lete rahiye.",
+   "text": "Metformin le li nashte baad"
+  },
+  "h046": {
+   "saheli": "Maine BP note kar liya hai Neha ji. Unhein thoda aaram karne ko bolein.",
+   "text": "papa ka bp 142 80 aya"
+  },
+  "h047": {
+   "saheli": "Bohot achha Sushila ji, note kar liya hai.",
+   "text": "papa ko Metformin dedi subah nashte baad"
+  },
+  "h048": {
+   "saheli": "Chaliye achha hua Ramesh ji, baat-cheet karke mann halka ho gaya hoga.",
+   "text": "gupta ji mile the"
+  },
+  "h049": {
+   "saheli": "Theek hai Ramesh ji, bohot achha.",
+   "text": "Metformin li breakfast baad"
+  },
+  "h050": {
+   "saheli": "Bohot badhiya Sushila ji, bhagwan sab par kripa banaye rakhein.",
+   "text": "aaj ki pooja ho gyi"
+  },
+  "h051": {
+   "saheli": "Haan, mausam badal raha hai toh Ramesh ji ka aur apna dhyan rakhiyega, thand se bachein.",
+   "text": "aaj mausam kafi thanda h hawa chal rhi"
+  },
+  "h052": {
+   "saheli": "Theek hai Sushila ji, update ke liye shukriya.",
+   "text": "papa ne breakfast baad Metformin le li thi"
+  },
+  "h053": {
+   "saheli": "Aap thoda aaram kar lijiye Neha ji, sab sambhalne mein thakan ho hi jaati hai.",
+   "text": "aaj bohot thakawat ho rhi h"
+  },
+  "h054": {
+   "saheli": "Bohot achha Neha ji, dhyan rakhne ke liye shukriya.",
+   "text": "papa ne Metformin li thi breakfast ke baad"
+  },
+  "h055": {
+   "saheli": "Nahi Sushila ji, dawaiyon ko hamesha taaze paani ke saath hi lena behtar rehta hai.",
+   "text": "kya dawa chai ke sath le sakte h"
+  },
+  "h056": {
+   "saheli": "Kadhi chawal toh sabhi ka pasandida hota hai Ramesh ji, bohot swadishth lagta hai!",
+   "text": "kadhi chawal pasand h"
+  },
+  "h057": {
+   "saheli": "Nahi Ramesh ji, dawai taaze paani ke saath hi lijiye ga.",
+   "text": "chai se dawa le lu?"
+  },
+  "h058": {
+   "saheli": "BP ki reading maine note kar li hai Shalini ji. Ramesh ji ko thoda aaram karne dein.",
+   "text": "BP 126/96 aaya"
+  },
+  "h059": {
+   "saheli": "Aap thoda rest le lijiye Neha ji, khud ko thakayein mat.",
+   "text": "bohot zyada thak gyi hu aj"
+  },
+  "h060": {
+   "saheli": "Theek hai Sushila ji, bohot achha kiya.",
+   "text": "Metformin dedi thi breakfast ke bad papa ko"
+  },
+  "h061": {
+   "saheli": "Aap aaram kar lijiye thoda. Khayal rakhiye apna.",
+   "text": "bahut thak gayi"
+  },
+  "h062": {
+   "saheli": "Note kar liya hai. Reading theek lag rahi hai, bas aaram se rehne dein.",
+   "text": "BP 133/89"
+  },
+  "h063": {
+   "saheli": "Yeh toh bohot achhi baat hai Neha! Parivaar ke saath time bita kar sabko achha lagta hai.",
+   "text": "aaj sab log aaye the it was such a hapy day papaji also very happy"
+  },
+  "h064": {
+   "saheli": "Shaam ko Papa ki regular medicines aur BP check karna schedule mein hai.",
+   "text": "evening medicines konsi hai"
+  },
+  "h065": {
+   "saheli": "Doctor ki agli appointment agle hafte schedule hai Ramesh ji.",
+   "text": "next doctor visit kab"
+  },
+  "h066": {
+   "saheli": "Theek hai, note kar liya hai. Shukriya batane ke liye.",
+   "text": "Papa took Metformin after breakfast"
+  },
+  "z01": {
+   "saheli": "Mujhe abhi Ramesh ji ke Metformin dose ke baare mein pata nahi hai. Kripya unki prescription check kar lijiye.",
+   "text": "saheli Ramesh ka Metformin ka dose kya chal rha h abhi"
+  },
+  "z02": {
+   "saheli": "Mujhe abhi Ramesh ji ki kisi allergy ke baare mein jaankari nahi hai. Ek baar unki medical file dekh lijiye ya doctor se pooch lijiye.",
+   "text": "ramesh ko kisi cheez se koi allergy h kya"
+  },
+  "z03": {
+   "saheli": "Mujhe Ramesh ji ke doctor ka naam abhi nahi maloom. Kya aapke paas unka koi parcha hai?",
+   "text": "ramesh ke docotr kon h pata h kya"
+  },
+  "z04": {
+   "saheli": "Mujhe Ramesh ji ki regular dawaiyon ki sankhya ke baare mein abhi jaankari nahi hai. Doctor ki slip dekh kar confirm kar lijiye.",
+   "text": "ramesh kitni regular medicines lete h abhi total"
+  },
+  "z05": {
+   "saheli": "Mujhe Ramesh ji ke hospital jaane aur discharge hone ki details ka pata nahi hai. Ghar par kisi se confirm kar lijiye.",
+   "text": "ramesh hospital kyu gye the aur ghr kab wapas aaye"
+  },
+  "z06": {
+   "saheli": "Mujhe Ramesh ji ke 9 baje waale TV serial ka naam nahi pata. Unse pooch lijiye, wo bata denge.",
+   "text": "ramesh raat ko 9 bje kon sa serial dekhte h"
+  },
+  "z07": {
+   "saheli": "Mujhe nahi pata ki Ramesh ji kiske gaane pasand karte hain. Unse zaroor poochiye, unhe batakar khushi hogi.",
+   "text": "ramesh ko kiske songs sunna pasnd h"
+  },
+  "z08": {
+   "saheli": "Mujhe agle mahine ke trip ke plan ke baare mein jaankari nahi hai. Ghar ke baaki logon se pata kar lijiye.",
+   "text": "agli mahine family kha jane ka soch rhi h"
+  },
+  "z09": {
+   "saheli": "Mujhe nahi maloom ki Sunday ko Ramesh ji ko kaun call karta hai. Aap unse baat karke dekh lijiye.",
+   "text": "sunday ko ramesh ko kon call karta h"
+  },
+  "z10": {
+   "saheli": "Mujhe Ramesh ji ke pasandeeda khane ke baare mein pata nahi hai. Unhi se pooch kar unki pasand ki cheez banwaiye.",
+   "text": "ramesh ki favourite dish konsi h"
+  }
+ }
+}

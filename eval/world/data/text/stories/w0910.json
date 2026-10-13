@@ -1,0 +1,314 @@
+{
+ "family": "w0910",
+ "hash": "ccc1eff5d999d4a8ace1",
+ "texts": {
+  "e01": {
+   "saheli": "कोनो बात नहि शंभू जी, बस अहाँ समय पर दवाई लए लेलहुँ ई बहुत नीक भेल।",
+   "text": "देरी सँ उत्तर देबाक लेल क्षमा करब। आइ भोर में Metformin लए लेलहुँ।"
+  },
+  "e02": {
+   "saheli": "ई रीडिंग नोट कऽ लेलहुँ शंभू जी, आराम करू आ पानि पीबैत रहू।",
+   "text": "BP नाप लेलहुँ, 145/86 आएल अछि।"
+  },
+  "e03": {
+   "saheli": "शंभू जी, घबराउ नहि। एखन कतेको अस्वस्थता लगैत अछि तँ आराम करू आ तुरंत डॉक्टर सँ बात कऽ लिय।",
+   "text": "क्षमा करब, चिंता भऽ रहल अछि जे भोरक दवाई कतहु दु बेर तँ नहि लऽ लेलहुँ?"
+  },
+  "e04": {
+   "saheli": "बहुत सुंदर विचार अछि शंभू जी, सांझक टहल स्वास्थ्य लेल नीक रहत।",
+   "text": "काल्हि सँ सांझ 6:30 pm में रोज टहलब शुरू करब।"
+  },
+  "e05": {
+   "saheli": "Main order to nahi kar sakti, par aap kisi grocery app se jaldi mangwa lijiye.",
+   "text": "papa ke liye curd pack order kardo"
+  },
+  "h001": {
+   "saheli": "Noted. I have set up all details for Shambhu ji.",
+   "text": "Setup for papa Shambhu. Conditions: Type 2 diabetes, Parkinson's disease. Medicines: Metformin 500 mg at 08:30, 21:30; Glimepiride 0.5 mg at 08:30. Allergies: none. Doctor: Dr Ravi Thakur."
+  },
+  "h002": {
+   "saheli": "Next visit Dr Ravi Thakur ke saath scheduled nahi hai abhi tak.",
+   "text": "next doctor visit kab hai?"
+  },
+  "h003": {
+   "saheli": "कोनो बात नहि शंभू जी, हम याद राखब जे रुक्मिणी आंटी लग चाभी अछि।",
+   "text": "देरी सं जवाब देबय लेल क्षमा करब। हमर पड़ोसी Rukmini aunty लग घरक फालतू चाभी रहैत छैन्ह।"
+  },
+  "h004": {
+   "saheli": "रीडिंग नोट क लेलहुँ। अहाँ आराम करू आ कोनो दिक्कत बुझाए तँ जरूर बताओ।",
+   "text": "देरी भ गेल। BP 151/95 आएल अछि।"
+  },
+  "h005": {
+   "saheli": "Aise achhe padosi hona sach mein badi rahat ki baat hoti hai.",
+   "text": "neighbour Rukmini aunty helpful hain"
+  },
+  "h006": {
+   "saheli": "हँ शंभू जी, नीक पड़ोसी भेल तँ बहुत बड़का सहारा भ जाइत अछि।",
+   "text": "पड़ोसी बहुत नीक छथि। सुख-दुख मे साथ दैत छथि।"
+  },
+  "h007": {
+   "saheli": "Theek hai, note kar liya.",
+   "text": "papa took Metformin after breakfast"
+  },
+  "h008": {
+   "saheli": "ई रीडिंग नोट क लेलहुँ, बहुत नीक।",
+   "text": "BP 136/81 रहय।"
+  },
+  "h009": {
+   "saheli": "BP reading note kar li hai.",
+   "text": "papa BP 146/77"
+  },
+  "h010": {
+   "saheli": "Bachhon ki masti se ghar mein alag hi raunak rehti hai!",
+   "text": "kids masti full on"
+  },
+  "h011": {
+   "saheli": "Noted, reading save kar li hai.",
+   "text": "BP 144/76"
+  },
+  "h012": {
+   "saheli": "Aap thoda aaram kar lijiye aur paani pijiye.",
+   "text": "bahut thak gayi"
+  },
+  "h013": {
+   "saheli": "Haan, dhyan rakhein aur sabhi log paani peete rahein.",
+   "text": "aaj garmi zyada hai"
+  },
+  "h014": {
+   "saheli": "Mausam achha ho toh din bhi achha guzarta hai.",
+   "text": "weather cool today"
+  },
+  "h015": {
+   "saheli": "शंभू जी, अहाँ बेस क' सुस्ता लिअ आ आराम करू।",
+   "text": "आइज देह बहुत थाकल अछि।"
+  },
+  "h016": {
+   "saheli": "Arey waah, Nisha ka birthday 7 November ko yaad rakhungi.",
+   "text": "Nisha grandchild bday 7 November"
+  },
+  "h017": {
+   "saheli": "Papa ke liye sham ko 21:30 baje Metformin 500 mg leni hai.",
+   "text": "evening medicines?"
+  },
+  "h018": {
+   "saheli": "नीक लागल सुनि क', गपशप कइला सं मन प्रसन्न रहैत अछि।",
+   "text": "पड़ोसी संग सांझ मे बातचीत भेल।"
+  },
+  "h019": {
+   "saheli": "Reading note kar li hai.",
+   "text": "BP 136/90"
+  },
+  "h020": {
+   "saheli": "पाबनि-तिहारक उमंग तँ अलगहि रहैत अछि शंभू जी, खूब नीक!",
+   "text": "छठि पाबनि आबय वला अछि, मन प्रसन्न अछि।"
+  },
+  "h021": {
+   "saheli": "Theek hai, note kar liya.",
+   "text": "papa took Glimepiride after breakfast"
+  },
+  "h022": {
+   "saheli": "Dr Ravi Thakur ke paas koi agla appointment abhi scheduled nahi hai.",
+   "text": "next doctor visit kab?"
+  },
+  "h023": {
+   "saheli": "के. जे. येसुदास जीक आवाज तँ सचहुँ बहुत शांति दैत अछि, नीक सं सुनू।",
+   "text": "हमरा K. J. Yesudas क पुरान गीत बहुत नीक लगैत अछि, सांझ मे सुनैत छी।"
+  },
+  "h024": {
+   "saheli": "Thoda waqt nikaal kar aaram kar lijiye Puja.",
+   "text": "exhausted today"
+  },
+  "h025": {
+   "saheli": "Noted, kal subah se Shambhu ji ke liye Glimepiride 1 mg update kar diya hai.",
+   "text": "Doctor changed papa's Glimepiride to 1 mg from tomorrow"
+  },
+  "h026": {
+   "saheli": "कोनो बात नहि, योग नियमित करब बहुत नीक बात अछि।",
+   "text": "देरी सं कहय लेल क्षमा, योग भ गेल।"
+  },
+  "h027": {
+   "saheli": "Noted, BP reading record kar li hai.",
+   "text": "BP 141/88"
+  },
+  "h028": {
+   "saheli": "Theek hai, note kar liya.",
+   "text": "papa took Metformin after breakfast"
+  },
+  "h029": {
+   "saheli": "बहुत नीक शंभू जी, अहाँ स्वस्थ रहू।",
+   "text": "सांझ मे योग क लेलहुँ।"
+  },
+  "h030": {
+   "saheli": "Theek hai, note kar liya.",
+   "text": "papa took Glimepiride after breakfast"
+  },
+  "h031": {
+   "saheli": "कोनो बात नहि शम्भु जी, समय पर दवाई लऽ लेलहुँ से बहुत निक भेल।",
+   "text": "देरी सँ कहबाक लेल क्षमा, जलखाइक बाद Metformin लऽ लेने छलहुँ।"
+  },
+  "h032": {
+   "saheli": "Sach mein, aise weather mein thoda relax kijiye.",
+   "text": "mausam kafi pleasant hai aaj"
+  },
+  "h033": {
+   "saheli": "बहुत निक शम्भु जी, अपन ध्यान रखब।",
+   "text": "जलखाइक बाद Glimepiride लऽ लेलहुँ।"
+  },
+  "h034": {
+   "saheli": "परिवार संग समय बितेनाइ मन केँ कते खुशी दैत अछि, बहुत सुंदर बात!",
+   "text": "आजुक दिन बहुत निक रहल, परिवारक सबहक आगमन भेल छल।"
+  },
+  "h035": {
+   "saheli": "ई तँ एकदम सही आ सामान्य रीडिंग अछि, निश्चिंत रहू।",
+   "text": "बीपी 126/78 आयल अछि।"
+  },
+  "h036": {
+   "saheli": "Billu toh pyara naam hai, pets se ghar mein ronak rehti hai.",
+   "text": "hamare yahan ek cat hai Billu"
+  },
+  "h037": {
+   "saheli": "Theek hai Puja, update ke liye thanks.",
+   "text": "papa took Metformin after breakfast"
+  },
+  "h038": {
+   "saheli": "साँझक नियमित दवाई आ भोजनक बाद विश्राम करब, शम्भु जी।",
+   "text": "आइ साँझ मे कोनो दवाई लेबाक अछि की?"
+  },
+  "h039": {
+   "saheli": "Paani peete rahiye aur dhoop se bachiye.",
+   "text": "bahut garmi hai"
+  },
+  "h040": {
+   "saheli": "कोनो बात नहि शम्भु जी, बस नियमित रूप सँ लइत रहू।",
+   "text": "विलंब भऽ गेल, जलखाइक बाद Glimepiride लऽ लेने रही।"
+  },
+  "h041": {
+   "saheli": "Noted Puja, thank you.",
+   "text": "papa took Glimepiride after breakfast"
+  },
+  "h042": {
+   "saheli": "Thoda aaram kijiye aur deep breaths lijiye, sab theek hoga.",
+   "text": "feeling bit low today"
+  },
+  "h043": {
+   "saheli": "परिवार संग दिन बीतल तँ थकान सेहो दूर भऽ जाइत अछि, बहुत निक शम्भु जी।",
+   "text": "देरी सँ मैसेज कऽ रहल छी, आइ परिवार आयल छल, मन बहुत प्रसन्न भेल।"
+  },
+  "h044": {
+   "saheli": "पुरान मित्रक संबंध बड़ अनमोल होइत अछि, इतवारक बात चीत कते सुखद रहैत होएत!",
+   "text": "हमर स्कूलक परम मित्र कांति अछि, ओ हर इतवार केँ फोन करैत अछि।"
+  },
+  "h045": {
+   "saheli": "Evening medicines on time and light walk if comfortable.",
+   "text": "what is due this evening"
+  },
+  "h046": {
+   "saheli": "So nice to hear that Puja, family time brings so much joy.",
+   "text": "happy day, family visited"
+  },
+  "h047": {
+   "saheli": "साँझ मे नियमित दवाई लऽ लेब आ हलुक भोजन कऽ कऽ आराम करब।",
+   "text": "आइ साँझ मे की सब करबाक अछि?"
+  },
+  "h048": {
+   "saheli": "Great, thanks for confirming Puja.",
+   "text": "papa took Glimepiride after breakfast"
+  },
+  "h049": {
+   "saheli": "Bahut badhiya, consistent rehna best hai.",
+   "text": "yoga done"
+  },
+  "h050": {
+   "saheli": "BP theek hai, normal range ke paas hai.",
+   "text": "BP reading 137/82"
+  },
+  "h051": {
+   "saheli": "कोनो चिंता नहि शम्भु जी, समय पर दवाई लेलहुँ से उचित भेल।",
+   "text": "क्षमा करब देरी सँ लिखलहुँ, जलखाइक बाद Glimepiride लऽ लेने छलहुँ।"
+  },
+  "h052": {
+   "saheli": "Koi baat nahi, body ko jab rest chahiye ho toh aaram zaroori hai.",
+   "text": "yoga skipped today"
+  },
+  "h053": {
+   "saheli": "ई थोड़ा अधिक अछि, तनिक सुस्ता लिअ आ शांत रहू।",
+   "text": "आइ बीपी 143/76 आयल अछि।"
+  },
+  "h054": {
+   "saheli": "अब एकदम नीक आ संतुलित भऽ गेल अछि, चैन सँ सुति रहू।",
+   "text": "देरी भेल, एखन फेर नापलि तँ बीपी 127/78 आयल अछि।"
+  },
+  "h055": {
+   "saheli": "बहुत सुंदर बात, भरपूर नींद सँ स्वास्थ्य उत्तम रहैत अछि।",
+   "text": "राति मे नीक सँ नींद भेल छल।"
+  },
+  "h056": {
+   "saheli": "बस साँझक नियमित दवाई समय पर लऽ लेब शम्भु जी।",
+   "text": "आइ साँझ मे कोनो काज या दवाई अछि?"
+  },
+  "h057": {
+   "saheli": "बहुत निक, एहिना नियम बना कऽ राखब।",
+   "text": "जलखाइक बाद Glimepiride लऽ लेलहुँ।"
+  },
+  "h058": {
+   "saheli": "हँ शम्भु जी, एहन सुहावन मौसम मे मन प्रसन्न रहैत अछि।",
+   "text": "आइ हवा बहुत शीतल चलि रहल अछि, मौसम सुहावन भऽ गेल।"
+  },
+  "h059": {
+   "saheli": "हल्का टहल लिअ आ साँझक दवाई लऽ कऽ भोजन कऽ लेब।",
+   "text": "साँझक लेल की योजना अछि?"
+  },
+  "h060": {
+   "saheli": "Good to know, have a wonderful day ahead Puja.",
+   "text": "yoga done"
+  },
+  "h061": {
+   "saheli": "कोनो बात नहि शम्भू जी, समय पर दवाई ल लेलहुं ई बहुत नीक भेल। अपना ध्यान राखब।",
+   "text": "उत्तर दै म देरी भेल, क्षमा करब। जलखईक बाद Metformin ल लेलहुं।"
+  },
+  "h062": {
+   "saheli": "बहुत नीक बात शम्भू जी! एहिना नियम सं योग करैत रहू, शरीर स्वस्थ रहत।",
+   "text": "आइ योग भ गेल।"
+  },
+  "z01": {
+   "saheli": "Papa Glimepiride 1mg le rahe hain subah nashte ke baad.",
+   "text": "Glimepiride dose for papa now?"
+  },
+  "z02": {
+   "saheli": "Nahi, papa ko kisi bhi dawai ya cheez se allergy record nahi hai.",
+   "text": "Papa allergic to anything?"
+  },
+  "z03": {
+   "saheli": "Papa Dr. Verma ko consult karte hain.",
+   "text": "Papa ka doctor kaun hai?"
+  },
+  "z04": {
+   "saheli": "Papa abhi roz 3 regular medicines lete hain.",
+   "text": "Total regular meds papa takes?"
+  },
+  "z05": {
+   "saheli": "Is mahine unka blood pressure dawai ka timing sham ko shift hua tha.",
+   "text": "Meds changed this month for papa?"
+  },
+  "z06": {
+   "saheli": "Ghar ki spare key pados mein Sharma ji ke paas rakhi hai.",
+   "text": "Spare key kiske paas hai?"
+  },
+  "z07": {
+   "saheli": "Nisha ka birthday 14th November ko hota hai.",
+   "text": "Nisha's birthday when?"
+  },
+  "z08": {
+   "saheli": "Papa ko Mohammad Rafi ke gaane sunna sabse zyada pasand hai.",
+   "text": "Papa loves whose songs?"
+  },
+  "z09": {
+   "saheli": "Billi ka naam Billo hai.",
+   "text": "Cat name?"
+  },
+  "z10": {
+   "saheli": "Sundays ko unke purane dost Ramesh ji call karte hain.",
+   "text": "Who calls papa on Sundays?"
+  }
+ }
+}

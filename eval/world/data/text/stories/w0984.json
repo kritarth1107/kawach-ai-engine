@@ -1,0 +1,370 @@
+{
+ "family": "w0984",
+ "hash": "6836725b4826af03dbd6",
+ "texts": {
+  "e01": {
+   "saheli": "Bahut achhi baat hai Pushpa ji, time par dawai lene ke liye shabash. Aap apna khayal rakhiye!",
+   "text": "Sorry late reply ke liye beta. Morning me Metformin le li thi."
+  },
+  "e02": {
+   "saheli": "Reading ekdum normal aur achhi lag rahi hai, Pushpa ji. Aise hi aaram se rahiye.",
+   "text": "BP reading 132/80 aaya hai abhi."
+  },
+  "e03": {
+   "saheli": "Pushpa ji, bilkul bhi OTP mat dijiyega, bank wale kabhi phone par OTP nahi maangte. Yeh fraud ho sakta hai, Neha ko turant batayein.",
+   "text": "Sorry late reply beta. Ek call aaya tha bank se bol rahe the, account open rakhne ke liye OTP maang rahe the."
+  },
+  "e04": {
+   "saheli": "Yeh toh bahut badhiya routine hai Pushpa ji! Shaam ki walk se tabiyat ekdum fresh rahegi.",
+   "text": "Kal se daily evening walk 6:30 pm par hogi."
+  },
+  "e05": {
+   "saheli": "Main order toh nahi kar sakti Neha, par aap kisi grocery app se jaldi mangwa lijiye.",
+   "text": "Pack of fruit order kar do for mummy."
+  },
+  "h001": {
+   "saheli": "Noted, Neha ji. Main Mummy ji ka poora khayal rakhungi aur time par yaad dilaungi.",
+   "text": "Setup for Mummy ji (Pushpa). Conditions: Type 2 diabetes, High blood pressure, Osteoarthritis (knees), Heart disease (after angioplasty). Meds: Metformin 500 mg at 08:00, 21:00; Sitagliptin 100 mg at 08:00; Amlodipine half tablet (5 mg) at 09:00; Telmisartan 40 mg at 08:00; Calcium + Vitamin D3 500 mg at 13:00; Clopidogrel 75 mg at 13:00; Aspirin 75 mg at 14:00; Iron 100 mg at 13:00; Furosemide 20 mg at 08:30; Rosuvastatin 10 mg at 21:00. Allergy: brinjal. Doctor: Dr Manish Sharma. Call her Mummy ji."
+  },
+  "h002": {
+   "saheli": "Festival time hamesha kitna lively hota hai! Tayyari araam se kariyega.",
+   "text": "diwali prep starting soon"
+  },
+  "h003": {
+   "saheli": "Koi baat nahi Mummy ji, update dene ke liye shukriya. Par Rosuvastatin raat 21:00 baje ke liye scheduled hai, toh agla dose lene se pehle time ka dhyan rakhiyega.",
+   "text": "Late reply ke liye sorry beta, maine subah nashte ke baad Rosuvastatin le li thi."
+  },
+  "h004": {
+   "saheli": "Mithaiyon ki baat sunkar hi tyohar ka ehsaas hone lagta hai! Mummy ji ke liye sugar-free options zaroor dekhiyega.",
+   "text": "dussehra sweets planning"
+  },
+  "h005": {
+   "saheli": "Noted Neha ji, Furosemide ka update record kar liya hai.",
+   "text": "mummy had furosemide after breakfast"
+  },
+  "h006": {
+   "saheli": "Kuch din aise lag sakte hain, Neha ji. Thoda waqt nikaal kar gehri saans lijiye aur rest kariye.",
+   "text": "feeling a bit low today"
+  },
+  "h007": {
+   "saheli": "Theek hai Neha ji, Telmisartan note kar liya hai.",
+   "text": "mummy took telmisartan after breakfast"
+  },
+  "h008": {
+   "saheli": "Methi ke theple toh bahut swadisht hote hain Mummy ji! Khaane ka maza lijiye.",
+   "text": "Sorry der se likh rahi hoon beta, aaj methi thepla banaya tha nashte mein."
+  },
+  "h009": {
+   "saheli": "Rajma chawal toh sabka favourite hota hai Mummy ji! Ghar ka bana ho toh aur bhi lazeez lagta hai.",
+   "text": "Waise mujhe rajma chawal sabse zyada pasand hai, bas thoda dhyan se khana padta hai."
+  },
+  "h010": {
+   "saheli": "Haan, aisi humidity mein thoda paani peete rehna zaroori hai. Khayal rakhiyega.",
+   "text": "too humid today"
+  },
+  "h011": {
+   "saheli": "Mummy ji, filhal mere paas aapke agle doctor visit ki date note nahi hai. Aap chahein toh Neha ji se ya Dr Manish Sharma ke clinic se confirm kar sakti hain.",
+   "text": "Beta sorry der se poocha, agla doctor visit kab hai?"
+  },
+  "h012": {
+   "saheli": "Koi baat nahi Mummy ji, note kar liya hai. Aap aaram kijiye.",
+   "text": "Der se batane ke liye sorry, maine nashte ke baad Amlodipine le li thi."
+  },
+  "h013": {
+   "saheli": "Yeh toh bahut achhi baat hai Neha ji! Acchi neend se din fresh gujarta hai.",
+   "text": "slept well last night"
+  },
+  "h014": {
+   "saheli": "Shukriya Mummy ji, maine Telmisartan ka dose mark kar diya hai.",
+   "text": "Sorry late message ke liye, subah Telmisartan nashte ke baad le li thi beta."
+  },
+  "h015": {
+   "saheli": "Noted Neha ji, Metformin record ho gaya hai.",
+   "text": "mummy took metformin after breakfast"
+  },
+  "h016": {
+   "saheli": "Yeh toh bahut acchi baat hai Mummy ji! Halka sa dhoop mein baithna accha lagega.",
+   "text": "Beta aaj thodi dhoop achhi nikli hai yahan."
+  },
+  "h017": {
+   "saheli": "Sunkar bahut khushi hui Mummy ji! Achi neend sehat ke liye sabse zaroori hai.",
+   "text": "Sorry late bata rahi hoon, kal raat neend bahut achhi aayi thi."
+  },
+  "h018": {
+   "saheli": "Apno ke saath waqt bitakar dil khush ho jaata hai, Neha ji! Bahut achha laga sunkar.",
+   "text": "family came over, happy day"
+  },
+  "h019": {
+   "saheli": "Mausam toh mast ho gaya, Neha ji. Chai ka maza lijiye aur safe rahiye.",
+   "text": "raining heavily now"
+  },
+  "h020": {
+   "saheli": "Navratri ke din waise hi bahut paavan aur festive hote hain! Tayyariyan acchi chal rahi hongi.",
+   "text": "navratri coming up soon"
+  },
+  "h021": {
+   "saheli": "Koi baat nahi Mummy ji, Sitagliptin note kar li hai. Aap pareshan mat hoyiye.",
+   "text": "Beta late message ke liye maaf karna, Sitagliptin nashte ke baad le li thi."
+  },
+  "h022": {
+   "saheli": "Mummy ji, dawai hamesha saade paani ke saath lena sabse behtar hota hai, kyunki chai se dawai ka asar kam ho sakta hai. Zaroorat lage toh Dr Manish Sharma se ek baar zaroor pooch lijiye.",
+   "text": "Beta ek baat batao, kya dawai chai ke saath le sakte hain?"
+  },
+  "h023": {
+   "saheli": "Ghar ki daal aur garam phulke se badhkar kuch nahi hota Mummy ji! Araam se khana khaiye.",
+   "text": "Sorry beta der ho gayi, aaj daal tadka aur phulke banaye the."
+  },
+  "h024": {
+   "saheli": "Manna Dey sahab ki aawaaz sach mein kitni sukoon dene wali hai Mummy ji! Shaam ko gaane sunte huye aaram kijiye.",
+   "text": "Mujhe Manna Dey ke purane gaane sunna bahut pasand hai, har shaam zaroor sunti hoon."
+  },
+  "h025": {
+   "saheli": "Neha ji, mere paas agle visit ki date note nahi hai. Dr Manish Sharma ke clinic se confirm karna theek rahega.",
+   "text": "next doctor visit when?"
+  },
+  "h026": {
+   "saheli": "Theek hai Neha ji, Amlodipine update kar liya hai.",
+   "text": "mummy took amlodipine after breakfast"
+  },
+  "h027": {
+   "saheli": "Khichdi toh paachan ke liye bahut halki aur healthy hoti hai Neha ji.",
+   "text": "made vegetable khichdi today"
+  },
+  "h028": {
+   "saheli": "Bachhon ki yeh choti choti baatein hi din bana deti hain! Mummy ji ko bhi dekhkar bahut khushi hui hogi.",
+   "text": "kids made funny cards"
+  },
+  "h029": {
+   "saheli": "Noted Neha ji, Mummy ji ka naya address 72, Ram Nagar, Delhi record kar liya hai. Umeed hai naye ghar mein sab araam se settle ho gaye hain.",
+   "text": "Mummy moved from Gangtok to Delhi. New address: 72, Ram Nagar, Delhi"
+  },
+  "h030": {
+   "saheli": "Koi baat nahi Mummy ji, update ke liye shukriya. Waise yeh Calcium + Vitamin D3 dopahar 13:00 baje ke liye scheduled hai, agle dose ka thoda dhyan rakhiyega.",
+   "text": "Beta maaf karna der ho gayi, Calcium + Vitamin D3 nashte ke baad le li thi."
+  },
+  "h031": {
+   "saheli": "Theek hai, note kar liya hai.",
+   "text": "Mummy took Amlodipine after breakfast."
+  },
+  "h032": {
+   "saheli": "Haan, tyohar ki taiyari shuru ho gayi kya?",
+   "text": "Festival coming up soon."
+  },
+  "h033": {
+   "saheli": "Haan, aajkal mausam thoda chipchipa ho raha hai. Paani peete rahiye.",
+   "text": "Too humid today."
+  },
+  "h034": {
+   "saheli": "Koi baat nahi Pushpa ji! Doctor ke prescription ke hisaab se evening wali medicines check kar lijiye.",
+   "text": "Sorry late reply ke liye. Aaj evening me kaunsi dawa leni hai?"
+  },
+  "h035": {
+   "saheli": "Acha mausam ho gaya hai! Dhyan rakhiyega aur aaram se soiye.",
+   "text": "Raat ko hawa kafi thandi chal rahi hai."
+  },
+  "h036": {
+   "saheli": "Arre waah! Apna favorite show dekhna to banta hai, bilkul enjoy kijiye.",
+   "text": "9 pm wala serial 'Ghar Ki Rasoi' main kabhi miss nahi karti."
+  },
+  "h037": {
+   "saheli": "Koi baat nahi Pushpa ji! Aise mausam me shaam ko baithna bahut sukoon deta hai.",
+   "text": "Sorry der se likh rahi hu. Aaj shaam ko acchi thandak thi."
+  },
+  "h038": {
+   "saheli": "Ji note kar liya, thank you.",
+   "text": "Mummy took Furosemide after breakfast."
+  },
+  "h039": {
+   "saheli": "Aap thoda rest kar lijiye, zyada thakawat theek nahi.",
+   "text": "Too tired today."
+  },
+  "h040": {
+   "saheli": "Yeh to bahut achi baat hai! Achi neend se din bhar energy bani rehti hai.",
+   "text": "Kal raat neend bahut achi aayi."
+  },
+  "h041": {
+   "saheli": "Koi baat nahi Pushpa ji, note kar liya hai.",
+   "text": "Sorry late reply. Maine breakfast ke baad Telmisartan le li thi."
+  },
+  "h042": {
+   "saheli": "Theek hai Neha ji, note kar liya.",
+   "text": "Mummy took Telmisartan after breakfast."
+  },
+  "h043": {
+   "saheli": "Festival time par to ghar me kafi kaam nikal aata hai! Aap bhi beech me aaram zaroor kijiye.",
+   "text": "Tyohar ki safai chal rahi hai."
+  },
+  "h044": {
+   "saheli": "Pushpa ji, aap thodi der aaram se lait jaiye aur rest kijiye.",
+   "text": "Aaj thoda thakan lag rahi hai."
+  },
+  "h045": {
+   "saheli": "Ji theek hai, noted.",
+   "text": "Mummy took Furosemide after breakfast."
+  },
+  "h046": {
+   "saheli": "Arre waah, garma garam methi ke parathe to sabhi ko pasand aate hain!",
+   "text": "Making methi paratha today."
+  },
+  "h047": {
+   "saheli": "Koi baat nahi Pushpa ji! Doctor ki batayi hui routine check karke evening medicines le lijiye.",
+   "text": "Sorry late reply. Aaj evening kaunsi medicine leni hai?"
+  },
+  "h048": {
+   "saheli": "Kitni pyari baat hai Pushpa ji, bachpan ki dosti hamesha dil ke kareeb rehti hai!",
+   "text": "Meri school ki best friend Vimla hai, Sundays ko uska call aata hai."
+  },
+  "h049": {
+   "saheli": "Yeh toh bohot achi baat hai, tyohar ka maza lijiye!",
+   "text": "Festival preparations almost done."
+  },
+  "h050": {
+   "saheli": "Koi baat nahi Pushpa ji, maine note kar liya hai.",
+   "text": "Sorry late message ke liye. Maine breakfast ke baad Iron le li thi."
+  },
+  "h051": {
+   "saheli": "Wah, ghar ke bane laddoo ki khushboo hi alag hoti hai!",
+   "text": "Aaj shaam ko besan ke laddu banaye the."
+  },
+  "h052": {
+   "saheli": "Ji theek hai Neha ji, record kar liya.",
+   "text": "Mummy took Telmisartan after breakfast."
+  },
+  "h053": {
+   "saheli": "Potey-poti ki yaadein hamesha chehre par muskaan la deti hain!",
+   "text": "Baccho ki purani baatein yaad aa rahi thi, bohot shaitani karte the."
+  },
+  "h054": {
+   "saheli": "Pushpa ji, dawa hamesha sadhe paani ke saath hi leni chahiye, chai ke saath nahi.",
+   "text": "Dawa chai ke saath le sakte hain kya?"
+  },
+  "h055": {
+   "saheli": "Aap clinic ki appointment slip ya message check kar lijiye.",
+   "text": "Next doctor visit kab hai?"
+  },
+  "h056": {
+   "saheli": "Theek hai Neha ji, note kar liya.",
+   "text": "Mummy took Clopidogrel after breakfast."
+  },
+  "h057": {
+   "saheli": "Acha, 23 January! Gaurav ke birthday ki date dhyan rahegi.",
+   "text": "Gaurav ka birthday 23 January ko aata hai."
+  },
+  "h058": {
+   "saheli": "Sunkar bohot acha laga, apno se milkar din ban jata hai!",
+   "text": "Good day, family visited today."
+  },
+  "h059": {
+   "saheli": "Ji, note kar liya.",
+   "text": "Mummy took Sitagliptin after breakfast."
+  },
+  "h060": {
+   "saheli": "Koi baat nahi Pushpa ji, maine update kar diya hai. Aaram kijiye.",
+   "text": "Sorry late update ke liye. Breakfast ke baad maine Rosuvastatin li thi."
+  },
+  "h061": {
+   "saheli": "Aww, unki masti dekh kar ghar mein alag hi raunak aa jaati hai!",
+   "text": "kids were full of masti today"
+  },
+  "h062": {
+   "saheli": "Koi baat nahi Pushpa ji, aaram se bataya karein. Yaad se dawai lene ke liye bohot badhiya!",
+   "text": "Sorry beta late reply ke liye. Maine breakfast ke baad Iron le li thi."
+  },
+  "h063": {
+   "saheli": "Dawai hamesha paani ke saath lena hi best rehta hai. Chai dawai ke asar par farak daal sakti hai, toh doctor se zaroor confirm kar lein.",
+   "text": "can medicine be taken with tea?"
+  },
+  "h064": {
+   "saheli": "Yeh toh bohot achhi baat hai Pushpa ji! Achhi neend se poora din accha guzarata hai.",
+   "text": "Aaj neend bohot achhi aayi, refresh feel ho raha hai."
+  },
+  "h065": {
+   "saheli": "Aap aaram kijiye Pushpa ji, thoda garam paani peeyiye aur jald so jaiye.",
+   "text": "Aaj thoda thak gayi hoon beta."
+  },
+  "h066": {
+   "saheli": "Waah, neighbours aise milan-saar ho toh kitna achha lagta hai!",
+   "text": "neighbour brought fresh sweets today"
+  },
+  "h067": {
+   "saheli": "Festival ka time hamesha exciting hota hai! Bas zyaada bhag-daud mat kariyega.",
+   "text": "festival coming up soon, lots to prep"
+  },
+  "h068": {
+   "saheli": "Koi baat nahi Pushpa ji! Telmisartan time par lene ke liye shabash, ab aaram se so jaiye.",
+   "text": "Late message ke liye maafi beta. Telmisartan breakfast ke baad le li thi."
+  },
+  "h069": {
+   "saheli": "Aapka agla doctor visit scheduled date par hoga, agar appointment confirm karni ho toh clinic par phone karke poochh sakte hain.",
+   "text": "Doctor visit kab hai next?"
+  },
+  "h070": {
+   "saheli": "Koi baat nahi Pushpa ji, aap chinta na karein. Dawai time par li, bohot achhi baat hai!",
+   "text": "Sorry late ho gaya. Subah breakfast ke baad Calcium + Vitamin D3 le li thi."
+  },
+  "h071": {
+   "saheli": "Waah, poori bhaji ka toh apna hi maza hai! Sabko bohot pasand aayegi.",
+   "text": "cooking poori bhaji today"
+  },
+  "h072": {
+   "saheli": "Bachhon ko aise haste-khelte dekh kar dil khush ho jaata hai!",
+   "text": "grandkids playing in the garden"
+  },
+  "h073": {
+   "saheli": "Nahi Neha, dawai paani ke saath hi leni chahiye. Chai dawai ke absorption ko rok sakti hai.",
+   "text": "tea ke saath dawai le sakte?"
+  },
+  "h074": {
+   "saheli": "Pushpa ji, aapki file dekh kar doctor ke clinic se check kar sakte hain. Main yaad dila dungi jab date paas aayegi.",
+   "text": "Beta next doctor visit kab hai?"
+  },
+  "h075": {
+   "saheli": "Bohot achha kiya jo time par de di. Update ke liye shukriya Neha!",
+   "text": "mummy took Aspirin after breakfast"
+  },
+  "h076": {
+   "saheli": "Koyi baat nahi Pushpa ji, sunkar bohot khushi hui! Apno ke saath waqt bitana sabse achhi dawa hai. Shubh ratri!",
+   "text": "Sorry itni raat ko message kar rahi hoon. Aaj bohot khush thi, sab family aayi thi milne."
+  },
+  "z01": {
+   "saheli": "Aapke paas latest prescription check kar leti hoon, doctor ke chart ke bina dose confirm karna safe nahi hoga.",
+   "text": "Mummy ka Furosemide dose abhi kya chal raha hai?"
+  },
+  "z02": {
+   "saheli": "Mujhe unke allergy records ek baar verify karne honge, tab tak cautious rehna behtar hai.",
+   "text": "Pushpa ko kisi cheez se allergy hai kya?"
+  },
+  "z03": {
+   "saheli": "Unke medical papers me doctor ka naam dekh kar aapko batati hoon.",
+   "text": "Pushpa ke doctor kaun hain?"
+  },
+  "z04": {
+   "saheli": "Recent medicine list dekh kar total count share karti hoon.",
+   "text": "Pushpa abhi total kitni regular medicines leti hain?"
+  },
+  "z05": {
+   "saheli": "Yeh unki purani details dekh kar batati hoon.",
+   "text": "Pushpa kahan se move hui thi?"
+  },
+  "z06": {
+   "saheli": "Mummyji se hi unke pasandida khane ke baare me pooch leti hoon!",
+   "text": "Pushpa ki favourite dish kya hai?"
+  },
+  "z07": {
+   "saheli": "Unke favourite singer ka naam yaad karke aapko batati hoon.",
+   "text": "Pushpa kiske songs sunti hain?"
+  },
+  "z08": {
+   "saheli": "Unka 9 baje wala serial check karke batati hoon.",
+   "text": "Pushpa 9 pm kaunsa serial dekhti hain?"
+  },
+  "z09": {
+   "saheli": "Yeh unse baat karke confirm kar lungi.",
+   "text": "Sundays ko Pushpa ko kaun call karta hai?"
+  },
+  "z10": {
+   "saheli": "Family calendar check karke date batati hoon.",
+   "text": "Gaurav ka birthday kab aata hai?"
+  }
+ }
+}

@@ -27,7 +27,7 @@ async def test_news_for_a_caregiver_whose_chat_is_closed_goes_as_the_alert_templ
     at("2026-10-11 19:00")
     await store.save_roster(db, FAM, MAA, [MAA, SON])
     await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="user", text="ok thanks", speaker_id=SON["id"])
-    at("2026-10-12 21:00")
+    at("2026-10-12 20:00")
     host = SimHost()
     host.world.closed.add(SON["id"])
     c = system_ctx(db, host, "wake:12:1", profiles={SON["id"]: {"saved": {"language": "hi"}}})
@@ -67,7 +67,7 @@ async def test_an_order_update_to_a_closed_chat_names_the_order(db, at):
 
 
 async def test_an_open_chat_gets_the_message_itself(db, at):
-    at("2026-10-12 21:00")
+    at("2026-10-12 20:00")
     await store.save_roster(db, FAM, MAA, [MAA, SON])
     host = SimHost()
     res = await tools.send_message(system_ctx(db, host, "wake:12:1"), {"to": SON["id"], "text": "Kamla ji has not answered since the morning check."})

@@ -1043,8 +1043,17 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
                         "(reply none now; alert_caregiver only if the loop's rule says so)")
     if ctx.is_system and not task_update:
+        from app.brain.wake import quiet_for
         from app.learn import timing
 
+        # Their own night (or the household's), whoever the turn was about: a scheduled turn about the elder once reached a
+        # caregiver at 22:00 (world message-budget sim, 2026-10-13). Alerts go through alert_caregiver, not here.
+        night, morning = await quiet_for(ctx.session, ctx.family_id, to)
+        if night and await _no_answer_alert_loop(ctx):
+            night = False  # founder: only a no-answer alert may go out at night (wake_due lets those loops run)
+        if night:
+            problems.append(f"it is night for them now (their morning starts {clock.ist(morning).strftime('%H:%M') if morning else 'later'}); "
+                            "do not message them now, reply none")
         quiet = await timing.quiet_reason(ctx.session, ctx.family_id, to, ctx.situation)
         if quiet:
             problems.append(quiet)
@@ -1053,6 +1062,21 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     now = clock.ist()
     problems += guards.ungrounded(text, known="\n".join(ctx.known), fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
     return problems
+
+
+async def _no_answer_alert_loop(ctx: TurnCtx) -> bool:
+    """This scheduled turn runs an open loop whose rule is to tell a caregiver when there is no answer."""
+    ref = ctx.message_ref or ""
+    if not ref.startswith("wake:"):
+        return False
+    from app.care.models import OpenLoop
+
+    try:
+        loop_id = uuid.UUID(ref.split(":")[1])
+    except (ValueError, IndexError):
+        return False
+    loop = await ctx.session.get(OpenLoop, loop_id)
+    return bool(loop and loop.alert_rule == "alert_caregiver")
 
 
 async def _approval_just_asked(ctx: TurnCtx, person: str) -> bool:

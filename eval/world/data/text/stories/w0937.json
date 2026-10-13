@@ -1,0 +1,366 @@
+{
+ "family": "w0937",
+ "hash": "4962d85b5d6ca9c48a37",
+ "texts": {
+  "e01": {
+   "saheli": "घणी अच्छी बात सै। अपणा ध्यान रखियो।",
+   "text": "आज सबेरे Vitamin B12 ले ली।"
+  },
+  "e02": {
+   "saheli": "बीपी तो बिल्कुल ठीक सै, निश्चिंत रहो।",
+   "text": "बीपी 125/87 आया सै।"
+  },
+  "e03": {
+   "saheli": "कोई बात कोन्या, इब याद आई तो डाक्टर की सलाह मुजब देख ल्यो या अगली खुराक बगत पै ले लियो।",
+   "text": "सबेरे आळी गोली भूलगी।"
+  },
+  "e04": {
+   "saheli": "यो तो घणा बढ़िया फैसला सै। सांझ की सैर सेहत खातर बहुत अच्छी रहवैगी।",
+   "text": "काल्ल तै रोज सांझ नै 6:30 बजे सैर पै जाणा सै।"
+  },
+  "e05": {
+   "saheli": "हांजी, त्योहार की रौनक अलगै होवै सै। खूब मौज-मस्ती करियो।",
+   "text": "त्योहार आ लिया बस।"
+  },
+  "h001": {
+   "saheli": "Noted clearly, Sumit! I have saved all medicine timings and details for your mother.",
+   "text": "Hi Saheli! 🙏 Setting up details for mummy रामेश्वर. No medical conditions or allergies. Doctor visit not fixed yet. Medicines:\n- Vitamin B12 1500 mcg at 08:00\n- Rosuvastatin 10 mg at 21:30\n- Iron 100 mg at 13:00\n- Domperidone 10 mg at 08:15\n- Folic acid 5 mg at 08:00\n- Multivitamin half tablet (1 tablet) at 13:00 👍"
+  },
+  "h002": {
+   "saheli": "That sounds wonderfully comforting! Enjoy your warm meal.",
+   "text": "Cooked some nice dal tadka and jeera rice today 🍲😋 Smells delicious!"
+  },
+  "h003": {
+   "saheli": "त्योहार की तैयारियाँ बढ़िया सै, बस आराम तै काम करियो।",
+   "text": "त्योहार आ लिया, घर लिपाई करनी सै।"
+  },
+  "h004": {
+   "saheli": "घणी अच्छी बात सै, धूप म्हारै बदन खातर भी बढ़िया रहवै।",
+   "text": "पड़ोसन आई थी धूप सैंकण।"
+  },
+  "h005": {
+   "saheli": "बालकां की रौनक़ तै घर म्हारै खिल उठै सै!",
+   "text": "पोते घणे हुड़दंग मचावैं सैं।"
+  },
+  "h006": {
+   "saheli": "Thanks for updating, Sumit. Just keep in mind Rosuvastatin is scheduled for nighttime (21:30).",
+   "text": "Mummy took her Rosuvastatin after breakfast today 💊✨"
+  },
+  "h007": {
+   "saheli": "I'm sorry you are feeling low today, Sumit. Please take it gentle and give yourself some quiet time.",
+   "text": "Feeling quite low today... 😔 Just one of those days 🌧️"
+  },
+  "h008": {
+   "saheli": "मेले की सैर खूब बढ़िया रहवैगी, मन खुश हो ज्यागा।",
+   "text": "दशहरा पै मेले जाणा सै।"
+  },
+  "h009": {
+   "saheli": "Got it, Sumit. Thanks for sharing the update!",
+   "text": "Mummy took Multivitamin after breakfast 👍"
+  },
+  "h010": {
+   "saheli": "That is such a lovely lifelong friendship to cherish every Sunday! 💕",
+   "text": "Mummy's school bestie Rajbala calls her every Sunday without fail! ☎️❤️ So sweet to see their bond."
+  },
+  "h011": {
+   "saheli": "Get some good restful sleep tonight, Sumit. Take care.",
+   "text": "Super exhausted tonight 🥱 Exhausting day at work 😴"
+  },
+  "h012": {
+   "saheli": "Sending you warm thoughts, Sumit. Be kind to yourself this evening.",
+   "text": "Just feeling a bit heavy and low again today 😞💭"
+  },
+  "h013": {
+   "saheli": "घाम म्हारै ज्यादा लागै तो छांव म्बैठियो अर पानी पीते रहियो।",
+   "text": "आज घाम घणा तेज सै।"
+  },
+  "h014": {
+   "saheli": "Wonderful to hear that! A good night's sleep makes all the difference.",
+   "text": "Had such a refreshing, sound sleep last night! 😴✨ Feeling so fresh today ☀️"
+  },
+  "h015": {
+   "saheli": "ठीक सै जी, दवाई लेण की बात ध्यान म्आगी।",
+   "text": "रोटी खाकै Domperidone ले ली।"
+  },
+  "h016": {
+   "saheli": "Noted, Sumit! Thank you for keeping track.",
+   "text": "Mummy took Multivitamin after breakfast 💊👍"
+  },
+  "h017": {
+   "saheli": "Do wind down early and rest well tonight, Sumit.",
+   "text": "Completely drained out today 😓 Need rest 🛏️"
+  },
+  "h018": {
+   "saheli": "Festivals bring such joy and brightness to the family! Enjoy the spirit.",
+   "text": "Festival vibes starting soon! 🎉 Excitement at home is building up 🪔✨"
+  },
+  "h019": {
+   "saheli": "दवाई ले ली घणी अच्छी बात सै, याद राखियो यो संझा 21:30 खातर सै।",
+   "text": "रोटी खाकै Rosuvastatin खा ली।"
+  },
+  "h020": {
+   "saheli": "घणी बढ़िया बात सै जी, जरूरत पै चाबी पास रहणा काम आवै सै।",
+   "text": "पड़ोस आली संतोष चाची पै घर की दूसरी चाबी रहवै सै।"
+  },
+  "h021": {
+   "saheli": "There is no doctor visit scheduled yet on record, Sumit.",
+   "text": "Saheli, when is mummy's next doctor visit? 🗓️🤔"
+  },
+  "h022": {
+   "saheli": "वाह जी वाह, देसी घी का चूरमा तो घणा स्वाद लागै सै!",
+   "text": "आज चूरमा बणाया सै।"
+  },
+  "h023": {
+   "saheli": "काम छोड़ कै थोड़ी देर आराम कर ल्यो जी, सुस्ताणा जरूरी सै।",
+   "text": "गात टूटै सै, थकगी।"
+  },
+  "h024": {
+   "saheli": "Children laughing and playing fills the house with pure joy!",
+   "text": "Kids are having fun playing in the verandah 🏃‍♂️🏏 So much laughter! 😄"
+  },
+  "h025": {
+   "saheli": "A doctor visit isn't booked yet in our notes, Sumit.",
+   "text": "When is mummy's next doctor appointment due? 🩺🗓️"
+  },
+  "h026": {
+   "saheli": "Such precious moments together! Nothing beats time with grandparents.",
+   "text": "The grandchildren are showing mummy their drawing homework right now 🎨👧👦 Heartwarming!"
+  },
+  "h027": {
+   "saheli": "Thanks for the update, Sumit. Duly noted!",
+   "text": "Mummy took Vitamin B12 after breakfast today 💊🥛"
+  },
+  "h028": {
+   "saheli": "यो सुण कै मन घणा दुखी होया जी, भगवान भाई साहब की आत्मा नै शांति देवै अर थामनै हिम्मत बख्शै।",
+   "text": "कल छोटा भाई गुजर ग्या।"
+  },
+  "h029": {
+   "saheli": "It is always a blessing when family gathers together. Glad you had a heartwarming day!",
+   "text": "Such a pleasant day today! 😊 Family visited us and we all spent quality time together 👨‍👩‍👧‍👦❤️"
+  },
+  "h030": {
+   "saheli": "Rosuvastatin 10 mg is scheduled for 21:30 tonight.",
+   "text": "Saheli, what medicines are due for mummy this evening? 💊⏰"
+  },
+  "h031": {
+   "saheli": "घणा प्यारा नाम सै, Snowy घर मैं खूब लाड लडावै सै के?",
+   "text": "म्हारी बिल्ली का नाम Snowy सै।"
+  },
+  "h032": {
+   "saheli": "थारा दुख समझ सकूं, मन भारी होवै सै। थोड़ा थोड़ा खा लिया करो अर जी हलका राख्या करो।",
+   "text": "छोटा भाई जाण के बाद मन कोन्या लागदा। रोटी भी ना खाई जांदी, घणी उदास रहूँ।"
+  },
+  "h033": {
+   "saheli": "Good evening Sumit! Please check her prescription chart for the scheduled evening doses with dinner.",
+   "text": "Hello Saheli! 😊 Can you please tell me what medicines are due for Mom this evening? 💊✨"
+  },
+  "h034": {
+   "saheli": "घणी आच्छी बात सै, आराम हो गया तो दिन भी बढ़िया बीतेगा।",
+   "text": "नींद आच्छी आई।"
+  },
+  "h035": {
+   "saheli": "बढ़िया करा, दवाई बखत पै ले ली।",
+   "text": "रोटी खा कै Vitamin B12 ले ली।"
+  },
+  "h036": {
+   "saheli": "It is always best to take medicines with plain water, Sumit, as tea can interfere with absorption. 💧",
+   "text": "Hi Saheli! ☕ Can Mom take her medicine with hot tea? 🤔 Just wondering!"
+  },
+  "h037": {
+   "saheli": "Water is much safer for washing down tablets, Sumit, so please avoid giving them with tea.",
+   "text": "Quick question Saheli! ☕💊 Is it okay if she takes her tablet along with morning tea? 🙏"
+  },
+  "h038": {
+   "saheli": "बालकां तैं घर मैं रौनक रहवै सै, खूब खिलवाओ उननै।",
+   "text": "पोते घणी मौज करैं सैं।"
+  },
+  "h039": {
+   "saheli": "सांझ नै डाक्टर आली परची देख कै रोटी पाछै दवाई ले लियो।",
+   "text": "सांझ नै कुणसी दवाई सै?"
+  },
+  "h040": {
+   "saheli": "बालकां की मीठी बातां तैं मन राजी हो ज्या सै।",
+   "text": "बालक आज स्कूल तैं आ कै घणी बातां करैं थे।"
+  },
+  "h041": {
+   "saheli": "रफी साहब के गाणे सुनकै मन नै घणा सकून मिलै सै।",
+   "text": "सांझ नै Mohammed Rafi के पुराणे गाणे सुणूं, घणे पसंद सैं।"
+  },
+  "h042": {
+   "saheli": "Water is always recommended with medicines, Sumit, as tea can reduce how well they work.",
+   "text": "Hey Saheli! ☕💊 Just checking, can she take her tablets with milk tea? 🤔"
+  },
+  "h043": {
+   "saheli": "Please check her clinic slip or hospital card for the exact date of her next consultation, Sumit. 📋",
+   "text": "Hi Saheli! 🗓️🩺 Do you know when Mom's next doctor visit is scheduled? 🚗"
+  },
+  "h044": {
+   "saheli": "Festival preparations always bring such wonderful excitement and festive energy home! 🪔",
+   "text": "Festival season is right around the corner! 🪔✨ Getting the whole house cleaned and ready! 🧹🎉"
+  },
+  "h045": {
+   "saheli": "थोड़ा आराम कर ल्यो, ढलदी धूप मैं सुस्ताणा जरूरी सै।",
+   "text": "थक री सूं आज।"
+  },
+  "h046": {
+   "saheli": "Good to know she took it on time, Sumit! 😊",
+   "text": "Mom took her Rosuvastatin after breakfast today! 💊🥞👍"
+  },
+  "h047": {
+   "saheli": "Kindly refer to the appointment slip from the clinic or hospital file to confirm the date, Sumit.",
+   "text": "Saheli, could you remind me when our next doctor appointment is? 🏥👨‍⚕️📅"
+  },
+  "h048": {
+   "saheli": "That sounds absolutely delicious, Sumit, enjoy the hearty meal! 🍲",
+   "text": "Cooking some special dal makhani and hot rotis today! 🍲🫓 Smells heavenly! 😋👨‍🍳"
+  },
+  "h049": {
+   "saheli": "बालकां गेल खेलण तैं थकान दूर हो ज्या सै।",
+   "text": "पोते म्हारे गेल खेलैं थे।"
+  },
+  "h050": {
+   "saheli": "घणी प्यारी बात सै, पोती तैं रोज नई बातां सुणया करो।",
+   "text": "पोती आज नई कविता सुणावै थी।"
+  },
+  "h051": {
+   "saheli": "थारी परची मैं लिखी सांझ की दवाई रोटी खा कै ले लियो।",
+   "text": "सांझ की कुणसी दवाई लेणी सै?"
+  },
+  "h052": {
+   "saheli": "Family visits bring so much warmth and happiness, glad you all had a lovely day! ✨",
+   "text": "Relatives visited today and had such a happy family time together! 🏡🥰❤️"
+  },
+  "h053": {
+   "saheli": "Take it easy tonight, Sumit, and get some gentle rest. Tomorrow will be brighter. 🌸",
+   "text": "Feeling a bit low today Saheli... 😔🌧️ Just one of those tiring days. 💭"
+  },
+  "h054": {
+   "saheli": "That is wonderful, planning early for Monika's special day will make it memorable! 🎉",
+   "text": "Monika's birthday is on 21 January! 🎂👧 Already planning what surprise gift to give her! 🎁🎈"
+  },
+  "h055": {
+   "saheli": "Noted, thank you for making sure she stays on schedule, Sumit! 👍",
+   "text": "Mom has taken Rosuvastatin after breakfast this morning! 💊🥣✅"
+  },
+  "h056": {
+   "saheli": "Sending you warm thoughts, Sumit; please relax and sleep early tonight. 🌼",
+   "text": "Feeling quite low and overwhelmed this evening... 😞💤 Hope tomorrow is better. 🥀"
+  },
+  "h057": {
+   "saheli": "घणी आच्छी बात सै, बखत पै दवाई लेणा जरूरी सै।",
+   "text": "रोटी खा कै Iron ले ली।"
+  },
+  "h058": {
+   "saheli": "Festive planning is always so joyful, hope everyone has a wonderful celebration ahead! 🪔",
+   "text": "The festival is almost here! 🪔✨ Planning sweets and decorations for the family! 🍬🌸🎉"
+  },
+  "h059": {
+   "saheli": "बढ़िया करा, तनै दवाई बखत सिर ले ली।",
+   "text": "रोटी खा कै Folic acid ले ली।"
+  },
+  "h060": {
+   "saheli": "Great to hear she took it timely after her meal, Sumit! Have a pleasant day. ✨",
+   "text": "Morning update! 🌞 Mom had her Vitamin B12 after breakfast today. 💊🥣👌"
+  },
+  "h061": {
+   "saheli": "It sounds like lovely weather to unwind. Enjoy the cool evening breeze!",
+   "text": "Weather has suddenly become so pleasant tonight! 🌧️☕ Really enjoying the cool breeze outside. 🍃"
+  },
+  "h062": {
+   "saheli": "थोड़ा आराम कर ल्यो। सेहत का ध्यान राखो।",
+   "text": "घणी थकान हो री सै।"
+  },
+  "h063": {
+   "saheli": "त्योहार की तो न्यारी ए रौनक होवै सै! घर में खूब चहल-पहल रहवैगी।",
+   "text": "त्योहार आण आळा सै।"
+  },
+  "h064": {
+   "saheli": "बहुत बढ़िया, दवाई बख्त पै ले ली।",
+   "text": "कलेवे पाछै Vitamin B12 ले ली।"
+  },
+  "h065": {
+   "saheli": "त्योहार की त्यारी में मजा भी खूब आवै सै! बस अपणा ध्यान राखियो।",
+   "text": "त्योहार की त्यारी चालै सै।"
+  },
+  "h066": {
+   "saheli": "It is generally best to take medicines with plain water, as tea can interfere with absorption. You can check with the doctor or pharmacist for this specific medicine.",
+   "text": "Hi Saheli! 😊 Can medicines be taken along with hot tea? ☕💊 Just wondering! 🤔"
+  },
+  "h067": {
+   "saheli": "शाबाश, दवाई बख्त पै लेण की आदत घणी अच्छी सै।",
+   "text": "कलेवे पाछै Multivitamin ले ली।"
+  },
+  "h068": {
+   "saheli": "बहुत आच्छी बात सै, दवाई टाइम पै ले ली।",
+   "text": "कलेवे पाछै Iron ले ली।"
+  },
+  "h069": {
+   "saheli": "सुण कै घणा अच्छा लाग्या! अच्छी नींद तै दिन बढ़िया बितैगा।",
+   "text": "नींद घणी सुथरी आई।"
+  },
+  "h070": {
+   "saheli": "घणी अच्छी बात सै, याद तै दवाई ले ली।",
+   "text": "कलेवे पाछै Folic acid ले ली थी।"
+  },
+  "h071": {
+   "saheli": "Hope it cools down soon and you get some rain! Make sure to stay hydrated.",
+   "text": "Such a hot and humid evening today! ☀️🥵 Really hoping for some evening showers soon. 🌧️🙏"
+  },
+  "h072": {
+   "saheli": "सारे जणे इकट्ठे होज्याँ तो मन राजी हो ही जावै सै! बड़ी खुशी की बात सै।",
+   "text": "कुणबा आया था, मन खुश हो ग्या।"
+  },
+  "h073": {
+   "saheli": "बाजरे की ताती रोटी तै घणी सुथरी लागै सै! मजे तै खाओ।",
+   "text": "आज बाजरे की रोटी बनाई।"
+  },
+  "h074": {
+   "saheli": "सांझ नै थारी कोई दवाई बाकी कोन्या। आराम तै रहियो।",
+   "text": "सांझ नै के दवाई लेणी सै?"
+  },
+  "h075": {
+   "saheli": "धूप तै बच कै छांव में रहियो और पाणी पीते रहियो।",
+   "text": "घाम घणा कड़ा सै आज।"
+  },
+  "h076": {
+   "saheli": "आज सांझ खातर कोई दवाई तय कोन्या। निश्चिंत रहियो।",
+   "text": "आज सांझ नै के दवाई लेणी सै?"
+  },
+  "z01": {
+   "saheli": "I don't have the current dose of Folic acid noted down in our records. Please check the latest prescription or confirm with the doctor to be safe. 🙏",
+   "text": "Hi Saheli 🙏 do you know what dose of Folic acid रामेश्वर is taking now? 💊🤔"
+  },
+  "z02": {
+   "saheli": "I don't have any allergies recorded for रामेश्वर. Please do check with the family or doctor if you suspect any. 🌸",
+   "text": "Hello Saheli! Quick question 🩺 does रामेश्वर have any known allergies? 🚫🤧"
+  },
+  "z03": {
+   "saheli": "I don't have the complete list of रामेश्वर's regular medicines recorded right now. It would be best to check the medicine box or prescription directly. 🙏",
+   "text": "Saheli, could you tell me how many regular medicines रामेश्वर is taking these days? 💊📋 Thanks! 😊"
+  },
+  "z04": {
+   "saheli": "I don't have any record of the sad news shared this month. Wishing you and the family peace and strength during this time. 🤍",
+   "text": "Hey Saheli 😔 what was the sad news our family shared this month? 💔🕊️"
+  },
+  "z05": {
+   "saheli": "I don't have a note of who calls रामेश्वर on Sundays. It's always lovely to keep in touch with family, though! 💛",
+   "text": "Hi Saheli! Who usually calls रामेश्वर on Sundays? 📞👵✨"
+  },
+  "z06": {
+   "saheli": "I don't have information on who holds the spare key to the house. Please check directly with the family members. 🗝️",
+   "text": "Do you remember who has the spare key to the house? 🔑🏠 Just checking! 🤔"
+  },
+  "z07": {
+   "saheli": "I don't have the cat's name noted in our chats! Do tell me once you remember. 🐱",
+   "text": "Saheli, what's the name of our cat again? 🐱🐾 Forgot for a second! 😅"
+  },
+  "z08": {
+   "saheli": "I don't have a note of whose songs रामेश्वर loves listening to. Music always brings so much joy, though! 🎵",
+   "text": "Whose songs does रामेश्वर love listening to? 🎶📻 Remind me! 😃"
+  },
+  "z09": {
+   "saheli": "I don't have Monika's birthday saved in my notes. Please check with her or family so you can celebrate together! 🎈",
+   "text": "Hey Saheli 🎉 when is Monika's birthday? 🎂🎈 Want to make sure I don't miss it! 🗓️"
+  }
+ }
+}

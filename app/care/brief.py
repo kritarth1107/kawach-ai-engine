@@ -56,9 +56,17 @@ async def setting(session: AsyncSession, family_id: str, caregiver: str) -> dict
 
 
 async def default_time(session: AsyncSession, family_id: str, elder: str) -> time:
-    """30 minutes after the care recipient's bedtime, when an evening bedtime is saved; else 22:00."""
-    sleep = await store.active_fact(session, family_id, elder, "routine:sleep")
-    evening = [t for t in _times(sleep) if t.hour >= 12]
+    """30 minutes after the care recipient's bedtime, when an evening bedtime is saved; else 22:00.
+
+    Bedtimes are activities since 2026-10-13 (activity:sleep); an older record may still hold routine:sleep. Reading only
+    the old key left every brief at 22:00 (world message-budget sim, 2026-10-13)."""
+    from app.brain.wake import own_night
+
+    night = await own_night(session, family_id, elder)
+    evening = [time(night[0] // 60, night[0] % 60)] if night and night[0] >= 12 * 60 else []
+    if not evening:
+        sleep = await store.active_fact(session, family_id, elder, "routine:sleep")
+        evening = [t for t in _times(sleep) if t.hour >= 12]
     if not evening:
         return DEFAULT_TIME
     at = datetime.combine(datetime(2000, 1, 1), min(evening)) + AFTER_BEDTIME
@@ -66,10 +74,26 @@ async def default_time(session: AsyncSession, family_id: str, elder: str) -> tim
 
 
 async def brief_time(session: AsyncSession, family_id: str, caregiver: str, elder: str) -> time | None:
+    """The caregiver's own time when they chose one; else the default, moved out of the caregiver's own night when Saheli
+    knows it (a caregiver who sleeps at 21:30 got the 22:00 brief in their sleep): 30 minutes before their bedtime when
+    that is still evening, else their morning (wake-up plus 30 minutes, a brief about the day before)."""
     s = await setting(session, family_id, caregiver)
     if s.get("off"):
         return None
-    return _hm(s.get("time")) or await default_time(session, family_id, elder)
+    chosen = _hm(s.get("time"))
+    if chosen:
+        return chosen
+    at = await default_time(session, family_id, elder)
+    from app.brain.wake import _inside, own_night
+
+    night = await own_night(session, family_id, caregiver)
+    if not night or not _inside(at.hour * 60 + at.minute, night):
+        return at
+    before = night[0] - 30
+    if 18 * 60 <= before < 24 * 60:
+        return time(before // 60, before % 60)
+    morning = (night[1] + 30) % (24 * 60)
+    return time(morning // 60, morning % 60) if morning < 12 * 60 else at
 
 
 def due_day(at: time, now: datetime) -> str | None:

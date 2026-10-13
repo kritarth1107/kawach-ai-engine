@@ -1,0 +1,434 @@
+{
+ "family": "w0988",
+ "hash": "85b4978290b9a2a66ec6",
+ "texts": {
+  "e01": {
+   "saheli": "Good morning Suresh ji, bahut badhiya ki aapne time par inhaler le liya! Chai enjoy kijiye aur apna khayal rakhiye.",
+   "text": "Good morning Saheli! Aaj subah maine time pe Budesonide-Formoterol inhaler le liya hai. Abhi chai peene jaa raha hoon, feeling quite fresh today."
+  },
+  "e02": {
+   "saheli": "Namaste Suresh ji, BP share karne ke liye shukriya. Thoda aaram kijiye aur din bhar paani peete rahiye.",
+   "text": "Namaste Saheli beta, abhi subah BP check kiya tha machine se. Reading 140/87 aayi hai, socha tumhe bata doon."
+  },
+  "e03": {
+   "saheli": "Suresh ji, bilkul bhi OTP share mat kijiyega, bank wale kabhi OTP nahi maangte! Yeh pakka fraud call hai, phone kaat dijiye.",
+   "text": "Arre Saheli, abhi thodi der pehle ek phone aaya tha. Bol raha tha bank se hoon aur account chalu rakhne ke liye OTP maang raha tha, mujhe thoda ajeeb laga."
+  },
+  "e04": {
+   "saheli": "Wah Suresh ji, yeh toh bahut acchi aadat hai! 6:30 pm ki walk se mind aur body dono fresh rahenge.",
+   "text": "Sunno Saheli, maine decide kiya hai ki kal se roz evening walk pe jaunga 6:30 pm ko. Thoda taaza hawa khana zaroori hai health ke liye."
+  },
+  "e05": {
+   "saheli": "Nitin ji, main order toh nahi kar sakti, aap please kisi grocery app se mangwa lijiye.",
+   "text": "Suresh ke liye brown bread pack order kardo"
+  },
+  "h001": {
+   "saheli": "Theek hai Nitin, maine Pitaji Suresh ji ki sabhi details aur medicines note kar li hain. Main unka poora khayal rakhungi.",
+   "text": "Pitaji Suresh setup: COPD / asthma, Depression / anxiety, Hypothyroidism. Budesonide-Formoterol inhaler 2 puffs at 09:00, 21:30. Montelukast half tablet (10 mg) at 22:00. Escitalopram 10 mg at 08:00. Furosemide 20 mg at 08:00. Magnesium 250 mg at 21:00. Tamsulosin 0.4 mg at 21:00. Domperidone 10 mg at 08:45. Allergies none. Doctor Dr Vikas Agarwal. Call them 'Pitaji'."
+  },
+  "h002": {
+   "saheli": "Yeh toh bohot acchi baat hai! Tyohar ki raunak shuru hote hi ghar mein alag hi khushi rehti hai.",
+   "text": "Diwali prep shuru ho gayi ghar pe."
+  },
+  "h003": {
+   "saheli": "Wah, bohot badhiya! Bacchon ko meri taraf se dher saari shabashi.",
+   "text": "Bacche aaj drawing competition mein jeete."
+  },
+  "h004": {
+   "saheli": "Bohot accha kiya Pitaji, dawa samay par lena zaroori hai. Ab aap aaram se baithein.",
+   "text": "Beta Saheli, maine breakfast ke baad apni Domperidone le li thi. Ab pet theek lag raha hai."
+  },
+  "h005": {
+   "saheli": "Haan, aise mausam mein paani peete rehna chahiye aur dhoop se bachna zaroori hai.",
+   "text": "Aaj dhoop bohot tez hai bahar."
+  },
+  "h006": {
+   "saheli": "Theek hai Nitin, update ke liye shukriya.",
+   "text": "Pitaji took Domperidone after breakfast."
+  },
+  "h007": {
+   "saheli": "Noted Nitin, update ke liye thanks.",
+   "text": "Pitaji took Escitalopram after breakfast."
+  },
+  "h008": {
+   "saheli": "Bohot acchi baat hai Pitaji. Aise hi inhaler lene ke baad hamesha acche se kulla zaroor kar liya kijiye.",
+   "text": "Saheli beti, maine subah nashta karne ke baad Budesonide-Formoterol inhaler le liya tha. Saans lene mein kaafi aaram hai."
+  },
+  "h009": {
+   "saheli": "Ji Pitaji, yeh sunkar accha laga ki aapne samay par inhaler le liya tha. Apna khayal rakhiye.",
+   "text": "Arey Saheli, main batana bhool gaya tha shayad, maine breakfast ke baad apna Budesonide-Formoterol inhaler le liya tha."
+  },
+  "h010": {
+   "saheli": "Bohot badhiya plan hai! Tyohar ke mele ki baat hi alag hoti hai.",
+   "text": "Dussehra mela dekhne jaana hai weekend pe."
+  },
+  "h011": {
+   "saheli": "Bohot sundar plan hai Nitin, Kedarnath ki yatra bohot pavitra maani jaati hai.",
+   "text": "Next month Kedarnath trip plan kar rahe hain family ke sath."
+  },
+  "h012": {
+   "saheli": "Ji Nitin, note kar liya hai.",
+   "text": "Pitaji took Magnesium after breakfast."
+  },
+  "h013": {
+   "saheli": "Padosiyon ke sath aisi baatein aur baghbani dekhna mann ko bohot sukoon deta hai Pitaji.",
+   "text": "Saheli beta, hamare pados wale Sharma ji subah se naye paudhe laga rahe the garden mein. Dekh kar bohot accha laga, humne bhi thodi der unse baatcheet ki."
+  },
+  "h014": {
+   "saheli": "Arey wah, unke liye toh yeh bohot khushi ki baat hogi!",
+   "text": "Padosi nayi car leke aaye aaj."
+  },
+  "h015": {
+   "saheli": "Bohot badhiya Pitaji, dawa lene ki aadat banaye rakhein.",
+   "text": "Beta, maine breakfast ke baad Tamsulosin le li thi. Sab theek chal raha hai."
+  },
+  "h016": {
+   "saheli": "Acchi baat hai, walk ke sath doston se milna-julna bhi ho jata hai.",
+   "text": "Sharma uncle shaam ko walk pe mile the."
+  },
+  "h017": {
+   "saheli": "Theek hai Pitaji, dawa samay par lene ke liye shukriya, ab aap aaram kijiye.",
+   "text": "Saheli, maine subah breakfast ke baad Furosemide le li thi. Abhi aaram kar raha hoon."
+  },
+  "h018": {
+   "saheli": "Pitaji, mere record mein agle visit ki tareekh nahi hai. Aap ek baar Nitin se pooch lijiye ya doctor ke clinic confirm kar lijiye.",
+   "text": "Beti, zara dekh kar batao Dr Vikas Agarwal ke paas hamara agla visit kab ka hai? Yaad nahi aa raha."
+  },
+  "h019": {
+   "saheli": "Bohot badhiya khabar hai, unke parivar ke liye bohot garv ki baat hai!",
+   "text": "Neighbour ki beti ka exam clear ho gaya."
+  },
+  "h020": {
+   "saheli": "Diyon ki roshni se tyohar aur bhi sundar lagta hai Pitaji, ghar mein khoob ronak hogi!",
+   "text": "Saheli beta, is baar Diwali par socha hai ghar ke aangan mein khoob saare diye sajayein. Bachpan ki yaadein taaza ho jaati hain aise tyoharon par."
+  },
+  "h021": {
+   "saheli": "Shor mein pareshani hoti hai, ho sake toh thodi der kamre ki khidkiyan band rakhein.",
+   "text": "Pados mein repair work chal raha hai, shor hai."
+  },
+  "h022": {
+   "saheli": "Bohot accha, padhai ke baad thoda khel-kood bacchon ke liye zaroori hai.",
+   "text": "Kids homework khatam karke khelne gaye."
+  },
+  "h023": {
+   "saheli": "Theek hai Nitin, update record kar liya hai.",
+   "text": "Pitaji took Domperidone after breakfast."
+  },
+  "h024": {
+   "saheli": "Sun kar bohot khushi hui Pitaji. Apna aese hi dhyan rakhte rahiye.",
+   "text": "Beta Saheli, maine breakfast ke baad Budesonide-Formoterol inhaler le liya tha. Aaj tabiyat theek lag rahi hai."
+  },
+  "h025": {
+   "saheli": "Wah, meethai se toh din aur bhi meetha ho jata hai!",
+   "text": "Padosi sweets dekar gaye abhi."
+  },
+  "h026": {
+   "saheli": "Yeh toh bohot pyaari baat hai, bezubaan janwaron ke sath waqt bitane se mann khush rehta hai.",
+   "text": "Neighbour ke pet dog se mil rahe the Pitaji."
+  },
+  "h027": {
+   "saheli": "Pitaji, filhal mere paas agle doctor visit ka schedule nahi hai. Ek baar Nitin se confirm kar lijiyega.",
+   "text": "Beta Saheli, agla doctor checkup kab hai? Dr Vikas Agarwal se milna kab tay hua hai zara batao."
+  },
+  "h028": {
+   "saheli": "Mausam badal raha hai toh thand se bachkar rehna accha hoga.",
+   "text": "Sham ko mausam thanda ho gaya achanak."
+  },
+  "h029": {
+   "saheli": "Pota-poti ke sath waqt bitana sabse badi khushi hoti hai Pitaji, aisi yaadein hamesha khas rehti hain.",
+   "text": "Beti Saheli, aaj pota-poti mere kamre mein aaye the aur purane kisse sunte rahe. Unke sath hasi-mazak karke bohot sukoon mila."
+  },
+  "h030": {
+   "saheli": "Haha, bacchon ke sath khelne ki toh alag hi mithaas hai Pitaji! Aapka mann bhi bilkul halka ho gaya hoga.",
+   "text": "Saheli, bacchon ne school se aakar mere sath carrom khela. Mujhe hara kar kitne khush ho rahe the dono!"
+  },
+  "h031": {
+   "saheli": "Wah Suresh ji, khichdi aur desi ghee toh best combination hai! Maine bhi khaana kha liya hai, aap araam se dinner enjoy kijiye.",
+   "text": "Aaj maine mast moong dal khichdi banayi hai Saheli. Thoda sa desi ghee daala toh swaad hi badal gaya. Tumne dinner kar liya kya?"
+  },
+  "h032": {
+   "saheli": "Bachon ki masti se ghar mein alag hi raunak rehti hai.",
+   "text": "bache masti kar rahe"
+  },
+  "h033": {
+   "saheli": "Badiya Nitin ji, aap sab time pe lunch kar lijiye.",
+   "text": "lunch ban gaya"
+  },
+  "h034": {
+   "saheli": "Pakode toh bohot acche lagte hain Suresh ji, par thoda kam tel wala hi lijiyega. Chai ke saath halka snack hi theek rehta hai.",
+   "text": "Shaam ki chai ke saath thode besan ke pakode talne ka mann ho raha hai. Par tel-masala thoda sambhal ke hi lena padta hai. Tum batao, chai ke saath kya pasand hai?"
+  },
+  "h035": {
+   "saheli": "Yeh toh bohot acchi aur suvidhajanak baat hai Suresh ji, padosi bharosemand ho toh kaafi tasalli rehti hai.",
+   "text": "Waise hamari padosan Savitri aunty ke paas ghar ki ek spare key rehti hai emergency ke liye. Purani aadat hai unko sambhalne ki, kaafi bharosemand hain. Accha rehta hai aisi madad aas-paas ho toh."
+  },
+  "h036": {
+   "saheli": "Sunkar bohot accha laga Suresh ji, khushiyan baantne se aur badhti hain.",
+   "text": "Aaj subah Sharma ji se park mein mulaqat hui. Unke bete ka promotion ho gaya hai toh bohot khush the. Aise ache padosi milna bhi kismat ki baat hai."
+  },
+  "h037": {
+   "saheli": "Accha laga sunkar, padosiyon se baat hoti rahe toh theek rehta hai.",
+   "text": "neighbour se mile"
+  },
+  "h038": {
+   "saheli": "Bohot badiya Nitin ji, acchi neend se din accha guzarta hai.",
+   "text": "neend achi aayi"
+  },
+  "h039": {
+   "saheli": "Theek hai Nitin ji, note kar liya ki unhone Montelukast le li hai.",
+   "text": "papa took Montelukast post breakfast"
+  },
+  "h040": {
+   "saheli": "Subah ki dhoop sekna sehat ke liye bohot faydemand hai Suresh ji. Thodi der dhoop ka aanand lijiye!",
+   "text": "Aaj subah se aakash bilkul saaf hai aur dhoop badi suhani nikal aayi hai. Balcony mein baithkar thodi der sek raha hoon. Mausam badal raha hai dheere dheere."
+  },
+  "h041": {
+   "saheli": "Haan Suresh ji, dopahar mein dhoop tez ho jaati hai. Aap aaram se kamre mein hi aaram kijiye aur paani peete rahiye.",
+   "text": "Dopahar mein thodi garmi badh gayi hai achanak. Pankha chalana pad raha hai kamre mein. Baahar toh nikalne ka mann hi nahi karta."
+  },
+  "h042": {
+   "saheli": "Suresh ji, shaam ki dawaiyon ki list apne routine card ya prescription mein check kar lijiye, ya Nitin se ek baar confirm karwa lijiye.",
+   "text": "Saheli, zara batao aaj shaam ko kaunsi dawai lene ka time hai? Main thoda bhool raha hoon socha tumse pooch loon."
+  },
+  "h043": {
+   "saheli": "Bilkul Suresh ji, aise badalte mausam mein thand se bache rehna hi behtar hai. Khayal rakhiye apna.",
+   "text": "Shaam ko phir se thandi hawa chalne lagi hai. Mausam ka koi bharosa nahi, pal mein garam pal mein thanda. Main toh chadar nikaal ke baitha hoon."
+  },
+  "h044": {
+   "saheli": "Daliya bohot paushtik aur halka hota hai Suresh ji. Sehat ke liye yeh bilkul sahi nashta hai.",
+   "text": "Aaj subah maine apne liye daliya banaya hai halki namkeen wala. Matar aur gajar daali thi toh swaad bhi bohot badh gaya. Subah halka nashta hi theek rehta hai."
+  },
+  "h045": {
+   "saheli": "Wah, 22 December ko Pooja ka janamdin yaad rakhna bohot pyari baat hai Suresh ji. Bachon ke badhne ka waqt sach mein pata nahi chalta.",
+   "text": "Pooja, meri poti, uska birthday 22 December ko aata hai. Har saal hum log ghar par chhota sa function karte hain. Bacche itni jaldi bade ho jaate hain na!"
+  },
+  "h046": {
+   "saheli": "Theek hai Nitin ji, update ke liye shukriya.",
+   "text": "papa took Domperidone post breakfast"
+  },
+  "h047": {
+   "saheli": "Pehle padosi aur phir paudhon ki baatein, shaam bitane ka yeh bohot khoobsurat tareeqa hai Suresh ji.",
+   "text": "Hamare saamne wale Verma ji naye paudhe laaye hain nursery se. Shaam ko unke sath baithkar bagiche ki baatein kar rahe the. Kitna sukoon milta hai haryali dekhkar."
+  },
+  "h048": {
+   "saheli": "Bohot badiya Suresh ji, achha hua aapne time se Montelukast le li. Mera din bhi achha beet raha hai, aap aaram kijiye.",
+   "text": "Maine Montelukast nashte ke baad le li thi, batana bhool gaya tha shaayad. Tabiyat bilkul theek chal rahi hai aaj. Tum sunao tumhara din kaisa raha?"
+  },
+  "h049": {
+   "saheli": "Theek hai Nitin ji, main dhyaan rakhungi aur Pooja ke messages ka swagat hai.",
+   "text": "Pooja will also look after papa now and may message you"
+  },
+  "h050": {
+   "saheli": "Kadhi chawal ka toh apna hi maza hai Suresh ji! Maze se lunch kijiye.",
+   "text": "Aaj dohar ke khane mein kadhi chawal banane ki soch rahe hain. Dahi thodi khatte wali mil gayi hai toh mast banegi. Kadhi ke bina toh hafte ka maza hi nahi aata."
+  },
+  "h051": {
+   "saheli": "Aapne bohot accha kiya Suresh ji, aapas mein ek doosre ka khayal rakhna bohot zaroori hota hai.",
+   "text": "Gupta ji ki tabiyat thodi dheeli thi toh main unka haal-chaal lene gaya tha. Ab pehle se behtar hain, aaram kar rahe the. Padosi ka haal-chaal lete rehna chahiye."
+  },
+  "h052": {
+   "saheli": "Sunkar accha laga Nitin ji, mausam ka luft uthaiye.",
+   "text": "weather pleasant hai"
+  },
+  "h053": {
+   "saheli": "Garam roti aur bhindi ki toh baat hi alag hai Suresh ji! Ghar ka taaza khana hamesha sabse badiya hota hai.",
+   "text": "Aaj bahu ne bohot swadisht bhindi banayi hai. Sath mein garam phulke the, pura pet bhar gaya. Ghar ke khane jaisi koi baat nahi hoti."
+  },
+  "h054": {
+   "saheli": "Haan Nitin ji, tyoharon ki tayariyon ka alag hi maza hota hai.",
+   "text": "festivals coming up"
+  },
+  "h055": {
+   "saheli": "Noted Nitin ji, update ke liye shukriya.",
+   "text": "papa took Furosemide after breakfast"
+  },
+  "h056": {
+   "saheli": "Kabhi kabhi aisa lagna bilkul aam baat hai Suresh ji. Aap thoda paani pijiye, halki saans lijiye aur kisi se thodi baat kar lijiye, mann halka ho jayega.",
+   "text": "Aaj mann thoda udaas sa lag raha hai Saheli, pata nahi kyun ajeeb si bechaini hai. Kuch karne ka dil nahi kar raha. Bas akele baitha hoon thoda sukoon dhoondh raha hoon."
+  },
+  "h057": {
+   "saheli": "Baarish ke mausam mein chai peene ka alag hi maza hota hai Suresh ji. Thandi hawa ka aanand lijiye!",
+   "text": "Aaj subah thandi hawayein chal rahi hain aur badal chhaaye hue hain. Lagta hai shaam tak baarish ho sakti hai. Chai peene ka mann kar gaya achanak."
+  },
+  "h058": {
+   "saheli": "Theek hai Nitin ji, maine note kar liya hai.",
+   "text": "papa took Magnesium post breakfast"
+  },
+  "h059": {
+   "saheli": "Kitni pyari baat hai Suresh ji! Parivaar ke sath bitaye pal hamesha dil ko khushiyon se bhar dete hain.",
+   "text": "Aaj pura din bohot hi accha beeta, parivaar ke sab log milne aaye the! Bachon ki hansi-khushi se pura ghar gunj utha, mera mann ekdum prasann ho gaya."
+  },
+  "h060": {
+   "saheli": "Kishore Da ke gaane sach mein lajawab hain Suresh ji, unki aawaz shaam ko aur bhi sukoon bhari bana deti hai.",
+   "text": "Mujhe Kishore Kumar ke purane gaane bohot pasand hain, shaam ko daily unke hi gaane sunta hoon. Unki aawaz mein alag hi jadu hai jo seedha dil ko chhoota hai. Puraane gaano ka zamana hi alag tha."
+  },
+  "h061": {
+   "saheli": "Namaste Suresh ji! Agli visit 24 October ko subah 11 baje Dr. Sharma ke paas scheduled hai.",
+   "text": "Namaste Saheli beta, humara next doctor visit kab scheduled hai? Nitin keh raha tha checkup banta hai, socha tumse pooch loon."
+  },
+  "h062": {
+   "saheli": "Bahut badiya Suresh ji, medicine samay par lene ke liye shukriya.",
+   "text": "Beta aaj breakfast ke baad Escitalopram le li thi maine. Sab time pe chal raha hai, tabiyat bhi theek hai."
+  },
+  "h063": {
+   "saheli": "Dawai hamesha paani ke saath lena hi behtar hota hai, chai ke saath na lein toh achha hai.",
+   "text": "Saheli beta, kya yeh dawai chai ke saath le sakte hain? Subah garam chai peete waqt dhyan aaya toh socha pooch loon."
+  },
+  "h064": {
+   "saheli": "Noted, thank you Nitin.",
+   "text": "Dad took Escitalopram after breakfast."
+  },
+  "h065": {
+   "saheli": "Yeh toh sunkar achha laga Suresh ji, puraane padosi se milkar baat ho gayi!",
+   "text": "Sharma ji mil gaye the aaj subah park mein. Bahut din baad dikhe, bata rahe the unka beta Canada se aaya hua hai."
+  },
+  "h066": {
+   "saheli": "That is nice to hear.",
+   "text": "Neighbour visited today."
+  },
+  "h067": {
+   "saheli": "Thanks for updating, Nitin.",
+   "text": "Escitalopram done after breakfast."
+  },
+  "h068": {
+   "saheli": "Wah Suresh ji, pasandeeda serial dekhne ka maza hi alag hota hai!",
+   "text": "Beta raat ko TV dekhne ka alag hi maza hai. Main 9 pm serial 'Ghar Ki Rasoi' kabhi miss nahi karta, poora din wait karta hoon iska."
+  },
+  "h069": {
+   "saheli": "Take some rest this evening, Nitin.",
+   "text": "Too tired today."
+  },
+  "h070": {
+   "saheli": "Hope their preparation goes smoothly.",
+   "text": "Kids busy with exams."
+  },
+  "h071": {
+   "saheli": "Simple and comforting meal.",
+   "text": "Cooked dal chawal today."
+  },
+  "h072": {
+   "saheli": "Nothing scheduled for this evening, all clear.",
+   "text": "What is due this evening?"
+  },
+  "h073": {
+   "saheli": "The next visit is on 24 October at 11 am with Dr. Sharma.",
+   "text": "Next doctor visit when?"
+  },
+  "h074": {
+   "saheli": "Noted, thank you Nitin.",
+   "text": "Dad had Escitalopram post breakfast."
+  },
+  "h075": {
+   "saheli": "Got it, thanks for confirming.",
+   "text": "Escitalopram taken after breakfast today."
+  },
+  "h076": {
+   "saheli": "Nice to have them playing around.",
+   "text": "Kids playing outside now."
+  },
+  "h077": {
+   "saheli": "Aapne bahut achha kiya jo unka haal-chaal lene chale gaye Suresh ji.",
+   "text": "Verma ji ki tabiyat thodi dheeli chal rahi thi. Aaj subah unke ghar jaakar haalchaal pooch kar aaya hoon, ab better hain."
+  },
+  "h078": {
+   "saheli": "Noted, thank you Nitin.",
+   "text": "Domperidone given after breakfast."
+  },
+  "h079": {
+   "saheli": "Achha kiya Suresh ji, apna dhyan aise hi rakhte rahiye.",
+   "text": "Beta aaj breakfast ke baad Budesonide-Formoterol inhaler le liya tha maine. Saans ekdum theek hai abhi."
+  },
+  "h080": {
+   "saheli": "Thanks for the update, Nitin.",
+   "text": "Furosemide taken after breakfast."
+  },
+  "h081": {
+   "saheli": "Arey wah Suresh ji, parivaar ke saath waqt bitaane se din sach mein roshan ho jaata hai!",
+   "text": "Aaj ka din bahut hi khushnuma beeta beta! Ghar pe bache aur poori family aayi hui thi, sabke saath baithe aur khoob baatein hui."
+  },
+  "h082": {
+   "saheli": "Glad to hear everyone had a good time.",
+   "text": "Family visited today, good day."
+  },
+  "h083": {
+   "saheli": "Bahut badiya Suresh ji, update ke liye shukriya.",
+   "text": "Saheli beta, aaj breakfast ke baad Domperidone le li thi maine. Sab time se ho gaya."
+  },
+  "h084": {
+   "saheli": "Achhi baat hai Suresh ji, time par medicine lene ke liye thanks.",
+   "text": "Suno beta, aaj subah breakfast ke baad Furosemide le li thi maine. Paani bhi theek se pee raha hoon."
+  },
+  "h085": {
+   "saheli": "Wah Suresh ji, taaza garam paranthe ka toh alag hi maza hota hai!",
+   "text": "Aaj maine kitchen mein thodi madad karwayi. Garam garam aloo ke paranthe banwaye the, maza hi aa gaya kha kar!"
+  },
+  "h086": {
+   "saheli": "Festive season brings so much joy and energy.",
+   "text": "Diwali prep starting soon."
+  },
+  "h087": {
+   "saheli": "Suresh ji, agli appointment 24 October ko subah 11 baje Dr. Sharma ke sath hai.",
+   "text": "Beta humara agla doctor appointment kab ka hai? Calendar mein note karke rakhna chahta hoon taaki yaad rahe."
+  },
+  "h088": {
+   "saheli": "Mausam badal raha hai Suresh ji, thoda sambhal kar rahiye aur aaram se rahiye.",
+   "text": "Aaj mausam thoda thanda lag raha hai beta. Halka pankha chalaya hai, lagta hai ab dheere dheere sardi shuru ho rahi hai."
+  },
+  "h089": {
+   "saheli": "Kitni pyari baat hai Suresh ji, bacchon ki aisi choti baatein sach mein dil jeet leti hain!",
+   "text": "Pata hai beta, pota aaj school se aate hi mujhe apni drawing dikhane laga. Usne itna sundar ped banaya tha ki dil khush ho gaya."
+  },
+  "h090": {
+   "saheli": "Nothing is scheduled for this evening, Nitin.",
+   "text": "What is due this evening?"
+  },
+  "h091": {
+   "saheli": "Acha laga sunke! Padosi milte rahein toh acha rehta hai.",
+   "text": "Sharma ji mile the parking mein, sab theek."
+  },
+  "h092": {
+   "saheli": "Haan bilkul, festival season ka alag hi maza hai. Aap sab milke enjoy kijiye!",
+   "text": "Diwali preparations shuru karni hain ab."
+  },
+  "z01": {
+   "saheli": "Mujhe records check karke dekhna padega, Nitin. Ek baar prescription zaroor verify kar lena.",
+   "text": "Dad ka Furosemide dose kitna hai abhi?"
+  },
+  "z02": {
+   "saheli": "Mere paas kisi allergy ka record nahi hai. Safe rehne ke liye doctor se confirm kar lena behtar hoga.",
+   "text": "Dad ko kisi cheez se allergy hai kya?"
+  },
+  "z03": {
+   "saheli": "Unke primary doctor ka naam mere paas noted nahi hai. Aap unki latest file me check kar sakte ho.",
+   "text": "Dad ke doctor kaun hain?"
+  },
+  "z04": {
+   "saheli": "Current list check karni padegi, Nitin. Medicine box dekh kar exact count pata chal jayega.",
+   "text": "Dad ki total regular medicines kitni hain?"
+  },
+  "z05": {
+   "saheli": "Iss baare me mujhe koi nayi update nahi mili hai. Suresh ji se baat karke pata lagaya ja sakta hai.",
+   "text": "Iss month unka dhyan rakhne aur kaun aaya?"
+  },
+  "z06": {
+   "saheli": "Agle mahine ke trip plan ke baare me mujhe jankari nahi hai. Family group par confirm kar lo.",
+   "text": "Next month family kahan ja rahi hai?"
+  },
+  "z07": {
+   "saheli": "Spare key ki detail mere paas save nahi hai. Suresh ji se puchhna padega.",
+   "text": "Ghar ki spare key kiske paas hai?"
+  },
+  "z08": {
+   "saheli": "Pooja ke birthday ki date mere paas saved nahi hai, Nitin.",
+   "text": "Pooja ka birthday kab hai?"
+  },
+  "z09": {
+   "saheli": "Unke favourite singer ke baare me mujhe nahi pata. Suresh ji se unki pasand zaroor puchhungi.",
+   "text": "Dad ko kiske gaane pasand hain?"
+  },
+  "z10": {
+   "saheli": "Unke 9 baje ke serial ka naam note nahi hai mere paas. Suresh ji se hi pata chalega.",
+   "text": "9 pm Dad kaunsa serial dekhte hain?"
+  }
+ }
+}
