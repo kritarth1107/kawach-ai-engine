@@ -3,9 +3,7 @@ nudges before (fitness), checks in after (did it happen, what did they do), logs
 health data, counts streaks; something given up gets an evening check; a routine sends nothing. 100+ catalogue types."""
 
 import json
-from datetime import timedelta
 
-import pytest
 from sqlalchemy import select
 
 from app.brain import tools, wake

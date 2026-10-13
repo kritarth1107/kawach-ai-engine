@@ -301,7 +301,7 @@ def test_no_greeting_or_name_opener_in_a_running_conversation():
 
 
 def test_opening_state_reads_the_thread():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timezone
     from types import SimpleNamespace as T
 
     from app.core import clock

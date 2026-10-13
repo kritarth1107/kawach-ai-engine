@@ -4,7 +4,6 @@ weight about every 20 days, never at night; the same for a person caring for the
 from datetime import timedelta
 
 from app.care import checkins, store
-from app.core import clock
 
 FAM = "fam-ck"
 MAA = {"id": "maa-ck", "name": "Sarla", "role": "elder"}

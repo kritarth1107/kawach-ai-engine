@@ -1,6 +1,5 @@
 """Pattern spotting: two weeks of a family's logs, and what Saheli should notice on her own."""
 
-from datetime import timedelta
 
 import pytest
 

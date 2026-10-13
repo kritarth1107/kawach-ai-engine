@@ -206,7 +206,6 @@ async def main() -> int:
 
     from sqlalchemy import text
 
-    import brain_scenarios as bs
     import importlib
 
     for mod in ("app.care.baselines", "app.care.memory_index", "app.care.models", "app.care.skillbook", "app.care.versions",

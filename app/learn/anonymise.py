@@ -66,8 +66,8 @@ COMMON_INDIC = {"ठीक", "है", "हैं", "था", "थी", "हो"
 NAME_LIKE = re.compile(r"(?<![\w\[])([A-Z][a-z]{2,})(?![\w\]])")
 KEEP = {"mummy", "papa", "maa", "amma", "appa", "baba", "dadi", "dada", "nani", "nana", "beta", "beti", "ji", "aunty", "uncle", "didi",
         "bhaiya", "bhai", "saheli", "doctor", "sir", "madam", "bapa", "achan", "ammi", "abbu", "kaku", "kaki", "kaka", "mama", "mami",
-        "mausi", "bua", "chacha", "chachi", "amma", "ammachi", "chechi", "anna", "akka", "aai", "ajji", "thatha", "paati", "tai", "dadu",
-        "dida", "thakuma", "boudi", "nanna", "khala", "auntie", "aunties", "aunty", "aunt", "uncles", "uncleji", "auntyji", "mummyji",
+        "mausi", "bua", "chacha", "chachi", "ammachi", "chechi", "anna", "akka", "aai", "ajji", "thatha", "paati", "tai", "dadu",
+        "dida", "thakuma", "boudi", "nanna", "khala", "auntie", "aunties", "aunt", "uncles", "uncleji", "auntyji", "mummyji",
         "papaji", "mataji", "pitaji", "baji", "apa", "sahiba", "sahib", "begum", "ammijaan", "abbujaan"}
 HONORIFIC_WORDS = {"ji", "jee", "babu", "garu", "sahab", "saab", "sahib", "sahiba", "bhaiya", "bhai", "didi", "di", "aunty", "uncle", "madam",
                    "sir", "bhabhi", "mausi", "chacha", "kaka", "kaki", "maasi", "baba", "babuji", "dada", "dadi", "begum", "mian", "miyan"}

@@ -4,6 +4,7 @@ column waits only briefly and then stops the start, and a half-built index is bu
 import asyncio
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -62,7 +63,7 @@ async def test_a_half_built_index_is_built_again(engine):
         await c.execute(text("CREATE TABLE zz_index_probe (v int)"))
         await c.execute(text("INSERT INTO zz_index_probe VALUES (1), (1)"))
     try:
-        with pytest.raises(Exception):  # duplicates: the concurrent build fails half way and leaves an invalid index
+        with pytest.raises(DBAPIError):  # duplicates: the concurrent build fails half way and leaves an invalid index
             await migrate.build_index(engine, *spec[0])
         assert (await catalog(engine)).indexes["zz_index_probe_uq"] is False
         async with engine.begin() as c:

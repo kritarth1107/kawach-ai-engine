@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.prompts import (
     OUTREACH_TOPIC_HINTS,
-    SAHELI_CARE_RULES,
     build_elder_system_prompt,
     build_family_share_system_prompt,
     build_outreach_system_prompt,

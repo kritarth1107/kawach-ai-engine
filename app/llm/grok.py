@@ -6,7 +6,7 @@ import asyncio
 import subprocess
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_xai import ChatXAI
 
 from app.core.config import get_settings

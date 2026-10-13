@@ -5,7 +5,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.brain import wake
 from app.care import store
-from app.care.models import OpenLoop
 from app.core import clock
 from app.llm import router
 from app.llm.router import LLMReply, ToolCall

@@ -1,11 +1,10 @@
 """Weekly medicines count only on their day, and old facts are re-checked before acting (founder 2026-10-09)."""
 
 import json
-from datetime import date, timedelta
+from datetime import date
 
 from app.brain import tools
 from app.care import checkins, digest, doses, freshness, store
-from app.core import clock
 from app.sim.world import SimHost
 
 FAM, MAA = "fam-fresh", "maa-fresh"

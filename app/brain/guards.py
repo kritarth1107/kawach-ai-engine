@@ -445,10 +445,8 @@ def ungrounded(text: str, *, known: str, fresh: str = "", meds: dict[str, set[in
             for mm in _rx(rf"\b{re.escape(med)}").finditer(low):
                 # Only the time right next to this medicine is its time ("Telma at 9 am and Metformin at 9 pm"):
                 # the first one just after it, else one just before it, never across a comma or semicolon.
-                def gap(a: int, b: int) -> str:
-                    return s[a:b]
-                after = [(m, o) for m, o in found if o and 0 <= m.start() - mm.end() <= 15 and not re.search(r"[;,]", gap(mm.end(), m.start()))]
-                before = [(m, o) for m, o in found if o and 0 <= mm.start() - m.end() <= 12 and not re.search(r"[;,]", gap(m.end(), mm.start()))]
+                after = [(m, o) for m, o in found if o and 0 <= m.start() - mm.end() <= 15 and not re.search(r"[;,]", s[mm.end():m.start()])]
+                before = [(m, o) for m, o in found if o and 0 <= mm.start() - m.end() <= 12 and not re.search(r"[;,]", s[m.end():mm.start()])]
                 for m, opts in (after or before[-1:])[:1]:
                     if not (opts & ts) and not (opts & fresh_times):
                         t0 = sorted(opts)[0]

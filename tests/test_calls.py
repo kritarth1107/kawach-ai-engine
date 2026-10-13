@@ -6,7 +6,6 @@ import pytest
 from app.brain import loop
 from app.brain.loop import TurnRequest
 from app.core.security import verify_api_secret
-from app.db.session import get_db
 from app.main import app
 
 

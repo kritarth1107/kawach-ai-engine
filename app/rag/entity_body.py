@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
-from typing import Any
 
 
 def render_entity_frontmatter(

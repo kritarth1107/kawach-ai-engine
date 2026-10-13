@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from app.brain import tools
 from app.care import memory_index, memory_upkeep, store, versions
-from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop
+from app.care.models import CareEvent, MemoryNote, OpenLoop
 from app.llm import router
 from app.llm.router import LLMReply
 from app.sim.world import SimHost

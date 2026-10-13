@@ -132,7 +132,7 @@ async def test_when_no_model_answers_the_news_still_goes_in_plain_words(db, at, 
     runtime._ride_options_message(t)  # numbers the fares on the task, as the update did
     await db.commit()
     host = SimHost()
-    await wake.system_turn(sessions, host, FAM, f"[Task update] Fares on Ola ...", "task:f1", deliver_to=SON["id"], still_true=_update(t))
+    await wake.system_turn(sessions, host, FAM, "[Task update] Fares on Ola ...", "task:f1", deliver_to=SON["id"], still_true=_update(t))
     sent = host.world.sent[-1]["text"]
     assert sent.startswith("Fares on Ola, from Home to Airport (nothing is booked yet):\n1. Auto ₹142 (pickup in 4 min) - my suggestion\n2. Mini ₹210")
     assert sent.endswith("Which one shall I book? Reply with its number.")

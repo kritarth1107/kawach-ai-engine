@@ -87,7 +87,7 @@ async def test_appointment_wakes_evening_before_and_two_hours_before(db, at):
 
 
 async def test_family_task_reminds_assignee_once(db, at):
-    now = at("2026-10-02 09:00")
+    at("2026-10-02 09:00")
     c = ctx(db)
     out = await call(c, "assign_family_task", {"title": "Call Maa tonight", "to": BRO, "due": "2026-10-02T20:00"})
     tasks = (await call(c, "family_tasks", {}))["tasks"]

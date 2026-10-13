@@ -5,7 +5,6 @@ from datetime import timedelta
 
 from app.brain import tools
 from app.care import store, work
-from app.core import clock
 from app.sim.world import SimHost
 from app.tasks import runtime
 

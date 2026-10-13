@@ -88,7 +88,6 @@ async def test_words_the_re_read_heard_are_marked_heard_and_a_link_to_a_person_r
     """Live 2026-10-13: a re-read fact showed its evidence as if the person had said it, and a family link showed an id."""
     from app.api.dash import links_json
     from app.care import links
-    from app.care.models import CareFact
 
     at("2026-10-13 09:00")
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])

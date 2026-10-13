@@ -6,7 +6,6 @@ was informing his family and emergency services (there was no one), four follow-
 and no one at Kavach knew. Now: reason crisis emails the care team at once (later lines batched), the family other than
 the person is told once per half hour, no follow-up is ever owned by the person, and the reply says who was told."""
 
-from datetime import timedelta
 
 import pytest
 from sqlalchemy import select

@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
 from app.api import admin, brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory
 from app.core.config import get_settings

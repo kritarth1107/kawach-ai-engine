@@ -6,13 +6,10 @@ import json
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.brain import loop, tools
 from app.care import brief, store
-from app.care.models import CareEvent, OpenLoop
-from app.core import clock
 
 FAM = "fam-brief"
 MAA = {"id": "maa-brief", "name": "Babli", "role": "elder"}

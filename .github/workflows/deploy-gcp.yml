@@ -40,8 +40,22 @@ jobs:
       - run: pip install -r requirements.txt pytest pytest-asyncio
       - run: python -m pytest -q
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt ruff==0.17.0 pyright==1.1.414
+      - name: Lint (real-bug rules, see pyproject)
+        run: ruff check app eval tests
+      - name: Types (errors may only go down; scripts/pyright_baseline.json)
+        run: python scripts/pyright_gate.py
+
   deploy:
-    needs: test
+    needs: [test, lint]
     runs-on: ubuntu-latest
     permissions:
       contents: read

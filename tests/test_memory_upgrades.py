@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.brain import tools
 from app.care import baselines, digest, memory_index, memory_upkeep, store
-from app.care.models import CareEvent, MemoryNote, OpenLoop
+from app.care.models import CareEvent, OpenLoop
 from app.core import clock
 from app.llm import router, spend
 from app.llm.router import LLMReply

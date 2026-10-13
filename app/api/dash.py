@@ -443,7 +443,6 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
 
     now = clock.ist()
     today = clock.ist_day()
-    from app.care import doses as dose_days
 
     meds = [f for f in await store.facts(session, family_id, elder_id, domains=["medicine"], statuses=("active",))]
 

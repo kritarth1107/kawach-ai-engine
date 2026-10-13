@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +18,6 @@ from app.models.entities import Elder, EntityStatus, FamilyMemory, MemoryEntity
 from app.rag.embeddings import embed_text, embeddings_available
 from app.rag.entity_body import propose_slug, render_entity_body
 from app.rag.gcs_export import export_memory_to_gcs
-from app.rag.memory_hash import content_hash
 from app.rag.profile_render import render_memory_profile
 
 logger = logging.getLogger(__name__)

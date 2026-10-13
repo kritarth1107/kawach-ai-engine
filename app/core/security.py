@@ -1,4 +1,4 @@
-from fastapi import Depends, HTTPException, Security
+from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 from app.core.config import get_settings

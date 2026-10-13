@@ -1,6 +1,5 @@
 """Efficiency and no-leak guarantees (audit 2026-10-04)."""
 
-from datetime import date
 
 import httpx
 import pytest
