@@ -86,6 +86,24 @@ def _remember_mode(gate: dict) -> str:
     return _mode["value"]
 
 
+async def ensure_mode(host_for, rosters: list[FamilyRoster]) -> str | None:
+    """The flag, read from the backend once a run when the last read is over a minute old. Without it, a run where nobody is
+    due (all asleep, talking or within their cadence) never asks, the cached mode expires, and the old check-ins would
+    start again while regular nudges are on (found 13 Oct, the night nudges went on)."""
+    if _mode["value"] is not None and _time.monotonic() - _mode["at"] < MODE_TTL:
+        return _mode["value"]
+    for r in rosters[:3]:
+        pid = (r.elder or {}).get("id") or next((m.get("id") for m in r.members or [] if m.get("id")), None)
+        if not pid:
+            continue
+        try:
+            gate = await host_for(r.family_id).call("nudge_gate", {"to": pid}, family_id=r.family_id, subject_id=pid, actor_id=pid)
+        except Exception:  # noqa: BLE001 — another family may answer
+            continue
+        return _remember_mode(gate or {})
+    return None
+
+
 # ── who and when ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -782,6 +800,9 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
         async with sessions() as session:
             work += [(r, p) for p in await people(session, r)]
     stats["people"] = len(work)
+    if mode is None and not env_mode():
+        known = await ensure_mode(host_for, rosters)  # the old check-ins step aside on this, even when nobody is due
+        stats["mode"] = known or stats["mode"]
     sem = asyncio.Semaphore(int(os.getenv("NUDGE_PARALLEL") or PARALLEL))
     sends = {"n": 0}
 

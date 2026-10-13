@@ -723,3 +723,19 @@ async def test_the_ledger_keeps_the_options_field_not_the_writers_words_for_it(d
     row = (await rows(db))[-1]
     assert row.status == "shadow" and row.field != "whether the temple trip went well"
     assert f"[{row.kind}]" in row.context and (row.field is None or f"(field: {row.field})" in row.context)
+
+
+async def test_the_flag_is_read_every_run_even_when_nobody_is_due_so_old_check_ins_stay_off(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    host.world.nudge_mode = "on"
+    at("2026-10-14 10:20")  # within her hour: nobody is due, so no person reaches the gate
+    out = await nudges.run(sessions, lambda f: host)
+    assert out["mode"] == "on" and nudges.cached_mode() == "on" and host.world.sent == []
+    nudges._mode["at"] -= 20 * nudges.MODE_TTL  # long after the last read
+    assert nudges.cached_mode() is None
+    at("2026-10-14 10:25")
+    await nudges.run(sessions, lambda f: host)
+    assert nudges.cached_mode() == "on"
