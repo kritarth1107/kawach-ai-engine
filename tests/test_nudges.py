@@ -34,7 +34,15 @@ class Writer:
 
     async def complete(self, route, **kw):
         system = kw.get("system_stable") or ""
-        if " ".join(system if isinstance(system, list) else [system]).startswith("You check one WhatsApp message"):
+        head = " ".join(system if isinstance(system, list) else [system])
+        if head.startswith("You read how a person took"):
+            self.reacted = getattr(self, "reacted", 0) + 1
+            self.replies_seen = getattr(self, "replies_seen", []) + [kw["messages"][-1]["content"][0]["text"]]
+            return LLMReply(text=json.dumps({"reaction": getattr(self, "reaction", "neutral")}), tool_calls=[], model="fake", usage=self.usage)
+        if head.startswith("You grade one WhatsApp message"):
+            self.graded = getattr(self, "graded", 0) + 1
+            return LLMReply(text=json.dumps(getattr(self, "grade", {"pass": True, "issues": []})), tool_calls=[], model="fake", usage=self.usage)
+        if head.startswith("You check one WhatsApp message"):
             self.verified = getattr(self, "verified", 0) + 1
             return LLMReply(text=json.dumps(getattr(self, "verdict", {"ok": True})), tool_calls=[], model="fake", usage=self.usage)
         self.calls += 1
@@ -51,11 +59,12 @@ class Writer:
 def writer(monkeypatch):
     w = Writer()
     router.register_provider("fake", w)
-    monkeypatch.setenv("MODEL_ROUTES", '{"worker": ["fake:m"], "brain": ["fake:m"], "judge_fast": ["fake:m"]}')
+    monkeypatch.setenv("MODEL_ROUTES", '{"worker": ["fake:m"], "brain": ["fake:m"], "judge_fast": ["fake:m"], "judge": ["fake:m"]}')
     monkeypatch.delenv("NUDGE_REGULAR", raising=False)
     router.reset_breakers()
     spend.reset()
     nudges._mode.update(value=None, at=0.0)
+    nudges._everyone.update(at=0.0, rates={})
     yield w
     nudges._mode.update(value=None, at=0.0)  # the flag cache never leaks into another test
     router._providers.pop("fake", None)
@@ -540,3 +549,140 @@ async def test_every_ledger_row_that_cost_a_model_call_carries_what_it_cost(db, 
     await run(sessions, host, mode="shadow")
     skipped = [r for r in await rows(db) if r.status == "skipped"]
     assert len(skipped) == 1 and skipped[0].cost_inr == pytest.approx(6 * one, rel=1e-3)  # three tries, each written and reviewed
+
+
+# 13. Saheli learns from how they took it (self-learning)
+async def answered(db, at, sessions, writer, host, reply: str, reaction: str, when="2026-10-14 11:10"):
+    """A nudge goes at 11:00; they reply; the reply is read."""
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    at(when)
+    await wrote(db, MAA, reply)
+    await nudges.note_reply(db, FAM, MAA["id"])
+    await db.commit()
+    writer.reaction = reaction
+    return await nudges.read_reactions(sessions)
+
+
+async def test_every_nudge_keeps_the_context_it_was_written_from(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA, "Going to the temple fair with Sunita this evening")
+    at("2026-10-14 11:00")
+    await run(sessions, SimHost(), mode="shadow")
+    row = (await rows(db))[-1]
+    assert row.status == "shadow" and "temple fair with Sunita" in row.context and "OPTIONS" in row.context
+
+
+async def test_a_reply_asking_saheli_to_stop_stops_her_own_messages_for_thirty_days(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    out = await answered(db, at, sessions, writer, host, "Please don't keep messaging me like this", "stop")
+    assert out["stop"] == 1 and (await rows(db))[-1].reaction == "stop"
+    assert "don't keep messaging me" in writer.replies_seen[-1]  # the model read their words; no word list did
+    at("2026-10-14 13:00")
+    out = await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 1 and out["skipped"].get("asked_stop") == 1
+    at("2026-11-14 10:00")
+    await wrote(db, MAA, "Good morning")
+    at("2026-11-14 11:00")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 2  # thirty days later, the hourly nudge comes back
+
+
+async def test_a_question_they_did_not_want_rests_and_too_many_messages_doubles_the_silence(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    writer.script = [json.dumps({"option_id": "o1", "text": "What was the best part of your day so far?", "field": "reflect:morning"})]
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    row = (await rows(db))[-1]
+    row.kind = "reflect"  # an evening-reflection kind of question
+    await db.commit()
+    await answered(db, at, sessions, writer, host, "Why do you keep asking me this? Leave it.", "unwelcome")
+    lr = await nudges.learned(db, FAM, MAA["id"], nudges.clock.now())
+    assert "reflect:morning" in lr.unwelcome and "reflect" in lr.unwelcome  # light talk rests as a kind
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    ck = nudges.Clock(None, None, 0, False)
+    at("2026-10-14 18:00")
+    opts = await nudges.candidates(db, p, ck, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+    assert not any(o.kind == "reflect" for o in opts)
+    # "too many messages": the next nudge waits two hours instead of one
+    writer.script = []
+    at("2026-10-15 10:00")
+    await wrote(db, MAA)
+    at("2026-10-15 11:00")
+    await run(sessions, host)
+    n = len(sent_to(host, MAA))
+    at("2026-10-15 11:05")
+    await wrote(db, MAA, "Bahut zyada messages aate hain")
+    await nudges.note_reply(db, FAM, MAA["id"])
+    await db.commit()
+    writer.reaction = "fewer"
+    await nudges.read_reactions(sessions)
+    at("2026-10-15 12:05")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == n
+    at("2026-10-15 13:05")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == n + 1
+
+
+async def test_one_reply_to_several_nudges_is_read_once_and_kinds_they_answer_score_higher(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    at("2026-10-14 12:00")
+    await run(sessions, host)
+    at("2026-10-14 12:30")
+    await wrote(db, MAA, "So sorry, I was out. All good!")
+    await nudges.note_reply(db, FAM, MAA["id"])
+    await db.commit()
+    writer.reaction = "welcome"
+    out = await nudges.read_reactions(sessions)
+    sent = [r for r in await rows(db) if r.status == "sent"]
+    assert out["read"] == 1 and writer.reacted == 1 and [r.reaction for r in sent] == ["neutral", "welcome"]
+    lr = nudges.Learned(rates={"reflect": 0.9, "know": 0.1})
+    assert lr.weight("reflect") > 0 > lr.weight("know") and lr.weight("delight") == 0
+
+
+async def test_real_nudges_are_graded_against_their_context_and_a_made_up_fact_is_an_error(db, at, sessions, writer, caplog):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    at("2026-10-14 11:00")
+    await run(sessions, SimHost(), mode="shadow")
+    writer.grade = {"pass": False, "issues": ["made_up"], "note": "says the doctor called; nothing says so"}
+    out = await nudges.review(sessions)
+    row = (await rows(db))[-1]
+    assert out["graded"] == 1 and row.grade["pass"] is False and row.grade["issues"] == ["made_up"]
+    assert any("nudge review: made_up" in r.message for r in caplog.records if r.levelname == "ERROR")
+    assert (await nudges.review(sessions))["graded"] == 0  # graded once
+
+
+async def test_a_good_answered_nudge_becomes_one_tuning_example_and_a_bad_one_does_not(db, at, sessions, writer):
+    from eval import export_nudge_tuning as ex
+
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    await answered(db, at, sessions, writer, host, "Haan beta, bahut accha tha!", "welcome")
+    assert (await nudges.review(sessions))["graded"] == 1
+    got = await ex.rows_to_learn_from(sessions, 30, "neutral")
+    assert len(got) == 1
+    e = ex.example(got[0])
+    answer = json.loads(e["contents"][1]["parts"][0]["text"])
+    assert e["contents"][0]["parts"][0]["text"] == got[0].context and answer["text"] == got[0].text
+    assert f"{answer['option_id']} [{got[0].kind}]" in got[0].context
+    row = (await rows(db))[-1]
+    row.grade = {"pass": False, "issues": ["made_up"]}
+    await db.commit()
+    assert await ex.rows_to_learn_from(sessions, 30, "neutral") == []  # a graded failure never teaches

@@ -253,6 +253,10 @@ class NudgeLedger(Base):
     replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     unanswered_run: Mapped[int] = mapped_column(Integer, default=0)  # the unanswered ladder's position when it went
     cost_inr: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # What Saheli learns from (self-learning, 2026-10-13): what the writer saw, how they took it, the review grade
+    context: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reaction: Mapped[str | None] = mapped_column(String(16), nullable=True)  # welcome | neutral | unwelcome | fewer | stop
+    grade: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # {"pass", "issues", "note", "at"} (the hourly review)
 
     __table_args__ = (
         Index("uq_nudge_ledger_slot", "family_id", "person_id", "slot_key", unique=True),

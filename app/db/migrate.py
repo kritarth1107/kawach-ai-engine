@@ -107,6 +107,10 @@ COLUMNS = [  # every one is required: the models select it
     ("memory_versions", "trace_id", "VARCHAR(160)"),
     ("open_loops", "trace_id", "VARCHAR(160)"),
     ("care_tasks", "trace_id", "VARCHAR(160)"),
+    # regular nudges learn: what the writer saw, how the person took it, the nightly grade
+    ("nudge_ledger", "context", "TEXT"),
+    ("nudge_ledger", "reaction", "VARCHAR(16)"),
+    ("nudge_ledger", "grade", "JSONB"),
 ]
 
 INDEXES = [

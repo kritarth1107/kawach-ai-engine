@@ -208,7 +208,9 @@ async def run_nudges(host_for) -> dict:
     if _nudge_minute["last"] == minute:
         return {"skipped": "ran this minute"}
     _nudge_minute["last"] = minute
-    return {"regular": await nudges.run(SessionLocal, host_for), "followups": await nudges.reminder_followups(SessionLocal, host_for)}
+    out = {"regular": await nudges.run(SessionLocal, host_for), "followups": await nudges.reminder_followups(SessionLocal, host_for)}
+    out["learn"] = await nudges.learn(SessionLocal)  # how answered nudges were taken; hourly, a few real nudges graded
+    return out
 
 
 @router.post("/jobs/nudge")

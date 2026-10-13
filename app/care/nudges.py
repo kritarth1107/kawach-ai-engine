@@ -47,6 +47,15 @@ MAX_LEN = {True: 220, False: 300}  # an elder / anyone else
 EARLY_BIRD_MAX, EARLY_BIRD_GAP = 2, timedelta(hours=2)
 FOLLOWUP_AFTER = (timedelta(minutes=5), timedelta(minutes=10))  # a reminder this long ago, unanswered, gets one question
 MODE_TTL = 60.0
+# Learning from how they took it (self-learning, 2026-10-13)
+REACTIONS = ("welcome", "neutral", "unwelcome", "fewer", "stop")
+STOP_PAUSE = timedelta(days=30)  # "stop messaging me": no regular nudges or follow-ups for 30 days
+FEWER_FOR = timedelta(days=14)  # "too many messages": twice the silence before each nudge
+UNWELCOME_PAUSE = timedelta(days=30)  # "don't ask me that": that question (or that kind of light talk) rests
+LEARN_DAYS = timedelta(days=30)  # reply rates per kind are read over this window
+PRIOR = 4.0  # how many nudges' worth of weight the all-family rate carries for a new person
+REVIEW_EVERY = 3600.0  # the real nudges are graded at most once an hour, a few at a time
+REVIEW_BATCH = 15
 WINDOW = timedelta(hours=24) - timedelta(minutes=10)  # WhatsApp's free-message window, with the backend's margin
 SENT = ("sent", "shadow")  # a shadow nudge counts as sent for the clock and the ladder in shadow mode
 PRIORITY = {"doses": 9, "follow_up": 7, "upcoming": 6, "habit": 6, "collect": 4, "reflect": 4, "know": 3, "delight": 3,
@@ -234,7 +243,10 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
     bird = bool(night and p.cared and await early_bird_window(session, p.family_id, p.id, now, rows))
     if night and not bird:
         return Due(p, empty, reason="asleep")
-    base = CARED_EVERY if p.cared else CAREGIVER_EVERY
+    lr = await learned(session, p.family_id, p.id, now)
+    if lr.stop:
+        return Due(p, empty, reason="asked_stop", mode=mode or cached_mode())
+    base = (CARED_EVERY if p.cared else CAREGIVER_EVERY) * (2 if lr.fewer else 1)
     engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT)) if t], default=None)
     if engine_last and now - engine_last < base:
         return Due(p, empty, reason="talking" if last_user and now - last_user < base else "cadence")
@@ -267,6 +279,8 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
             return Due(p, ck, reason="talking", mode=m)
         return Due(p, ck, early_bird=True, mode=m)
     need = cadence(p.cared, ck.run)
+    if need is not None and lr.fewer:
+        need *= 2
     if need is None:
         if ck.nudged_today:
             return Due(p, ck, reason="ladder", mode=m)
@@ -437,6 +451,7 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
             asked_field[fld] = at
     today = clock.ist_day(now)
     out: list[Option] = []
+    lr = await learned(session, fid, p.id, now)
 
     def add(kind: str, why: str, *, about: str | None = None, fld: str | None = None, boost: float = 0.0, cooldown: timedelta | None = None):
         about, fld = short_ref(about), short_ref(fld)
@@ -444,7 +459,9 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
             return
         if about and any(r.about_ref == about and clock.ist_day(_when(r)) == today for r in rows):
             return
-        score = PRIORITY.get(kind, 3) + boost - (3 if kind in last_kinds else 0)
+        if (fld and fld in lr.unwelcome) or kind in lr.unwelcome:
+            return  # they did not want this asked: it rests for 30 days
+        score = PRIORITY.get(kind, 3) + boost - (3 if kind in last_kinds else 0) + lr.weight(kind)
         out.append(Option(id=f"o{len(out) + 1}", kind=kind, why=why, about_ref=about, field=fld, score=score))
 
     if early_bird:
@@ -625,7 +642,7 @@ def check(draft: dict, ctx: Context) -> list[str]:
 
 async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, status: str, reason: str = "", text: str = "",
                fld: str | None = None, about: str | None = None, run: int = 0, sent: bool = False,
-               cost: float | None = None) -> NudgeLedger | None:
+               cost: float | None = None, context: str | None = None) -> NudgeLedger | None:
     """One ledger row (unique per person per minute: a second run in the same minute adds nothing)."""
     rid = uuid.uuid4()
     lane = "followup" if kind == "reminder_followup" else "regular"  # a follow-up and a regular nudge may share a minute
@@ -634,7 +651,8 @@ async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, st
     fld, about = short_ref(fld), short_ref(about)  # whatever the caller passed, it fits its column
     row = NudgeLedger(id=rid, family_id=p.family_id, person_id=p.id, kind=kind, slot_key=short_ref(f"{p.id}:{clock.ist(now).strftime('%Y-%m-%dT%H:%M')}:{lane}", 120) or "",
                       status=status, reason=reason[:160], ref=f"nudge:{rid}", text=text, field=fld, about_ref=about, planned_at=now,
-                      sent_at=now if sent else None, unanswered_run=run, cost_inr=round(cost, 4) if cost else None)
+                      sent_at=now if sent else None, unanswered_run=run, cost_inr=round(cost, 4) if cost else None,
+                      context=context)
     try:
         async with session.begin_nested():
             session.add(row)
@@ -705,16 +723,19 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     async with sessions() as session:
         await _lock_family(session, p.family_id)
         if recheck is not None and not await recheck(session):
-            await _log(session, p, now, kind=kind, status="skipped", reason="talking", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
+            await _log(session, p, now, kind=kind, status="skipped", reason="talking", text=text, fld=fld, about=about, run=run, cost=ctx.cost,
+                       context=ctx.text)
             await session.commit()
             return "talking"
         greeted, mid = guards.opening_state(await store.recent_turns(session, p.family_id, p.id, limit=12), clock.now(), day_of=clock.ist_day)
         text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
         if mode != "on":
-            await _log(session, p, now, kind=kind, status="shadow", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
+            await _log(session, p, now, kind=kind, status="shadow", text=text, fld=fld, about=about, run=run, cost=ctx.cost,
+                       context=ctx.text)
             await session.commit()
             return "shadow"
-        row = await _log(session, p, now, kind=kind, status="planned", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
+        row = await _log(session, p, now, kind=kind, status="planned", text=text, fld=fld, about=about, run=run, cost=ctx.cost,
+                       context=ctx.text)
         if row is None:
             await session.commit()
             return "duplicate"
@@ -771,7 +792,7 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                         return
                     if d.reason:
                         stats["skipped"][d.reason] = stats["skipped"].get(d.reason, 0) + 1
-                        if d.mode and d.reason not in ("cadence", "asleep", "talking"):
+                        if d.mode and d.mode != "off" and d.reason not in ("cadence", "asleep", "talking"):
                             await log_skip(session, p, now, d.reason, d.clock.rows)
                             await session.commit()
                         return
@@ -859,7 +880,9 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                 inbound = max([t for t in (last_user, _iso(gate.get("last_inbound_at"))) if t], default=None)
                 outbound = [t for t in (last_bot, _iso(gate.get("last_outbound_at"))) if t]
                 live = await runtime.live_tasks(session, ev.family_id)
-                if inbound and inbound > ev.at:
+                if (await learned(session, ev.family_id, person.id, now)).stop:
+                    reason = "asked_stop"
+                elif inbound and inbound > ev.at:
                     reason = "answered"
                 elif any(t > ev.at + timedelta(seconds=90) for t in outbound) or any(r.status in SENT and _when(r) > ev.at for r in rows):
                     reason = "talking"
@@ -873,7 +896,7 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                     reason = "ladder"  # every other reminder after 3 unanswered follow-ups: this one skips, the next may go
                 if reason:
                     stats["skipped"][reason] = stats["skipped"].get(reason, 0) + 1
-                    if reason in ("ladder", "busy", "window_closed"):
+                    if reason in ("ladder", "busy", "window_closed", "asked_stop"):
                         await _log(session, person, now, kind="reminder_followup", status="skipped", reason=reason, about=about)
                         await session.commit()
                     continue
@@ -953,3 +976,191 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
     about = f" ({nudge['about_ref']})" if nudge.get("about_ref") else ""
     return (f"YOUR LAST MESSAGE TO THEM asked about {fld}{about}: \"{(last.text or '')[:160]}\". If what they wrote answers it, save it "
             f"with {tool}; if it does not, just answer what they wrote.")
+
+
+# ── learning from how they took it (self-learning, 2026-10-13) ────────────────────────────────────────────────────
+
+
+@dataclass
+class Learned:
+    stop: bool = False  # they asked Saheli to stop messaging on her own (30 days)
+    fewer: bool = False  # they asked for fewer messages (14 days: twice the silence)
+    unwelcome: set[str] = field(default_factory=set)  # questions (fields) or kinds of light talk they did not want asked
+    rates: dict[str, float] = field(default_factory=dict)  # kind → their reply rate, pulled toward everyone's
+
+    def weight(self, kind: str) -> float:
+        """Options of a kind they answer score higher, of a kind they leave unanswered lower (±2)."""
+        return round(4 * (self.rates[kind] - 0.5), 3) if kind in self.rates else 0.0
+
+
+LIGHT_KINDS = ("reflect", "delight", "know", "early_bird")  # unwelcome light talk rests as a kind, not one question
+_everyone: dict = {"at": 0.0, "rates": {}}
+
+
+async def everyone_rates(session: AsyncSession, now: datetime) -> dict[str, float]:
+    """Each kind's reply rate across every family (last 30 days), the starting point for someone new; cached an hour."""
+    if _time.monotonic() - _everyone["at"] < 3600 and _everyone["rates"]:
+        return _everyone["rates"]
+    got = (await session.execute(
+        select(NudgeLedger.kind, func.count(), func.count(NudgeLedger.replied_at))
+        .where(NudgeLedger.status == "sent", NudgeLedger.sent_at >= now - LEARN_DAYS).group_by(NudgeLedger.kind)
+    )).all()
+    rates = {k: (r + 1) / (n + 2) for k, n, r in got}
+    _everyone.update(at=_time.monotonic(), rates=rates)
+    return rates
+
+
+async def learned(session: AsyncSession, family_id: str, person: str, now: datetime) -> Learned:
+    """What their own replies taught: a stop or fewer they asked for, questions they did not want, and per kind how often
+    they answer (a Beta mean with everyone's rate as the prior, so one unanswered nudge does not bury a kind)."""
+    rows = (await session.execute(
+        select(NudgeLedger.kind, NudgeLedger.field, NudgeLedger.reaction, NudgeLedger.replied_at, NudgeLedger.sent_at)
+        .where(NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.status == "sent",
+               NudgeLedger.sent_at >= now - max(LEARN_DAYS, STOP_PAUSE, UNWELCOME_PAUSE))
+    )).all()
+    out = Learned()
+    newest_reacted = max((r for r in rows if r.reaction and r.replied_at), key=lambda r: r.replied_at, default=None)
+    if newest_reacted is not None:  # only their latest word counts: a later warm reply lifts an earlier stop
+        if newest_reacted.reaction == "stop" and now - newest_reacted.replied_at < STOP_PAUSE:
+            out.stop = True
+    out.fewer = any(r.reaction == "fewer" and r.replied_at and now - r.replied_at < FEWER_FOR for r in rows)
+    for r in rows:
+        if r.reaction == "unwelcome" and r.replied_at and now - r.replied_at < UNWELCOME_PAUSE:
+            if r.field:
+                out.unwelcome.add(r.field)
+            if r.kind in LIGHT_KINDS or not r.field:
+                out.unwelcome.add(r.kind)
+    if rows:
+        prior = await everyone_rates(session, now)
+        mine: dict[str, list[int]] = {}
+        for r in rows:
+            if r.sent_at and now - r.sent_at < LEARN_DAYS and r.kind != "reminder_followup":
+                n_r = mine.setdefault(r.kind, [0, 0])
+                n_r[0] += 1
+                n_r[1] += 1 if r.replied_at else 0
+        for kind, (n, rep) in mine.items():
+            g = prior.get(kind, 0.5)
+            out.rates[kind] = (rep + PRIOR * g) / (n + PRIOR)
+    return out
+
+
+REACT = """You read how a person took one WhatsApp message that Saheli (a care companion) sent on her own, from what they
+wrote back. Judge the meaning in any language, script or mix; when unsure, say neutral. Return only JSON
+{"reaction": "welcome" | "neutral" | "unwelcome" | "fewer" | "stop"}:
+- welcome: they engaged gladly (answered warmly, shared more, thanked her)
+- neutral: a short answer, or they moved on to something else; no sign of being bothered
+- unwelcome: they did not want THIS question or topic (annoyed by it, asked why she asks, told her not to ask that)
+- fewer: they find her messages too many or too frequent
+- stop: they want her to stop messaging them on her own"""
+
+
+async def read_reactions(sessions: async_sessionmaker, *, now: datetime | None = None, limit: int = 20) -> dict:
+    """Each answered nudge gets how they took it, read by a model from their reply (never by word lists). Only the newest
+    nudge they answered in one go is read; older unanswered ones answered by the same reply count as neutral."""
+    from app.llm import router
+
+    now = now or clock.now()
+    stats: dict = {"read": 0, **{r: 0 for r in REACTIONS}}
+    async with sessions() as session:
+        rows = list((await session.execute(
+            select(NudgeLedger).where(NudgeLedger.status == "sent", NudgeLedger.replied_at.is_not(None), NudgeLedger.reaction.is_(None),
+                                      NudgeLedger.replied_at >= now - timedelta(days=2))
+            .order_by(NudgeLedger.sent_at.desc()).limit(limit * 3)
+        )).scalars())
+        seen: set[tuple] = set()
+        for row in rows:
+            key = (row.family_id, row.person_id, row.replied_at)
+            if key in seen:
+                row.reaction = "neutral"
+                continue
+            seen.add(key)
+            if stats["read"] >= limit:
+                continue
+            replies = [t for t in await store.recent_turns(session, row.family_id, row.person_id, limit=30)
+                       if t.role == "user" and row.sent_at and t.at >= row.sent_at][:2]
+            said = " / ".join((t.text or "").strip()[:400] for t in replies if (t.text or "").strip())
+            if not said:
+                row.reaction = "neutral"  # a tap, a sticker or a voice note with no words: answered, nothing more to read
+                continue
+            try:
+                rep = await router.complete("judge_fast", system_stable=REACT, effort="low", max_tokens=300, timeout_s=30, messages=[
+                    {"role": "user", "content": [{"type": "text", "text": f"SAHELI'S MESSAGE:\n{row.text}\n\nTHEIR REPLY:\n{said}"}]}])
+            except Exception:  # noqa: BLE001 — read it next time
+                continue
+            got = str(parse(rep.text or "").get("reaction") or "neutral").strip().lower()
+            row.reaction = got if got in REACTIONS else "neutral"
+            row.cost_inr = round((row.cost_inr or 0.0) + _cost(rep), 4)
+            stats["read"] += 1
+            stats[row.reaction] += 1
+        await session.commit()
+    return stats
+
+
+GRADE = """You grade one WhatsApp message that Saheli (a warm care companion) started on her own after a quiet hour, the way a
+careful care manager would. You get what Saheli knew (the context she was given) and the message.
+
+Fail it for any of these (list each in issues):
+- made_up: it states a fact, number, name, time, event or reading that is not in the context.
+- medical_advice: it tells them what to take, stop or change, or diagnoses anything.
+- not_personal: it would fit anyone ("How are you today?") instead of naming something real from the context.
+- wrong_language: not in the language, script or dialect the context says to write in.
+- too_long: longer than the limit in the context, or more than one question.
+- repeats: it repeats or contradicts the last messages or the last nudges in the context.
+- tone: cold, pushy, alarming, lecturing, or wrong for who they are (an elder, a caregiver).
+Return only JSON: {"pass": true|false, "issues": ["made_up", ...], "note": "one line"}"""
+
+_review: dict = {"at": 0.0}
+
+
+async def review(sessions: async_sessionmaker, *, now: datetime | None = None, limit: int = REVIEW_BATCH) -> dict:
+    """Real nudges (sent, or written in shadow) are graded by a stronger model against the context they were written from.
+    A made-up fact or medical advice is logged as an error (the owner reads production errors after every change); every
+    grade stays on its row, so the good ones become examples to learn from."""
+    from app.llm import router
+
+    now = now or clock.now()
+    stats: dict = {"graded": 0, "pass": 0, "issues": {}}
+    async with sessions() as session:
+        rows = list((await session.execute(
+            select(NudgeLedger).where(NudgeLedger.status.in_(SENT), NudgeLedger.grade.is_(None), NudgeLedger.context.is_not(None),
+                                      NudgeLedger.planned_at >= now - timedelta(hours=36))
+            .order_by(NudgeLedger.planned_at.desc()).limit(limit)
+        )).scalars())
+        for row in rows:
+            try:
+                rep = await router.complete("judge", system_stable=GRADE, effort="low", max_tokens=1500, timeout_s=120, messages=[
+                    {"role": "user", "content": [{"type": "text", "text": f"CONTEXT SAHELI HAD:\n{row.context}\n\nHER MESSAGE:\n{row.text}"}]}])
+            except Exception:  # noqa: BLE001 — graded next time
+                continue
+            got = parse(rep.text or "")
+            if "pass" not in got:
+                continue
+            issues = [str(i)[:40] for i in (got.get("issues") or [])][:8]
+            ok = bool(got.get("pass")) and not issues
+            row.grade = {"pass": ok, "issues": issues, "note": str(got.get("note") or "")[:300], "at": now.isoformat()}
+            row.cost_inr = round((row.cost_inr or 0.0) + _cost(rep), 4)
+            stats["graded"] += 1
+            stats["pass"] += 1 if ok else 0
+            for i in issues:
+                stats["issues"][i] = stats["issues"].get(i, 0) + 1
+            if {"made_up", "medical_advice"} & set(issues):
+                logger.error("nudge review: %s in a %s nudge (status %s) family=%s ledger=%s note=%s", "/".join(sorted(set(issues))),
+                             row.kind, row.status, row.family_id[:8], row.id, row.grade["note"][:160])
+        await session.commit()
+    return stats
+
+
+async def learn(sessions: async_sessionmaker, *, now: datetime | None = None) -> dict:
+    """After each nudge run: read how answered nudges were taken, and once an hour grade a few real nudges."""
+    out: dict = {}
+    try:
+        out["reactions"] = await read_reactions(sessions, now=now)
+    except Exception:  # noqa: BLE001
+        logger.exception("nudge reactions failed")
+    if _time.monotonic() - _review["at"] >= REVIEW_EVERY:
+        _review["at"] = _time.monotonic()
+        try:
+            out["review"] = await review(sessions, now=now)
+        except Exception:  # noqa: BLE001
+            logger.exception("nudge review failed")
+    return out
