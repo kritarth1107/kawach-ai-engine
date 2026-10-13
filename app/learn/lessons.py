@@ -84,8 +84,8 @@ def lesson_problems(lesson: str) -> list[str]:
     out = []
     if len(lesson) > LESSON_MAX_CHARS:
         out.append("too long")
-    if FORBIDDEN.search(lesson):
-        out.append(f"touches a fixed rule or medical content ({FORBIDDEN.search(lesson).group(0)})")
+    if hit := FORBIDDEN.search(lesson):
+        out.append(f"touches a fixed rule or medical content ({hit.group(0)})")
     if re.search(r"\d", lesson):
         out.append("contains a number")
     if re.search(r"\[(PERSON|MED|PHONE|ADDRESS|PIN|ID)", lesson):
@@ -230,8 +230,10 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
 
 async def replay_gate(sessions: async_sessionmaker, pb: PlaybookVersion) -> dict:
     """Run the replay cases (trust plan C3) with this draft's playbook. {"status": passed|failed|unavailable, ...}."""
+    import importlib
+
     try:
-        from app.learn import replay
+        replay = importlib.import_module("app.learn.replay")
     except ImportError:
         return {"status": "unavailable", "why": "replay runner not built yet"}
     run = getattr(replay, "run_for_playbook", None)
