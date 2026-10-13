@@ -30,6 +30,8 @@ Rules:
 - Short: one or two lines, the way a caring friend texts. No greeting by name every time, no "Reminder:" label.
 - Their language and script exactly as told. Emoji only if their style says they like them.
 - Never shame, nag or sound like a bot.
+- Use the context when it fits (Kavach NUdge's plan §1.7): a streak, something from the last messages ("3 hours clean since
+  lunch — that walk idea worked?"), but never contradict the last messages and never invent anything not given here.
 Return only JSON: {"text": "..."}"""
 
 
@@ -85,6 +87,19 @@ async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: st
     prefs = [f.text for f in facts if f.domain == "preference"][:8]
     if prefs:
         lines.append("WHAT THEY TOLD SAHELI THEY LIKE:\n" + "\n".join(f"- {p}" for p in prefs))
+    try:
+        from app.care import activities
+
+        turns = [t for t in await store.recent_turns(session, family_id, subject_id, limit=12) if (t.text or "").strip() not in ("", "none")][-5:]
+        if turns:
+            lines.append("LAST MESSAGES (oldest first):\n" + "\n".join(
+                f"- {clock.ist(t.at).strftime('%H:%M')} {'them' if t.role == 'user' else 'Saheli'}: {t.text[:160]}" for t in turns))
+        habits = [a for a in await activities.status(session, family_id, subject_id) if a["kind"] in ("habit", "quit")]
+        if habits:
+            lines.append("THEIR HABITS:\n" + "\n".join(
+                f"- {a['text']}: today {a['today'].replace('_', ' ')}" + (f", streak {a['streak']} days" if a["streak"] > 1 else "") for a in habits[:6]))
+    except Exception:  # noqa: BLE001 — context is a nicety; the reminder still goes
+        logger.exception("reminder context failed family=%s", family_id)
     if style:
         lines.append(f"HOW THEY LIKE MESSAGES:\n{style[:1200]}")
     text = ""

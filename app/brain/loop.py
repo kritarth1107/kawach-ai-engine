@@ -205,6 +205,11 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         waiting_block(req),
     ]
     if req.speaker.get("role") != "system":
+        from app.care import nudges
+
+        hint = await nudges.reply_hint(session, req.family_id, req.speaker["id"])
+        if hint:
+            parts.append(hint)
         from app.care import brief as care_brief
 
         for lp in await care_brief.waiting_for(session, req.family_id, req.speaker["id"]):
@@ -596,6 +601,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
               **({"location": req.location} if req.location else {})},
     )
+    if inserted is not None and req.speaker.get("role") != "system":
+        from app.care import nudges
+
+        try:  # a regular nudge they had not answered is answered now (its ladder resets)
+            async with session.begin_nested():
+                await nudges.note_reply(session, req.family_id, req.speaker["id"])
+        except Exception:  # noqa: BLE001 — never stops the turn
+            logger.exception("nudge reply note failed family=%s", req.family_id)
     if req.message_ref and inserted is None:
         prior = (
             await session.execute(

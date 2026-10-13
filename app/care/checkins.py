@@ -170,7 +170,8 @@ async def _proactive_today(session: AsyncSession, family_id: str, person: str) -
         select(Turn.at, Turn.meta).where(Turn.family_id == family_id, Turn.thread_id == person, Turn.role == "assistant", Turn.at >= start)
     )).all()
     # Order and ride updates answer something they asked for: they are not nudges and do not use up the day's check-ins.
-    return [at for at, meta in rows if (meta or {}).get("proactive")
+    # Reminders the backend sent are in the chat too, but they are not check-ins (Kavach NUdge's plan §3.8).
+    return [at for at, meta in rows if (meta or {}).get("proactive") and (meta or {}).get("via") != "reminder"
             and not str((meta or {}).get("ref") or (meta or {}).get("fallback_delivery") or "").startswith("task:")]
 
 
@@ -424,7 +425,8 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                     ev_id = await store.record_event(session, family_id=r.family_id, subject_id=subject, kind="checkin",
                                                      summary=f"Saheli checked in: {topic.split(':')[0]}", payload={"topic": topic})
                     await session.commit()
-                ref = f"checkin:{topic}:{subject}:{clock.ist_day(now)}"
+                # the minute too: a check-in retried after 6 hours the same day needs its own ref (a reused one was dropped)
+                ref = f"checkin:{topic}:{subject}:{clock.ist(now).strftime('%Y-%m-%dT%H:%M')}"
                 started = clock.now()
                 await system_turn(sessions, host_for(r.family_id), r.family_id, prompt + STYLE, ref, deliver_to=subject)
                 async with sessions() as session:

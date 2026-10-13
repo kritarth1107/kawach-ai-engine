@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain.host import LiveHost, ShadowHost
 from app.brain.loop import TurnRequest, result_json, run_turn
 from app.care import store
+from app.core import clock
 from app.core.security import verify_api_secret
 from app.db.session import get_db
 from app.llm.router import AllModelsFailed
@@ -149,6 +150,15 @@ async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get
                 payload=body.payload, ref=body.ref, at=body.at,
             )
         )
+        if body.kind == "reminder_sent" and ids[-1] is not None:
+            # The reminder is a message in their chat too (Kavach NUdge's plan §3.8): Saheli sees it when they answer it, and
+            # the regular nudges' silence clock counts it. Not a brain nudge: the old check-in caps leave it out (via).
+            line = str(body.payload.get("preview") or body.summary or "").strip()
+            if line:
+                await store.add_turn(session, family_id=fid, thread_id=body.subject_id, role="assistant", text=line[:600],
+                                     message_ref=f"reminder:{body.ref}" if body.ref else None,
+                                     meta={"proactive": True, "via": "reminder", "ref": body.ref, "reminder_id": body.payload.get("reminderId"),
+                                           "slot": body.payload.get("slot")})
     await session.commit()
     return {"recorded": ids[0] is not None}
 
@@ -186,6 +196,32 @@ async def voice_prepare(body: SpeechIn) -> dict:
     return await speech.prepare(body.text, body.language)
 
 
+_nudge_minute: dict = {"last": None}
+
+
+async def run_nudges(host_for) -> dict:
+    """Regular nudges, then reminder follow-ups; once a minute at most (the wake job and the per-minute job may overlap)."""
+    from app.care import nudges
+    from app.db.session import SessionLocal
+
+    minute = clock.now().replace(second=0, microsecond=0)
+    if _nudge_minute["last"] == minute:
+        return {"skipped": "ran this minute"}
+    _nudge_minute["last"] = minute
+    return {"regular": await nudges.run(SessionLocal, host_for), "followups": await nudges.reminder_followups(SessionLocal, host_for)}
+
+
+@router.post("/jobs/nudge")
+async def nudge_job() -> dict:
+    """Cloud Scheduler, every minute (D5): regular nudges and 5-minute reminder follow-ups. The admin flag nudge.regular
+    decides off | shadow | on."""
+
+    def host_for(fid: str):
+        return ShadowHost() if fid.startswith("shadow:") else LiveHost()
+
+    return await run_nudges(host_for)
+
+
 @router.post("/jobs/wake")
 async def wake_job() -> dict:
     """Cloud Scheduler, every 5 minutes: run the open loops that are due."""
@@ -214,8 +250,17 @@ async def wake_job() -> dict:
     except Exception:  # noqa: BLE001
         logger.exception("care team flush failed")
     try:
-        # Saheli's own check-ins (today's unmarked schedule after a chat, how they feel, readings, reports, weight)
-        out["checkins"] = await checkins.run(SessionLocal, host_for)
+        # Regular nudges and reminder follow-ups (Kavach NUdge's plan), here until the per-minute job is approved (D5)
+        out["nudges"] = await run_nudges(host_for)
+    except Exception:  # noqa: BLE001
+        logger.exception("regular nudges failed")
+    try:
+        # Saheli's own check-ins (today's unmarked schedule after a chat, how they feel, readings, reports, weight); they
+        # step aside while regular nudges are on
+        from app.care import nudges
+
+        if nudges.cached_mode() != "on":
+            out["checkins"] = await checkins.run(SessionLocal, host_for)
     except Exception:  # noqa: BLE001 — loops above already ran
         logger.exception("check-ins failed")
     try:

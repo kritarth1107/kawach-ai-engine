@@ -1051,6 +1051,7 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     # 2026-10-12: a 08:30 "has it come?" held back Maa's 10:30 check-in), and her reply in a chat they ended is not a
     # message waiting for an answer (live 2026-10-12: "You're welcome!" at 15:34 held back his 16:30 nudges).
     last_out = next((t for t in reversed(recent) if t.role == "assistant" and (t.meta or {}).get("proactive")
+                     and (t.meta or {}).get("via") != "reminder"  # a reminder in the chat is not her nudge (its own caps)
                      and not str((t.meta or {}).get("ref") or (t.meta or {}).get("fallback_delivery") or "").startswith("task:")), None)
     answered = last_out is not None and any(t.role == "user" and t.at > last_out.at for t in recent)
     if ctx.is_system and not task_update and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:

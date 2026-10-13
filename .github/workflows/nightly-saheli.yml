@@ -18,6 +18,9 @@ on:
       judge_inr:
         description: "Spend guard for the night's judge (Rs)"
         default: "1000"
+      nudge_inr:
+        description: "Spend guard for the regular-nudge quality eval (Rs)"
+        default: "400"
 
 concurrency:
   group: nightly-saheli
@@ -27,6 +30,7 @@ env:
   SLICE: ${{ github.event.inputs.slice || 'ci' }}
   MAX_INR: ${{ github.event.inputs.max_inr || '2000' }}
   JUDGE_INR: ${{ github.event.inputs.judge_inr || '1000' }}
+  NUDGE_INR: ${{ github.event.inputs.nudge_inr || '400' }}
   SHARDS: "4"
 
 jobs:
@@ -108,6 +112,12 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_budget
           BUDGET_OUT: runs/budget
         run: PYTHONPATH=. python -u -m eval.world.budget --families 200 --days 7 --tick 5 | tee runs-budget.log
+      - name: Regular nudges, two simulated days of five personas (no AI; Kavach NUdge's plan §5)
+        if: always()
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_budget
+          NUDGE_SIM_OUT: runs/nudge_day_sim
+        run: PYTHONPATH=. python -u -m eval.nudge_day_sim --days 2 --tick 5
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -115,10 +125,56 @@ jobs:
           path: |
             runs/budget
             runs-budget.log
+            runs/nudge_day_sim
+          retention-days: 90
+
+  nudge-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_nudgeq
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Build the world
+        run: PYTHONPATH=. python -m eval.world.make
+      - name: 300 regular nudges written by the production models and graded (10 per language; bar 90 %, no made-up facts, no advice)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_nudgeq
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+          NUDGE_EVAL_MAX_INR: ${{ env.NUDGE_INR }}
+        run: PYTHONPATH=. python -u -m eval.nudge_quality --per-language 10 --out runs/nudge_quality
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nudge-quality
+          path: runs/nudge_quality
           retention-days: 90
 
   report:
-    needs: [probes, message-week]
+    needs: [probes, message-week, nudge-quality]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -141,11 +197,19 @@ jobs:
         run: |
           prev=$(gh run list --workflow nightly-saheli.yml --status completed --limit 5 --json databaseId --jq '.[].databaseId' | grep -v "${{ github.run_id }}" | head -1 || true)
           if [ -n "$prev" ]; then gh run download "$prev" --pattern 'probes-*' --dir previous || true; fi
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: "{message-week,nudge-quality}"
+          path: extras
       - name: Report
         run: |
           args="tonight --out report.md"
           [ -d previous ] && args="$args --previous previous"
           PYTHONPATH=. python -m eval.world.report $args
+          for f in extras/nudge-quality/report.md extras/message-week/runs/nudge_day_sim/report.md extras/message-week/nudge_day_sim/report.md; do
+            [ -f "$f" ] && { echo; echo "---"; cat "$f"; } >> report.md
+          done
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:

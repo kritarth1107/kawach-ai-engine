@@ -4,6 +4,7 @@ os.environ.setdefault("TASK_BROWSE_FIRST", "off")  # older task tests start at t
 os.environ.setdefault("MEMORY_EMBEDDINGS", "off")  # tests never call Vertex; memory tests inject a fake embedder
 os.environ.setdefault("STORE_CHECK_AFTER_RUNS", "off")  # the read-only store check after each logged-in run: its own tests turn it on
 os.environ.setdefault("TASK_PARALLEL", "1")  # all test sessions share one connection: no parallel steps
+os.environ.setdefault("NUDGE_PARALLEL", "1")  # the same for regular nudges
 from datetime import datetime, timezone
 
 import pytest

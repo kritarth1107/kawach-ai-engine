@@ -228,3 +228,33 @@ class FamilyRoster(Base):
 
 from app.care import skillbook as _skillbook  # noqa: E402,F401  (registers the skills table)
 from app.care import versions as _versions  # noqa: E402,F401  (registers memory_versions)
+
+
+class NudgeLedger(Base):
+    """Every regular nudge and reminder follow-up (Kavach NUdge's plan §3.1): planned, sent, skipped and why, shadow, the
+    reply. One row per person per planned minute; the ref is never reused, so a retry never collides with a turn."""
+
+    __tablename__ = "nudge_ledger"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_id: Mapped[str] = mapped_column(String(64), index=True)
+    person_id: Mapped[str] = mapped_column(String(64))
+    # follow_up | upcoming | collect | habit | reflect | know | delight | early_bird | reminder_followup | doses
+    kind: Mapped[str] = mapped_column(String(32))
+    slot_key: Mapped[str] = mapped_column(String(120))  # person:YYYY-MM-DDTHH:MM (the minute it was planned)
+    status: Mapped[str] = mapped_column(String(16))  # planned | sent | skipped | failed | shadow
+    reason: Mapped[str] = mapped_column(String(160), default="")  # talking, busy, asleep, window_closed, ladder, guard:<x>…
+    ref: Mapped[str] = mapped_column(String(160))  # nudge:<id>
+    text: Mapped[str] = mapped_column(Text, default="")
+    field: Mapped[str | None] = mapped_column(String(160), nullable=True)  # the data asked for (weight, activity:gym:plan…)
+    about_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)  # the reminder, activity, loop or fact it is about
+    planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    unanswered_run: Mapped[int] = mapped_column(Integer, default=0)  # the unanswered ladder's position when it went
+    cost_inr: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("uq_nudge_ledger_slot", "family_id", "person_id", "slot_key", unique=True),
+        Index("ix_nudge_ledger_person_sent", "family_id", "person_id", "sent_at"),
+    )

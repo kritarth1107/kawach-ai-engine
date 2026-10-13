@@ -35,6 +35,13 @@ class World:
     service_script: list[str] = field(default_factory=list)
     # what the backend already held for the family before Saheli v2 (export_care_record)
     backend_record: dict = field(default_factory=dict)
+    # regular nudges (nudge_gate): the admin flag, a pause, flows in progress per person, their last inbound message (ISO),
+    # and messages the backend sent them itself (reminders, dose nudges, the morning schedule): {to, text, at}
+    nudge_mode: str = "off"
+    paused: bool = False
+    flows: dict[str, str] = field(default_factory=dict)
+    inbound: dict[str, str] = field(default_factory=dict)
+    outbound: list[dict] = field(default_factory=list)
 
 
 class SimHost:
@@ -157,6 +164,15 @@ class SimHost:
             return {"sent": True, "to": 1}
         if tool == "whatsapp_window":
             return {"open": args.get("to") not in w.closed}
+        if tool == "nudge_gate":
+            to = args.get("to") or subject_id
+            outs = sorted([{"text": m.get("text", ""), "at": m["at"]} for m in [*w.sent, *w.outbound] if m.get("to") == to and m.get("at")],
+                          key=lambda m: m["at"], reverse=True)[:5]
+            flow = w.flows.get(to)
+            reason = "paused" if w.paused else (f"active_flow:{flow}" if flow else ("window_closed" if to in w.closed else None))
+            return {"ok": reason is None, "reason": reason, "mode": w.nudge_mode, "window_open": to not in w.closed, "paused": w.paused,
+                    "active_flow": f"active_flow:{flow}" if flow else None, "last_inbound_at": w.inbound.get(to),
+                    "last_outbound_at": outs[0]["at"] if outs else None, "last_outbound_preview": outs}
         if tool == "send_template":
             if args.get("to") not in w.closed:
                 return {"sent": False, "reason": "chat open"}
