@@ -168,6 +168,8 @@ async def test_downgraded_alert_does_not_count_as_telling_the_family(db, at, bra
                                                                           "confidence": 0.9})], model="fake"),
         LLMReply(text="Maine Asha ko bata diya hai, woh aapko batayengi.", tool_calls=[], model="fake"),
         LLMReply(text="Yeh doctor hi batayenge; maine aapka sawaal note kar liya hai.", tool_calls=[], model="fake"),
+        # the rewrite is checked again (trust plan C4): the Roman-script check asks once more; the same line comes back
+        LLMReply(text="Yeh doctor hi batayenge; maine aapka sawaal note kar liya hai.", tool_calls=[], model="fake"),
     ])
     out = await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, ASHA],
                                                     text="Kya main Crocin le sakti hoon?", message_ref="r2"))

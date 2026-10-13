@@ -5,7 +5,8 @@ os.environ.setdefault("MEMORY_EMBEDDINGS", "off")  # tests never call Vertex; me
 os.environ.setdefault("STORE_CHECK_AFTER_RUNS", "off")  # the read-only store check after each logged-in run: its own tests turn it on
 os.environ.setdefault("TASK_PARALLEL", "1")  # all test sessions share one connection: no parallel steps
 os.environ.setdefault("NUDGE_PARALLEL", "1")  # the same for regular nudges
-os.environ.setdefault("FACT_DEDUPE", "off")  # the write-time duplicate check asks a model: its own tests turn it on
+os.environ.setdefault("FACT_DEDUPE", "off")
+os.environ.setdefault("GROUNDING_CHECK", "off")  # the no-invention check asks a model: its own tests turn it on  # the write-time duplicate check asks a model: its own tests turn it on
 from datetime import datetime, timezone
 
 import pytest

@@ -13,7 +13,7 @@ from app.llm.router import LLMReply, ModelUnavailable, Route, ToolCall, ToolSpec
 
 FOREIGN_SIGNATURE = b"skip_thought_signature_validator"
 
-_LEVEL = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH", "xhigh": "HIGH", "max": "HIGH"}
+_LEVEL = {"minimal": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH", "xhigh": "HIGH", "max": "HIGH"}
 
 
 class GeminiProvider:

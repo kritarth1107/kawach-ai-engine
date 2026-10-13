@@ -92,7 +92,7 @@ async def test_a_reply_that_still_holds_code_after_the_rewrite_becomes_the_scope
     await store.save_roster(db, FAM, ME, [ME])
     await db.commit()
     code = "Sure!\n```python\nxs.sort()\n```"
-    fake.answers["You are Saheli"] = [code, code]
+    fake.answers["You are Saheli"] = [code, code, code]  # the rewrite is checked again (trust plan C4)
     out = await loop.run_turn(db, SimHost(), loop.TurnRequest(family_id=FAM, elder=ME, speaker=ME, members=[ME],
                                                               text="write python code to sort a list", message_ref="scope1"))
     assert "```" not in out.reply and "outside what I do" in out.reply

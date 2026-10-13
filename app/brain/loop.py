@@ -14,7 +14,7 @@ from typing import Awaitable, Callable
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.brain import guards, policy, tools
+from app.brain import grounding, guards, policy, tools
 from app.brain.host import ToolHost
 from app.brain.persona import PERSONA, REPLY_FORMAT
 from app.care import digest, freshness, importer, links, store
@@ -811,6 +811,13 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         except Exception:  # noqa: BLE001 — the turn goes on at the usual effort
             logger.exception("hard-turn check failed family=%s", req.family_id)
     guarded = False
+    guard_rounds = 0  # a rewrite is checked again (trust plan C4); after two, unsupported sentences are removed by code
+    # What a reply may draw on for the no-invention check: memory and this turn's context, what the PEOPLE wrote (never
+    # Saheli's own earlier replies), and this turn's tool results (tool_texts, filled as tools run).
+    # A scheduled turn's prompt carries the data it is about (the day's digest for the nightly brief, the order update):
+    # that is a source too.
+    grounding_memory = "\n".join(p for p in (fam_block, known_record, known_turn, dynamic, req.text if is_system else "") if p)
+    their_msgs = [_msg_text(m) for m in msgs if m.get("role") == "user"] + ([req.text] if req.text and not is_system else [])
     degraded = ""
     tool_text_retried = False
     reply: router.LLMReply | None = None
@@ -848,13 +855,16 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                     "If the action is still needed, call the tool through the tool interface now. Then write only the message for the person.)"
                 )}]})
                 continue
-            if guarded or is_system or not text_now or last:
+            if guard_rounds >= 2 or is_system or not text_now or last:
                 break
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
+            problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
+                                                                 tool_results=tool_texts))
             if not problems:
                 break
             guarded = True
+            guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
             try:
                 from app.learn import corrections
@@ -886,6 +896,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else degraded).strip()
+    if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
+        # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
+        # and the tools do not support: those sentences are removed (trust plan C4).
+        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts)
+        if still:
+            logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
+            final = grounding.strip(final, still) or ("none" if is_system else "")
+            guarded = True
     if final and final != "none" and not is_system and guards.code_in_reply(final):
         logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line
         final = guards.canned(ctx.profiles.get(req.speaker["id"]), SCOPE)

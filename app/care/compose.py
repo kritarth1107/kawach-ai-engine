@@ -121,6 +121,14 @@ async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: st
             lines.append(f"The last try called them {', '.join(care_naming.uses_avoided(text, avoid))}, which they asked never to be called.")
             text = ""
             continue
+        from app.brain import grounding
+
+        made_up = await grounding.check(text, memory="\n".join(lines), their_messages=[], tool_results=[])
+        if made_up:  # nothing in a reminder line that its context does not say (trust plan C4)
+            lines.append("The last try said things not in the context above (" + "; ".join(c.quote for c in made_up)
+                         + "); say only what the context says.")
+            text = ""
+            continue
         if fresh(text, recent):
             break
         text = ""

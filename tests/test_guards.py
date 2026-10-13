@@ -204,6 +204,8 @@ async def test_claimed_message_is_actually_sent(db, at, brain):
         LLMReply(text="Maine Asha ko message bhej diya hai, woh aapko call karengi.", tool_calls=[], model="fake"),
         LLMReply(text="", tool_calls=[ToolCall("c1", "send_message", {"to": ASHA["id"], "text": "Asha, Bapa aapse baat karna chahte hain."})], model="fake"),
         LLMReply(text="Maine Asha ko message bhej diya hai, woh aapko call karengi.", tool_calls=[], model="fake"),
+        # the rewrite is checked again (trust plan C4): the Roman-script check asks once more; the same line comes back
+        LLMReply(text="Maine Asha ko message bhej diya hai, woh aapko call karengi.", tool_calls=[], model="fake"),
     ])
     host = SimHost()
     out = await run_turn(db, host, _req("Asha ko bolo mujhe call kare"))
