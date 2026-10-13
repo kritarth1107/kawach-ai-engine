@@ -83,7 +83,7 @@ async def test_symptom_comes_back_and_low_mood_and_meals(db, at):
     for d, t in [(9, "feeling lonely today"), (11, "bahut udaas"), (13, "akeli lag rahi hoon")]:
         await ev(db, "mood", ist(d, "18:00"), t, severity="watch")
     for d in (10, 12, 13):
-        await ev(db, "meal", ist(d, "14:00"), "skipped lunch, no appetite")
+        await ev(db, "meal", ist(d, "14:00"), "skipped lunch, no appetite", meal_skipped=True)  # the brain's structured field
     clock.set_now(ist(14, "10:00"))
     kinds = {p.kind for p in await patterns.find(db, FAM, ELDER)}
     assert {"symptom_repeat", "mood_low", "meals_skipped"} <= kinds

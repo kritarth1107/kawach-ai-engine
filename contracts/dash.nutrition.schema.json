@@ -1,0 +1,1044 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "counters": {
+   "items": {
+    "properties": {
+     "key": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "today": {
+      "type": "number"
+     },
+     "unit": {
+      "type": "string"
+     },
+     "usual": {
+      "type": [
+       "null",
+       "number"
+      ]
+     },
+     "week": {
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "key",
+     "label",
+     "today",
+     "unit",
+     "usual",
+     "week"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "day": {
+   "type": "string"
+  },
+  "days": {
+   "type": "integer"
+  },
+  "history": {
+   "items": {
+    "properties": {
+     "carbs_g": {
+      "type": "number"
+     },
+     "complete": {
+      "type": "number"
+     },
+     "day": {
+      "type": "string"
+     },
+     "fat_g": {
+      "type": "number"
+     },
+     "fibre_g": {
+      "type": "number"
+     },
+     "items": {
+      "type": "integer"
+     },
+     "kcal": {
+      "type": "integer"
+     },
+     "logged": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "meals": {
+      "items": {
+       "properties": {
+        "at": {
+         "type": "string"
+        },
+        "kcal": {
+         "type": "integer"
+        },
+        "meal": {
+         "type": "string"
+        },
+        "names": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "protein_g": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "at",
+        "kcal",
+        "meal",
+        "names",
+        "protein_g"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "mealsLogged": {
+      "type": "integer"
+     },
+     "met": {
+      "properties": {
+       "protein_g": {
+        "type": "boolean"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "protein_g": {
+      "type": "number"
+     },
+     "skipped": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sodium_mg": {
+      "type": "number"
+     },
+     "sugar_g": {
+      "type": "number"
+     },
+     "water_ml": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "carbs_g",
+     "complete",
+     "day",
+     "fat_g",
+     "fibre_g",
+     "items",
+     "kcal",
+     "logged",
+     "meals",
+     "mealsLogged",
+     "met",
+     "protein_g",
+     "skipped",
+     "sodium_mg",
+     "sugar_g",
+     "water_ml"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "mealSlots": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "month": {
+   "properties": {
+    "calendar": {
+     "items": {
+      "properties": {
+       "complete": {
+        "type": "number"
+       },
+       "day": {
+        "type": "string"
+       },
+       "items": {
+        "type": "integer"
+       },
+       "kcal": {
+        "type": "integer"
+       },
+       "logged": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "complete",
+       "day",
+       "items",
+       "kcal",
+       "logged"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "trends": {
+     "properties": {
+      "kcal": {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      "protein_g": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "sodium_mg": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "sugar_g": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "kcal",
+      "protein_g",
+      "sodium_mg",
+      "sugar_g"
+     ],
+     "type": "object"
+    }
+   },
+   "required": [
+    "calendar",
+    "trends"
+   ],
+   "type": "object"
+  },
+  "noticed": {
+   "items": {},
+   "type": "array"
+  },
+  "nutrients": {
+   "items": {
+    "properties": {
+     "avg30": {
+      "type": [
+       "null",
+       "number"
+      ]
+     },
+     "avg7": {
+      "type": [
+       "null",
+       "number"
+      ]
+     },
+     "highlight": {
+      "type": "boolean"
+     },
+     "key": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "max": {
+      "x-seen": "only null"
+     },
+     "min": {
+      "type": [
+       "null",
+       "number"
+      ]
+     },
+     "target": {
+      "type": [
+       "null",
+       "number"
+      ]
+     },
+     "unit": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "avg30",
+     "avg7",
+     "highlight",
+     "key",
+     "label",
+     "max",
+     "min",
+     "target",
+     "unit"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "pantry": {
+   "items": {
+    "properties": {
+     "addedAt": {
+      "type": "string"
+     },
+     "bestBefore": {
+      "x-seen": "only null"
+     },
+     "brand": {
+      "x-seen": "only null"
+     },
+     "count": {
+      "type": "number"
+     },
+     "fromTask": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "perUnit": {
+      "x-seen": "only null"
+     },
+     "source": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "subjectId": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "unit": {
+      "type": "string"
+     },
+     "unitG": {
+      "x-seen": "only null"
+     }
+    },
+    "required": [
+     "addedAt",
+     "bestBefore",
+     "brand",
+     "count",
+     "fromTask",
+     "id",
+     "name",
+     "perUnit",
+     "source",
+     "status",
+     "subjectId",
+     "unit",
+     "unitG"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "pendingQuestions": {
+   "items": {},
+   "type": "array"
+  },
+  "rules": {
+   "items": {
+    "properties": {
+     "food": {
+      "type": "string"
+     },
+     "how": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "maxPerDay": {
+      "type": "integer"
+     },
+     "none": {
+      "type": "boolean"
+     },
+     "rule": {
+      "type": "string"
+     },
+     "setBy": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "when": {
+      "x-seen": "only null"
+     }
+    },
+    "required": [
+     "food",
+     "how",
+     "key",
+     "maxPerDay",
+     "none",
+     "rule",
+     "setBy",
+     "status",
+     "text",
+     "when"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "streaks": {
+   "properties": {
+    "allMeals": {
+     "type": "integer"
+    },
+    "proteinMet": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "allMeals",
+    "proteinMet"
+   ],
+   "type": "object"
+  },
+  "subjectId": {
+   "type": "string"
+  },
+  "targets": {
+   "items": {
+    "properties": {
+     "field": {
+      "type": "string"
+     },
+     "how": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "max": {
+      "x-seen": "only null"
+     },
+     "min": {
+      "type": "number"
+     },
+     "nutrient": {
+      "type": "string"
+     },
+     "sense": {
+      "type": "string"
+     },
+     "setBy": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "unit": {
+      "type": "string"
+     },
+     "value": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "field",
+     "how",
+     "key",
+     "max",
+     "min",
+     "nutrient",
+     "sense",
+     "setBy",
+     "status",
+     "text",
+     "unit",
+     "value"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "today": {
+   "properties": {
+    "day": {
+     "type": "string"
+    },
+    "meals": {
+     "items": {
+      "properties": {
+       "entries": {
+        "items": {
+         "properties": {
+          "confidence": {
+           "type": "string"
+          },
+          "consumed": {
+           "type": "string"
+          },
+          "day": {
+           "type": "string"
+          },
+          "eatenAt": {
+           "type": "string"
+          },
+          "flags": {
+           "properties": {
+            "tags": {
+             "items": {
+              "type": "string"
+             },
+             "type": "array"
+            }
+           },
+           "required": [],
+           "type": "object"
+          },
+          "foodId": {
+           "type": [
+            "null",
+            "string"
+           ]
+          },
+          "grams": {
+           "type": [
+            "null",
+            "number"
+           ]
+          },
+          "id": {
+           "type": "string"
+          },
+          "kcal": {
+           "type": "integer"
+          },
+          "kind": {
+           "type": "string"
+          },
+          "loggedBy": {
+           "type": "string"
+          },
+          "meal": {
+           "type": "string"
+          },
+          "mealId": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "nameSaid": {
+           "type": "string"
+          },
+          "note": {
+           "x-seen": "only null"
+          },
+          "nutrients": {
+           "properties": {
+            "added_sugar_g": {
+             "type": "number"
+            },
+            "carbs_g": {
+             "type": "number"
+            },
+            "energy_kcal": {
+             "type": "number"
+            },
+            "fat_g": {
+             "type": "number"
+            },
+            "fibre_g": {
+             "type": "number"
+            },
+            "protein_g": {
+             "type": "number"
+            },
+            "sugar_g": {
+             "type": "number"
+            },
+            "water_g": {
+             "type": "number"
+            },
+            "water_ml": {
+             "type": "number"
+            }
+           },
+           "required": [],
+           "type": "object"
+          },
+          "photoRef": {
+           "x-seen": "only null"
+          },
+          "portionEaten": {
+           "x-seen": "only null"
+          },
+          "protein_g": {
+           "type": "number"
+          },
+          "qty": {
+           "type": "string"
+          },
+          "quantity": {
+           "type": [
+            "null",
+            "number"
+           ]
+          },
+          "source": {
+           "type": "string"
+          },
+          "sourceRef": {
+           "type": [
+            "null",
+            "string"
+           ]
+          },
+          "status": {
+           "type": "string"
+          },
+          "unit": {
+           "type": [
+            "null",
+            "string"
+           ]
+          },
+          "version": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "confidence",
+          "consumed",
+          "day",
+          "eatenAt",
+          "flags",
+          "foodId",
+          "grams",
+          "id",
+          "kcal",
+          "kind",
+          "loggedBy",
+          "meal",
+          "mealId",
+          "name",
+          "nameSaid",
+          "note",
+          "nutrients",
+          "photoRef",
+          "portionEaten",
+          "protein_g",
+          "qty",
+          "quantity",
+          "source",
+          "sourceRef",
+          "status",
+          "unit",
+          "version"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "kcal": {
+        "type": "integer"
+       },
+       "label": {
+        "type": "string"
+       },
+       "meal": {
+        "type": "string"
+       },
+       "notLogged": {
+        "type": "boolean"
+       },
+       "protein_g": {
+        "type": "number"
+       },
+       "skipped": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "entries",
+       "kcal",
+       "label",
+       "meal",
+       "notLogged",
+       "protein_g",
+       "skipped"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "progress": {
+     "items": {
+      "properties": {
+       "field": {
+        "type": "string"
+       },
+       "how": {
+        "type": "string"
+       },
+       "key": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "left": {
+        "type": "number"
+       },
+       "max": {
+        "x-seen": "only null"
+       },
+       "met": {
+        "type": "boolean"
+       },
+       "min": {
+        "type": "number"
+       },
+       "nutrient": {
+        "type": "string"
+       },
+       "over": {
+        "x-seen": "only null"
+       },
+       "pct": {
+        "type": "integer"
+       },
+       "sense": {
+        "type": "string"
+       },
+       "set_by": {
+        "type": "string"
+       },
+       "so_far": {
+        "type": "number"
+       },
+       "target": {
+        "type": "number"
+       },
+       "unit": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "field",
+       "how",
+       "key",
+       "label",
+       "left",
+       "max",
+       "met",
+       "min",
+       "nutrient",
+       "over",
+       "pct",
+       "sense",
+       "set_by",
+       "so_far",
+       "target",
+       "unit"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "totals": {
+     "properties": {
+      "added_sugar_g": {
+       "type": "number"
+      },
+      "carbs_g": {
+       "type": "number"
+      },
+      "energy_kcal": {
+       "type": "number"
+      },
+      "fat_g": {
+       "type": "number"
+      },
+      "fibre_g": {
+       "type": "number"
+      },
+      "protein_g": {
+       "type": "number"
+      },
+      "sugar_g": {
+       "type": "number"
+      },
+      "water_g": {
+       "type": "number"
+      },
+      "water_ml": {
+       "type": "number"
+      }
+     },
+     "required": [],
+     "type": "object"
+    },
+    "water": {
+     "properties": {
+      "glassMl": {
+       "type": "number"
+      },
+      "glasses": {
+       "type": "number"
+      },
+      "ml": {
+       "type": "number"
+      },
+      "targetMl": {
+       "x-seen": "only null"
+      }
+     },
+     "required": [
+      "glassMl",
+      "glasses",
+      "ml",
+      "targetMl"
+     ],
+     "type": "object"
+    }
+   },
+   "required": [
+    "day",
+    "meals",
+    "progress",
+    "totals",
+    "water"
+   ],
+   "type": "object"
+  },
+  "tracking": {
+   "properties": {
+    "ask": {
+     "type": "string"
+    },
+    "counters": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "daily_summary_to": {
+     "items": {},
+     "type": "array"
+    },
+    "sizes": {
+     "properties": {},
+     "required": [],
+     "type": "object"
+    },
+    "tracking": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "ask",
+    "counters",
+    "daily_summary_to",
+    "sizes",
+    "tracking"
+   ],
+   "type": "object"
+  },
+  "units": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "waiting": {
+   "items": {},
+   "type": "array"
+  },
+  "week": {
+   "items": {
+    "properties": {
+     "carbs_g": {
+      "type": "number"
+     },
+     "complete": {
+      "type": "number"
+     },
+     "day": {
+      "type": "string"
+     },
+     "fat_g": {
+      "type": "number"
+     },
+     "fibre_g": {
+      "type": "number"
+     },
+     "items": {
+      "type": "integer"
+     },
+     "kcal": {
+      "type": "integer"
+     },
+     "logged": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "meals": {
+      "items": {
+       "properties": {
+        "at": {
+         "type": "string"
+        },
+        "kcal": {
+         "type": "integer"
+        },
+        "meal": {
+         "type": "string"
+        },
+        "names": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "protein_g": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "at",
+        "kcal",
+        "meal",
+        "names",
+        "protein_g"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "mealsLogged": {
+      "type": "integer"
+     },
+     "met": {
+      "properties": {
+       "protein_g": {
+        "type": "boolean"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "protein_g": {
+      "type": "number"
+     },
+     "skipped": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sodium_mg": {
+      "type": "number"
+     },
+     "sugar_g": {
+      "type": "number"
+     },
+     "water_ml": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "carbs_g",
+     "complete",
+     "day",
+     "fat_g",
+     "fibre_g",
+     "items",
+     "kcal",
+     "logged",
+     "meals",
+     "mealsLogged",
+     "met",
+     "protein_g",
+     "skipped",
+     "sodium_mg",
+     "sugar_g",
+     "water_ml"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "counters",
+  "day",
+  "days",
+  "history",
+  "mealSlots",
+  "month",
+  "noticed",
+  "nutrients",
+  "pantry",
+  "pendingQuestions",
+  "rules",
+  "streaks",
+  "subjectId",
+  "targets",
+  "today",
+  "tracking",
+  "units",
+  "waiting",
+  "week"
+ ],
+ "title": "dash.nutrition",
+ "type": "object"
+}

@@ -194,6 +194,16 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
             lines.append(f"  {t.service} {t.kind}: {runtime.bought(t)}: {outcome}{total}")
         parts.append("ORDERS AND RIDES FOR THEM:\n" + "\n".join(lines))
 
+    try:  # the food log (NUTRITION_PLAN §N9): meals, totals against targets, water, not logged, waiting, strict rules
+        from app.nutrition import report as food_report
+
+        async with session.begin_nested():
+            food = await food_report.brief_block(session, family_id, eid, day, now=now)
+        if food:
+            parts.append(food)
+    except Exception:  # noqa: BLE001 — the rest of the brief still goes
+        logger.warning("brief: food block failed family=%s", family_id, exc_info=True)
+
     from app.care import versions
 
     changed = [v for v in await versions.changes(session, family_id, [eid], limit=20) if v.at and start <= v.at < end]
@@ -224,10 +234,13 @@ def prompt_for(caregiver: dict, elder: dict, day: str, text: str) -> str:
     cg, name = caregiver["id"], (elder.get("name") or "them")
     return (f"[Daily brief] Tonight's brief about {name}'s day ({day}) for person {cg} ({caregiver.get('name') or 'the caregiver'}). "
             f"Write it for them with send_message: one short opening line, then short sections with bold titles (medicines; health "
-            f"and mood; what {name} did and talked about; orders and rides; reminders; anything that needs them), skipping a "
-            "section that has nothing, and one closing line about tomorrow. Use only the data below: times, names, doses and "
-            "amounts exactly as given; a dose that is not marked is 'not marked', never 'taken'. Warm and plain, readable in a "
-            f"minute. Then reply none.\n\n{text}")
+            f"and mood; food and nutrition; what {name} did and talked about; orders and rides; reminders; anything that needs "
+            "them), skipping a section that has nothing, and one closing line about tomorrow. Use only the data below: times, "
+            "names, doses and amounts exactly as given; a dose that is not marked is 'not marked', never 'taken'. Food and "
+            "nutrition (from FOOD): the meals with their main items, the day's kcal and protein against any targets (who set "
+            "them), water, meals not logged (never call them skipped unless FOOD says skipped), delivered food not yet confirmed "
+            "eaten, and any strict rule or target gone past, plainly and without judging the food; say which numbers are only "
+            f"estimates. Warm and plain, readable in a minute. Then reply none.\n\n{text}")
 
 
 async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day: str, *, now: datetime | None = None, on_request: bool = False) -> str:

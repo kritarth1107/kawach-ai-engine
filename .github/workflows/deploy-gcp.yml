@@ -129,7 +129,7 @@ jobs:
           VERTEX_CAREGIVER_CHAT_MODEL: gemini-3.1-pro-preview
           # Brain v2 model order per role: India region first (2-3 s turns, data stays in India).
           # Gemini only for every role (no Claude Model Garden quota); defaults would try Claude first.
-          MODEL_ROUTES: '{"brain": ["gemini:gemini-3.5-flash@asia-south1"], "extract": ["gemini:gemini-3.5-flash@asia-south1"], "worker": ["gemini:gemini-3.5-flash@asia-south1"], "classify": ["gemini:gemini-3.5-flash@asia-south1"], "judge": ["gemini:gemini-3.5-flash@asia-south1"], "judge_fast": ["gemini:gemini-3.5-flash@asia-south1"], "learn": ["gemini:gemini-3.5-flash@asia-south1"], "vision": ["gemini:gemini-3.5-flash@asia-south1"], "speech": ["gemini:gemini-3.5-flash@asia-south1"]}'
+          MODEL_ROUTES: '{"brain": ["gemini:gemini-3.5-flash@asia-south1"], "extract": ["gemini:gemini-3.5-flash@asia-south1"], "worker": ["gemini:gemini-3.5-flash@asia-south1"], "classify": ["gemini:gemini-3.5-flash@asia-south1"], "judge": ["gemini:gemini-3.5-flash@asia-south1"], "judge_fast": ["gemini:gemini-3.5-flash@asia-south1"], "learn": ["gemini:gemini-3.5-flash@asia-south1"], "vision": ["gemini:gemini-3.5-flash@asia-south1"], "speech": ["gemini:gemini-3.5-flash@asia-south1"], "nutrition": ["gemini:gemini-3.5-flash@asia-south1"]}'
           VERTEX_EMBEDDING_MODEL: text-multilingual-embedding-002
           EMBED_DIM: "768"
           DEBUG: "false"

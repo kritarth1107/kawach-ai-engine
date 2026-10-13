@@ -231,6 +231,16 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
             parts.append(f"A DAILY BRIEF IS WAITING FOR THE SPEAKER (it could not be sent while WhatsApp's 24-hour window was "
                          f"closed): answer what they wrote first, then give them the brief in the same reply, written from this "
                          f"data only (short sections, bold titles), and close_loop {lp.id}.\n{str((lp.detail or {}).get('text') or '')[:5000]}")
+    try:  # the nutrition agent's questions still waiting for an answer (log_food answer_to)
+        from app.nutrition import jobs as food_jobs
+
+        async with session.begin_nested():
+            asked = await food_jobs.open_for(session, req.family_id, list({req.elder["id"], req.speaker["id"]}))
+        food_q = food_jobs.context_block(asked, {m.get("id"): m.get("name") for m in [req.elder, *req.members] if m.get("id")})
+        if food_q:
+            parts.append(food_q)
+    except Exception:  # noqa: BLE001 — never costs the turn
+        logger.exception("food questions block failed family=%s", req.family_id)
     from app.care import activities as care_activities
 
     for pid, pname in {req.elder["id"]: req.elder.get("name"), req.speaker["id"]: req.speaker.get("name")}.items():
@@ -632,6 +642,7 @@ WRITE_TOOLS = {
     "remember", "stop", "note", "confirm_change", "fact_still_true", "set_boundaries", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
     "close_loop", "send_message", "alert_caregiver", "start_task", "task_input", "cancel_task", "done_in_app", "set_stock",
     "add_doctor_question", "assign_family_task", "health_record",
+    "log_food", "change_food", "nutrition_target", "pantry", "nutrition_settings", "nutrition_report",
 }
 PARTIAL = {
     "devanagari": "मैंने आपकी बात नोट कर ली है 🙏 अभी पूरा जवाब देने में दिक्कत आ रही है, कुछ मिनट बाद फिर लिखिए।",
@@ -837,7 +848,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         tool_texts=tool_texts, known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
-        location=req.location,
+        location=req.location, images=list(req.images or []),
     )
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]

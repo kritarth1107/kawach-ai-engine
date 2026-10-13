@@ -1,0 +1,286 @@
+[
+ {
+  "file": "idli-sambar.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Breakfast_idli_sambar.jpg",
+  "license": "CC0",
+  "author": "PrasanthR",
+  "expect": [
+   "idli",
+   "sambar"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "dosa-sambar.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Dosa_with_Chutney_and_Sambhar.jpg",
+  "license": "CC0",
+  "author": "Pravega",
+  "expect": [
+   "dosa",
+   "coconut chutney",
+   "sambar"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "masala-dosa.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Masala_Dosa_served_as_lunch_in_Howrah_Maidan,_West_Bengal.jpg",
+  "license": "CC0",
+  "author": "Billjones94",
+  "expect": [
+   "masala dosa",
+   "coconut chutney"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "chicken-biryani.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Chicken_Biryani_3.jpg",
+  "license": "CC0",
+  "author": "Apurv013",
+  "expect": [
+   "chicken biryani",
+   "cucumber",
+   "onion"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "veg-biryani.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Vegetable_Biryani.JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "vegetable biryani",
+   "salad"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "karnataka-thali.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:A_Non_Vegetarian_Thali_in_Karnataka.jpg",
+  "license": "CC0",
+  "author": "Cleavon23",
+  "expect": [
+   "rice",
+   "chapati",
+   "dal",
+   "sambar"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "goan-thali.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Goan_Thali.jpg",
+  "license": "CC0",
+  "author": "MayWrite",
+  "expect": [
+   "rice",
+   "fried fish",
+   "fish curry",
+   "chapati"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "maharashtrian-thali.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Homemade_Thali,_Maharashtrian_Thali.jpg",
+  "license": "CC0",
+  "author": "Smarthem",
+  "expect": [
+   "rice",
+   "dal",
+   "aloo sabzi",
+   "puri"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "bengali-thali.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Traditional_Bengali_Thali_1.jpg",
+  "license": "CC0",
+  "author": "Pallabbanerjee89",
+  "expect": [
+   "puri",
+   "aloo curry",
+   "begun bhaja",
+   "apple"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "chapati.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Chappathi.JPG",
+  "license": "Public domain",
+  "author": "Abhiabhi.abhilash7 at Malayalam Wikipedia.",
+  "expect": [
+   "chapati"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "paratha.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Paratha.JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "paratha"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "chana-dal.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Dal_Chana_Tarka.JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "chana dal",
+   "onion",
+   "pickle"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "dal-bhat.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Dal_Bhat_(Traditional_Nepali_Lentil_Soup_and_Rice).jpg",
+  "license": "CC0",
+  "author": "SristiAwasthi21",
+  "expect": [
+   "rice",
+   "dal"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "khichdi.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Khichdi_(Khichrri).JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "khichdi"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "samosa.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Punjabi_Samosa.JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "samosa",
+   "green chutney"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "upma.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Upma..JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "upma"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "matar-pulao.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Mattar_Pulao_(Peas_Pullao).JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "matar pulao"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "chole-bhature.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Chole_bhature_delhi.jpg",
+  "license": "CC0",
+  "author": "Krishnav25",
+  "expect": [
+   "chole",
+   "bhature",
+   "onion"
+  ],
+  "edit": "cropped to remove people at the edge; resized"
+ },
+ {
+  "file": "rajma-chawal.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Rajma..JPG",
+  "license": "CC0",
+  "author": "Miansari66",
+  "expect": [
+   "rajma",
+   "rice"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "masala-chai.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Masala_Chai.JPG",
+  "license": "Public domain",
+  "author": "Miansari66",
+  "expect": [
+   "chai",
+   "biscuits"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "boiled-eggs.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Eggs,_hard-boiled_with_garlic_sea_salt_and_chili_powder_-_Massachusetts.jpg",
+  "license": "CC0",
+  "author": "Daderot",
+  "expect": [
+   "boiled eggs"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "fruit-bowl.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Fruit-49740_bananas_apples_tangerines_-_Hans_Braxmeier.jpg",
+  "license": "CC0",
+  "author": "Hans Braxmeier",
+  "expect": [
+   "apple",
+   "banana",
+   "orange"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "curd.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Indischer_Joghurt_Dahi.JPG",
+  "license": "CC0",
+  "author": "Brücke-Osteuropa",
+  "expect": [
+   "curd"
+  ],
+  "edit": "resized"
+ },
+ {
+  "file": "dal-rice-lunch.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Lunch_at_Curry_Leaf_Cafe_2024-01-20.jpg",
+  "license": "CC0",
+  "author": "Andy Li",
+  "expect": [
+   "dal",
+   "rice",
+   "papad",
+   "chai"
+  ],
+  "edit": "cropped to remove people at the edge; resized"
+ },
+ {
+  "file": "chana-masala-samosa.jpg",
+  "source": "https://commons.wikimedia.org/wiki/File:Chana_Masala_-_Mohammed_-_Spice_Of_Life_2024-05-27.jpg",
+  "license": "CC0",
+  "author": "Andy Li",
+  "expect": [
+   "chana masala",
+   "samosa",
+   "roti"
+  ],
+  "edit": "cropped to remove people at the edge; resized"
+ }
+]

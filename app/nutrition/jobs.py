@@ -1,0 +1,157 @@
+"""The nutrition agent's work queue (plan §N1.3): one job per log_food call.
+
+    queued → resolving → needs_input → resolving → saved | dropped
+
+- The quick path runs inside the turn (about 8 s at most: NUTRITION_INLINE_S). A new food whose web look-up does not fit
+  goes on in the background (`kick_nutrition()`, like `kick_tasks()`), and Saheli tells them when it is saved.
+- A question waits 2 hours. Then food they said they ate is saved as "unquantified" (counted, no nutrients); a question
+  about an order's food (did you eat it?) saves nothing.
+- The sweep runs from /v2/jobs/wake (every 5 minutes) and /v2/jobs/nutrition.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import uuid
+from datetime import timedelta
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core import clock, trace
+from app.nutrition.models import NutritionJob
+
+logger = logging.getLogger(__name__)
+
+ANSWER_WAIT = timedelta(hours=2)
+LIVE = ("queued", "resolving", "needs_input")
+COUNTED = ("quantity", "which", "label", "photo")  # at most 2 of these per meal; consent and identity never count
+MAX_QUESTIONS = 2
+
+
+def inline_seconds() -> float:
+    return float(os.getenv("NUTRITION_INLINE_S", "8"))
+
+
+async def create(session: AsyncSession, *, family_id: str, subject_id: str, requested_by: str, ask: dict, source_ref: str | None,
+                 channel: str) -> NutritionJob:
+    now = clock.now()
+    job = NutritionJob(id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, requested_by=requested_by[:64], state="queued", ask=ask,
+                       needs=None, draft={}, answers=[], questions=0, result=None, source_ref=source_ref, channel=channel[:12],
+                       deadline_at=now + ANSWER_WAIT, trace_id=trace.current(), created_at=now, updated_at=now)
+    session.add(job)
+    await session.flush()
+    return job
+
+
+async def get(session: AsyncSession, family_id: str, job_id: str) -> NutritionJob | None:
+    try:
+        job = await session.get(NutritionJob, uuid.UUID(str(job_id)), with_for_update=True, populate_existing=True)
+    except ValueError:
+        return None
+    return job if job and job.family_id == family_id else None
+
+
+async def open_for(session: AsyncSession, family_id: str, subject_ids: list[str]) -> list[NutritionJob]:
+    """Questions still waiting for these people (newest first)."""
+    return list((await session.execute(select(NutritionJob).where(
+        NutritionJob.family_id == family_id, NutritionJob.subject_id.in_(subject_ids), NutritionJob.state.in_(("needs_input", "resolving")),
+        NutritionJob.deadline_at > clock.now()).order_by(NutritionJob.created_at.desc()).limit(6))).scalars())
+
+
+def ask_needs(job: NutritionJob, reason: str, question: str, options: list[str] | None = None, item: str | None = None) -> dict:
+    job.state = "needs_input"
+    needs = {"reason": reason, "question": question, "options": list(options or [])[:6], **({"item": item} if item else {}),
+             "at": clock.now().isoformat()}
+    job.needs = needs
+    if reason in COUNTED:
+        job.questions = (job.questions or 0) + 1
+    job.deadline_at = clock.now() + ANSWER_WAIT
+    job.updated_at = clock.now()
+    return needs
+
+
+def can_ask(job: NutritionJob) -> bool:
+    return (job.questions or 0) < MAX_QUESTIONS
+
+
+def finish(job: NutritionJob, state: str, result: dict) -> None:
+    job.state, job.result, job.needs, job.updated_at = state, result, None, clock.now()
+
+
+def context_block(jobs: list[NutritionJob], names: dict) -> str:
+    """For the brain's turn context: food questions waiting for an answer."""
+    rows = [j for j in jobs if j.state == "needs_input" and j.needs]
+    if not rows:
+        return ""
+    lines = ["FOOD LOG QUESTIONS WAITING (the nutrition agent asked; when they answer, call log_food with answer_to = the job id "
+             "and the answer as fields; if they say never mind or don't know what they ate, answer_to with cancel=true):"]
+    for j in rows[:4]:
+        n = j.needs or {}
+        opts = f" (options: {', '.join(n.get('options') or [])})" if n.get("options") else ""
+        lines.append(f"  - job {j.id} about {names.get(j.subject_id, 'them')}: {n.get('reason')}: \"{n.get('question')}\"{opts}")
+    return "\n".join(lines)
+
+
+# ── background ───────────────────────────────────────────────────────────────
+
+_kicked: asyncio.Task | None = None
+
+
+def kick_nutrition() -> None:
+    """Finish slow look-ups now in the background (a turn just left one). One run at a time."""
+    global _kicked
+    if _kicked is not None and not _kicked.done():
+        return
+    import contextvars
+
+    from app.db.session import SessionLocal
+
+    ctx = contextvars.copy_context()
+    ctx.run(trace.detach)
+    try:
+        _kicked = asyncio.get_running_loop().create_task(sweep(SessionLocal, None), context=ctx)
+    except RuntimeError:
+        logger.warning("no running loop for the nutrition sweep; the wake job picks it up")
+
+
+async def sweep(sessions, host_for=None) -> dict:
+    """Slow look-ups still resolving, and questions past their 2 hours."""
+    from app.nutrition import agent
+
+    stats = {"resolved": 0, "expired": 0, "failed": 0}
+    async with sessions() as session:
+        ids = list((await session.execute(select(NutritionJob.id).where(NutritionJob.state.in_(LIVE)).limit(100))).scalars())
+    for jid in ids:
+        try:
+            async with sessions() as session:
+                job = await session.get(NutritionJob, jid, with_for_update=True, populate_existing=True)
+                if job is None or job.state not in LIVE:
+                    continue
+                if job.state == "needs_input":
+                    if job.deadline_at > clock.now():
+                        continue
+                    out = await agent.expire(session, job)
+                    await session.commit()
+                    stats["expired"] += 1
+                    continue
+                if job.updated_at > clock.now() - timedelta(seconds=5):
+                    continue  # the turn that made it may still be finishing it
+                if job.created_at < clock.now() - timedelta(hours=2):
+                    # a look-up that never finished: kept the way an unanswered question is (never retried forever)
+                    out = await agent.expire(session, job)
+                    await session.commit()
+                    stats["expired"] += 1
+                    continue
+                with trace.use(job.trace_id or trace.new("nutrition"), family_id=job.family_id):
+                    out = await agent.run_background(session, job)
+                await session.commit()
+            stats["resolved"] += 1
+            if out and out.get("result") in ("saved", "needs_input"):
+                await agent.tell(sessions, host_for, job, out)
+        except Exception:  # noqa: BLE001 — one job must not stop the others
+            logger.exception("nutrition job failed id=%s", jid)
+            stats["failed"] += 1
+    return stats

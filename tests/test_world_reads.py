@@ -21,7 +21,8 @@ from eval.world.slice import slice_ids
 
 PAST = make.day(-3)
 ROUTES = ["overview", f"overview?day={PAST}", "home", "portrait", "emergency", "stock", "memory-health", "memory-history", "skills", "care-team",
-          "report", "wellbeing", "patterns", "family-tasks", "spending", "boundaries", f"events?day={PAST}", "outcomes", "work"]
+          "report", "wellbeing", "patterns", "family-tasks", "spending", "boundaries", f"events?day={PAST}", "outcomes", "work",
+          "nutrition", f"nutrition?days=30&day={PAST}", "nutrition/report"]
 SLOW_S = 1.5
 
 
@@ -70,7 +71,7 @@ async def test_every_read_for_every_family_of_the_ci_slice(world_client, db):
                     continue
                 if dt > SLOW_S:
                     slow.append(f"{fam['id']} {route}: {dt:.2f}s")
-                seen[f"dash.{route.split('?')[0]}"].append((fam["id"], r.json()))
+                seen[f"dash.{route.split('?')[0].replace('/', '-')}"].append((fam["id"], r.json()))
         r = await world_client.get(f"/v2/admin/families/{fid}/care-record", params={"subject": subjects[0]})
         calls += 1
         if r.status_code != 200:

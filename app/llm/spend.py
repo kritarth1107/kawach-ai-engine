@@ -164,9 +164,10 @@ def process_spent() -> float:
     return _process_total
 
 
-async def record(role: str, model: str, usage: dict) -> float:
+async def record(role: str, model: str, usage: dict, *, extra_inr: float = 0.0) -> float:
+    """extra_inr: a fee on top of tokens (a grounded search is billed per search)."""
     global _process_total, _flusher
-    inr = cost_inr(model, usage)
+    inr = cost_inr(model, usage) + max(0.0, extra_inr)
     _process_total += inr
     day = today()
     _prune(day)

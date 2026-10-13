@@ -34,9 +34,12 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core import clock, trace
 from app.db.session import Base
 
-KINDS = ("note", "fact", "skill", "style", "link")
+KINDS = ("note", "fact", "skill", "style", "link", "food")
+# What "memory history" lists unless a kind is asked for: the food log (app.nutrition.entries) has its own history and
+# would bury the care record's changes under five meals a day.
+MEMORY_KINDS = ("note", "fact", "skill", "style", "link")
 KEEP_FOR = timedelta(days=365)
-HEALTH_DOMAINS = ("medicine", "allergy", "condition", "vital_target")
+HEALTH_DOMAINS = ("medicine", "allergy", "condition", "vital_target", "nutrition_target")
 LIST_LINES = 5
 
 
@@ -212,8 +215,7 @@ async def latest(session: AsyncSession, family_id: str, subject_id: str, kind: s
 async def changes(session: AsyncSession, family_id: str, subject_ids: list[str], *, kinds: tuple[str, ...] | None = None,
                   target: str | None = None, words: str = "", limit: int = 20, include_baseline: bool = False) -> list[MemoryVersion]:
     q = select(MemoryVersion).where(MemoryVersion.family_id == family_id, MemoryVersion.subject_id.in_(subject_ids))
-    if kinds:
-        q = q.where(MemoryVersion.kind.in_(kinds))
+    q = q.where(MemoryVersion.kind.in_(kinds or MEMORY_KINDS))
     if target:
         q = q.where(MemoryVersion.target == target)
     if not include_baseline:
@@ -337,14 +339,18 @@ async def view(session: AsyncSession, v: MemoryVersion, *, names: dict[str, str]
         from app.care import links
 
         out.update(**links.view_bits(v))
+    elif v.kind == "food":
+        from app.nutrition import entries as food_entries
+
+        out.update(**food_entries.view_bits(v))
     else:
         out.update(label="Reply style (learned nightly)", body=v.body, summary=f"now: {v.body[:140]}")
     can = v.op != "baseline" and v.kind != "style"
-    if can and v.kind in ("fact", "skill", "link"):  # these undo only from the newest change
+    if can and v.kind in ("fact", "skill", "link", "food"):  # these undo only from the newest change
         last = await (last_effective(session, v) if v.kind == "fact" else latest(session, v.family_id, v.subject_id, v.kind, v.target))
         can = not last or last.id == v.id
     out["canUndo"] = can
-    out["canRestore"] = v.kind in ("note", "skill") or (v.kind == "fact" and v.status in ("active", "stopped")) or (
+    out["canRestore"] = v.kind in ("note", "skill", "food") or (v.kind == "fact" and v.status in ("active", "stopped")) or (
         v.kind == "link" and v.status in ("active", "ended"))
     return out
 
@@ -587,6 +593,10 @@ async def preview(session: AsyncSession, v: MemoryVersion, mode: str, *, caregiv
             from app.care import links
 
             return await links.preview(session, v, mode, caregiver=caregiver)
+        if v.kind == "food":
+            from app.nutrition import entries as food_entries
+
+            return await food_entries.preview(session, v, mode)
         if v.kind == "fact":
             plan = await (plan_fact_undo(session, v, caregiver=caregiver, actor_id="", confirmed=confirmed) if mode == "undo"
                           else plan_fact_restore(session, v, caregiver=caregiver, confirmed=confirmed))

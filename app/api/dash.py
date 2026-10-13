@@ -10,7 +10,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1077,3 +1077,195 @@ async def memory_undo(family_id: str, elder_id: str, version_id: int, body: Undo
         raise HTTPException(status_code=404, detail="no such change")
     ctx = _ctx(session, family_id, elder_id, body.actor, confirmed=body.confirm)
     return await _run(session, ctx, "undo_change", {"id": version_id, "mode": body.mode, "reason": body.reason})
+
+
+# ── food and nutrition (NUTRITION_PLAN_2026-10-14 §N8; INTERFACES.md §3) ─────
+
+
+@router.get("/{family_id}/{elder_id}/nutrition")
+async def nutrition_view(family_id: str, elder_id: str, session: DB, days: int = 7, day: str | None = None) -> dict:
+    """The Food & nutrition page: the day's meals with each entry's confidence, totals against targets, counters, the week
+    and the month, the nutrients table, food at home, delivered meals waiting for "did they eat it?", open questions and
+    what Saheli noticed (data only)."""
+    import re
+
+    from app.nutrition import report
+
+    if day and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise HTTPException(status_code=400, detail="day must be YYYY-MM-DD")
+    return await report.view(session, family_id, elder_id, day=day, days=days if days in (1, 7, 30) else 7)
+
+
+@router.get("/{family_id}/{elder_id}/nutrition/report")
+async def nutrition_report_view(family_id: str, elder_id: str, session: DB, days: int = 7) -> dict:
+    """The doctor report (the printable PDF and the share link's page): averages against targets with who set them, the meal
+    pattern, top foods, how sure the numbers are, and the weight trend. Shared only when the caregiver chooses."""
+    from app.nutrition import report
+
+    return await report.doctor(session, family_id, elder_id, days if days in (7, 14, 30) else 7)
+
+
+@router.get("/{family_id}/{elder_id}/nutrition/foods")
+async def nutrition_foods(family_id: str, elder_id: str, session: DB, q: str = "", limit: int = 10) -> dict:
+    """Add-food autocomplete: the family's own foods first, then the shared catalogue."""
+    from sqlalchemy import func, or_
+
+    from app.nutrition.models import NutritionFood
+
+    want = q.strip().lower()[:80]
+    if not want:
+        return {"foods": []}
+    sim = func.similarity(func.lower(NutritionFood.name), want)
+    rows = (await session.execute(select(NutritionFood).where(
+        or_(NutritionFood.family_id.is_(None), NutritionFood.family_id == family_id),
+        or_(func.lower(NutritionFood.name).contains(want), NutritionFood.aliases.contains([want]), sim > 0.25))
+        .order_by(NutritionFood.family_id.is_(None), sim.desc()).limit(max(1, min(limit, 20))))).scalars()
+    return {"foods": [{"id": str(f.id), "name": f.name, "brand": f.brand, "kind": f.kind, "defaultUnit": f.default_unit, "units": f.units or {},
+                       "kcalPer100g": (f.per_100g or {}).get("energy_kcal"), "proteinPer100g": (f.per_100g or {}).get("protein_g"),
+                       "perServing": f.per_serving, "servingG": f.serving_g, "family": f.family_id is not None} for f in rows]}
+
+
+class FoodItemIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    quantity: float | None = Field(default=None, gt=0, le=5000)
+    unit: str | None = Field(default=None, max_length=16)
+    brand: str | None = Field(default=None, max_length=120)
+    food_id: str | None = Field(default=None, max_length=64)
+
+
+class FoodIn(BaseModel):
+    actor: Actor
+    items: list[FoodItemIn] = Field(default_factory=list, max_length=15)
+    meal: str | None = Field(default=None, pattern="^(breakfast|lunch|snack|dinner|other)$")
+    eaten_at: str | None = Field(default=None, max_length=40)
+    # the caregiver answers the food agent's open question about this log; "never mind" saves nothing, "not sure" saves a
+    # usual portion marked estimate
+    answer_to: str | None = Field(default=None, min_length=8, max_length=64)
+    cancel: bool | None = None
+    unsure: bool | None = None
+
+    @model_validator(mode="after")
+    def _items_or_an_answer(self) -> "FoodIn":
+        if not self.items and not (self.answer_to and (self.cancel or self.unsure)):
+            raise ValueError("items are needed (or answer_to with cancel or unsure)")
+        return self
+
+
+class FoodChangeIn(BaseModel):
+    actor: Actor
+    set: dict = Field(default_factory=dict)
+
+
+class TargetsIn(BaseModel):
+    actor: Actor
+    set: dict = Field(default_factory=dict)
+    rules: list[dict] = Field(default_factory=list, max_length=10)
+    set_by: str = Field(default="caregiver", pattern="^(caregiver|self|doctor|dietitian|trainer|other)$")
+    how: str = Field(default="guide", pattern="^(strict|guide)$")
+    remove: list[str] = Field(default_factory=list, max_length=20)
+
+
+class FoodSettingsIn(BaseModel):
+    actor: Actor
+    tracking: str | None = Field(default=None, pattern="^(off|counts|full)$")
+    ask: str | None = Field(default=None, pattern="^(adaptive|per_meal|recap|off)$")
+    daily_summary_to: list[str] | None = Field(default=None, max_length=6)
+    sizes: dict | None = None
+    counters: list[str] | None = Field(default=None, max_length=10)
+
+
+class PantryIn(BaseModel):
+    actor: Actor
+    action: str = Field(pattern="^(add|used|remove)$")
+    item: str | None = Field(default=None, max_length=200)
+    count: float | None = Field(default=None, gt=0, le=1000)
+    unit: str | None = Field(default=None, pattern="^(piece|pack)$")
+    id: str | None = Field(default=None, max_length=64)
+
+
+class ConsumedIn(BaseModel):
+    actor: Actor
+    task_id: str = Field(min_length=8, max_length=64)
+    consumed: str = Field(pattern="^(yes|part|no)$")
+    portion_eaten: str | None = Field(default=None, pattern="^(all|most|half|little)$")
+
+
+def _drop_none(d: dict) -> dict:
+    return {k: v for k, v in d.items() if v not in (None, "", [], {})}
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/entries")
+async def nutrition_add(family_id: str, elder_id: str, body: FoodIn, session: DB) -> dict:
+    """Add food from the dashboard (the same log_food Saheli uses; a question it returns is shown to the caregiver)."""
+    ctx = _ctx(session, family_id, elder_id, body.actor)
+    args = _drop_none({"items": [_drop_none(i.model_dump()) for i in body.items], "meal": body.meal, "eaten_at": body.eaten_at, "for_whom": elder_id,
+                       "answer_to": body.answer_to, "cancel": body.cancel or None, "unsure": body.unsure or None})
+    return await _run(session, ctx, "log_food", args)
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/entries/{entry_id}")
+async def nutrition_change(family_id: str, elder_id: str, entry_id: str, body: FoodChangeIn, session: DB) -> dict:
+    from app.nutrition import entries
+
+    e = await entries.get(session, family_id, entry_id)
+    if e is None or e.subject_id != elder_id:
+        raise HTTPException(status_code=404, detail="no such entry")
+    allowed = {k: v for k, v in (body.set or {}).items() if k in ("quantity", "unit", "eaten_at", "meal", "item") and v not in (None, "")}
+    return await _run(session, _ctx(session, family_id, elder_id, body.actor), "change_food", {"entry_id": entry_id, "set": allowed})
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/entries/{entry_id}/delete")
+async def nutrition_delete(family_id: str, elder_id: str, entry_id: str, body: ConsentActor, session: DB) -> dict:
+    from app.nutrition import entries
+
+    e = await entries.get(session, family_id, entry_id)
+    if e is None or e.subject_id != elder_id:
+        raise HTTPException(status_code=404, detail="no such entry")
+    return await _run(session, _ctx(session, family_id, elder_id, body.actor), "change_food", {"entry_id": entry_id, "delete": True})
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/targets")
+async def nutrition_targets(family_id: str, elder_id: str, body: TargetsIn, session: DB) -> dict:
+    args = _drop_none({"for_whom": elder_id, "set": body.set, "rules": body.rules, "set_by": body.set_by, "how": body.how, "remove": body.remove})
+    return await _run(session, _ctx(session, family_id, elder_id, body.actor), "nutrition_target", args)
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/settings")
+async def nutrition_settings_save(family_id: str, elder_id: str, body: FoodSettingsIn, session: DB) -> dict:
+    args = _drop_none({"for_whom": elder_id, "tracking": body.tracking, "ask": body.ask, "daily_summary_to": body.daily_summary_to,
+                       "sizes": body.sizes})
+    out = await _run(session, _ctx(session, family_id, elder_id, body.actor), "nutrition_settings", args)
+    if body.counters is not None:
+        from app.nutrition import settings
+
+        _, value = await settings.save(session, family_id=family_id, person_id=elder_id, changes={"counters": body.counters},
+                                       source_kind="dashboard", stated_by=body.actor.id)
+        await session.commit()
+        out = {**out, "setting": value, "text": settings.sentence(value)}
+    return out
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/pantry")
+async def nutrition_pantry(family_id: str, elder_id: str, body: PantryIn, session: DB) -> dict:
+    args = _drop_none({"action": body.action, "item": body.item, "count": body.count, "unit": body.unit, "id": body.id})
+    return await _run(session, _ctx(session, family_id, elder_id, body.actor), "pantry", args)
+
+
+@router.post("/{family_id}/{elder_id}/nutrition/consumed")
+async def nutrition_consumed(family_id: str, elder_id: str, body: ConsumedIn, session: DB) -> dict:
+    """'Waiting: did they eat it?' answered on the dashboard: Yes / Part / No for a delivered meal (nothing is logged before)."""
+    from app.nutrition import agent
+
+    task = await agent._task(session, family_id, body.task_id)
+    if task is None or task.subject_id != elder_id:
+        raise HTTPException(status_code=404, detail="no such order")
+    with trace.use(trace.current() or trace.new("dash"), family_id=family_id):
+        from app.care import versions
+
+        with versions.attribution(actor_id=body.actor.id, source="dashboard"):
+            out = await agent.log_order_meal(session, task, consumed=body.consumed, portion_eaten=body.portion_eaten, by=body.actor.id,
+                                             channel="dashboard")
+    await store.record_event(session, family_id=family_id, subject_id=elder_id, kind="dashboard_edit",
+                             summary=f"order food eaten: {body.consumed}", actor_id=body.actor.id, payload={"task_id": body.task_id})
+    await session.commit()
+    return out

@@ -82,11 +82,21 @@
      },
      "value": {
       "properties": {
+       "amount": {
+        "type": "number"
+       },
+       "avoid": {
+        "items": {},
+        "type": "array"
+       },
        "days": {
         "items": {
          "type": "integer"
         },
         "type": "array"
+       },
+       "dialect": {
+        "type": "string"
        },
        "doctor": {
         "type": "string"
@@ -94,7 +104,13 @@
        "dose": {
         "type": "string"
        },
+       "field": {
+        "type": "string"
+       },
        "food": {
+        "type": "string"
+       },
+       "how": {
         "type": "string"
        },
        "instructions": {
@@ -112,6 +128,12 @@
        "language": {
         "type": "string"
        },
+       "max_per_day": {
+        "type": "integer"
+       },
+       "min": {
+        "type": "number"
+       },
        "minutes": {
         "type": "integer"
        },
@@ -120,6 +142,9 @@
        },
        "none": {
         "type": "boolean"
+       },
+       "nutrient": {
+        "type": "string"
        },
        "phone": {
         "type": "string"
@@ -142,6 +167,15 @@
        "rule": {
         "type": "string"
        },
+       "script": {
+        "type": "string"
+       },
+       "sense": {
+        "type": "string"
+       },
+       "set_by": {
+        "type": "string"
+       },
        "specialty": {
         "type": "string"
        },
@@ -158,6 +192,9 @@
         "type": "array"
        },
        "type": {
+        "type": "string"
+       },
+       "unit": {
         "type": "string"
        },
        "value": {

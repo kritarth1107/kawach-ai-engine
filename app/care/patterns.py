@@ -11,7 +11,7 @@ Plain counting over the last two weeks (no model calls, so it is free and cannot
 - low moods piling up
 - going quiet: far fewer messages than usual
 - awake and writing in the middle of the night
-- meals skipped
+- meals skipped (from the food log's skipped-meal markers: structured data, never words)
 
 Each finding says what was seen, with the evidence, and one gentle suggestion. Nothing here diagnoses or
 alerts: patterns go to the brain's context (to mention once to a caregiver), the dashboard and the weekly
@@ -59,8 +59,6 @@ SYMPTOM_TERMS = {
     "joint pain": ["joint", "jodon", "jodo"],
     "nausea": ["nausea", "vomit", "ulti", "ji machal"],
 }
-SKIPPED_MEAL = re.compile(r"\b(skip\w*|missed|did not eat|didn'?t eat|not eat\w*|nahi khaya|nahin khaya|khana nahi|no (?:lunch|dinner|breakfast)|"
-                          r"no appetite|bhookh nahi|bhook nahi)\b|नहीं खाया|भूख नहीं", re.I)
 LOW_MOOD = re.compile(r"\b(sad|low|lonely|alone|akela|akeli|udaas|upset|worried|anxious|tension|cry\w*|ro rah\w*|depress\w*|hopeless|bored|"
                       r"irritat\w*|gussa|angry|dukhi|pareshan|ghabra\w*)\b|उदास|अकेल|दुखी|परेशान|घबरा", re.I)
 
@@ -259,13 +257,23 @@ def mood_patterns(events: list, *, now, subject: str) -> list[Pattern]:
     return []
 
 
-def meal_patterns(events: list, *, now, subject: str) -> list[Pattern]:
-    week = [e for e in events if e.at >= now - timedelta(days=7) and SKIPPED_MEAL.search(e.summary or "")]
-    days_ = sorted({e.day for e in week})
+def meal_patterns(food: list, events: list, *, now, subject: str) -> list[Pattern]:
+    """Meals skipped, from structured data only (founder rule: no regex on people's words): a skipped-meal marker in the food
+    log (log_food skipped), or a meal event the brain marked meal_skipped (people with food tracking off)."""
+    since = now - timedelta(days=7)
+    said: list[tuple[str, str]] = []  # (day, what)
+    for e in food:
+        if e.kind == "skipped" and e.status == "active" and e.eaten_at >= since and e.meal in ("breakfast", "lunch", "dinner"):
+            said.append((e.day, f"{e.meal} skipped"))
+    for e in events:
+        if e.at >= since and (e.payload or {}).get("meal_skipped"):
+            said.append((e.day, (e.summary or "meal skipped")[:60]))
+    days_ = sorted({d for d, _ in said})
     if len(days_) >= 3:
+        said.sort()
         return [Pattern(
-            "meals_skipped", "meals:skipped", f"Meals skipped or little appetite on {len(days_)} days this week",
-            "Said: " + "; ".join(f"{e.day[5:]} {e.summary[:60]}" for e in week[-3:]) + ".",
+            "meals_skipped", "meals:skipped", f"Meals skipped on {len(days_)} days this week",
+            "Logged: " + "; ".join(f"{d[5:]} {w}" for d, w in said[-3:]) + ".",
             "Poor appetite can matter with diabetes and BP tablets; worth mentioning to the doctor.", "watch", days_, subject)]
     return []
 
@@ -349,13 +357,18 @@ async def find(session: AsyncSession, family_id: str, subject_id: str, *, days: 
     from app.care import baselines
 
     base = await baselines.get(session, family_id, subject_id)
+    from app.nutrition.models import NutritionEntry
+
+    food = list((await session.execute(select(NutritionEntry).where(
+        NutritionEntry.family_id == family_id, NutritionEntry.subject_id == subject_id, NutritionEntry.kind == "skipped",
+        NutritionEntry.status == "active", NutritionEntry.eaten_at >= now - timedelta(days=7)))).scalars())
     found: list[Pattern] = []
     detectors = [
         lambda: dose_patterns(meds, doses, now=now, subject=subject_id, days=days),
         lambda: vital_patterns(vitals, now=now, subject=subject_id),
         lambda: symptom_patterns([e for e in life if e.kind in ("symptom", "sleep", "other")], subject=subject_id),
         lambda: mood_patterns([e for e in life if e.kind == "mood"], now=now, subject=subject_id),
-        lambda: meal_patterns([e for e in life if e.kind == "meal"], now=now, subject=subject_id),
+        lambda: meal_patterns(food, [e for e in life if e.kind == "meal"], now=now, subject=subject_id),
         lambda: talk_patterns(turn_times, now=now, subject=subject_id),
         lambda: baseline_patterns(base, vitals, now=now, subject=subject_id),
     ]

@@ -276,7 +276,36 @@ async def wake_job() -> dict:
         out["briefs"] = await brief.run(SessionLocal, host_for)  # each caregiver's nightly brief, at their time
     except Exception:  # noqa: BLE001
         logger.exception("daily briefs failed")
+    try:
+        from app.nutrition import jobs as food_jobs
+
+        # slow food look-ups that finished after their turn, and food questions past their 2 hours
+        out["nutrition"] = await food_jobs.sweep(SessionLocal, host_for)
+    except Exception:  # noqa: BLE001
+        logger.exception("nutrition sweep failed")
     return out
+
+
+@router.post("/jobs/nutrition")
+async def nutrition_job() -> dict:
+    """The nutrition agent's background work (also inside /jobs/wake): slow look-ups, questions past 2 hours."""
+    from app.db.session import SessionLocal
+    from app.nutrition import jobs as food_jobs
+
+    def host_for(fid: str):
+        return ShadowHost() if fid.startswith("shadow:") else LiveHost()
+
+    return await food_jobs.sweep(SessionLocal, host_for)
+
+
+@router.post("/jobs/nutrition-backfill")
+async def nutrition_backfill_job(days: int = 7, apply: bool = False, family: str = "") -> dict:
+    """Recent meals noted as plain events (log_event kind=meal) become food-log entries: quantities as said, otherwise
+    unquantified; asks nobody anything. apply=false (the default) lists what it would write."""
+    from app.db.session import SessionLocal
+    from app.nutrition import backfill
+
+    return await backfill.run(SessionLocal, days=max(1, min(days, 30)), apply=apply, family_prefix=family)
 
 
 EXTRACT_BATCHES = 6  # per family per run: up to 6 x 120 new turns

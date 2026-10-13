@@ -1,0 +1,341 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "averages": {
+   "properties": {
+    "calcium_mg": {
+     "x-seen": "only null"
+    },
+    "carbs_g": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "energy_kcal": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "fat_g": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "fibre_g": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "iron_mg": {
+     "x-seen": "only null"
+    },
+    "potassium_mg": {
+     "x-seen": "only null"
+    },
+    "protein_g": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "sat_fat_g": {
+     "x-seen": "only null"
+    },
+    "sodium_mg": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "sugar_g": {
+     "type": [
+      "null",
+      "number"
+     ]
+    },
+    "water_ml": {
+     "type": [
+      "null",
+      "number"
+     ]
+    }
+   },
+   "required": [
+    "calcium_mg",
+    "carbs_g",
+    "energy_kcal",
+    "fat_g",
+    "fibre_g",
+    "iron_mg",
+    "potassium_mg",
+    "protein_g",
+    "sat_fat_g",
+    "sodium_mg",
+    "sugar_g",
+    "water_ml"
+   ],
+   "type": "object"
+  },
+  "confidence": {
+   "properties": {
+    "estimate": {
+     "type": "integer"
+    },
+    "label": {
+     "type": "integer"
+    },
+    "photo": {
+     "type": "integer"
+    },
+    "said": {
+     "type": "integer"
+    },
+    "unquantified": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "estimate",
+    "label",
+    "photo",
+    "said",
+    "unquantified"
+   ],
+   "type": "object"
+  },
+  "daily": {
+   "items": {
+    "properties": {
+     "carbs_g": {
+      "type": "number"
+     },
+     "day": {
+      "type": "string"
+     },
+     "energy_kcal": {
+      "type": "number"
+     },
+     "fat_g": {
+      "type": "number"
+     },
+     "fibre_g": {
+      "type": "number"
+     },
+     "mealsLogged": {
+      "type": "integer"
+     },
+     "protein_g": {
+      "type": "number"
+     },
+     "sodium_mg": {
+      "type": "number"
+     },
+     "sugar_g": {
+      "type": "number"
+     },
+     "water_ml": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "carbs_g",
+     "day",
+     "energy_kcal",
+     "fat_g",
+     "fibre_g",
+     "mealsLogged",
+     "protein_g",
+     "sodium_mg",
+     "sugar_g",
+     "water_ml"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "days": {
+   "type": "integer"
+  },
+  "daysLogged": {
+   "type": "integer"
+  },
+  "deviations": {
+   "items": {},
+   "type": "array"
+  },
+  "from": {
+   "type": "string"
+  },
+  "mealPattern": {
+   "properties": {
+    "breakfast": {
+     "type": "integer"
+    },
+    "dinner": {
+     "type": "integer"
+    },
+    "lunch": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "breakfast",
+    "dinner",
+    "lunch"
+   ],
+   "type": "object"
+  },
+  "note": {
+   "type": "string"
+  },
+  "rules": {
+   "items": {
+    "properties": {
+     "how": {
+      "type": "string"
+     },
+     "setBy": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "how",
+     "setBy",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "skipped": {
+   "properties": {
+    "breakfast": {
+     "type": "integer"
+    },
+    "dinner": {
+     "type": "integer"
+    },
+    "lunch": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "breakfast",
+    "dinner",
+    "lunch"
+   ],
+   "type": "object"
+  },
+  "subjectId": {
+   "type": "string"
+  },
+  "targets": {
+   "items": {
+    "properties": {
+     "average": {
+      "type": "number"
+     },
+     "daysLogged": {
+      "type": "integer"
+     },
+     "daysMet": {
+      "type": "integer"
+     },
+     "field": {
+      "type": "string"
+     },
+     "how": {
+      "type": "string"
+     },
+     "setBy": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "average",
+     "daysLogged",
+     "daysMet",
+     "field",
+     "how",
+     "setBy",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "to": {
+   "type": "string"
+  },
+  "topFoods": {
+   "items": {
+    "properties": {
+     "kcalShare": {
+      "type": "integer"
+     },
+     "name": {
+      "type": "string"
+     },
+     "times": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "kcalShare",
+     "name",
+     "times"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "weight": {
+   "items": {
+    "properties": {
+     "day": {
+      "type": "string"
+     },
+     "value": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "day",
+     "value"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "averages",
+  "confidence",
+  "daily",
+  "days",
+  "daysLogged",
+  "deviations",
+  "from",
+  "mealPattern",
+  "note",
+  "rules",
+  "skipped",
+  "subjectId",
+  "targets",
+  "to",
+  "topFoods",
+  "weight"
+ ],
+ "title": "dash.nutrition-report",
+ "type": "object"
+}

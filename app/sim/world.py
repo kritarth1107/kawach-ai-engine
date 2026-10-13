@@ -150,6 +150,8 @@ class SimHost:
             return {"cancelled": bool(w.rides)}
         if tool == "emergency_link":
             return {"url": f"https://kavach.test/e/{subject_id}"}
+        if tool == "nutrition_share_link":
+            return {"url": f"https://kavach.test/n/{subject_id}-{args.get('days')}", "expiresAt": "in 7 days"}
         if tool == "export_care_record":
             return dict(w.backend_record)
         if tool == "send_whatsapp":

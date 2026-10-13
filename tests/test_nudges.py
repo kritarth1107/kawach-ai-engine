@@ -920,7 +920,10 @@ async def test_lunch_is_asked_about_after_its_time_only_when_nothing_is_logged(d
     assert await meal_opts(db, at, "2026-10-14 14:30", meals_mode="off") == []
 
 
-async def test_no_meal_question_without_the_nutrition_agent(db, at, sessions, writer):
+async def test_no_meal_question_without_the_nutrition_agent(db, at, sessions, writer, monkeypatch):
+    from app.care import meal_nudges
+
+    monkeypatch.setattr(meal_nudges, "hooks", lambda: None)  # app.nutrition has landed; this is the case of it missing
     await meal_day(db, at)
     assert await meal_opts(db, at, "2026-10-14 14:30") == []
 

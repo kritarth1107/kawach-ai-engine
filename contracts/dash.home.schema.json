@@ -208,7 +208,29 @@
    "type": "array"
   },
   "timeline": {
-   "items": {},
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "at",
+     "id",
+     "kind",
+     "text"
+    ],
+    "type": "object"
+   },
    "type": "array"
   },
   "vitals": {

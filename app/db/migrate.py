@@ -125,6 +125,21 @@ INDEXES = [
     ("ix_open_loops_trace", "open_loops", "", "(trace_id) WHERE trace_id IS NOT NULL"),
     ("ix_care_tasks_trace", "care_tasks", "", "(trace_id) WHERE trace_id IS NOT NULL"),
     ("ix_care_events_task", "care_events", "", "((payload->>'task_id')) WHERE (payload->>'task_id') IS NOT NULL"),
+    # nutrition (NUTRITION_PLAN_2026-10-14 §N2): the tables come from create_all, their indexes from here
+    ("ix_nutrition_foods_family_name", "nutrition_foods", "", "(family_id, lower(name))"),
+    ("ix_nutrition_foods_aliases", "nutrition_foods", "", "USING GIN (aliases)"),
+    ("ix_nutrition_foods_name_trgm", "nutrition_foods", "", "USING GIN (lower(name) gin_trgm_ops)"),
+    ("ix_nutrition_foods_barcode", "nutrition_foods", "", "(barcode) WHERE barcode IS NOT NULL"),
+    ("uq_nutrition_foods_generic", "nutrition_foods", "UNIQUE",
+     "(lower(name), coalesce(lower(brand), ''), coalesce(lower(restaurant), '')) WHERE family_id IS NULL"),
+    ("ix_nutrition_entries_day", "nutrition_entries", "", "(family_id, subject_id, day)"),
+    ("ix_nutrition_entries_eaten", "nutrition_entries", "", "(family_id, subject_id, eaten_at)"),
+    ("ix_nutrition_entries_meal", "nutrition_entries", "", "(meal_id)"),
+    ("ix_nutrition_entries_source", "nutrition_entries", "", "(family_id, source_ref) WHERE source_ref IS NOT NULL"),
+    ("ix_nutrition_jobs_live", "nutrition_jobs", "", "(family_id, subject_id, state)"),
+    ("ix_nutrition_jobs_sweep", "nutrition_jobs", "", "(state, updated_at) WHERE state IN ('queued', 'resolving', 'needs_input')"),
+    ("ix_nutrition_pantry_family", "nutrition_pantry", "", "(family_id, status)"),
+    ("uq_nutrition_pantry_task_item", "nutrition_pantry", "UNIQUE", "(family_id, task_id, lower(name)) WHERE task_id IS NOT NULL"),
 ]
 
 COLUMN_THERE = ("SELECT 1 FROM information_schema.columns "

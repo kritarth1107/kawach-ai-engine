@@ -121,5 +121,8 @@ async def erase_elder_memory(
         profile.body_md = ""
         profile.rendered_at = None
 
+    from app.nutrition import entries as food_entries
+
+    food = await food_entries.erase(session, str(family_id), str(elder_id))  # the food log, questions, pantry, history, photos
     await session.commit()
-    return {"erased": True, "entities_removed": len(entities)}
+    return {"erased": True, "entities_removed": len(entities), "nutrition": food}

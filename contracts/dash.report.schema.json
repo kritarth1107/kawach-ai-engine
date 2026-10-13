@@ -188,6 +188,10 @@
    "items": {},
    "type": "array"
   },
+  "patterns": {
+   "items": {},
+   "type": "array"
+  },
   "symptoms": {
    "items": {},
    "type": "array"
@@ -243,6 +247,7 @@
   "mood",
   "narrative",
   "orders",
+  "patterns",
   "symptoms",
   "to",
   "vitals"

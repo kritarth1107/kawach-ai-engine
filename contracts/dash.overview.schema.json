@@ -42,6 +42,9 @@
     "language": {
      "type": "string"
     },
+    "learned": {
+     "type": "string"
+    },
     "medicine": {
      "type": "string"
     },
@@ -49,6 +52,9 @@
      "type": "string"
     },
     "no_order": {
+     "type": "string"
+    },
+    "nutrition_target": {
      "type": "string"
     },
     "occasion": {
@@ -61,6 +67,9 @@
      "type": "string"
     },
     "routine": {
+     "type": "string"
+    },
+    "setting": {
      "type": "string"
     },
     "vital_target": {
@@ -80,13 +89,16 @@
     "home",
     "hospital",
     "language",
+    "learned",
     "medicine",
     "naming",
     "no_order",
+    "nutrition_target",
     "occasion",
     "preference",
     "profile",
     "routine",
+    "setting",
     "vital_target"
    ],
    "type": "object"
@@ -147,6 +159,15 @@
        "day": {
         "type": "string"
        },
+       "entries": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "kcal": {
+        "type": "integer"
+       },
        "key": {
         "type": "string"
        },
@@ -156,11 +177,29 @@
        "label": {
         "type": "string"
        },
+       "meal": {
+        "type": "string"
+       },
+       "meal_id": {
+        "type": "string"
+       },
        "medicine": {
         "type": "string"
        },
+       "nutrition": {
+        "type": "boolean"
+       },
+       "protein_g": {
+        "type": "number"
+       },
+       "removed": {
+        "type": "boolean"
+       },
        "score": {
         "type": "integer"
+       },
+       "skipped": {
+        "type": "boolean"
        },
        "source": {
         "type": "string"
@@ -255,11 +294,21 @@
      },
      "value": {
       "properties": {
+       "amount": {
+        "type": "number"
+       },
+       "avoid": {
+        "items": {},
+        "type": "array"
+       },
        "days": {
         "items": {
          "type": "integer"
         },
         "type": "array"
+       },
+       "dialect": {
+        "type": "string"
        },
        "doctor": {
         "type": "string"
@@ -267,7 +316,13 @@
        "dose": {
         "type": "string"
        },
+       "field": {
+        "type": "string"
+       },
        "food": {
+        "type": "string"
+       },
+       "how": {
         "type": "string"
        },
        "instructions": {
@@ -285,6 +340,12 @@
        "language": {
         "type": "string"
        },
+       "max_per_day": {
+        "type": "integer"
+       },
+       "min": {
+        "type": "number"
+       },
        "minutes": {
         "type": "integer"
        },
@@ -293,6 +354,9 @@
        },
        "none": {
         "type": "boolean"
+       },
+       "nutrient": {
+        "type": "string"
        },
        "phone": {
         "type": "string"
@@ -315,6 +379,15 @@
        "rule": {
         "type": "string"
        },
+       "script": {
+        "type": "string"
+       },
+       "sense": {
+        "type": "string"
+       },
+       "set_by": {
+        "type": "string"
+       },
        "specialty": {
         "type": "string"
        },
@@ -331,6 +404,9 @@
         "type": "array"
        },
        "type": {
+        "type": "string"
+       },
+       "unit": {
         "type": "string"
        },
        "value": {

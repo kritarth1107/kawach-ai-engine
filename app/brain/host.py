@@ -47,6 +47,7 @@ WRITE_TOOLS = {
     "send_template",
     "alert_care_team",
     "send_song",
+    "nutrition_share_link",
 }
 
 

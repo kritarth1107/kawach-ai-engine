@@ -207,7 +207,8 @@ def encrypt_bytes(data: bytes, recipient: str) -> bytes:
 
 # ── per-family memory snapshots ──────────────────────────────────────────────
 
-FAMILY_TABLES = ("care_facts", "memory_notes", "skills", "person_baselines", "open_loops", "care_links")
+FAMILY_TABLES = ("care_facts", "memory_notes", "skills", "person_baselines", "open_loops", "care_links", "nutrition_entries",
+                 "nutrition_pantry", "nutrition_foods")
 
 
 def family_sql(have: set[str]) -> str:
@@ -233,6 +234,14 @@ def family_sql(have: set[str]) -> str:
     if "open_loops" in have:
         fields.append("'open_loops', COALESCE((SELECT json_agg(o) FROM open_loops o WHERE o.family_id = f.family_id"
                       " AND o.status = 'open'), '[]'::json)")
+    if "nutrition_entries" in have:  # the food log (NUTRITION_PLAN §N12.6): kept and erased with the family
+        fields.append("'nutrition_entries', COALESCE((SELECT json_agg(e) FROM nutrition_entries e WHERE e.family_id = f.family_id"
+                      " AND e.status = 'active'), '[]'::json)")
+    if "nutrition_pantry" in have:
+        fields.append("'nutrition_pantry', COALESCE((SELECT json_agg(p) FROM nutrition_pantry p WHERE p.family_id = f.family_id"
+                      " AND p.status = 'in_stock'), '[]'::json)")
+    if "nutrition_foods" in have:
+        fields.append("'nutrition_foods', COALESCE((SELECT json_agg(n) FROM nutrition_foods n WHERE n.family_id = f.family_id), '[]'::json)")
     # ::jsonb::text keeps each family on one line (json_agg puts newlines between elements)
     return (f"SELECT json_build_object({', '.join(fields)})::jsonb::text FROM (SELECT DISTINCT family_id FROM ({' UNION '.join(sources)}) u) f"
             " WHERE f.family_id IS NOT NULL AND f.family_id NOT LIKE 'shadow:%' ORDER BY f.family_id")
