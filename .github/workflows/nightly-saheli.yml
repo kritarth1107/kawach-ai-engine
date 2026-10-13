@@ -1,5 +1,5 @@
 name: Nightly Saheli (real AI on the synthetic world)
-run-name: "Nightly ${{ github.event_name == 'schedule' && 'full' || inputs.slice }}${{ inputs.fixture == 'true' && ' fixture' || '' }}"
+run-name: "Nightly ${{ github.event.inputs.repost_run && format('repost {0}', github.event.inputs.repost_run) || (github.event_name == 'schedule' && 'full' || inputs.slice) }}${{ inputs.fixture == 'true' && ' fixture' || '' }}"
 
 # Plan B3: every night at 01:00 IST the real brain answers the probes of the synthetic families (30 languages, every
 # household type), and a simulated week of every proactive job is checked against the message rules. Paid model calls
@@ -39,6 +39,9 @@ on:
       fixture:
         description: "true: skip the run; put a stored failing scores.json through the gate (shows a failing night on purpose)"
         default: "false"
+      repost_run:
+        description: "A run id: post that night's scores.json to the engine again (its post was lost); nothing else runs"
+        default: ""
 
 concurrency:
   group: nightly-saheli
@@ -57,7 +60,7 @@ env:
 
 jobs:
   probes:
-    if: github.event.inputs.fixture != 'true'
+    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 300
     permissions:
@@ -123,7 +126,7 @@ jobs:
 
   recall:
     # the story families' memory quiz, scored (C2) and their memory score (A2), on a rotation of 25 families a night
-    if: github.event.inputs.fixture != 'true'
+    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -170,7 +173,7 @@ jobs:
           retention-days: 90
 
   message-week:
-    if: github.event.inputs.fixture != 'true'
+    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 240
     services:
@@ -212,7 +215,7 @@ jobs:
           retention-days: 90
 
   nudge-quality:
-    if: github.event.inputs.fixture != 'true'
+    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -270,7 +273,7 @@ jobs:
 
   report:
     needs: [probes, recall, message-week, nudge-quality]
-    if: always() && github.event.inputs.fixture != 'true'
+    if: always() && github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -321,22 +324,15 @@ jobs:
           token_format: id_token
           id_token_audience: ${{ env.ENGINE_URL }}
           id_token_include_email: true
-      - name: Publish the number to the engine (eval_scores; a failing night on master emails the team)
+      - name: Publish the number to the engine (eval_scores; a failing night on master emails the team; a lost post emails it too)
         if: always()
         env:
           ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           KIND: ${{ (github.event_name == 'schedule' || inputs.slice == 'full') && 'nightly' || 'fixture' }}
         run: |
-          [ -f scores.json ] || { echo "no scores.json"; exit 0; }
-          python3 - <<'PY' > body.json
-          import json, os
-          sc = json.load(open("scores.json"))
-          print(json.dumps({"run_id": os.environ["GITHUB_RUN_ID"], "kind": os.environ["KIND"], "day": __import__("datetime").date.today().isoformat(),
-                            "passed": bool(sc.get("passed")), "commit": os.environ["GITHUB_SHA"], "branch": os.environ["GITHUB_REF_NAME"],
-                            "scores": sc, "failures": sc.get("failures") or []}))
-          PY
-          curl -sS --fail-with-body -X POST "$ENGINE_URL/v2/admin/eval-scores" -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" \
-            --data @body.json | head -c 600 || echo "::warning::could not post the scores to the engine"
+          [ -f scores.json ] || echo '{"passed": false, "failures": ["the report wrote no scores.json"]}' > scores.json
+          python3 scripts/post_eval_scores.py scores.json --kind "$KIND"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -384,9 +380,49 @@ jobs:
       - name: Store it as a fixture run
         env:
           ID_TOKEN: ${{ steps.auth.outputs.id_token }}
-        run: |
-          python3 -c "import json,os,datetime; sc=json.load(open('scores.json')); print(json.dumps({'run_id': os.environ['GITHUB_RUN_ID'], 'kind': 'fixture', 'day': datetime.date.today().isoformat(), 'passed': bool(sc.get('passed')), 'commit': os.environ['GITHUB_SHA'], 'branch': os.environ['GITHUB_REF_NAME'], 'scores': sc, 'failures': sc.get('failures') or []}))" > body.json
-          curl -sS --fail-with-body -X POST "$ENGINE_URL/v2/admin/eval-scores" -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" --data @body.json | head -c 400 || true
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          POST_TRIES: "3"
+        run: python3 scripts/post_eval_scores.py scores.json --kind fixture
       - name: Fail on the broken bar
         run: |
           [ "${{ steps.gate.outputs.code }}" = "0" ] || { echo "::error::fixture night: a release bar is broken, as intended"; exit 1; }
+
+  repost:
+    # a night whose post was lost (the engine was between deploys): its scores.json posted again, as the night it was
+    if: github.event.inputs.repost_run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: That night's scores
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.event.inputs.repost_run }}
+        run: |
+          gh run download "$RUN" --name report --dir night
+          info=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN" --jq '[.head_sha, .head_branch, .display_title, .created_at] | @tsv')
+          sha=$(echo "$info" | cut -f1); branch=$(echo "$info" | cut -f2); title=$(echo "$info" | cut -f3); at=$(echo "$info" | cut -f4)
+          kind=fixture; case "$title" in "Nightly full"*) case "$title" in *fixture*) ;; *) kind=nightly;; esac;; esac
+          day=$(TZ=Asia/Kolkata date -d "$at" +%F)
+          { echo "sha=$sha"; echo "branch=$branch"; echo "kind=$kind"; echo "day=$day"; } >> "$GITHUB_OUTPUT"
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ENGINE_URL }}
+          id_token_include_email: true
+      - name: Post it again
+        env:
+          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          POST_TRIES: "4"
+          POST_WAIT_S: "60"
+        run: |
+          python3 scripts/post_eval_scores.py night/scores.json --kind ${{ steps.run.outputs.kind }} --run-id ${{ github.event.inputs.repost_run }} \
+            --commit ${{ steps.run.outputs.sha }} --branch ${{ steps.run.outputs.branch }} --day ${{ steps.run.outputs.day }}

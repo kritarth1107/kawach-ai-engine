@@ -136,3 +136,30 @@ def _write(tmp: Path, rs, js) -> None:
     (d / "probes_meta_0.json").write_text(json.dumps({"selected": len(rs), "spent": 300, "cap": 800, "every": 11}))
     (d / "judge_meta_0.json").write_text(json.dumps({"picked": len(js), "spent": 200, "route": "gemini:gemini-3.1-pro-preview"}))
     (d / "recall.jsonl").write_text("".join(json.dumps(q) + "\n" for q in story(20)))
+
+
+def test_a_lost_post_is_retried_then_emailed(tmp_path, monkeypatch):
+    """13 Oct 00:34: the engine answered 404 (no deploy with the route yet) and the score was lost without a word."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("post_eval_scores", Path(__file__).parents[1] / "scripts" / "post_eval_scores.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    p = tmp_path / "scores.json"
+    p.write_text(json.dumps({"passed": False, "failures": ["ml: judge 83.3% < 90% (n=30)"], "judge": {"overall": {"pct": 94.7, "n": 95}}}))
+    monkeypatch.setenv("ID_TOKEN", "t")
+    monkeypatch.setenv("POST_TRIES", "3")
+    monkeypatch.setenv("POST_WAIT_S", "0")
+    answers = [(404, "Not Found"), (503, "starting"), (200, '{"stored": true}')]
+    sent: list = []
+    monkeypatch.setattr(mod, "post", lambda url, token, body: answers.pop(0))
+    monkeypatch.setattr(mod, "email", lambda subject, text: sent.append((subject, text)) or True)
+    assert mod.main([str(p), "--kind", "nightly", "--run-id", "42"]) == 0 and not answers and not sent  # stored on the third try
+    answers[:] = [(404, "Not Found")] * 3
+    assert mod.main([str(p), "--kind", "nightly", "--run-id", "42"]) == 0
+    assert sent and "NOT STORED (run 42)" in sent[0][0] and "FAILED" in sent[0][0] and "ml: judge 83.3%" in sent[0][1] and "repost_run=42" in sent[0][1]
+    sent.clear()
+    calls = []
+    monkeypatch.setattr(mod, "post", lambda url, token, body: calls.append(1) or (403, "caller not allowed"))
+    mod.main([str(p), "--kind", "nightly", "--run-id", "43"])
+    assert len(calls) == 1 and sent  # a setup problem is not retried, and the team hears
