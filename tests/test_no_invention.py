@@ -176,3 +176,50 @@ async def test_action_claims_count_only_in_the_reply_loop(fake):
     found = await grounding.check("Rest well tonight, I'll check on you tomorrow.", memory="", their_messages=[], tool_results=[],
                                   actions=True)
     assert [c.kind for c in found] == ["action"] and "no tool did" in grounding.problems(found)[0]
+
+
+def test_health_information_without_a_doctor_note_is_a_problem_but_nothing_is_stripped():
+    cs = grounding._parse(json.dumps({"claims": [], "doctor_note_missing": True}))
+    assert [c.problem for c in cs] == [True]
+    assert grounding._parse(json.dumps({"claims": [], "doctor_note_missing": True}), doctor_note=False) == [], "only on look-up turns"
+    assert "when to see a doctor" in grounding.problems(cs)[0]
+    text = "Zerodol MR can cause drowsiness. Did you hurt yourself?"
+    assert grounding.strip(text, cs) == text, "the rewrite adds the line; strip never removes the information"
+    assert grounding._parse(json.dumps({"claims": [], "doctor_note_missing": False})) == []
+
+
+async def test_a_side_effect_reply_gets_its_doctor_line(db, fake, monkeypatch):
+    from app.llm.router import ToolCall
+
+    f = fake([], [])
+    seen: list[str] = []
+    judge = [json.dumps({"claims": [], "doctor_note_missing": True}), '{"claims": [], "doctor_note_missing": false}']
+    brain = [LLMReply(text="", tool_calls=[ToolCall("w1", "web_search", {"query": "metformin side effects"})], model="fake"),
+             LLMReply(text="Metformin can upset the stomach at first.", tool_calls=[], model="fake"),
+             LLMReply(text="Metformin can upset the stomach at first; check with your doctor if it lasts.", tool_calls=[], model="fake")]
+
+    async def answer(route, **kw):
+        system = kw.get("system_stable") or ""
+        system = " ".join(system) if isinstance(system, list) else system
+        if system.startswith(grounding.PROMPT[:40]):
+            seen.append(system)
+            return LLMReply(text=judge.pop(0) if judge else '{"claims": []}', tool_calls=[], model="fake")
+        return brain.pop(0) if brain else LLMReply(text="Okay.", tool_calls=[], model="fake")
+
+    async def search(ctx, a):
+        return {"results": [{"snippet": "Metformin: stomach upset, nausea."}]}
+
+    monkeypatch.setattr(f, "complete", answer)
+    from app.brain import tools as brain_tools
+
+    spec, _ = brain_tools._TOOLS["web_search"]
+    monkeypatch.setitem(brain_tools._TOOLS, "web_search", (spec, search))
+    res = await turn(db, "what are metformin side effects?", "g8")
+    assert "doctor" in res.reply
+    assert "doctor_note_missing" in seen[0], "asked only because this turn looked something up"
+
+
+async def test_no_doctor_line_asked_when_nothing_was_looked_up(db, fake):
+    f = fake(["Your Metformin is at 8 in the morning."], ['{"claims": []}'])
+    await turn(db, "when is my metformin?", "g9")
+    assert f.judge_inputs  # the check ran without the doctor-note rule (see _system)

@@ -878,7 +878,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
             problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                                                 tool_results=tool_texts, actions=True))
+                                                                 tool_results=tool_texts, actions=True,
+                                                                 doctor_note=any(t.startswith("web_search") for t in tool_texts)))
             if not problems:
                 break
             guarded = True
@@ -917,7 +918,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
-        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True)
+        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
+                                      doctor_note=any(t.startswith("web_search") for t in tool_texts))
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
             final = grounding.strip(final, still) or ("none" if is_system else "")

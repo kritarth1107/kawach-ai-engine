@@ -33,6 +33,7 @@ from functools import lru_cache
 logger = logging.getLogger(__name__)
 
 KINDS = ("person", "food", "event", "time", "date", "place", "medicine", "number", "advice", "action")
+DOCTOR_NOTE = "[health information with no doctor note]"
 
 PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders and families, before it is sent.
 
@@ -53,6 +54,15 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
 Return only JSON: {"claims": [{"kind": "...", "quote": "exact words", "supported": true|false, "prescriptive": true|false,
 "source": "tool|doctor|safety|none"}]}. An empty list when there are no claims."""
 
+# Only when this turn looked health information up (web_search): health information always comes with when to see a doctor.
+_DOCTOR_RULE = """N. doctor_note_missing = true when the REPLY shares general health or medicine information (a medicine's side
+   effects or precautions, what a symptom or reading may mean, self-care for a problem) and says nothing about seeing or
+   checking with a doctor or pharmacist (when to see one, or "check with your doctor"). False when it only repeats their own
+   schedule, doses, readings or record, or already has such a line, or shares no health information. Add
+   "doctor_note_missing": true|false to the JSON.
+
+"""
+
 _ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "action"): "I've saved / recorded / noted / set / ordered /
    booked / told X", "done", "I will track / remind / check / send / call / do X", "from now on I'll …". Quote the exact
    words. These are claims even when the person asked for exactly that: being asked is not doing.
@@ -68,6 +78,13 @@ _ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "
 """
 
 PROMPT_ACTIONS = PROMPT.replace("what Saheli herself will do, ", "").replace("\nReturn only JSON", "\n" + _ACTIONS_RULE + "Return only JSON", 1)
+
+
+def _system(actions: bool, doctor_note: bool) -> str:
+    base = PROMPT_ACTIONS if actions else PROMPT
+    if doctor_note:
+        base = base.replace("\nReturn only JSON", "\n" + _DOCTOR_RULE.replace("N.", "5." if actions else "4.") + "Return only JSON", 1)
+    return base
 
 
 @lru_cache(maxsize=1)
@@ -93,6 +110,8 @@ class Claim:
 
     @property
     def problem(self) -> bool:
+        if self.source == "doctor_note":
+            return True
         if self.kind == "advice":
             return self.prescriptive and self.source not in ("tool", "doctor", "safety")
         return not self.supported
@@ -103,7 +122,7 @@ def needs_check(draft: str) -> bool:
     return len((draft or "").strip()) >= 25
 
 
-def _parse(raw: str) -> list[Claim]:
+def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
     m = re.search(r"\{.*\}", raw or "", re.S)
     try:
         data = json.loads(m.group(0)) if m else {}
@@ -115,10 +134,15 @@ def _parse(raw: str) -> list[Claim]:
             continue
         out.append(Claim(kind=c["kind"], quote=str(c["quote"]).strip()[:300], supported=c.get("supported") is True,
                          prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none")))
+    if isinstance(data, dict) and data.get("doctor_note_missing") is True and doctor_note:
+        # Health information always comes with when to see a doctor (persona; founder's health rule). No quote: nothing to
+        # strip, only a rewrite that adds the line.
+        out.append(Claim(kind="advice", quote=DOCTOR_NOTE, supported=False, prescriptive=True, source="doctor_note"))
     return out
 
 
-async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str], actions: bool = False) -> list[Claim]:
+async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str], actions: bool = False,
+                doctor_note: bool = False) -> list[Claim]:
     """The claims in the draft that memory, their messages and this turn's tools do not support (or own advice).
     actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities."""
     if os.getenv("GROUNDING_CHECK", "on").strip().lower() == "off" or not needs_check(draft):
@@ -128,19 +152,22 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
     try:
         from app.llm import router
 
-        system = PROMPT_ACTIONS + "\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else PROMPT
+        system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
         reply = await router.complete("judge_fast", system_stable=system, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=1500, timeout_s=12,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")
         return []
-    return [c for c in _parse(reply.text or "") if c.problem and (actions or c.kind != "action")]
+    return [c for c in _parse(reply.text or "", doctor_note) if c.problem and (actions or c.kind != "action")]
 
 
 def problems(claims: list[Claim]) -> list[str]:
     out = []
     for c in claims:
-        if c.kind == "advice":
+        if c.source == "doctor_note":
+            out.append("you share health or medicine information but not when to see a doctor: add one short line (when to see "
+                       "a doctor, or to check with their doctor or pharmacist)")
+        elif c.kind == "advice":
             out.append(f"'{c.quote}' is your own health advice: give no doses, food rules or limits of your own; share only what a "
                        "search result or their doctor said (as general information, check with the doctor), or ask")
         elif c.kind == "action":
@@ -156,6 +183,6 @@ _SENT = re.compile(r"(?<=[.!?।])\s+|\n+")
 
 def strip(text: str, claims: list[Claim]) -> str:
     """Remove the sentences that carry an unsupported quote (the last resort after a rewrite still invents)."""
-    quotes = [c.quote.lower() for c in claims if c.quote]
+    quotes = [c.quote.lower() for c in claims if c.quote and c.source != "doctor_note"]
     kept = [s for s in _SENT.split(text or "") if s.strip() and not any(q in s.lower() for q in quotes)]
     return " ".join(kept).strip()

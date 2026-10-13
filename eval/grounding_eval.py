@@ -68,6 +68,11 @@ ACTION_CASES = [
     ("order_update", "I'll message you as soon as the order is placed.", ["yes place it"],
      ['task_input: {"ok": true, "task": "Blinkit order", "status": "running"}'], False),
     ("offer_only", "Shall I set a reminder for her evening walk?", ["she should walk in the evening"], [], False),
+    # health information needs one line on when to see a doctor (also checked in the reply loop only)
+    ("side_no_doctor", "Zerodol MR can make you drowsy, so avoid driving after taking it. Did you hurt yourself somewhere?",
+     ["order zerodol mr for me"], ['web_search: {"results": [{"snippet": "Zerodol MR side effects: drowsiness, dizziness, nausea."}]}'], True),
+    ("side_with_doctor", "Zerodol MR can make you drowsy; check with your doctor if it bothers you. Did you hurt yourself somewhere?",
+     ["order zerodol mr for me"], ['web_search: {"results": [{"snippet": "Zerodol MR side effects: drowsiness, dizziness, nausea."}]}'], False),
 ]
 
 
@@ -77,7 +82,8 @@ async def main_async() -> int:
     rows = []
     for key, draft, theirs, tools_out, should, actions in [(*c, False) for c in CASES] + [(*c, True) for c in ACTION_CASES]:
         t0 = time.monotonic()
-        found = await grounding.check(draft, memory=MEMORY, their_messages=theirs, tool_results=tools_out, actions=actions)
+        found = await grounding.check(draft, memory=MEMORY, their_messages=theirs, tool_results=tools_out, actions=actions,
+                                      doctor_note=actions and any(t.startswith("web_search") for t in tools_out))
         took = time.monotonic() - t0
         rows.append({"case": key, "flagged": bool(found), "should": should, "ok": bool(found) == should, "seconds": round(took, 2),
                      "claims": [f"{c.kind}: {c.quote}" for c in found]})
