@@ -395,7 +395,8 @@ async def test_a_reply_to_a_nudge_that_asked_for_something_is_saved_and_answers_
     at("2026-10-14 11:00")
     await run(sessions, host)
     hint = await nudges.reply_hint(db, FAM, MAA["id"])
-    assert "asked about sleep" in hint and "save it" in hint
+    fld = (await rows(db))[-1].field  # the picked option's field
+    assert fld and f"asked about {fld}" in hint and "save it" in hint
     at("2026-10-14 11:10")
     await nudges.note_reply(db, FAM, MAA["id"])
     await db.commit()
@@ -605,7 +606,7 @@ async def test_a_question_they_did_not_want_rests_and_too_many_messages_doubles_
     await db.commit()
     await answered(db, at, sessions, writer, host, "Why do you keep asking me this? Leave it.", "unwelcome")
     lr = await nudges.learned(db, FAM, MAA["id"], nudges.clock.now())
-    assert "reflect:morning" in lr.unwelcome and "reflect" in lr.unwelcome  # light talk rests as a kind
+    assert row.field in lr.unwelcome and "reflect" in lr.unwelcome  # the question rests, and light talk rests as a kind
     p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
     ck = nudges.Clock(None, None, 0, False)
     at("2026-10-14 18:00")
@@ -709,3 +710,16 @@ async def test_an_unmarked_item_is_asked_about_only_two_hours_after_its_time_by_
     sched["items"].append({"scheduleId": "s2", "title": "Ecosprin", "time": "13:00", "status": "missed"})
     ck = nudges.Clock(None, None, 0, False, rows=await nudges.ledger_rows(db, FAM, MAA["id"]))
     assert await doses("2026-10-14 16:00", ck) == []  # asked once today already
+
+
+async def test_the_ledger_keeps_the_options_field_not_the_writers_words_for_it(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    writer.script = [json.dumps({"option_id": "o1", "text": "How did the temple visit go today?", "field": "whether the temple trip went well"})]
+    at("2026-10-14 11:00")
+    await run(sessions, host, mode="shadow")
+    row = (await rows(db))[-1]
+    assert row.status == "shadow" and row.field != "whether the temple trip went well"
+    assert f"[{row.kind}]" in row.context and (row.field is None or f"(field: {row.field})" in row.context)

@@ -721,7 +721,9 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
 
     opt = next((o for o in ctx.options if o.id == draft.get("option_id")), ctx.options[0] if ctx.options else None)
     kind = opt.kind if opt else kind_default
-    fld = draft.get("field") or (opt.field if opt else None)
+    # The option's own field, never the writer's words for it (live 2026-10-13: "whether he ended up ordering pizza",
+    # "cigarettes_smoked_today"): cooldowns, what was unwelcome and which tool saves the answer all key on it.
+    fld = opt.field if opt else None
     about = about or (opt.about_ref if opt else None)
     text = str(draft.get("text") or "").strip()
     async with sessions() as session:
