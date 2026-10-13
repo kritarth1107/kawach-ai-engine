@@ -174,8 +174,11 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
     wrong = await care_rejected.rejected(session, req.family_id, req.elder["id"])
     record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale,
                                 await links.links_for(session, req.family_id, req.elder["id"]), rejected=wrong)
+    from app.care import naming as care_naming
+
+    who_naming = await care_naming.for_people(session, req.family_id, [req.elder["id"], *[str(m.get("id")) for m in req.members if m.get("id")]])
     block = "\n\n".join(
-        p for p in (digest.household(req.elder, req.members, req.speaker["id"]), record, digest.notes_block(note_rows)) if p
+        p for p in (digest.household(req.elder, req.members, req.speaker["id"], who_naming), record, digest.notes_block(note_rows)) if p
     )
     avoid: list[str] = []
     for f in rows:
@@ -499,6 +502,17 @@ async def hard_start(session: AsyncSession, req: "TurnRequest") -> bool:
 
 # Hard moments get the strongest model when one is configured (MODEL_ROUTES "brain_hard": e.g. Opus or Gemini Pro);
 # everything else stays on the fast one. BRAIN_ROLE lets a training run point Saheli at a tuned model ("brain_tuned").
+HEALTH_TOOLS = {"web_search", "log_vital", "log_outcome", "add_doctor_question"}
+
+
+def health_turn(actions: list[dict]) -> bool:
+    """A turn that looked health information up or recorded a symptom, a fall, a reading or a health outcome (from the tools
+    it called, never from people's words): its reply must say when to see a doctor (the no-invention check asks). Hard-turn
+    A/B 14 Oct: dizziness, loose motions and a high sugar reading were answered without a search and without a doctor line."""
+    return any(a.get("tool") in HEALTH_TOOLS or (a.get("tool") == "log_event" and str((a.get("args") or {}).get("kind")) in ("symptom", "fall"))
+               for a in actions if a.get("ok", True))
+
+
 HARD_SITUATIONS = {"emergency", "grief", "med_question", "injection", "caregiver_stressed", "low_mood"}
 
 
@@ -562,6 +576,10 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     for t in naming.uses_avoided(final, list(wrong_terms or [])):
         if not naming.uses_avoided(req.text, [t]):  # unless they brought it up themselves in this message
             problems.append(f"the reply mentions '{t}', which the family said is wrong; do not say, assume or use it")
+    who = await naming.for_person(session, req.family_id, req.speaker["id"])
+    if req.speaker["id"] == req.elder["id"]:
+        who = {**who, "avoid": []}  # the elder's never-use names are already in avoid (policy.reply_problems)
+    problems += naming.address_problems(final, roster_name=req.speaker.get("name") or "", who=who)
     if guards.leaked_reasoning(final):
         problems.append("the reply contains your private notes (thoughts, the time, who is speaking); write only the message to the person")
     if guards.code_in_reply(final):
@@ -577,6 +595,8 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     )
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
     problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
+    if ctx.speaker_is_elder and not ctx.self_care and not ctx.buttons:
+        problems += guards.question_problems(final)
     if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
         problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
@@ -813,8 +833,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     tool_texts: list[str] = []
     ctx = tools.TurnCtx(
         session=session, host=host, family_id=req.family_id, elder=req.elder, speaker=req.speaker,
-        members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text,
-        known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
+        members=req.members, message_ref=req.message_ref, user_text="" if is_system else req.text, prompt=req.text if is_system else "",
+        tool_texts=tool_texts, known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
         location=req.location,
@@ -879,7 +899,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                                             wrong_terms=wrong_terms)
             problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
                                                                  tool_results=tool_texts, actions=True,
-                                                                 doctor_note=any(t.startswith("web_search") for t in tool_texts)))
+                                                                 doctor_note=health_turn(ctx.actions)))
             if not problems:
                 break
             guarded = True
@@ -919,7 +939,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
         still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
-                                      doctor_note=any(t.startswith("web_search") for t in tool_texts))
+                                      doctor_note=health_turn(ctx.actions))
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
             final = grounding.strip(final, still) or ("none" if is_system else "")
@@ -979,7 +999,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     )
 
 
-TRACE_RESULT_CHARS = 1500
+TRACE_RESULT_CHARS = 4000  # the judge grades against these results: at 1500 a record's medicine list was cut and read as made up (13 Oct)
 
 
 def turn_trace(msgs: list[dict], start: int, final: str) -> list[dict]:

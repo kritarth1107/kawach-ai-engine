@@ -151,18 +151,32 @@ def relation(m: dict, names: dict[str, str]) -> str:
     return f", relation given: {rel} (to the family member who added them)"
 
 
-def household(elder: dict, members: list[dict], speaker_id: str) -> str:
+def household(elder: dict, members: list[dict], speaker_id: str, naming: dict[str, dict] | None = None) -> str:
+    """naming: {person id: {"name", "avoid"}} (app.care.naming.for_people): how to address each person, so a message she
+    starts to anyone (a check-in, an order update) uses the name they asked for, not the one on the roster."""
+    from app.care import naming as care_naming
+
     roster = {str(m.get("id")): m for m in members}
     who = {**roster.get(str(elder.get("id")), {}), **{k: v for k, v in elder.items() if v}}
     names = {str(m.get("id")): str(m.get("name") or "") for m in [*members, elder] if m.get("name")}
-    lines = [f"HOUSEHOLD\n  Care recipient: {elder.get('name')} (id {elder.get('id')}){relation(who, names)}"]
+
+    def call(pid) -> str:
+        how = care_naming.line((naming or {}).get(str(pid)))
+        return f" — {how}" if how else ""
+
+    lines = [f"HOUSEHOLD\n  Care recipient: {elder.get('name')} (id {elder.get('id')}){relation(who, names)}{call(elder.get('id'))}"]
     for m in members:
         if m.get("id") == elder.get("id"):
             continue
         you = "  ← speaking now" if m.get("id") == speaker_id else ""
-        lines.append(f"  {m.get('role', 'member')}: {m.get('name')} (id {m.get('id')}){relation(m, names)}{you}")
+        lines.append(f"  {m.get('role', 'member')}: {m.get('name')} (id {m.get('id')}){relation(m, names)}{call(m.get('id'))}{you}")
     if speaker_id == elder.get("id"):
         lines.append(f"  {elder.get('name')} is speaking now.")
+        if "caregiver" in str(roster.get(str(speaker_id), {}).get("role") or "").lower():
+            # self care (as TurnCtx.self_care: the person cared for holds a caregiver role). Hard-turn A/B 13 Oct: a self-care
+            # user asking about a new medicine was told "I will check with your family"; there is no one to check with.
+            lines.append(f"  SELF CARE: {elder.get('name')} manages their own care. Their own changes are saved at once and they decide; never "
+                         "say you will check with the family or a caregiver about their own care. A medical question goes to their own doctor.")
     lines.append("  You can message only the people listed here. Helpers, neighbours, doctors and anyone else are not reachable by you.")
     if len(members) > 1:
         lines.append("  Relations are only the ones written here (and what the care record says). Never guess one: the person cared for may be the"

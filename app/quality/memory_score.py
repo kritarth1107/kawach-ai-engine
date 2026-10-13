@@ -136,9 +136,18 @@ RECALL_QUESTION = (
     "doses and times exactly as you know them:\n"
     '{{"name_to_use": "the name you call them, or null if you do not know", "never_call": ["names you must never use"], '
     '"medicines": [{{"name": "", "dose": "", "times": ["HH:MM"]}}], "allergies": ["each allergy", or "none" if they have none, '
-    'or [] if you do not know], "diet": ["each diet rule"], "latest_change": {{"what": "the most recent thing the family '
-    'changed, stopped or said was wrong", "new": "what is true now"}} or null}}'
+    'or [] if you do not know], "diet": ["each diet rule"], "latest_change": {{"what": "{changed}", "new": "what is true now '
+    'about it (stopped, or not true, if so)"}} or null if you do not know}}'
 )
+
+
+def recall_question(t: "Truths") -> str:
+    """The 5 questions for this person. Truth 5 names the item the family changed (code knows it from memory history): the
+    brain's context carries no dates, so "the most recent change" was a guess about recency (13 Oct: 3 of 4 people failed it
+    while their records held the new values); what must hold is that she knows the new value of that item."""
+    c = t.correction
+    changed = (f"{c.key.split(':', 1)[0]}: {c.key.split(':', 1)[-1].replace('_', ' ')}" if c else "the most recent thing the family changed")
+    return RECALL_QUESTION.format(name=t.name or "this person", sid=t.subject_id, changed=changed.replace('"', "'"))
 
 
 def req_for(roster: FamilyRoster, subject_id: str, text: str):
@@ -307,7 +316,7 @@ async def settle(items: list[dict]) -> None:
     text = json.dumps([{"field": i["field"], "EXPECTED": i["expected"], "GOT": i["got"]} for i in todo], ensure_ascii=False, default=str)
     try:
         rep = await router.complete("judge", system_stable=EQUIV_PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": text}]}],
-                                    max_tokens=1500, effort="low", timeout_s=120, essential=False)
+                                    max_tokens=6000, effort="low", timeout_s=120, essential=False)
         m = re.search(r"\{.*\}", rep.text or "", re.S)
         got = {x.get("field"): x for x in (json.loads(m.group(0)).get("items") or [])} if m else {}
     except Exception as exc:  # noqa: BLE001 — undecided fields count as not recalled
@@ -322,10 +331,10 @@ async def recall(session: AsyncSession, roster: FamilyRoster, t: Truths, context
     from app.brain.loop import BRAIN_EFFORT
     from app.llm import router
 
-    question = RECALL_QUESTION.format(name=t.name or "this person", sid=t.subject_id)
+    question = recall_question(t)
     stable, dynamic, msgs = await context_fn(session, roster, t.subject_id, question)
     msgs = [*msgs, {"role": "user", "content": [{"type": "text", "text": question}]}]
-    rep = await router.complete("brain", system_stable=stable, system_dynamic=dynamic, messages=msgs, tools=None, max_tokens=2000,
+    rep = await router.complete("brain", system_stable=stable, system_dynamic=dynamic, messages=msgs, tools=None, max_tokens=6000,
                                 effort=BRAIN_EFFORT, timeout_s=90, essential=False)
     m = re.search(r"\{.*\}", rep.text or "", re.S)
     try:
@@ -465,7 +474,7 @@ async def score_person(session: AsyncSession, roster: FamilyRoster, person: dict
         t.correction.pinned = bool(row is not None and row.pinned_at is not None)
         t.correction.still_active = bool(row is not None and row.text == t.correction.new)
     context_fn = context_fn or real_context
-    stable, dynamic, _msgs = await context_fn(session, roster, sid, RECALL_QUESTION.format(name=t.name or "this person", sid=sid))
+    stable, dynamic, _msgs = await context_fn(session, roster, sid, recall_question(t))
     context = "\n".join(stable[1:]) + "\n" + dynamic
     checks = stored_checks(t, context, groups)
     failures: list[dict] = [{"part": "stored", **c} for c in checks if not c["ok"]]

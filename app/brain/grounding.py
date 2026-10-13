@@ -50,9 +50,13 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
    activity (a dose, "X is fine to eat", a threshold, "you can skip it", how far to walk). source = "tool" when it repeats a
    TOOL RESULT (e.g. a web search) as general information, "doctor" when it repeats a doctor's instruction in MEMORY,
    "safety" when it is a safety step (call 112 or an ambulance, tell the family, see a doctor), else "none".
+   dose_change = true when it tells them to skip, hold off, delay, double, stop, start or change the amount or timing of a
+   medicine or dose ("hold off on that tablet tonight", "take two", "skip the missed dose", "don't take it now"), whatever
+   the reason given. Taking a due or late dose as prescribed, or keeping to the prescribed dose (not taking an extra or a
+   double one), is not a dose change.
 
 Return only JSON: {"claims": [{"kind": "...", "quote": "exact words", "supported": true|false, "prescriptive": true|false,
-"source": "tool|doctor|safety|none"}]}. An empty list when there are no claims."""
+"source": "tool|doctor|safety|none", "dose_change": true|false}]}. An empty list when there are no claims."""
 
 # Only when this turn looked health information up (web_search): health information always comes with when to see a doctor.
 _DOCTOR_RULE = """N. doctor_note_missing = true when the REPLY shares general health or medicine information (a medicine's side
@@ -107,12 +111,17 @@ class Claim:
     supported: bool
     prescriptive: bool = False
     source: str = "none"
+    dose_change: bool = False
 
     @property
     def problem(self) -> bool:
         if self.source == "doctor_note":
             return True
         if self.kind == "advice":
+            if self.dose_change:
+                # only the doctor changes a dose: a search result or a "safety" reason never makes "hold off on that tablet
+                # tonight" hers to say (13 Oct live: a caregiver with an upset stomach was told to skip his magnesium)
+                return self.source != "doctor"
             return self.prescriptive and self.source not in ("tool", "doctor", "safety")
         return not self.supported
 
@@ -133,7 +142,7 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
         if not isinstance(c, dict) or c.get("kind") not in KINDS or not str(c.get("quote") or "").strip():
             continue
         out.append(Claim(kind=c["kind"], quote=str(c["quote"]).strip()[:300], supported=c.get("supported") is True,
-                         prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none")))
+                         prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none"), dose_change=c.get("dose_change") is True))
     if isinstance(data, dict) and data.get("doctor_note_missing") is True and doctor_note:
         # Health information always comes with when to see a doctor (persona; founder's health rule). No quote: nothing to
         # strip, only a rewrite that adds the line.
@@ -153,7 +162,7 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
         from app.llm import router
 
         system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
-        reply = await router.complete("judge_fast", system_stable=system, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=1500, timeout_s=12,
+        reply = await router.complete("judge_fast", system_stable=system, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=4000, timeout_s=12,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")
@@ -167,6 +176,9 @@ def problems(claims: list[Claim]) -> list[str]:
         if c.source == "doctor_note":
             out.append("you share health or medicine information but not when to see a doctor: add one short line (when to see "
                        "a doctor, or to check with their doctor or pharmacist)")
+        elif c.kind == "advice" and c.dose_change:
+            out.append(f"'{c.quote}' tells them to skip, delay, double or change a dose: only their doctor decides that. Do not say it; "
+                       "ask them to check with their doctor or pharmacist (or that you are checking with the family), and offer to note it")
         elif c.kind == "advice":
             out.append(f"'{c.quote}' is your own health advice: give no doses, food rules or limits of your own; share only what a "
                        "search result or their doctor said (as general information, check with the doctor), or ask")

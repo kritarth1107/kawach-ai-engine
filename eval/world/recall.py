@@ -93,7 +93,7 @@ async def judge_answers(items: list[dict]) -> dict[int, bool | None]:
     text = json.dumps([{"n": i["n"], "QUESTION": i["q"], "EXPECTED": i["a"], "REPLY": i["reply"]} for i in items], ensure_ascii=False)
     try:
         rep = await router.complete("judge", system_stable=SCORE_PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": text}]}],
-                                    max_tokens=2500, effort="low", timeout_s=150)
+                                    max_tokens=6000, effort="low", timeout_s=150)
         got = {int(x["n"]): bool(x.get("correct")) for x in parse_json(rep.text).get("items") or [] if str(x.get("n", "")).isdigit()}
     except Exception:  # noqa: BLE001 — not graded: counted as an error, never as correct
         got = {}

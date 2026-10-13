@@ -132,10 +132,16 @@ async def corrections_held(sessions: async_sessionmaker, family_id: str, day: st
         names = judge.names_of(elder, members)
         ids = set(names)
         jobs = []
-        for c in found:
+        for i, c in enumerate(found):
             since = max(c.at, start)
+            # a later correction of the same thing replaces this one: her messages after it are checked against that one
+            # (13 Oct: a language switched twice in a day failed the first switch for every message after the second)
+            later = next((x.at for x in found[i + 1:] if x.subject_id == c.subject_id and x.key == c.key and x.at > c.at), None)
+            until = min(end, later) if later else end
+            if since >= until:
+                continue
             day_msgs = list((await s.execute(
-                select(Turn).where(Turn.family_id == family_id, Turn.role == "assistant", Turn.at > since, Turn.at < end).order_by(Turn.at).limit(200)
+                select(Turn).where(Turn.family_id == family_id, Turn.role == "assistant", Turn.at > since, Turn.at < until).order_by(Turn.at).limit(200)
             )).scalars())
             next_thread = c.by if c.by in ids else c.subject_id
             nxt = (await s.execute(select(Turn).where(Turn.family_id == family_id, Turn.thread_id == next_thread, Turn.role == "assistant",
@@ -143,7 +149,7 @@ async def corrections_held(sessions: async_sessionmaker, family_id: str, day: st
             msgs = [t for t in day_msgs if (t.text or "").strip().lower() not in ("", "none")]
             msgs.sort(key=lambda t: (t.thread_id != c.subject_id, t.at))
             msgs = msgs[:MAX_MESSAGES]
-            next_today = nxt is not None and start <= nxt.at < end
+            next_today = nxt is not None and start <= nxt.at < until
             if next_today and nxt is not None and all(t.id != nxt.id for t in msgs):
                 msgs.insert(0, nxt)
             if not msgs:

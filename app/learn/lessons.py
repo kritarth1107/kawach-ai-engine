@@ -168,7 +168,7 @@ async def draft(sessions: async_sessionmaker) -> PlaybookVersion | None:
             try:
                 out = await router.complete("learn", system_stable=PROMPT,
                                             messages=[{"role": "user", "content": [{"type": "text", "text": f"SITUATION: {situation} — {SITUATIONS[situation]}\n\n{listing}"}]}],
-                                            max_tokens=1500, effort="low", essential=False)
+                                            max_tokens=6000, effort="low", essential=False)
                 got = parse(out.text)
             except router.AllModelsFailed as exc:
                 logger.warning("lessons stopped at %s: %s", situation, exc)

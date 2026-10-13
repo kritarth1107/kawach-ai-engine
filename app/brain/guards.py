@@ -460,6 +460,19 @@ def ungrounded(text: str, *, known: str, fresh: str = "", meds: dict[str, set[in
     return sorted(set(problems))
 
 
+# ── one question at a time ─────────────────────────────────────────────────────
+
+QUESTION_MARKS = re.compile(r"[?？؟]")
+
+
+def question_problems(text: str) -> list[str]:
+    """To the person cared for: at most one question in a message (persona; 13 Oct live: "आज नींद तो चोखी आई? कैसी है आज
+    तबियत?" and "रसोई हो गई कांई? भोजन कर लिया आपने?" were graded as two questions at once). Counts the question marks in
+    her own text only."""
+    n = len(QUESTION_MARKS.findall(text or ""))
+    return [f"you ask {n} questions at once; ask only the one that matters most now (one question per message)"] if n > 1 else []
+
+
 # ── repetition ─────────────────────────────────────────────────────────────────
 
 

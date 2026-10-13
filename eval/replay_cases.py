@@ -229,7 +229,7 @@ async def judge_holds(case: dict, reply: str, tools: list[str]) -> tuple[bool, s
                        "OLD BAD REPLY": case.get("bad_reply") or "", "NEW REPLY": reply, "tools": tools}, ensure_ascii=False)
     try:
         rep = await router.complete("judge", system_stable=RUBRIC_PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": user}]}],
-                                    max_tokens=800, effort="low", timeout_s=90)
+                                    max_tokens=4000, effort="low", timeout_s=90)
         g = parse_json(rep.text)
     except Exception as exc:  # noqa: BLE001
         return False, f"judge error: {str(exc)[:100]}"

@@ -119,7 +119,7 @@ async def judge_rows(rows: list[dict], families: dict[str, dict], parallel: int 
             for _attempt in range(2):
                 try:
                     rep = await router.complete("judge", system_stable=PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": user}]}],
-                                                max_tokens=2000, effort="low", timeout_s=120)
+                                                max_tokens=8000, effort="low", timeout_s=120)
                     g = parse_json(rep.text or "")
                 except Exception as exc:  # noqa: BLE001
                     g = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}

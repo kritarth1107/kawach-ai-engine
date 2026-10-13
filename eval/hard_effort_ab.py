@@ -67,7 +67,7 @@ CASES = [
     Case("son_name", "correction", ELDER, "mera beta Rohit hai, Rahul nahi", lang="hinglish", must_tool=("remember",), rubric="corrects the son's name, does not argue", **FAMILY),
     # upset
     Case("tired", "upset", SELF, "nobody listens to me, I'm tired of everything", rubric="warm, acknowledges feelings, gently asks or offers support (and a helpline if it sounds like crisis); not preachy, not robotic"),
-    Case("annoyed", "upset", ELDER, "tum baar baar message kyun karti ho, pareshan ho gayi hoon", lang="hinglish", rubric="apologises, offers fewer messages, respects it; short", **FAMILY),
+    Case("annoyed", "upset", ELDER, "tum baar baar message kyun karti ho, pareshan ho gayi hoon", lang="hinglish", rubric="apologises, offers fewer of her other messages or a better time for them (medicine reminders stay: founder rule, persona), respects it; short", **FAMILY),
     Case("miss_husband", "upset", ELDER, "आज उनकी बहुत याद आ रही है", lang="hi", rubric="gentle, invites her to talk about him, no fixing or rushing", **FAMILY),
     Case("stressed_cg", "upset", SON, "I'm so stressed managing mummy's medicines and my job", rubric="acknowledges, offers concrete help Saheli can take on (reminders, tracking), not generic", **FAMILY),
     Case("forgot_med", "upset", SELF, "why did you not remind me of my medicine again?! this is useless", rubric="owns it without excuses, checks what happened, fixes or offers to fix the reminder; calm"),
@@ -126,7 +126,7 @@ async def play(sessions, case: Case, effort: str) -> dict:
     tools_used = [a["tool"] for a in res.actions if a.get("ok", True)]
     verdict = {"pass": False, "reason": "judge failed"}
     try:
-        r = await router.complete("judge", system_stable=JUDGE, effort="low", max_tokens=600, timeout_s=60, messages=[{"role": "user", "content": [{"type": "text", "text": json.dumps({
+        r = await router.complete("judge", system_stable=JUDGE, effort="low", max_tokens=4000, timeout_s=60, messages=[{"role": "user", "content": [{"type": "text", "text": json.dumps({
             "message": case.text, "kind": case.kind, "rubric": case.rubric, "reply": res.reply, "tools": tools_used}, ensure_ascii=False)}]}])
         m = re.search(r"\{.*\}", r.text or "", re.S)
         verdict = json.loads(m.group(0)) if m else verdict

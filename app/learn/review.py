@@ -121,7 +121,7 @@ async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
     fails = lines
     try:
         out = await router.complete("learn", system_stable=PROPOSE, messages=[{"role": "user", "content": [{"type": "text", "text": items}]}],
-                                    max_tokens=1500, effort="low", essential=False)
+                                    max_tokens=6000, effort="low", essential=False)
     except router.AllModelsFailed:
         return []
     got = []
@@ -206,7 +206,7 @@ async def gap_specs(sessions: async_sessionmaker) -> dict:
         return {"specs": []}
     try:
         out = await router.complete("learn", system_stable=SPEC, messages=[{"role": "user", "content": [{"type": "text", "text": json.dumps(top, ensure_ascii=False)}]}],
-                                    max_tokens=2000, effort="low", essential=False)
+                                    max_tokens=6000, effort="low", essential=False)
     except router.AllModelsFailed:
         return {"specs": []}
     data = {"specs": (parse_json(out.text).get("specs") or [])[:5], "from": top}

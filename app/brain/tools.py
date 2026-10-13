@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
@@ -40,6 +41,12 @@ class TurnCtx:
     # Filled by the loop for the guards (app.brain.guards): what the person wrote, what Saheli may draw on,
     # medicine times on record, and how each person writes.
     user_text: str = ""
+    # A scheduled turn's prompt (the task update, the loop that woke her) and this turn's tool results ("name: output", the
+    # loop fills them as tools run): logged with each message she starts, so the full-memory judge grades it against the
+    # data it was about (13 Oct: an order's options read as "made up" because the judge saw neither).
+    prompt: str = ""
+    tool_texts: list[str] = field(default_factory=list)
+    send_checks: dict = field(default_factory=dict)  # no-invention checks of send_message per recipient this turn
     known: list[str] = field(default_factory=list)
     meds: dict = field(default_factory=dict)
     profiles: dict = field(default_factory=dict)
@@ -245,6 +252,12 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         details["name"] = details.get("name") or a["name"]
         times = details.get("times") or []
         details["times"] = sorted({t for t in times if isinstance(t, str) and len(t) <= 5 and ":" in t})
+        dose = str(details.get("dose") or "").strip()
+        if dose and (guards.times_in(dose) or re.fullmatch(r"(?i)[a-z]?\s*(am|pm|morning|night|evening|afternoon)", dose)):
+            # live 13 Oct: a prescription list saved "Empsi L" with dose "10 am" and "Cilacar" with dose "T am" (Cilacar-T, in the
+            # morning); the record, the reminders and the memory score then disagreed on the dose
+            raise ToolRefused(f"The dose '{dose}' is a time of day: put the time in times (HH:MM) and in dose only the strength or the count "
+                              "(e.g. '10 mg', '1 tablet', '1/2 tablet'); keep the full medicine name in name (e.g. 'Cilacar T').")
         if details.get("food_timing") not in FOOD_TIMING:
             details.pop("food_timing", None)
     from app.care import dedupe
@@ -1106,11 +1119,47 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
         quiet = await timing.quiet_reason(ctx.session, ctx.family_id, to, ctx.situation)
         if quiet:
             problems.append(quiet)
+    # The name they asked for, in every message she starts (trust plan A3; 13 Oct: order updates and check-ins to a
+    # caregiver used his roster name, not the saved one)
+    from app.care import naming
+
+    roster_name = next((str(m.get("name") or "") for m in [ctx.elder, *ctx.members] if m.get("id") == to), "")
+    problems += naming.address_problems(text, roster_name=roster_name, who=await naming.for_person(ctx.session, ctx.family_id, to))
+    to_role = next((str(m.get("role") or "") for m in ctx.members if m.get("id") == to), "")
+    if to == ctx.elder_id and "caregiver" not in to_role.lower() and not (ctx.message_ref or "").startswith("task:"):
+        problems += guards.question_problems(text)  # the person cared for: one question at a time (an order's options excepted)
     # Wrong script blocks the message; a few English words in it are only advice (never worth not passing it on).
     problems += [x for x in guards.language_problems(text, ctx.profiles.get(to), who="they") if not x.startswith("do not mix scripts")]
     now = clock.ist()
     problems += guards.ungrounded(text, known="\n".join(ctx.known), fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
     return problems
+
+
+async def _grounded_send(ctx: TurnCtx, to: str, text: str) -> str:
+    """No invention in a message she starts or passes on (trust plan C4.5; 13 Oct live: the nightly brief said Maa "went to
+    bed at 9:15 after a goodnight message" from a 21:15 message that said "bhindi"; send_message had no such check). The
+    sources are memory and this turn's context (the scheduled prompt's data included), the recipient's own messages and this
+    turn's tool results, never her own earlier messages. The first time, the message is sent back with the exact items; a
+    second attempt to the same person loses those sentences instead, so a brief or an order update still goes."""
+    from app.brain import grounding
+
+    theirs = [t.text for t in await store.recent_turns(ctx.session, ctx.family_id, to, limit=20) if t.role == "user" and t.text]
+    memory = [p for p in ctx.known[:5] if p]  # family block, record, turn context, dynamic block, this turn's message or prompt
+    if ctx.prompt and ctx.prompt not in memory:
+        memory.append(ctx.prompt)
+    claims = await grounding.check(text, memory="\n".join(memory), their_messages=[*theirs, ctx.user_text],
+                                   tool_results=ctx.tool_texts)
+    if not claims:
+        return text
+    tries = ctx.send_checks.get(to, 0)
+    ctx.send_checks[to] = tries + 1
+    if tries == 0:
+        raise ToolRefused("Not sent: " + "; ".join(grounding.problems(claims)) + ". Write it again without those, then send it.")
+    kept = grounding.strip(text, claims)
+    logger.warning("ungrounded sentences removed from a message family=%s claims=%s", ctx.family_id, [c.quote for c in claims])
+    if not kept:
+        raise ToolRefused("Not sent: nothing in it is supported by memory, this chat or a tool result.")
+    return kept
 
 
 def delivery_kind(ref: str | None) -> str:
@@ -1246,6 +1295,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     problems = await send_problems(ctx, a["to"], a["text"])
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
+    a = {**a, "text": await _grounded_send(ctx, a["to"], a["text"])}
     greeted, mid = guards.opening_state(await store.recent_turns(ctx.session, ctx.family_id, a["to"], limit=12), clock.now(), day_of=clock.ist_day)
     a = {**a, "text": guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)),
                                           ctx.profiles.get(a["to"]))}
@@ -1299,10 +1349,18 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         from app.learn import scoring, situations
 
         to_role = "elder" if a["to"] == ctx.elder_id else "caregiver"
+        from app.core import trace as turn_trace
+
+        secrets = set().union(*[turn_trace.secrets_in(x.get("args")) for x in ctx.actions]) if ctx.actions else set()
+        why = turn_trace.scrub(ctx.prompt if ctx.is_system else ctx.user_text, secrets)  # the scheduler's prompt, or the request to pass it on
+        trace = [{"role": "user", "text": why[:4000]}] if why else []
+        if ctx.tool_texts:
+            trace.append({"role": "tool", "results": [{"name": t.split(":", 1)[0], "content": turn_trace.scrub(t[:4000], secrets)}
+                                                      for t in ctx.tool_texts[-12:]]})
         await scoring.record(ctx.session, family_id=ctx.family_id, thread_id=a["to"], turn_id=turn_id,
                              kind="proactive" if ctx.is_system else "relay", situation=ctx.situation if ctx.is_system else "relay",
-                             speaker_role=to_role, lang=situations.lang_of(ctx.profiles.get(a["to"])), user_text="", text=a["text"],
-                             tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm)
+                             speaker_role=to_role, lang=situations.lang_of(ctx.profiles.get(a["to"])), user_text=why, text=a["text"],
+                             tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace or None)
     except Exception:  # noqa: BLE001 — learning must never stop a message
         logger.exception("learning log failed (send_message)")
     return res
@@ -2347,7 +2405,11 @@ async def web_search(ctx: TurnCtx, a: dict) -> dict:
         out = await websearch.search(q)
     except Exception as exc:  # noqa: BLE001
         logger.warning("web search failed: %s", exc)
-        raise ToolRefused("The internet look-up did not work just now. Say so plainly; do not guess.") from exc
+        # hard-turn A/B 14 Oct: "My search tool isn't working right now, so I can't look up the side effects" to a health question
+        raise ToolRefused("The internet look-up did not work just now. Answer from what is well known (a medicine's common side effects "
+                          "and precautions as its label gives them, general self-care, warning signs that need a doctor) as general "
+                          "information, with when to see the doctor; guess nothing specific to them, and never mention looking it up, "
+                          "searching or tools.") from exc
     await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
                              summary=f"Looked up: {q[:160]}", payload={"question": q[:300], "sources": out["sources"]},
                              actor_id=ctx.speaker.get("id") or "saheli")

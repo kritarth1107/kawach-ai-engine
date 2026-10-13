@@ -18,9 +18,14 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 PROMPT = ("Answer this question for an elderly person's care companion in India, using current web results. Plain facts "
-          "only, at most 6 short sentences; prefer Indian sources and units (₹, Indian places). For health questions use "
-          "reliable medical sources and never give a dose or tell anyone to change a medicine. Say so when the results do not "
-          "answer it.\n\nQuestion: ")
+          "only, at most 6 short sentences; prefer Indian sources and units (₹, Indian places). State the facts directly: no "
+          "\"according to…\" or \"sources say\" (the sources are listed separately). For health questions use reliable medical "
+          "sources, include when to see a doctor, and never give a dose or tell anyone to change a medicine. Say so when the "
+          "results do not answer it.\n\nQuestion: ")
+# Gemini counts its thinking in the output limit: at 900 the answer was cut mid-sentence ("the target post-meal level is
+# typically below 18"; hard-turn A/B, 14 Oct), and Saheli passed on half a fact.
+OUT_TOKENS = 4000
+TIMEOUT_S = float(os.getenv("WEB_SEARCH_TIMEOUT_S", "25"))  # usually 7-10 s; a hung search held a turn for minutes
 
 
 def daily_limit() -> int:
@@ -39,12 +44,14 @@ def _gemini() -> genai.Client:
 
 async def search(question: str) -> dict:
     """{answer, sources: [{title, url}]} or raises on failure."""
-    resp = await _gemini().aio.models.generate_content(
+    import asyncio
+
+    resp = await asyncio.wait_for(_gemini().aio.models.generate_content(
         model=os.getenv("WEB_SEARCH_MODEL", "gemini-3.5-flash"),
         contents=PROMPT + question.strip()[:400],
         config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())], temperature=0.2,
-                                           max_output_tokens=900),
-    )
+                                           max_output_tokens=OUT_TOKENS, thinking_config=types.ThinkingConfig(thinking_level="LOW")),
+    ), timeout=TIMEOUT_S)
     import re
 
     answer = re.sub(r"\s*\[\d+(?:\.\d+)*(?:,\s*\d+(?:\.\d+)*)*\]", "", (resp.text or "")).strip()  # citation markers
