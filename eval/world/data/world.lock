@@ -1,0 +1,11 @@
+{
+ "version": 1,
+ "seed": 20261013,
+ "today": "2026-10-19",
+ "families": 1000,
+ "profile": 900,
+ "story": 100,
+ "probes": 12020,
+ "sha256": "52155053fd95102d96095ac61731cd72eb2c89dfd7570d952aa22dd74aeba017",
+ "built": "2026-10-13"
+}
