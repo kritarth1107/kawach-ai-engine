@@ -87,9 +87,10 @@ async def admin_health(session: DB) -> dict:
     from app.care.models import FamilyRoster
     from app.llm.provider import llm_provider_label
     from app.rag.embeddings import embedding_provider_label
-    from app.models.entities import MemoryProfile
+    from app.care.models import CareEvent
 
-    last_dream = (await session.execute(select(func.max(MemoryProfile.rendered_at)))).scalar_one_or_none()
+    # the nightly dream's ledger event (app/care/dream.py), not the retired v1 profile render (trust plan A1)
+    last_dream = (await session.execute(select(func.max(CareEvent.at)).where(CareEvent.kind == "dream"))).scalar_one_or_none()
     families = (await session.execute(select(func.count()).select_from(FamilyRoster))).scalar_one()
     from app.db.session import SessionLocal
     from app.learn.jobs import last_backup

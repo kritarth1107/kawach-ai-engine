@@ -35,7 +35,6 @@ WRITE_TOOLS = {
     "update_reminder",
     "notify_caregivers",
     "trigger_emergency_escalation",
-    "save_memory",
     "book_ride",
     "cancel_ride",
     "browser_order",

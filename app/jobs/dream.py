@@ -255,15 +255,14 @@ def main() -> None:
 
     if args.all:
         async def _both() -> dict:
-            # v1 memory entities (older families) and Saheli v2's night (app/care/dream.py), one job, one schedule.
+            # Saheli v2's night (app/care/dream.py) only: the old v1 dream that consolidated the Instinct inbox is retired
+            # (trust plan A1; founder D9).
             from app.care import dream as v2_dream
             from app.llm import spend
 
             spend.configure(SessionLocal)
-            out = {"v1": await dream_all_elders()}
             await _ensure_v2_schema()
-            out["v2"] = await v2_dream.dream_all(SessionLocal, budget_s=3000)
-            return out
+            return {"v2": await v2_dream.dream_all(SessionLocal, budget_s=3000)}
 
         out = asyncio.run(_both())
         print(json.dumps(out, indent=2, default=str))

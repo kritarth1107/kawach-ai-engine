@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory
+from app.api import admin, brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory, one_memory
 from app.core.config import get_settings
 from app.db.migrate import ensure_indexes, ensure_schema
 from app.db.session import engine
@@ -95,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(doctor_brief.router, prefix="/v1")
     app.include_router(brain.router)
     app.include_router(dash.router)
+    app.include_router(one_memory.router)
     from app.api import calls
 
     app.include_router(calls.router)

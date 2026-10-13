@@ -23,18 +23,27 @@ async def test_import_seeds_record_once(db, at):
     host = SimHost(World(backend_record=RECORD))
     assert not await importer.already_imported(db, FAM, ELDER)
     counts = await importer.import_family(db, host, family_id=FAM, backend_family_id=FAM, elder_id=ELDER)
-    assert counts["created"] >= 7
+    assert counts["created"] >= 2
     facts = {f.key: f for f in await store.facts(db, FAM, ELDER)}
     assert facts["medicine:metformin"].value["times"] == ["08:30", "20:30"]
-    assert facts["medicine:thyroxine"].value["times"] == ["06:30"]
-    assert "diet:low_salt" in facts and "diet:no_onion" in facts
-    assert facts["naming:address_as"].value == {"name": "Leela ji", "avoid": ["maa"]}
     assert "routine:evening_walk" in facts
     claims = [c for c in host.world.calls if c["tool"] == "claim_schedule_rows"]
     assert claims and sorted(claims[0]["args"]["scheduleIds"]) == ["s1", "s2"]
-    notes = await store.notes(db, FAM, [ELDER])
-    assert "besan chilla" in notes[0].body_md
     assert await importer.already_imported(db, FAM, ELDER)
+
+
+async def test_old_profile_fields_are_not_read_at_the_first_turn_any_more(db, at):
+    """Trust plan A1: the old profile (name to use, allergies, diet rules, profile medicines, learned lines) moved once
+    with the memory move (app.care.memory_unify); the first-turn import reads the care schedules only, so a frozen old
+    profile can never seed the record again, and diet rules are never read with a word list."""
+    at("2026-10-02 08:00")
+    host = SimHost(World(backend_record=RECORD))
+    await importer.import_family(db, host, family_id=FAM, backend_family_id=FAM, elder_id=ELDER)
+    keys = {f.key for f in await store.facts(db, FAM, ELDER)}
+    assert not {"naming:address_as", "allergy:milk", "medicine:thyroxine"} & keys
+    assert not [k for k in keys if k.startswith("diet:")]
+    assert not await store.notes(db, FAM, [ELDER])
+    assert not hasattr(importer, "DIET_WORDS")
 
 
 async def test_shadow_import_does_not_claim_rows(db, at):

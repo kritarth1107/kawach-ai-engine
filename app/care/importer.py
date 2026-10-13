@@ -1,4 +1,7 @@
-"""Seed a family's care memory from what the backend already holds, once, before their first v2 turn."""
+"""Seed a family's care memory from what the backend already holds, once, before their first v2 turn: the care schedules
+(medicines and timed routines). What the old profile held (name to use, allergies, diet rules, learned facts, language)
+moved into the care record once, with the memory move (app.care.memory_unify, trust plan A1); the backend no longer sends
+it here."""
 
 from __future__ import annotations
 
@@ -12,21 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.brain.host import ToolHost
 from app.care import store
 from app.care.doses import from_backend_days
-from app.care.domains import fact_key, slug
+from app.care.domains import fact_key
 from app.care.models import CareEvent
 
 logger = logging.getLogger(__name__)
-
-DIET_WORDS = {
-    "low_salt": ("salt", "namak", "sodium"),
-    "low_sugar": ("sugar", "cheeni", "sweet", "diabet"),
-    "low_oil": ("oil", "fried", "tel"),
-    "no_onion": ("onion", "pyaz", "pyaaz"),
-    "no_garlic": ("garlic", "lehsun"),
-    "no_spice": ("spice", "spicy", "mirch", "teekha"),
-    "vegetarian": ("vegetarian", "veg only", "no meat", "shakahari"),
-}
-
 
 def to_hhmm(raw: str | None) -> str | None:
     """'1:00 PM', '8 am', '13:00', '08:30' → 'HH:MM' (24h). None when it is not a clock time."""
@@ -39,14 +31,6 @@ def to_hhmm(raw: str | None) -> str | None:
     if ampm == "am" and h == 12:
         h = 0
     return f"{h:02d}:{mins:02d}" if h < 24 and mins < 60 else None
-
-
-def diet_name(rule: str) -> str:
-    low = rule.lower()
-    for name, words in DIET_WORDS.items():
-        if any(w in low for w in words):
-            return name
-    return slug(rule)
 
 
 async def already_imported(session: AsyncSession, family_id: str, elder_id: str) -> bool:
@@ -70,17 +54,6 @@ async def import_family(session: AsyncSession, host: ToolHost, *, family_id: str
         )
         counts[w.result] += 1
 
-    for a in data.get("allergies") or []:
-        await put("allergy", a, {"allergen": a}, f"Allergic to {a}")
-    for r in data.get("dietRules") or []:
-        await put("diet", diet_name(r), {"rule": diet_name(r), "detail": r}, r)
-    if data.get("nameToUse"):
-        await put("naming", "address_as", {"name": data["nameToUse"], **({"avoid": ["maa"]} if data.get("avoidMaa") else {})}, f"Call her {data['nameToUse']}")
-    elif data.get("avoidMaa"):
-        await put("naming", "address_as", {"avoid": ["maa"]}, "Never call her 'maa'")
-    if data.get("language"):
-        await put("language", "preferred", {"language": data["language"]}, f"Prefers {data['language']}")
-
     # Medicines: one fact per medicine, gathering its dose times; the rows are claimed so later syncs update them.
     meds: dict[str, dict] = {}
     claims: dict[str, list[str]] = defaultdict(list)
@@ -96,11 +69,6 @@ async def import_family(session: AsyncSession, host: ToolHost, *, family_id: str
             m["times"].append(to_hhmm(s["time"]))
         if not s.get("sourceKey"):
             claims[key].append(s["scheduleId"])
-    for p in data.get("profileMedicines") or []:
-        key = fact_key("medicine", p["name"])
-        m = meds.setdefault(key, {"name": p["name"], "dose": p.get("dose"), "times": [], "instructions": None, "days": None})
-        if to_hhmm(p.get("time")) and to_hhmm(p["time"]) not in m["times"]:
-            m["times"].append(to_hhmm(p["time"]))
     for key, m in meds.items():
         m["times"] = sorted(set(m["times"]))
         when = ", ".join(m["times"]) or "no time set"
@@ -112,12 +80,6 @@ async def import_family(session: AsyncSession, host: ToolHost, *, family_id: str
         counts[w.result] += 1
         if claims.get(key) and not family_id.startswith("shadow:"):
             await host.call("claim_schedule_rows", {"key": key, "scheduleIds": claims[key]}, family_id=backend_family_id, subject_id=elder_id, actor_id=elder_id)
-
-    learned = data.get("learned") or []
-    if learned:
-        lines = [f"- {'(confirmed) ' if x.get('confirmed') else ''}{x['text']}" for x in learned[:80]]
-        await store.upsert_note(session, family_id=family_id, subject_id=elder_id, slug="profile", title="Learned profile", body_md="\n".join(lines))
-        counts["notes"] += len(lines)
 
     await store.record_event(
         session, family_id=family_id, subject_id=elder_id, kind="import_done", summary=f"Imported care record: {dict(counts)}",

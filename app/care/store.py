@@ -175,7 +175,15 @@ async def write_fact(
     if old:
         await _keep_index(session, family_id, subject_id)
     await end_none(session, row)
+    _person_changed(session, row)
     return FactWrite("superseded" if old else "created", row, old)
+
+
+def _person_changed(session: AsyncSession, row: CareFact) -> None:
+    """The backend's cached name-to-use / language for this person is dropped after the commit (app.care.person_sync)."""
+    from app.care import person_sync
+
+    person_sync.mark(session, row.family_id, row.subject_id, row.domain)
 
 
 async def end_none(session: AsyncSession, row: CareFact) -> None:
@@ -251,6 +259,7 @@ async def stop_fact(
     await session.flush()
     await versions.record_fact(session, old, "stop")
     await _keep_index(session, family_id, subject_id)
+    _person_changed(session, old)
     return FactWrite("stopped", old)
 
 
@@ -290,6 +299,8 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
     await versions.record_fact(session, row, "approve" if approve else "reject")
     await _keep_index(session, row.family_id, row.subject_id)
     await end_none(session, row)
+    if approve:
+        _person_changed(session, row)
     from app.care import links
 
     await links.resolve_with_fact(session, row, approve=approve, by=by)  # links proposed with it go the same way

@@ -96,6 +96,9 @@ def _dialect_code(v: object) -> str | None:
     return None
 
 
+VOICE_MODES = ("auto", "always", "never")
+
+
 def normalise(value: dict | None) -> dict:
     """{language, dialect, script} with codes from whatever was said or stored ('Marwari', 'hinglish', {'language': 'hi'})."""
     v = value or {}
@@ -112,6 +115,8 @@ def normalise(value: dict | None) -> dict:
         out["script"] = v["script"]
     if out.get("dialect") and v.get("mix") == "light":
         out["mix"] = "light"  # mostly the base language with a touch of the dialect ("thodi Marwari wali Hindi")
+    if v.get("voice") in VOICE_MODES:
+        out["voice"] = v["voice"]  # voice replies: auto | always | never (the engine keeps it; the backend reads it, trust plan A1)
     return out
 
 
@@ -138,6 +143,7 @@ def merge(current: dict | None, asked: dict | None) -> dict:
         out["mix"] = a["mix"]
     elif not (a.get("dialect") or said.get("dialect")) and out.get("dialect") == now.get("dialect"):
         out["mix"] = now.get("mix")
+    out["voice"] = a.get("voice") if a.get("voice") in VOICE_MODES else now.get("voice")  # a language change keeps the voice setting
     return normalise(out)
 
 
@@ -185,4 +191,7 @@ def sentence(speech: dict) -> str:
     """One line for the care record."""
     script = script_for(speech)
     where = "in Roman letters" if script == "latin" and speech.get("language") != "en" else (f"in {script.capitalize()}" if script and script != "latin" else "")
-    return f"Speaks {label(speech)}" + (f"; write to them {where}" if where else "")
+    voice = f"voice replies: {speech['voice']}" if speech.get("voice") in VOICE_MODES else ""
+    if not speech.get("language"):
+        return voice.capitalize() or "No language saved"
+    return f"Speaks {label(speech)}" + (f"; write to them {where}" if where else "") + (f"; {voice}" if voice else "")

@@ -13,9 +13,14 @@ ACTOR = {"id": CG, "name": "Asha"}
 
 @pytest.fixture
 async def client(db, monkeypatch):
-    host = SimHost(World(backend_record={"allergies": ["milk"], "schedules": [
+    host = SimHost(World(backend_record={"schedules": [
         {"scheduleId": "s1", "type": "MEDICINE", "title": "Metformin", "time": "8:30 AM", "dosage": "500 mg", "daysOfWeek": [], "sourceKey": None}]}))
     monkeypatch.setattr(dash, "make_host", lambda: host)
+    from app.care import store
+
+    # the first-turn import reads the care schedules only; what the old profile held moved with app.care.memory_unify
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="allergy", key="allergy:milk", value={"allergen": "milk"},
+                           text="Allergic to milk", source_kind="caregiver_said", stated_by=CG)
 
     async def _db():
         yield db
@@ -115,3 +120,36 @@ async def test_speech_view(client, at):
     body = {"actor": ACTOR, "domain": "language", "name": "preferred", "details": {"language": "hi", "dialect": "mwr"}, "sentence": "Speaks Marwari"}
     assert (await client.post(f"/v2/dash/{FAM}/{ELDER}/facts", json=body)).status_code == 200
     assert (await client.get(f"/v2/dash/{FAM}/{ELDER}/speech")).json() == {"dialect": "mwr", "language": "hi"}
+
+
+async def test_the_language_and_voice_setting_lives_in_the_care_record_and_syncs_to_the_backend(client, at):
+    """Trust plan A1: the engine language/voice fact is the truth; the backend keeps a copy written by the sync."""
+    at("2026-10-02 09:00")
+    r = await client.put(f"/v2/dash/{FAM}/{ELDER}/speech", json={"actor": ACTOR, "language": "Bengali", "voice": "always"})
+    assert r.status_code == 200
+    person = (await client.get(f"/v2/person/{FAM}/{ELDER}")).json()
+    assert person["language"] == "bn" and person["voice"] == "always" and person["known"] is True
+    synced = [c["args"] for c in client.host.world.calls if c["tool"] == "set_voice_preference"]
+    assert {"mode": "always"} in synced and any(a.get("language") == "bn" for a in synced)
+    # a later language change keeps the voice setting
+    await client.put(f"/v2/dash/{FAM}/{ELDER}/speech", json={"actor": ACTOR, "language": "Hindi"})
+    person = (await client.get(f"/v2/person/{FAM}/{ELDER}")).json()
+    assert person["language"] == "hi" and person["voice"] == "always"
+    assert (await client.get(f"/v2/dash/{FAM}/{ELDER}/speech")).json() == {"language": "hi", "voice": "always"}
+
+
+async def test_a_fact_the_caregiver_says_was_never_true_goes_on_the_never_use_list(client, at, db):
+    """The dashboard's "What Saheli learned" card: Not true → the rejected list, so it is never proposed or used again."""
+    from app.care import rejected, store
+
+    at("2026-10-02 09:00")
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="preference", key="preference:ginger_tea", value={},
+                           text="Likes ginger tea", source_kind="inferred")
+    r = await client.post(f"/v2/dash/{FAM}/{ELDER}/facts/stop", json={"actor": ACTOR, "domain": "preference", "name": "ginger_tea",
+                                                                      "reason": "not true", "wrong": True})
+    assert r.status_code == 200
+    assert [f.key for f in await rejected.rejected(db, FAM, ELDER)] == ["preference:ginger_tea"]
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="routine", key="routine:walk", value={}, text="Evening walk",
+                           source_kind="inferred")
+    await client.post(f"/v2/dash/{FAM}/{ELDER}/facts/stop", json={"actor": ACTOR, "domain": "routine", "name": "walk", "reason": "stopped"})
+    assert [f.key for f in await rejected.rejected(db, FAM, ELDER)] == ["preference:ginger_tea"]  # an ended fact is not "wrong"

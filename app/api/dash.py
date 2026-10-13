@@ -247,6 +247,7 @@ class StopIn(BaseModel):
     domain: str
     name: str
     reason: str = "removed by caregiver"
+    wrong: bool = False  # it was never true: it goes on the never-use list (app.care.rejected), not only ended
 
 
 class RecordRememberIn(BaseModel):
@@ -288,7 +289,7 @@ async def record_forget(family_id: str, elder_id: str, body: RecordForgetIn, ses
 @router.post("/{family_id}/{elder_id}/facts/stop")
 async def stop_fact(family_id: str, elder_id: str, body: StopIn, session: DB) -> dict:
     ctx = _ctx(session, family_id, elder_id, body.actor)
-    return await _run(session, ctx, "stop", {"domain": body.domain, "name": body.name, "reason": body.reason})
+    return await _run(session, ctx, "stop", {"domain": body.domain, "name": body.name, "reason": body.reason, "wrong": body.wrong})
 
 
 class ResolveIn(BaseModel):
@@ -789,6 +790,29 @@ async def speech_view(family_id: str, elder_id: str, session: DB) -> dict:
     facts = await store.facts(session, family_id, elder_id)
     row = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
     return language.normalise(row.value) if row else {}
+
+
+class SpeechIn(BaseModel):
+    actor: Actor
+    language: str | None = None
+    dialect: str | None = None
+    script: str | None = None
+    voice: str | None = None  # auto | always | never
+
+
+@router.put("/{family_id}/{elder_id}/speech")
+async def speech_set(family_id: str, elder_id: str, body: SpeechIn, session: DB) -> dict:
+    """Set how Saheli speaks to this person and whether she answers with voice notes (the dashboard, web onboarding). The
+    care record holds it (trust plan A1: the engine language/voice fact is the truth); the same tools Saheli uses on
+    WhatsApp save it and keep the backend's copy in step."""
+    ctx = _ctx(session, family_id, elder_id, body.actor)
+    out: dict = {}
+    lang = {k: v for k, v in {"language": body.language, "dialect": body.dialect, "script": body.script}.items() if v}
+    if lang:
+        out.update(await _run(session, ctx, "language_preference", {**lang, "about": elder_id}))
+    if body.voice in ("auto", "always", "never"):
+        out["voice"] = await _run(session, ctx, "voice_replies", {"mode": body.voice, "about": elder_id})
+    return out
 
 
 @router.get("/{family_id}/{elder_id}/consent")

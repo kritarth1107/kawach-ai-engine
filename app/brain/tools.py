@@ -3183,8 +3183,19 @@ async def voice_replies(ctx: TurnCtx, a: dict) -> dict:
             raise ToolRefused("You can choose this for yourself only; a caregiver can set it for others.")
     elif subject not in (ctx.elder_id, ctx.speaker.get("id")):
         raise ToolRefused("A caregiver sets this for the person they care for, or for themselves.")
+    from app.care import language
+
+    current = await store.active_fact(ctx.session, ctx.family_id, subject, "language:preferred")
+    now = language.normalise(current.value if current else {})
     if not a.get("mode"):
+        if now.get("voice"):
+            return {"mode": now["voice"], **{k: v for k, v in now.items() if k != "voice"}}
         return await ctx.host.call("get_voice_preference", {}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    # The care record holds the setting (trust plan A1); the backend keeps a copy for sending voice notes.
+    speech = {**now, "voice": a["mode"]}
+    await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=subject, domain="language", key="language:preferred",
+                           value=speech, text=language.sentence(speech), source_kind=ctx.source_kind, source_ref=ctx.message_ref,
+                           stated_by=ctx.speaker.get("id"), replace=True)
     return await ctx.host.call("set_voice_preference", {"mode": a["mode"]}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
 
 
