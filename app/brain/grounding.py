@@ -15,6 +15,10 @@ How:
   a tool result (web_search), a doctor's instruction in memory, or a safety step (call 112, tell the family, see a doctor).
 - The loop then asks for a rewrite and checks the rewrite again; if it still invents, the sentences with those exact words
   are removed by code (app.brain.loop).
+- In the reply loop (actions=True) it also checks what Saheli says she did or will do: "I've saved / set / told …" must be
+  a tool result of this turn or in memory, and "I will track / remind / do X from now on" must be something one of her
+  tools can do (the tool list is given). On 13 Oct she promised to "track your proteins and calories from now on" with no
+  tool that could; that promise is now rewritten into what she can do.
 """
 
 from __future__ import annotations
@@ -24,10 +28,11 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("person", "food", "event", "time", "date", "place", "medicine", "number", "advice")
+KINDS = ("person", "food", "event", "time", "date", "place", "medicine", "number", "advice", "action")
 
 PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders and families, before it is sent.
 
@@ -47,6 +52,35 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
 
 Return only JSON: {"claims": [{"kind": "...", "quote": "exact words", "supported": true|false, "prescriptive": true|false,
 "source": "tool|doctor|safety|none"}]}. An empty list when there are no claims."""
+
+_ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "action"): "I've saved / recorded / noted / set / ordered /
+   booked / told X", "done", "I will track / remind / check / send / call / do X", "from now on I'll …". Quote the exact
+   words. These are claims even when the person asked for exactly that: being asked is not doing.
+   supported = true only when:
+   - a past action ("I've told Rohit", "saved", "done"): a TOOL RESULT of this turn shows that very action (each result
+     starts with the tool's name, e.g. "send_message: …" for telling someone, "remember: …" for saving a fact), or MEMORY
+     shows it was done earlier. No matching tool result means unsupported.
+   - a promise ("I will …", "from now on …"): one of SAHELI'S ABILITIES below does that exact thing, or a tool result of
+     this turn already set it up (e.g. a reminder). A nearby ability is not enough: noting a meal is not counting its
+     calories, a reminder is not a phone call. A promise no ability covers is unsupported, however kind it sounds.
+   Offers and questions ("shall I…?", "want me to…?") are not claims.
+
+"""
+
+PROMPT_ACTIONS = PROMPT.replace("what Saheli herself will do, ", "").replace("\nReturn only JSON", "\n" + _ACTIONS_RULE + "Return only JSON", 1)
+
+
+@lru_cache(maxsize=1)
+def abilities() -> str:
+    """One line per tool Saheli has: what she can actually do (for promise claims)."""
+    from app.brain import tools
+
+    lines = []
+    for spec in sorted(tools.specs(), key=lambda s: s.name):
+        desc = " ".join((spec.description or "").split())
+        first = re.split(r"(?<=\.)\s", desc, maxsplit=1)[0]
+        lines.append(f"- {spec.name}: {first[:160]}")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -84,8 +118,9 @@ def _parse(raw: str) -> list[Claim]:
     return out
 
 
-async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str]) -> list[Claim]:
-    """The claims in the draft that memory, their messages and this turn's tools do not support (or own advice)."""
+async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str], actions: bool = False) -> list[Claim]:
+    """The claims in the draft that memory, their messages and this turn's tools do not support (or own advice).
+    actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities."""
     if os.getenv("GROUNDING_CHECK", "on").strip().lower() == "off" or not needs_check(draft):
         return []
     sources = ("MEMORY\n" + (memory or "")[:24000] + "\n\nTHEIR MESSAGES\n" + "\n".join(f"- {m[:600]}" for m in their_messages[-30:] if m)
@@ -93,12 +128,13 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
     try:
         from app.llm import router
 
-        reply = await router.complete("judge_fast", system_stable=PROMPT, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=1500, timeout_s=12,
+        system = PROMPT_ACTIONS + "\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else PROMPT
+        reply = await router.complete("judge_fast", system_stable=system, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=1500, timeout_s=12,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")
         return []
-    return [c for c in _parse(reply.text or "") if c.problem]
+    return [c for c in _parse(reply.text or "") if c.problem and (actions or c.kind != "action")]
 
 
 def problems(claims: list[Claim]) -> list[str]:
@@ -107,6 +143,9 @@ def problems(claims: list[Claim]) -> list[str]:
         if c.kind == "advice":
             out.append(f"'{c.quote}' is your own health advice: give no doses, food rules or limits of your own; share only what a "
                        "search result or their doctor said (as general information, check with the doctor), or ask")
+        elif c.kind == "action":
+            out.append(f"'{c.quote}' says you did or will do something that no tool did this turn and none of your tools can do: "
+                       "do it now with a tool if one fits, otherwise say plainly what you did and what you can do")
         else:
             out.append(f"'{c.quote}' is not in memory or this chat: remove it, or ask them instead of stating it")
     return out

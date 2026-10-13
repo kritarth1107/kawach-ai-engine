@@ -131,3 +131,48 @@ async def test_memory_and_their_messages_are_the_sources(db, fake):
     await turn(db, "when is her metformin?", "g5")
     src = f.judge_inputs[0].split("REPLY")[0]
     assert "Metformin 500 mg at 08:00" in src and "when is her metformin?" in src
+
+
+# ── what she says she did or will do (13 Oct: "I will track your proteins and calories from now on") ──
+
+async def test_a_promise_no_tool_can_keep_is_rewritten(db, fake):
+    promise = claims(("action", "I will track your proteins and calories from now on", False, False, "none"))
+    f = fake(["Noted the 4 boiled eggs. I will track your proteins and calories from now on.",
+              "Noted the 4 boiled eggs in today's log. I can't count calories or protein yet."],
+             [promise, '{"claims": []}'])
+    res = await turn(db, "I ate four boiled eggs, track my protein and calories from now on", "g6")
+    assert "from now on" not in res.reply and "can't count" in res.reply
+    assert len(f.judge_inputs) == 2
+
+
+async def test_the_reply_check_knows_her_tools_and_this_turns_results(db, fake, monkeypatch):
+    from app.llm.router import ToolCall
+
+    f = fake([], [])
+    seen: list[str] = []
+    brain = [LLMReply(text="", tool_calls=[ToolCall("c1", "log_event", {"kind": "meal", "summary": "Two rotis and dal"})], model="fake"),
+             LLMReply(text="Saved your lunch: two rotis and dal.", tool_calls=[], model="fake")]
+
+    async def answer(route, **kw):  # a tool call needs the whole reply, so this one answers directly
+        system = kw.get("system_stable") or ""
+        system = " ".join(system) if isinstance(system, list) else system
+        if system.startswith(grounding.PROMPT[:40]):
+            seen.append(system)
+            f.judge_inputs.append(kw["messages"][-1]["content"][0]["text"])
+            return LLMReply(text='{"claims": []}', tool_calls=[], model="fake")
+        return brain.pop(0) if brain else LLMReply(text="Okay.", tool_calls=[], model="fake")
+
+    monkeypatch.setattr(f, "complete", answer)
+    res = await turn(db, "had two rotis and dal for lunch", "g7")
+    assert res.reply == "Saved your lunch: two rotis and dal."
+    assert seen and "SAHELI'S ABILITIES" in seen[0] and "- log_event:" in seen[0] and "- set_reminder:" in seen[0]
+    assert "log_event: " in f.judge_inputs[0].split("REPLY")[0]  # this turn's tool results carry the tool's name
+
+
+async def test_action_claims_count_only_in_the_reply_loop(fake):
+    f = fake([], [claims(("action", "I'll check on you tomorrow", False, False, "none"))])
+    assert await grounding.check("Rest well tonight, I'll check on you tomorrow.", memory="", their_messages=[], tool_results=[]) == []
+    f.judge = [claims(("action", "I'll check on you tomorrow", False, False, "none"))]
+    found = await grounding.check("Rest well tonight, I'll check on you tomorrow.", memory="", their_messages=[], tool_results=[],
+                                  actions=True)
+    assert [c.kind for c in found] == ["action"] and "no tool did" in grounding.problems(found)[0]

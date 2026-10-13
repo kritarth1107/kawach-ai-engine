@@ -878,7 +878,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
             problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                                                 tool_results=tool_texts))
+                                                                 tool_results=tool_texts, actions=True))
             if not problems:
                 break
             guarded = True
@@ -908,7 +908,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                                 "content": json.dumps({"refused": "You have searched enough. If it is not there, say plainly you do not have it and ask."})})
                 continue
             out, is_error = await tools.run(ctx, call.name, call.args)
-            tool_texts.append(out)
+            tool_texts.append(f"{call.name}{' (failed)' if is_error else ''}: {out}")
             ctx.known.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
@@ -917,7 +917,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
-        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts)
+        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
             final = grounding.strip(final, still) or ("none" if is_system else "")

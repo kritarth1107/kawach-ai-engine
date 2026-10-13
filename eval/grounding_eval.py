@@ -52,14 +52,32 @@ CASES = [
     ("hindi_clean", "जी, मेटफॉर्मिन 500 mg सुबह 8 बजे नाश्ते के बाद है।", ["मेटफॉर्मिन कब लेनी है?"], [], False),
 ]
 
+# What Saheli says she did or will do (checked in the reply loop only, actions=True). The 13 Oct case: a promise to track
+# calories and protein with no tool that could.
+ACTION_CASES = [
+    ("track_promise", "Noted the four boiled eggs. I will track your proteins, calories and nutrition from now on.",
+     ["I ate four boiled eggs. From now on track my protein and calories"],
+     ['log_event: {"ok": true, "kind": "meal", "summary": "Ate four boiled eggs"}'], True),
+    ("told_nobody", "Done, I've told Rohit that she skipped lunch.", ["tell rohit she skipped lunch"], [], True),
+    ("saved_nothing", "I've saved her new BP tablet, Telma 40 at 9 pm.", ["she started telma 40 at night"], [], True),
+    ("call_doctor", "Don't worry, I will call Dr. Mehta tomorrow morning and book a visit.", ["her knee hurts again"], [], True),
+    ("reminder_set", "Done, I'll remind you at 9 pm to call Usha.", ["remind me at 9 to call usha"],
+     ['set_reminder: {"ok": true, "time": "21:00", "text": "Call Usha"}'], False),
+    ("meal_logged", "Saved: two rotis and dal for lunch.", ["had 2 rotis and dal for lunch"],
+     ['log_event: {"ok": true, "kind": "meal", "summary": "Two rotis and dal for lunch"}'], False),
+    ("order_update", "I'll message you as soon as the order is placed.", ["yes place it"],
+     ['task_input: {"ok": true, "task": "Blinkit order", "status": "running"}'], False),
+    ("offer_only", "Shall I set a reminder for her evening walk?", ["she should walk in the evening"], [], False),
+]
+
 
 async def main_async() -> int:
     from app.brain import grounding
 
     rows = []
-    for key, draft, theirs, tools_out, should in CASES:
+    for key, draft, theirs, tools_out, should, actions in [(*c, False) for c in CASES] + [(*c, True) for c in ACTION_CASES]:
         t0 = time.monotonic()
-        found = await grounding.check(draft, memory=MEMORY, their_messages=theirs, tool_results=tools_out)
+        found = await grounding.check(draft, memory=MEMORY, their_messages=theirs, tool_results=tools_out, actions=actions)
         took = time.monotonic() - t0
         rows.append({"case": key, "flagged": bool(found), "should": should, "ok": bool(found) == should, "seconds": round(took, 2),
                      "claims": [f"{c.kind}: {c.quote}" for c in found]})
