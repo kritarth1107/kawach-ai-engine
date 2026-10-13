@@ -15,6 +15,7 @@ Every planned nudge, skip, shadow and reply is a row in nudge_ledger.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -437,6 +438,7 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
     out: list[Option] = []
 
     def add(kind: str, why: str, *, about: str | None = None, fld: str | None = None, boost: float = 0.0, cooldown: timedelta | None = None):
+        about, fld = short_ref(about), short_ref(fld)
         if fld and cooldown and fld in asked_field and now - asked_field[fld] < cooldown:
             return
         if about and any(r.about_ref == about and clock.ist_day(_when(r)) == today for r in rows):
@@ -513,6 +515,14 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
     if likes:
         add("delight", "something light from what they enjoy: " + "; ".join(likes), fld="delight", cooldown=timedelta(hours=8))
     return out
+
+
+def short_ref(ref: str | None, limit: int = 160) -> str | None:
+    """A reference that fits its ledger column (live 2026-10-13: "doses:<every unmarked schedule id>" overflowed 200
+    characters and that nudge was lost). A long one keeps its start and a hash, so the same set compares equal."""
+    if ref is None or len(ref) <= limit:
+        return ref
+    return f"{ref[:limit - 17]}#{hashlib.sha1(ref.encode()).hexdigest()[:16]}"
 
 
 def personal_anchor(facts: list, acts: list[dict], now: datetime) -> str:
@@ -612,7 +622,8 @@ async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, st
     lane = "followup" if kind == "reminder_followup" else "regular"  # a follow-up and a regular nudge may share a minute
     if status == "skipped":
         lane += f":skip:{reason[:40]}"  # a skip never takes the minute from a nudge that may still go
-    row = NudgeLedger(id=rid, family_id=p.family_id, person_id=p.id, kind=kind, slot_key=f"{p.id}:{clock.ist(now).strftime('%Y-%m-%dT%H:%M')}:{lane}",
+    fld, about = short_ref(fld), short_ref(about)  # whatever the caller passed, it fits its column
+    row = NudgeLedger(id=rid, family_id=p.family_id, person_id=p.id, kind=kind, slot_key=short_ref(f"{p.id}:{clock.ist(now).strftime('%Y-%m-%dT%H:%M')}:{lane}", 120) or "",
                       status=status, reason=reason[:160], ref=f"nudge:{rid}", text=text, field=fld, about_ref=about, planned_at=now,
                       sent_at=now if sent else None, unanswered_run=run)
     try:

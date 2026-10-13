@@ -493,3 +493,32 @@ async def test_the_reviewer_sends_back_a_draft_that_says_something_happened_when
     assert sent_to(host, MAA) == [] and writer.calls == 3 and writer.verified == 3
     assert out["skipped"].get("guard") == 1 and "invented" in (await rows(db))[-1].reason
     assert "says the walk is done" in writer.seen[-1]  # the rewrite was told why
+
+
+def test_a_long_reference_fits_its_column_and_the_same_set_stays_equal():
+    many = "doses:" + ",".join(f"sched-{i:04d}-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" for i in range(12))
+    short = nudges.short_ref(many)
+    assert len(short) <= 160 and short == nudges.short_ref(many) and short != nudges.short_ref(many + ",x")
+    assert nudges.short_ref("doses:a,b") == "doses:a,b"
+
+
+async def test_a_nudge_about_many_unmarked_doses_is_logged_not_lost(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    for i in range(12):  # twelve items past their time and unmarked
+        sid = f"sched-{i:04d}-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        host.world.schedules[sid] = {"scheduleId": sid, "title": f"Tablet {i}", "time": "08:00", "active": True}
+
+    async def schedule(tool, args, **kw):
+        if tool == "get_today_schedule":
+            return {"items": [{"scheduleId": s, "title": r["title"], "time": "08:00", "status": "missed"} for s, r in host.world.schedules.items()]}
+        return await SimHost.call(host, tool, args, **kw)
+
+    host.call = schedule
+    writer.script = [json.dumps({"option_id": "o1", "text": "Did the morning tablets happen today?", "field": "doses"})]
+    at("2026-10-14 11:00")
+    await run(sessions, host, mode="shadow")
+    logged = [r for r in await rows(db) if r.status == "shadow"]
+    assert len(logged) == 1 and logged[0].kind == "doses" and len(logged[0].about_ref) <= 160
