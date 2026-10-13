@@ -1,0 +1,148 @@
+name: Nightly Saheli (real AI on the synthetic world)
+
+# Plan B3: every night at 01:00 IST the real brain answers the probes of the synthetic families (30 languages, every
+# household type), and a simulated week of every proactive job is checked against the message rules. Paid model calls
+# go to the sunny-ship TEST project only (never kavach-care). The world is synthetic, so logs and artifacts are safe.
+
+on:
+  schedule:
+    - cron: "30 19 * * *"   # 01:00 IST
+  workflow_dispatch:
+    inputs:
+      slice:
+        description: "World slice: ci (120 families), nudge (200), full (1,000), or family ids"
+        default: "ci"
+      max_inr:
+        description: "Spend guard for the whole night (Rs)"
+        default: "2000"
+
+concurrency:
+  group: nightly-saheli
+  cancel-in-progress: false
+
+env:
+  SLICE: ${{ github.event.inputs.slice || 'ci' }}
+  MAX_INR: ${{ github.event.inputs.max_inr || '2000' }}
+  SHARDS: "4"
+
+jobs:
+  probes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_probes
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pillow
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Build the world
+        run: PYTHONPATH=. python -m eval.world.make --check || PYTHONPATH=. python -m eval.world.make
+      - name: Probes (shard ${{ matrix.shard }} of 4)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_probes
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+          NIGHTLY_OUT: runs/nightly
+        run: |
+          export PROBES_MAX_INR=$(( MAX_INR / SHARDS ))
+          PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probes-${{ matrix.shard }}
+          path: runs/nightly
+          retention-days: 90
+
+  message-week:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_budget
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: A simulated week of every proactive job, 200 families, no AI (plan B1.3 at full size)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_budget
+          BUDGET_OUT: runs/budget
+        run: PYTHONPATH=. python -u -m eval.world.budget --families 200 --days 7 --tick 5 | tee runs-budget.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: message-week
+          path: |
+            runs/budget
+            runs-budget.log
+          retention-days: 90
+
+  report:
+    needs: [probes, message-week]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: probes-*
+          path: tonight
+      - name: The previous night's results (for new failures and fixes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh run list --workflow nightly-saheli.yml --status completed --limit 5 --json databaseId --jq '.[].databaseId' | grep -v "${{ github.run_id }}" | head -1 || true)
+          if [ -n "$prev" ]; then gh run download "$prev" --pattern 'probes-*' --dir previous || true; fi
+      - name: Report
+        run: |
+          args="tonight --out report.md"
+          [ -d previous ] && args="$args --previous previous"
+          PYTHONPATH=. python -m eval.world.report $args
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: report
+          path: report.md
+          retention-days: 90

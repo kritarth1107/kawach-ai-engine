@@ -273,6 +273,12 @@ def main(argv: list[str]) -> int:
         i = argv.index("--parallel")
         par = int(argv[i + 1])
         argv = argv[:i] + argv[i + 2:]
+    shard = None
+    if "--shard" in argv:  # i/n: this job takes every n-th family starting at i (the nightly runs n jobs side by side)
+        i = argv.index("--shard")
+        a, b = argv[i + 1].split("/")
+        shard = (int(a), int(b))
+        argv = argv[:i] + argv[i + 2:]
     if "--limit" in argv:
         i = argv.index("--limit")
         limit = int(argv[i + 1])
@@ -286,6 +292,8 @@ def main(argv: list[str]) -> int:
         return 2
     ids = argv if argv and argv[0].startswith("w") else slice_ids(argv[0] if argv else "ci")
     ids = ids[:limit] if limit else ids
+    if shard:
+        ids = ids[shard[0]::shard[1]]
     return asyncio.run(main_async(ids, par, os.getenv("DATABASE_URL") or "", cap))
 
 
