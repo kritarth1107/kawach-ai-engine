@@ -1,0 +1,191 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "contacts": {
+   "items": {},
+   "type": "array"
+  },
+  "doctors": {
+   "items": {
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "speciality": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "phone",
+     "speciality",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "helpers": {
+   "items": {
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "phone",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "hospital": {
+   "items": {
+    "properties": {
+     "address": {
+      "x-seen": "only null"
+     },
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "x-seen": "only null"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "address",
+     "name",
+     "phone",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "past": {
+   "items": {
+    "properties": {
+     "doctor": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "place": {
+      "type": "string"
+     },
+     "purpose": {
+      "type": "string"
+     },
+     "questions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "upcoming": {
+      "type": "boolean"
+     },
+     "when": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "doctor",
+     "key",
+     "place",
+     "purpose",
+     "questions",
+     "status",
+     "text",
+     "upcoming",
+     "when"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "upcoming": {
+   "items": {
+    "properties": {
+     "doctor": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "place": {
+      "type": "string"
+     },
+     "purpose": {
+      "type": "string"
+     },
+     "questions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "upcoming": {
+      "type": "boolean"
+     },
+     "when": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "doctor",
+     "key",
+     "place",
+     "purpose",
+     "questions",
+     "status",
+     "text",
+     "upcoming",
+     "when"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "contacts",
+  "doctors",
+  "helpers",
+  "hospital",
+  "past",
+  "upcoming"
+ ],
+ "title": "dash.care-team",
+ "type": "object"
+}

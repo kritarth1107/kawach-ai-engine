@@ -513,6 +513,19 @@ def make_engine(fam: dict, rng: random.Random) -> None:
         for a in t["activities"]:
             facts.append(F(sid, "activity", a["type"], dict(a), f"{p['first']}: {a['label']}", source="inferred" if a["kind"] == "routine" else src,
                            by=teller["id"], key=f"activity:{a['type']}"))
+        # New draws take their own random stream, so adding to the world never shifts names, briefs or story arcs (whose AI
+        # texts are cached by hash).
+        arng = random.Random(f"{G.SEED}:{fam['id']}:{sid}:appointment")
+        if t["doctor"] and arng.random() < 0.4:
+            # an appointment: upcoming in the next 10 days, or one already past
+            d = arng.choice([-6, -2, 1, 2, 4, 7, 10])
+            when = f"{day(d)}T{arng.choice(['10:30', '11:00', '17:30', '18:00'])}"
+            doc = t["doctor"]["name"]
+            facts.append(F(sid, "appointment", f"{doc} {day(d)}", {"doctor": doc, "when": when, "place": t["hospital"], "purpose": arng.choice(
+                ["routine check-up", "review of reports", "BP follow-up", "sugar review"]), "questions": arng.sample(
+                ["Can the BP dose be lowered?", "Is the knee pain from the new tablet?", "Should the sugar test be repeated?", "Is walking safe after lunch?"],
+                arng.randint(0, 2)), "status": "done" if d < 0 else "planned"}, f"{p['first']} sees {doc} on {when.replace('T', ' at ')}",
+                source=src, by=teller["id"], days_ago=max(1, -d + 3) if d < 0 else 3))
     for p in fam["people"]:
         if p["role"] == "family member" and p["relation"] == "helper":
             cared = next((x for x in fam["people"] if x["careRecipient"]), None)
@@ -549,6 +562,18 @@ def make_history(fam: dict, rng: random.Random) -> None:
                 sys_, dia = rng.randint(118, 168), rng.randint(72, 102)
                 eng["events"].append({"subject": sid, "kind": "vital", "day": day(d), "time": hm(people[sid]["sleep"]["wake"], 45),
                                       "summary": f"BP {sys_}/{dia}", "payload": {"kind": "bp", "value": f"{sys_}/{dia}", "unit": "mmHg"}})
+            vrng = random.Random(f"{G.SEED}:{fam['id']}:{sid}:{d}:vitals")  # its own stream (see make_engine)
+            if "weight_weekly" in t["readings"] and dt.weekday() == 6:
+                w = round(vrng.uniform(48, 92), 1)
+                eng["events"].append({"subject": sid, "kind": "vital", "day": day(d), "time": hm(people[sid]["sleep"]["wake"], 20),
+                                      "summary": f"Weight {w} kg", "payload": {"kind": "weight", "value": str(w), "unit": "kg"}})
+            if any(c["key"] == "copd_asthma" for c in t["conditions"]) and vrng.random() < 0.5:
+                o = vrng.randint(90, 98)
+                eng["events"].append({"subject": sid, "kind": "vital", "day": day(d), "time": "09:30", "summary": f"SpO2 {o}%",
+                                      "payload": {"kind": "spo2", "value": str(o), "unit": "%"}})
+            if "fever" in fam.get("tricky", []) and d == -2:
+                eng["events"].append({"subject": sid, "kind": "vital", "day": day(d), "time": "16:00", "summary": "Temperature 100.4 F",
+                                      "payload": {"kind": "temperature", "value": "100.4", "unit": "F"}})
             if "sugar_fasting_pp" in t["readings"]:
                 v = rng.randint(96, 210)
                 eng["events"].append({"subject": sid, "kind": "vital", "day": day(d), "time": "08:00", "summary": f"Fasting sugar {v}",

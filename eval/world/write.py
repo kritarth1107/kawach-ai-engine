@@ -65,7 +65,8 @@ def writer_input(fam: dict) -> dict:
                    "language": lang["name"], "script": SCRIPT_NAMES["latin" if lang["roman"] else lang["script"]], "style": STYLE[p["style"]],
                    "voice_notes": p["voice"], "lives_in": p["city"], "on_whatsapp": p["usesWhatsapp"]})
     probes = [{"id": q["id"], "by": people[q["who"]]["key"], "topic": q["topic"], "brief": q["brief"], "voice_note": q["voice"]} for q in fam["probes"]]
-    cared = [f"{people[s]['first']}: " + ", ".join(c["label"] for c in t["conditions"]) for s, t in fam["truth"].items()]
+    # sorted by person id: the same order whether the family was just built or read back from its JSON file
+    cared = [f"{people[s]['first']}: " + ", ".join(c["label"] for c in t["conditions"]) for s, t in sorted(fam["truth"].items())]
     return {"household": fam["household"].replace("_", " "), "city": fam["city"]["name"], "cared_for": cared, "people": pp, "probes": probes}
 
 

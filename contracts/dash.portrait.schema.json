@@ -1,0 +1,451 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "activities": {
+   "items": {
+    "properties": {
+     "category": {
+      "type": "string"
+     },
+     "days": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "end": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "goal": {
+      "x-seen": "only null"
+     },
+     "key": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "last": {
+      "properties": {
+       "at": {
+        "type": "string"
+       },
+       "done": {
+        "type": "boolean"
+       },
+       "summary": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "at",
+       "done",
+       "summary"
+      ],
+      "type": [
+       "null",
+       "object"
+      ]
+     },
+     "paused": {
+      "type": "boolean"
+     },
+     "start": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "streak": {
+      "type": "integer"
+     },
+     "text": {
+      "type": "string"
+     },
+     "today": {
+      "type": "string"
+     },
+     "type": {
+      "type": "string"
+     },
+     "week_done": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "category",
+     "days",
+     "end",
+     "goal",
+     "key",
+     "kind",
+     "label",
+     "last",
+     "paused",
+     "start",
+     "streak",
+     "text",
+     "today",
+     "type",
+     "week_done"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "avoid": {
+   "items": {},
+   "type": "array"
+  },
+  "day": {
+   "items": {},
+   "type": "array"
+  },
+  "enjoys": {
+   "items": {
+    "properties": {
+     "domain": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "domain",
+     "key",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "gaps": {
+   "properties": {
+    "items": {
+     "items": {
+      "properties": {
+       "key": {
+        "type": "string"
+       },
+       "known": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "key",
+       "known"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "known": {
+     "type": "integer"
+    },
+    "total": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "items",
+    "known",
+    "total"
+   ],
+   "type": "object"
+  },
+  "knownSince": {
+   "type": [
+    "null",
+    "string"
+   ]
+  },
+  "learned": {
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "domain": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "said": {
+      "x-seen": "only null"
+     },
+     "source": {
+      "type": "string"
+     },
+     "statedBy": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "at",
+     "domain",
+     "id",
+     "key",
+     "said",
+     "source",
+     "statedBy",
+     "status",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "mood": {
+   "properties": {
+    "days": {
+     "items": {
+      "properties": {
+       "at": {
+        "type": "string"
+       },
+       "day": {
+        "type": "string"
+       },
+       "score": {
+        "type": "integer"
+       },
+       "source": {
+        "type": "string"
+       },
+       "summary": {
+        "type": "string"
+       },
+       "word": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "at",
+       "day",
+       "score",
+       "source",
+       "summary",
+       "word"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "now": {
+     "properties": {
+      "at": {
+       "type": "string"
+      },
+      "score": {
+       "type": "integer"
+      },
+      "source": {
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      },
+      "word": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "at",
+      "score",
+      "source",
+      "summary",
+      "word"
+     ],
+     "type": [
+      "null",
+      "object"
+     ]
+    }
+   },
+   "required": [
+    "days",
+    "now"
+   ],
+   "type": "object"
+  },
+  "people": {
+   "items": {
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "note": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "relation": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "kind",
+     "name",
+     "relation"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "person": {
+   "properties": {
+    "address": {
+     "x-seen": "only null"
+    },
+    "age": {
+     "x-seen": "only null"
+    },
+    "callAs": {
+     "type": [
+      "null",
+      "string"
+     ]
+    },
+    "city": {
+     "x-seen": "only null"
+    },
+    "language": {
+     "type": [
+      "null",
+      "string"
+     ]
+    },
+    "livesWith": {
+     "x-seen": "only null"
+    },
+    "mobility": {
+     "x-seen": "only null"
+    },
+    "name": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "address",
+    "age",
+    "callAs",
+    "city",
+    "language",
+    "livesWith",
+    "mobility",
+    "name"
+   ],
+   "type": "object"
+  },
+  "stats": {
+   "properties": {
+    "known": {
+     "type": "integer"
+    },
+    "learnedWeek": {
+     "type": "integer"
+    },
+    "pending": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "known",
+    "learnedWeek",
+    "pending"
+   ],
+   "type": "object"
+  },
+  "week": {
+   "items": {
+    "properties": {
+     "day": {
+      "type": "string"
+     },
+     "doses": {
+      "items": {
+       "properties": {
+        "dose": {
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "status": {
+         "type": "string"
+        },
+        "time": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "dose",
+        "id",
+        "name",
+        "status",
+        "time"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "day",
+     "doses"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "activities",
+  "avoid",
+  "day",
+  "enjoys",
+  "gaps",
+  "knownSince",
+  "learned",
+  "mood",
+  "people",
+  "person",
+  "stats",
+  "week"
+ ],
+ "title": "dash.portrait",
+ "type": "object"
+}

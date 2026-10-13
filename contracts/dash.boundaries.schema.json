@@ -1,0 +1,117 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "approvers": {
+   "items": {
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "categories": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "members": {
+   "items": {
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "role": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "role"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "monthSpent": {
+   "type": "number"
+  },
+  "plain": {
+   "type": "string"
+  },
+  "policy": {
+   "properties": {
+    "anyone_over": {
+     "x-seen": "only null"
+    },
+    "approval_categories": {
+     "items": {},
+     "type": "array"
+    },
+    "approvers": {
+     "items": {},
+     "type": "array"
+    },
+    "elder_order_limit": {
+     "type": "integer"
+    },
+    "elder_ride_limit": {
+     "type": "integer"
+    },
+    "login_codes": {
+     "properties": {},
+     "required": [],
+     "type": "object"
+    },
+    "members": {
+     "properties": {},
+     "required": [],
+     "type": "object"
+    },
+    "monthly_cap": {
+     "x-seen": "only null"
+    }
+   },
+   "required": [
+    "anyone_over",
+    "approval_categories",
+    "approvers",
+    "elder_order_limit",
+    "elder_ride_limit",
+    "login_codes",
+    "members",
+    "monthly_cap"
+   ],
+   "type": "object"
+  },
+  "waiting": {
+   "items": {},
+   "type": "array"
+  }
+ },
+ "required": [
+  "approvers",
+  "categories",
+  "members",
+  "monthSpent",
+  "plain",
+  "policy",
+  "waiting"
+ ],
+ "title": "dash.boundaries",
+ "type": "object"
+}

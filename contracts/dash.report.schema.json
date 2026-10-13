@@ -1,0 +1,240 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "adherence": {
+   "properties": {
+    "byDay": {
+     "items": {
+      "properties": {
+       "day": {
+        "type": "string"
+       },
+       "expected": {
+        "type": "integer"
+       },
+       "missed": {
+        "type": "integer"
+       },
+       "taken": {
+        "type": "integer"
+       }
+      },
+      "required": [
+       "day",
+       "expected",
+       "missed",
+       "taken"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "byMedicine": {
+     "items": {
+      "properties": {
+       "dose": {
+        "type": [
+         "null",
+         "string"
+        ]
+       },
+       "expected": {
+        "type": "integer"
+       },
+       "missed": {
+        "type": "integer"
+       },
+       "name": {
+        "type": "string"
+       },
+       "taken": {
+        "type": "integer"
+       },
+       "times": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "dose",
+       "expected",
+       "missed",
+       "name",
+       "taken",
+       "times"
+      ],
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "expected": {
+     "type": "integer"
+    },
+    "percent": {
+     "type": [
+      "integer",
+      "null"
+     ]
+    },
+    "taken": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "byDay",
+    "byMedicine",
+    "expected",
+    "percent",
+    "taken"
+   ],
+   "type": "object"
+  },
+  "alerts": {
+   "items": {},
+   "type": "array"
+  },
+  "appointments": {
+   "items": {
+    "properties": {
+     "doctor": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "place": {
+      "type": "string"
+     },
+     "purpose": {
+      "type": "string"
+     },
+     "questions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "upcoming": {
+      "type": "boolean"
+     },
+     "when": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "doctor",
+     "key",
+     "place",
+     "purpose",
+     "questions",
+     "status",
+     "text",
+     "upcoming",
+     "when"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "changes": {
+   "items": {},
+   "type": "array"
+  },
+  "days": {
+   "type": "integer"
+  },
+  "from": {
+   "type": "string"
+  },
+  "generatedAt": {
+   "type": "string"
+  },
+  "mood": {
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "at",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "narrative": {
+   "type": "string"
+  },
+  "orders": {
+   "items": {},
+   "type": "array"
+  },
+  "symptoms": {
+   "items": {},
+   "type": "array"
+  },
+  "to": {
+   "type": "string"
+  },
+  "vitals": {
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "note": {
+      "x-seen": "only null"
+     },
+     "redFlag": {
+      "x-seen": "only null"
+     },
+     "value": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "at",
+     "kind",
+     "note",
+     "redFlag",
+     "value"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "adherence",
+  "alerts",
+  "appointments",
+  "changes",
+  "days",
+  "from",
+  "generatedAt",
+  "mood",
+  "narrative",
+  "orders",
+  "symptoms",
+  "to",
+  "vitals"
+ ],
+ "title": "dash.report",
+ "type": "object"
+}

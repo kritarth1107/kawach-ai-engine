@@ -1,0 +1,93 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "items": {
+   "items": {
+    "properties": {
+     "due_at": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "next_action": {
+      "type": "string"
+     },
+     "owner": {
+      "type": "string"
+     },
+     "ownerName": {
+      "type": "string"
+     },
+     "requested_by": {
+      "x-seen": "only null"
+     },
+     "source": {
+      "type": "string"
+     },
+     "state": {
+      "type": "string"
+     },
+     "stuck": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "subject": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "updated_at": {
+      "type": "string"
+     },
+     "waiting_on": {
+      "type": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "required": [
+     "due_at",
+     "id",
+     "kind",
+     "next_action",
+     "owner",
+     "ownerName",
+     "requested_by",
+     "source",
+     "state",
+     "stuck",
+     "subject",
+     "title",
+     "updated_at",
+     "waiting_on"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "open": {
+   "type": "integer"
+  },
+  "stuck": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "items",
+  "open",
+  "stuck"
+ ],
+ "title": "dash.work",
+ "type": "object"
+}

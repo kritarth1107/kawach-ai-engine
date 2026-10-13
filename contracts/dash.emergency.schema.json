@@ -1,0 +1,174 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "allergies": {
+   "items": {
+    "properties": {
+     "allergen": {
+      "type": "string"
+     },
+     "reaction": {
+      "x-seen": "only null"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "allergen",
+     "reaction",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "conditions": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "contacts": {
+   "items": {},
+   "type": "array"
+  },
+  "diet": {
+   "items": {
+    "type": "string"
+   },
+   "type": "array"
+  },
+  "doctors": {
+   "items": {
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     },
+     "speciality": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "phone",
+     "speciality",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "familyRules": {
+   "items": {},
+   "type": "array"
+  },
+  "home": {
+   "x-seen": "only null"
+  },
+  "hospital": {
+   "items": {
+    "properties": {
+     "address": {
+      "x-seen": "only null"
+     },
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "x-seen": "only null"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "address",
+     "name",
+     "phone",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "medicines": {
+   "items": {
+    "properties": {
+     "dose": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "times": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "dose",
+     "name",
+     "text",
+     "times"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "none": {
+   "properties": {
+    "allergy": {
+     "type": "boolean"
+    },
+    "condition": {
+     "type": "boolean"
+    },
+    "medicine": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "allergy",
+    "condition",
+    "medicine"
+   ],
+   "type": "object"
+  },
+  "profile": {
+   "properties": {
+    "blood_group": {
+     "type": "string"
+    }
+   },
+   "required": [],
+   "type": "object"
+  }
+ },
+ "required": [
+  "allergies",
+  "conditions",
+  "contacts",
+  "diet",
+  "doctors",
+  "familyRules",
+  "home",
+  "hospital",
+  "medicines",
+  "none",
+  "profile"
+ ],
+ "title": "dash.emergency",
+ "type": "object"
+}

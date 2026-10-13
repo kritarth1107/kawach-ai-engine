@@ -1,0 +1,74 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "consent": {
+   "properties": {
+    "at": {
+     "x-seen": "only null"
+    },
+    "by": {
+     "x-seen": "only null"
+    },
+    "granted": {
+     "type": "boolean"
+    }
+   },
+   "required": [
+    "at",
+    "by",
+    "granted"
+   ],
+   "type": "object"
+  },
+  "kinds": {
+   "properties": {
+    "all_fine": {
+     "type": "string"
+    },
+    "doctor_visit": {
+     "type": "string"
+    },
+    "er_visit": {
+     "type": "string"
+    },
+    "fall": {
+     "type": "string"
+    },
+    "hospital_visit": {
+     "type": "string"
+    },
+    "medicine_changed": {
+     "type": "string"
+    },
+    "other": {
+     "type": "string"
+    },
+    "recovered": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "all_fine",
+    "doctor_visit",
+    "er_visit",
+    "fall",
+    "hospital_visit",
+    "medicine_changed",
+    "other",
+    "recovered"
+   ],
+   "type": "object"
+  },
+  "outcomes": {
+   "items": {},
+   "type": "array"
+  }
+ },
+ "required": [
+  "consent",
+  "kinds",
+  "outcomes"
+ ],
+ "title": "dash.outcomes",
+ "type": "object"
+}

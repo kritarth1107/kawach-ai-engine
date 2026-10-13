@@ -1,0 +1,59 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "medicines": {
+   "items": {
+    "properties": {
+     "asOf": {
+      "x-seen": "only null"
+     },
+     "daysLeft": {
+      "x-seen": "only null"
+     },
+     "dose": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "key": {
+      "type": "string"
+     },
+     "low": {
+      "type": "boolean"
+     },
+     "name": {
+      "type": "string"
+     },
+     "perDay": {
+      "type": "number"
+     },
+     "stock": {
+      "x-seen": "only null"
+     }
+    },
+    "required": [
+     "asOf",
+     "daysLeft",
+     "dose",
+     "key",
+     "low",
+     "name",
+     "perDay",
+     "stock"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "refillWithinDays": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "medicines",
+  "refillWithinDays"
+ ],
+ "title": "dash.stock",
+ "type": "object"
+}

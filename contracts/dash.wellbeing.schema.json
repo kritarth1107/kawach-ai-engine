@@ -1,0 +1,87 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "concerns": {
+   "items": {},
+   "type": "array"
+  },
+  "days": {
+   "items": {
+    "properties": {
+     "day": {
+      "type": "string"
+     },
+     "level": {
+      "type": "string"
+     },
+     "mood": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "symptoms": {
+      "items": {},
+      "type": "array"
+     },
+     "talked": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "day",
+     "level",
+     "mood",
+     "symptoms",
+     "talked"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "daysTalked": {
+   "type": "integer"
+  },
+  "lastHeard": {
+   "type": [
+    "null",
+    "string"
+   ]
+  },
+  "recentMood": {
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "level": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "at",
+     "level",
+     "text"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "streak": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "concerns",
+  "days",
+  "daysTalked",
+  "lastHeard",
+  "recentMood",
+  "streak"
+ ],
+ "title": "dash.wellbeing",
+ "type": "object"
+}

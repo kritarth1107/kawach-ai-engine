@@ -1,0 +1,45 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "forgotten": {
+   "items": {},
+   "type": "array"
+  },
+  "issues": {
+   "items": {
+    "properties": {
+     "ask": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "problem": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "ask",
+     "key",
+     "kind",
+     "problem"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "profileCard": {
+   "x-seen": "only null"
+  }
+ },
+ "required": [
+  "forgotten",
+  "issues",
+  "profileCard"
+ ],
+ "title": "dash.memory-health",
+ "type": "object"
+}

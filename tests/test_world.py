@@ -60,3 +60,14 @@ async def test_seeding_a_family_goes_through_the_store(db, world):
     keys = {f.key for f in facts if f.status == "active"}
     assert {k for k in keys if k.startswith("medicine:")}, keys
     assert out.events > 0 and (await store.roster(db, fam["familyId"])) is not None
+
+
+def test_the_ai_written_texts_still_match_the_world(world):
+    """A change to make.py that shifts names, briefs or story arcs would silently drop the paid texts (cached by hash)."""
+    from eval.world.stories import attach_stories
+    from eval.world.write import attach
+
+    fams = [dict(f) for f in world]
+    probes = sum(len(f["probes"]) for f in fams)
+    assert attach(fams) >= 0.98 * probes
+    assert attach_stories([f for f in fams if f["tier"] == "story"]) >= 95

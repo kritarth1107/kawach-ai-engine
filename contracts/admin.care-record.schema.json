@@ -1,0 +1,64 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "facts": {
+   "items": {
+    "properties": {
+     "confidence": {
+      "type": "number"
+     },
+     "domain": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "links": {
+      "items": {},
+      "type": "array"
+     },
+     "recordedAt": {
+      "type": "string"
+     },
+     "source": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "validTo": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "versionId": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "confidence",
+     "domain",
+     "key",
+     "links",
+     "recordedAt",
+     "source",
+     "status",
+     "text",
+     "validTo",
+     "versionId"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "facts"
+ ],
+ "title": "admin.care-record",
+ "type": "object"
+}

@@ -1,0 +1,59 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "patterns": {
+   "items": {
+    "properties": {
+     "detail": {
+      "type": "string"
+     },
+     "evidence": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "key": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "severity": {
+      "type": "string"
+     },
+     "subject_id": {
+      "type": "string"
+     },
+     "suggestion": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "detail",
+     "evidence",
+     "key",
+     "kind",
+     "severity",
+     "subject_id",
+     "suggestion",
+     "title"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "windowDays": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "patterns",
+  "windowDays"
+ ],
+ "title": "dash.patterns",
+ "type": "object"
+}

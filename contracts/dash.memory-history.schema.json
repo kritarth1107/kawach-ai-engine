@@ -1,0 +1,213 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "changes": {
+   "items": {
+    "properties": {
+     "actorId": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "added": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "at": {
+      "type": "string"
+     },
+     "body": {
+      "type": "string"
+     },
+     "by": {
+      "type": "string"
+     },
+     "canRestore": {
+      "type": "boolean"
+     },
+     "canUndo": {
+      "type": "boolean"
+     },
+     "deleted": {
+      "type": "boolean"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "more": {
+      "type": "integer"
+     },
+     "op": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "removed": {
+      "items": {},
+      "type": "array"
+     },
+     "source": {
+      "type": "string"
+     },
+     "status": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "subjectId": {
+      "type": "string"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "undoes": {
+      "x-seen": "only null"
+     },
+     "value": {
+      "properties": {
+       "days": {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       "doctor": {
+        "type": "string"
+       },
+       "dose": {
+        "type": "string"
+       },
+       "food": {
+        "type": "string"
+       },
+       "instructions": {
+        "type": "string"
+       },
+       "item": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "language": {
+        "type": "string"
+       },
+       "minutes": {
+        "type": "integer"
+       },
+       "name": {
+        "type": "string"
+       },
+       "none": {
+        "type": "boolean"
+       },
+       "phone": {
+        "type": "string"
+       },
+       "place": {
+        "type": "string"
+       },
+       "prn": {
+        "type": "boolean"
+       },
+       "purpose": {
+        "type": "string"
+       },
+       "questions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "rule": {
+        "type": "string"
+       },
+       "specialty": {
+        "type": "string"
+       },
+       "start": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string"
+       },
+       "times": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "type": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string"
+       },
+       "when": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "version": {
+      "type": "integer"
+     },
+     "where": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "actorId",
+     "at",
+     "body",
+     "by",
+     "canRestore",
+     "canUndo",
+     "deleted",
+     "id",
+     "kind",
+     "label",
+     "op",
+     "reason",
+     "source",
+     "status",
+     "subjectId",
+     "summary",
+     "target",
+     "title",
+     "undoes",
+     "version",
+     "where"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "changes"
+ ],
+ "title": "dash.memory-history",
+ "type": "object"
+}

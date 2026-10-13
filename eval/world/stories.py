@@ -68,7 +68,7 @@ def outline(fam: dict) -> dict:
     people = {p["id"]: p for p in fam["people"]}
     talkers = [p for p in fam["people"] if p["usesWhatsapp"]]
     teller = next((p for p in fam["people"] if p["role"] == "primary caregiver"), talkers[0])
-    subjects = list(fam["truth"])
+    subjects = sorted(fam["truth"])  # the same order built or read back from JSON
     sid = subjects[0] if subjects else teller["id"]
     s = people[sid]
     t = fam["truth"].get(sid, {"medicines": [], "conditions": [], "allergies": ["none"], "doctor": None, "callAs": None, "activities": []})

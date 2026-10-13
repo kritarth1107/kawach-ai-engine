@@ -1,0 +1,14 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "tasks": {
+   "items": {},
+   "type": "array"
+  }
+ },
+ "required": [
+  "tasks"
+ ],
+ "title": "dash.family-tasks",
+ "type": "object"
+}

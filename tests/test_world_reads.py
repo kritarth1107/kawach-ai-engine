@@ -1,11 +1,14 @@
 """Plan B1.2: every dashboard and admin read, for every family and person of the world's ci slice (120 families in 30
 languages, every household type and data shape). No AI. A page must never break on a real family's data."""
 
+import os
 import time
+from collections import defaultdict
 
 import httpx
 import pytest
 
+from app import contracts
 from app.api import admin as admin_api, dash
 from app.core import clock
 from app.core.security import verify_api_secret
@@ -50,6 +53,7 @@ async def test_every_read_for_every_family_of_the_ci_slice(world_client, db):
         await seed_family(db, fam, out)
     clock.set_now(ist(make.TODAY.isoformat(), "12:00"))
     failures, slow, calls = [], [], 0
+    seen: dict[str, list] = defaultdict(list)  # contract name -> responses (plan B1.5)
     for fam in fams:
         world_client.host.world.backend_record = {"schedules": fam["backend"]["schedules"]}
         fid = fam["familyId"]
@@ -63,14 +67,33 @@ async def test_every_read_for_every_family_of_the_ci_slice(world_client, db):
                 calls += 1
                 if r.status_code != 200 or not isinstance(r.json(), dict):
                     failures.append(f"{fam['id']} ({fam['household']}, {','.join(fam['shapes']) or 'plain'}) {route}: {r.status_code} {r.text[:160]}")
-                elif dt > SLOW_S:
+                    continue
+                if dt > SLOW_S:
                     slow.append(f"{fam['id']} {route}: {dt:.2f}s")
+                seen[f"dash.{route.split('?')[0]}"].append((fam["id"], r.json()))
         r = await world_client.get(f"/v2/admin/families/{fid}/care-record", params={"subject": subjects[0]})
         calls += 1
         if r.status_code != 200:
             failures.append(f"{fam['id']} admin care-record: {r.status_code} {r.text[:160]}")
+        else:
+            seen["admin.care-record"].append((fam["id"], r.json()))
     r = await world_client.get("/v2/admin/live", params={"minutes": 120})
     assert r.status_code == 200, r.text[:300]
+    seen["admin.live"].append(("all", r.json()))
+    # contracts: every response against the committed shape (or relearn them on purpose)
+    if os.getenv("CONTRACTS_WRITE") == "1":
+        for name, rows in seen.items():
+            contracts.write(name, [body for _, body in rows])
+    else:
+        for name, rows in seen.items():
+            schema = contracts.load(name)
+            if schema is None:
+                failures.append(f"no contract for {name}: run CONTRACTS_WRITE=1 pytest tests/test_world_reads.py and commit contracts/")
+                continue
+            for fid, body in rows:
+                errs = contracts.validate(body, schema)
+                if errs:
+                    failures.append(f"{fid} {name} breaks its contract: {'; '.join(errs[:3])}")
     assert not failures, f"{len(failures)} of {calls} reads failed:\n" + "\n".join(failures[:25])
     assert len(slow) <= calls * 0.01, f"{len(slow)} reads slower than {SLOW_S}s:\n" + "\n".join(slow[:15])
     assert out.families == len(fams) and calls > 2000

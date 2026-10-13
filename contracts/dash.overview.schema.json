@@ -1,0 +1,663 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "day": {
+   "type": "string"
+  },
+  "domains": {
+   "properties": {
+    "activity": {
+     "type": "string"
+    },
+    "allergy": {
+     "type": "string"
+    },
+    "appointment": {
+     "type": "string"
+    },
+    "condition": {
+     "type": "string"
+    },
+    "contact": {
+     "type": "string"
+    },
+    "diet": {
+     "type": "string"
+    },
+    "dish": {
+     "type": "string"
+    },
+    "doctor": {
+     "type": "string"
+    },
+    "family": {
+     "type": "string"
+    },
+    "home": {
+     "type": "string"
+    },
+    "hospital": {
+     "type": "string"
+    },
+    "language": {
+     "type": "string"
+    },
+    "medicine": {
+     "type": "string"
+    },
+    "naming": {
+     "type": "string"
+    },
+    "no_order": {
+     "type": "string"
+    },
+    "occasion": {
+     "type": "string"
+    },
+    "preference": {
+     "type": "string"
+    },
+    "profile": {
+     "type": "string"
+    },
+    "routine": {
+     "type": "string"
+    },
+    "vital_target": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "activity",
+    "allergy",
+    "appointment",
+    "condition",
+    "contact",
+    "diet",
+    "dish",
+    "doctor",
+    "family",
+    "home",
+    "hospital",
+    "language",
+    "medicine",
+    "naming",
+    "no_order",
+    "occasion",
+    "preference",
+    "profile",
+    "routine",
+    "vital_target"
+   ],
+   "type": "object"
+  },
+  "doses": {
+   "items": {
+    "properties": {
+     "dose": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "time": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "dose",
+     "id",
+     "name",
+     "status",
+     "time"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "events": {
+   "items": {
+    "properties": {
+     "actorId": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "at": {
+      "type": "string"
+     },
+     "day": {
+      "type": "string"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "payload": {
+      "properties": {
+       "day": {
+        "type": "string"
+       },
+       "key": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "medicine": {
+        "type": "string"
+       },
+       "score": {
+        "type": "integer"
+       },
+       "source": {
+        "type": "string"
+       },
+       "time": {
+        "type": "string"
+       },
+       "unit": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string"
+       },
+       "word": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "summary": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "actorId",
+     "at",
+     "day",
+     "id",
+     "kind",
+     "payload",
+     "summary"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "facts": {
+   "items": {
+    "properties": {
+     "confidence": {
+      "type": "number"
+     },
+     "confirmedBy": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "domain": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "links": {
+      "items": {},
+      "type": "array"
+     },
+     "name": {
+      "type": "string"
+     },
+     "note": {
+      "x-seen": "only null"
+     },
+     "recordedAt": {
+      "type": "string"
+     },
+     "source": {
+      "type": "string"
+     },
+     "statedBy": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "validFrom": {
+      "type": "string"
+     },
+     "validTo": {
+      "x-seen": "only null"
+     },
+     "value": {
+      "properties": {
+       "days": {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       "doctor": {
+        "type": "string"
+       },
+       "dose": {
+        "type": "string"
+       },
+       "food": {
+        "type": "string"
+       },
+       "instructions": {
+        "type": "string"
+       },
+       "item": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "language": {
+        "type": "string"
+       },
+       "minutes": {
+        "type": "integer"
+       },
+       "name": {
+        "type": "string"
+       },
+       "none": {
+        "type": "boolean"
+       },
+       "phone": {
+        "type": "string"
+       },
+       "place": {
+        "type": "string"
+       },
+       "prn": {
+        "type": "boolean"
+       },
+       "purpose": {
+        "type": "string"
+       },
+       "questions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "rule": {
+        "type": "string"
+       },
+       "specialty": {
+        "type": "string"
+       },
+       "start": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string"
+       },
+       "times": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "type": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string"
+       },
+       "when": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "type": "object"
+     }
+    },
+    "required": [
+     "confidence",
+     "confirmedBy",
+     "domain",
+     "id",
+     "key",
+     "links",
+     "name",
+     "note",
+     "recordedAt",
+     "source",
+     "statedBy",
+     "status",
+     "text",
+     "validFrom",
+     "validTo",
+     "value"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "loops": {
+   "items": {
+    "properties": {
+     "createdAt": {
+      "type": "string"
+     },
+     "detail": {
+      "properties": {
+       "activity_key": {
+        "type": "string"
+       },
+       "date": {
+        "type": "string"
+       },
+       "fact_id": {
+        "type": "string"
+       },
+       "key": {
+        "type": "string"
+       },
+       "new": {
+        "properties": {
+         "days": {
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "dose": {
+          "type": "string"
+         },
+         "food": {
+          "type": "string"
+         },
+         "instructions": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "prn": {
+          "type": "boolean"
+         },
+         "times": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "required": [
+         "dose",
+         "food",
+         "name"
+        ],
+        "type": "object"
+       },
+       "old": {
+        "properties": {
+         "days": {
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "dose": {
+          "type": "string"
+         },
+         "food": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "prn": {
+          "type": "boolean"
+         },
+         "times": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "required": [
+         "dose",
+         "food",
+         "name"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "ownerId": {
+      "x-seen": "only null"
+     },
+     "rule": {
+      "x-seen": "only null"
+     },
+     "status": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "wakeAt": {
+      "type": [
+       "null",
+       "string"
+      ]
+     }
+    },
+    "required": [
+     "createdAt",
+     "detail",
+     "id",
+     "kind",
+     "ownerId",
+     "rule",
+     "status",
+     "title",
+     "wakeAt"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "notes": {
+   "items": {
+    "properties": {
+     "body": {
+      "type": "string"
+     },
+     "slug": {
+      "type": "string"
+     },
+     "subjectId": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "updatedAt": {
+      "type": "string"
+     },
+     "version": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "body",
+     "slug",
+     "subjectId",
+     "title",
+     "updatedAt",
+     "version"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "pending": {
+   "items": {
+    "properties": {
+     "confidence": {
+      "type": "number"
+     },
+     "confirmedBy": {
+      "x-seen": "only null"
+     },
+     "domain": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "note": {
+      "x-seen": "only null"
+     },
+     "recordedAt": {
+      "type": "string"
+     },
+     "source": {
+      "type": "string"
+     },
+     "statedBy": {
+      "type": [
+       "null",
+       "string"
+      ]
+     },
+     "status": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     },
+     "validFrom": {
+      "type": "string"
+     },
+     "validTo": {
+      "x-seen": "only null"
+     },
+     "value": {
+      "properties": {
+       "days": {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       "dose": {
+        "type": "string"
+       },
+       "food": {
+        "type": "string"
+       },
+       "instructions": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "prn": {
+        "type": "boolean"
+       },
+       "times": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "dose",
+       "food",
+       "name"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "confidence",
+     "confirmedBy",
+     "domain",
+     "id",
+     "key",
+     "name",
+     "note",
+     "recordedAt",
+     "source",
+     "statedBy",
+     "status",
+     "text",
+     "validFrom",
+     "validTo",
+     "value"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "tasks": {
+   "items": {},
+   "type": "array"
+  }
+ },
+ "required": [
+  "day",
+  "domains",
+  "doses",
+  "events",
+  "facts",
+  "loops",
+  "notes",
+  "pending",
+  "tasks"
+ ],
+ "title": "dash.overview",
+ "type": "object"
+}

@@ -1,0 +1,44 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "byKind": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "byPerson": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "byService": {
+   "properties": {},
+   "required": [],
+   "type": "object"
+  },
+  "count": {
+   "type": "integer"
+  },
+  "items": {
+   "items": {},
+   "type": "array"
+  },
+  "month": {
+   "type": "string"
+  },
+  "total": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "byKind",
+  "byPerson",
+  "byService",
+  "count",
+  "items",
+  "month",
+  "total"
+ ],
+ "title": "dash.spending",
+ "type": "object"
+}

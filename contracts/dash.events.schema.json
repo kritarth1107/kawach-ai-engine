@@ -1,0 +1,84 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "events": {
+   "items": {
+    "properties": {
+     "actorId": {
+      "type": "string"
+     },
+     "at": {
+      "type": "string"
+     },
+     "day": {
+      "type": "string"
+     },
+     "id": {
+      "type": "integer"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "payload": {
+      "properties": {
+       "day": {
+        "type": "string"
+       },
+       "key": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "medicine": {
+        "type": "string"
+       },
+       "score": {
+        "type": "integer"
+       },
+       "source": {
+        "type": "string"
+       },
+       "time": {
+        "type": "string"
+       },
+       "unit": {
+        "type": "string"
+       },
+       "value": {
+        "type": "string"
+       },
+       "word": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "summary": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "actorId",
+     "at",
+     "day",
+     "id",
+     "kind",
+     "payload",
+     "summary"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  }
+ },
+ "required": [
+  "events"
+ ],
+ "title": "dash.events",
+ "type": "object"
+}

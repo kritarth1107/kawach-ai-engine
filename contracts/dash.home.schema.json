@@ -1,0 +1,453 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "doses": {
+   "items": {
+    "properties": {
+     "dose": {
+      "type": "string"
+     },
+     "id": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string"
+     },
+     "time": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "dose",
+     "id",
+     "name",
+     "status",
+     "time"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "followUps": {
+   "items": {
+    "properties": {
+     "createdAt": {
+      "type": "string"
+     },
+     "detail": {
+      "properties": {
+       "activity_key": {
+        "type": "string"
+       },
+       "date": {
+        "type": "string"
+       }
+      },
+      "required": [],
+      "type": "object"
+     },
+     "id": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "ownerId": {
+      "x-seen": "only null"
+     },
+     "rule": {
+      "x-seen": "only null"
+     },
+     "status": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     },
+     "wakeAt": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "createdAt",
+     "detail",
+     "id",
+     "kind",
+     "ownerId",
+     "rule",
+     "status",
+     "title",
+     "wakeAt"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "lastHeardAt": {
+   "type": [
+    "null",
+    "string"
+   ]
+  },
+  "mood": {
+   "properties": {
+    "at": {
+     "type": "string"
+    },
+    "score": {
+     "type": "integer"
+    },
+    "source": {
+     "type": "string"
+    },
+    "summary": {
+     "type": "string"
+    },
+    "word": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "at",
+    "score",
+    "source",
+    "summary",
+    "word"
+   ],
+   "type": [
+    "null",
+    "object"
+   ]
+  },
+  "needsYou": {
+   "items": {
+    "properties": {
+     "id": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "meta": {
+      "type": "string"
+     },
+     "title": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "kind",
+     "meta",
+     "title"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "nextAppointment": {
+   "properties": {
+    "doctor": {
+     "type": "string"
+    },
+    "key": {
+     "type": "string"
+    },
+    "place": {
+     "type": "string"
+    },
+    "purpose": {
+     "type": "string"
+    },
+    "questions": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "status": {
+     "type": "string"
+    },
+    "text": {
+     "type": "string"
+    },
+    "upcoming": {
+     "type": "boolean"
+    },
+    "when": {
+     "type": "string"
+    }
+   },
+   "required": [
+    "doctor",
+    "key",
+    "place",
+    "purpose",
+    "questions",
+    "status",
+    "text",
+    "upcoming",
+    "when"
+   ],
+   "type": [
+    "null",
+    "object"
+   ]
+  },
+  "now": {
+   "type": "string"
+  },
+  "tasks": {
+   "items": {},
+   "type": "array"
+  },
+  "timeline": {
+   "items": {},
+   "type": "array"
+  },
+  "vitals": {
+   "properties": {
+    "bp": {
+     "properties": {
+      "at": {
+       "type": "string"
+      },
+      "change": {
+       "properties": {
+        "dir": {
+         "type": "string"
+        },
+        "pct": {
+         "type": "integer"
+        }
+       },
+       "required": [
+        "dir",
+        "pct"
+       ],
+       "type": "object"
+      },
+      "redFlag": {
+       "x-seen": "only null"
+      },
+      "trend": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "unit": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "at",
+      "change",
+      "redFlag",
+      "trend",
+      "unit",
+      "value"
+     ],
+     "type": [
+      "null",
+      "object"
+     ]
+    },
+    "spo2": {
+     "properties": {
+      "at": {
+       "type": "string"
+      },
+      "change": {
+       "properties": {
+        "dir": {
+         "type": "string"
+        },
+        "pct": {
+         "type": "integer"
+        }
+       },
+       "required": [
+        "dir",
+        "pct"
+       ],
+       "type": [
+        "null",
+        "object"
+       ]
+      },
+      "redFlag": {
+       "x-seen": "only null"
+      },
+      "trend": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "unit": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "at",
+      "change",
+      "redFlag",
+      "trend",
+      "unit",
+      "value"
+     ],
+     "type": [
+      "null",
+      "object"
+     ]
+    },
+    "sugar": {
+     "x-seen": "only null"
+    },
+    "temperature": {
+     "properties": {
+      "at": {
+       "type": "string"
+      },
+      "change": {
+       "x-seen": "only null"
+      },
+      "redFlag": {
+       "x-seen": "only null"
+      },
+      "trend": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "unit": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "at",
+      "change",
+      "redFlag",
+      "trend",
+      "unit",
+      "value"
+     ],
+     "type": [
+      "null",
+      "object"
+     ]
+    },
+    "weight": {
+     "properties": {
+      "at": {
+       "type": "string"
+      },
+      "change": {
+       "x-seen": "only null"
+      },
+      "redFlag": {
+       "x-seen": "only null"
+      },
+      "trend": {
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "unit": {
+       "type": "string"
+      },
+      "value": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "at",
+      "change",
+      "redFlag",
+      "trend",
+      "unit",
+      "value"
+     ],
+     "type": [
+      "null",
+      "object"
+     ]
+    }
+   },
+   "required": [
+    "bp",
+    "spo2",
+    "sugar",
+    "temperature",
+    "weight"
+   ],
+   "type": "object"
+  },
+  "week": {
+   "properties": {
+    "adherence": {
+     "items": {
+      "type": "integer"
+     },
+     "type": "array"
+    },
+    "days": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "scheduled": {
+     "type": "integer"
+    },
+    "streakDays": {
+     "type": "integer"
+    },
+    "taken": {
+     "type": "integer"
+    }
+   },
+   "required": [
+    "adherence",
+    "days",
+    "scheduled",
+    "streakDays",
+    "taken"
+   ],
+   "type": "object"
+  }
+ },
+ "required": [
+  "doses",
+  "followUps",
+  "lastHeardAt",
+  "mood",
+  "needsYou",
+  "nextAppointment",
+  "now",
+  "tasks",
+  "timeline",
+  "vitals",
+  "week"
+ ],
+ "title": "dash.home",
+ "type": "object"
+}

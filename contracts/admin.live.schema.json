@@ -1,0 +1,64 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "properties": {
+  "alerts": {
+   "items": {},
+   "type": "array"
+  },
+  "comingUp": {
+   "items": {
+    "properties": {
+     "at": {
+      "type": "string"
+     },
+     "familyId": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "personId": {
+      "x-seen": "only null"
+     }
+    },
+    "required": [
+     "at",
+     "familyId",
+     "kind",
+     "personId"
+    ],
+    "type": "object"
+   },
+   "type": "array"
+  },
+  "conversations": {
+   "items": {},
+   "type": "array"
+  },
+  "now": {
+   "type": "string"
+  },
+  "outreach": {
+   "items": {},
+   "type": "array"
+  },
+  "tasks": {
+   "items": {},
+   "type": "array"
+  },
+  "windowMinutes": {
+   "type": "integer"
+  }
+ },
+ "required": [
+  "alerts",
+  "comingUp",
+  "conversations",
+  "now",
+  "outreach",
+  "tasks",
+  "windowMinutes"
+ ],
+ "title": "admin.live",
+ "type": "object"
+}
