@@ -162,6 +162,9 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
                         rows.append(await play(sessions, c, effort))
                     except Exception as exc:  # noqa: BLE001
                         rows.append({"case": c.key, "kind": c.kind, "effort": effort, "pass": False, "error": str(exc)[:200]})
+                    if os.getenv("HARD_AB_PROGRESS"):
+                        with open(os.environ["HARD_AB_PROGRESS"], "a") as f:
+                            f.write(json.dumps(rows[-1], ensure_ascii=False) + "\n")
     finally:
         await engine.dispose()
     print(f"spent ₹{spend.process_spent():.0f}")

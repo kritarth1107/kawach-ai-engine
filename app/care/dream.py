@@ -131,6 +131,12 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
     from app.care import memory_index, memory_upkeep
 
     owner = next((m.get("id") for m in roster.members or [] if "primary" in str(m.get("role", "")).lower()), None)
+    from app.care import outcomes_learn
+
+    # what happened becomes visible, undoable learnings (best times to write, habits) before anything plans tomorrow (A5)
+    learned = await step("outcomes", lambda s: outcomes_learn.run_family(s, fid, [p["id"] for p in uniq]))
+    if learned:
+        report["learned"] = learned.get("learned", 0)
     for p in uniq:
         base = await step(f"baseline:{p['id']}", lambda s, p=p: baselines.save(s, fid, p["id"]))
         if base is not None:

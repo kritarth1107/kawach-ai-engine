@@ -30,6 +30,7 @@ DOMAINS = {
     "preference": "Likes and dislikes that matter for care",
     "profile": "Emergency profile: blood_group, height, weight, insurance, mobility, id_note (one fact each)",
     "appointment": "Doctor appointments: doctor, when (YYYY-MM-DDTHH:MM IST), place, purpose, questions to ask",
+    "learned": "What Saheli learned from what happened (best times to write, habits); written by her nightly learning, never by the brain",
 }
 
 # A change from a weaker source to these waits for a caregiver to confirm.
@@ -53,6 +54,7 @@ SOURCE_RANK = {
     "import": 3,
     "elder_said": 2,
     "inferred": 1,
+    "learned": 1,
 }
 
 # What a person said or set (chat, dashboard, a prescription or lab report they gave). These pin a fact; inferred,

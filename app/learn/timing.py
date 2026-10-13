@@ -111,6 +111,11 @@ async def quiet_reason(session: AsyncSession, family_id: str, person: str, situa
     2026-10-12: eleven ride and order updates in the night used up his limit of four, so no check-in could go all day)."""
     if situation not in TIMED:
         return None
+    from app.care import outcomes_learn
+
+    learned = await outcomes_learn.avoid_now(session, family_id, person)  # an hour they rarely answer (trust plan A5)
+    if learned:
+        return learned + " (reply none)"
     rows = [r for r in await _person_rows(session, family_id, person, days=28) if r.situation in TIMED]
     from app.care.models import Turn
 

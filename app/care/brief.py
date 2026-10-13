@@ -208,6 +208,12 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
     upcoming += [f"appointment: {f.text[:120]}" for f in meds if f.domain == "appointment" and str((f.value or {}).get("when", "")).startswith(tomorrow)]
     if upcoming:
         parts.append("TOMORROW: " + "; ".join(upcoming[:8]))
+    from app.care import outcomes_learn
+
+    noticed = await outcomes_learn.new_since(session, family_id, eid, now=end)
+    if noticed:  # one line each in the brief: "I noticed … so I'll …" (trust plan A5)
+        parts.append("WHAT SAHELI LEARNED TODAY (say each in one line as \"I noticed … so I'll …\"; they can undo it on the dashboard):\n"
+                     + "\n".join(f"  {n}" for n in noticed[:3]))
     return "\n\n".join(parts)
 
 

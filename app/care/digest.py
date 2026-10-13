@@ -64,6 +64,7 @@ TITLES = {
     "profile": "Emergency profile",
     "appointment": "Appointments",
     "activity": "Activities and habits",
+    "learned": "What Saheli learned (from what happened; the family can undo it)",
 }
 
 
