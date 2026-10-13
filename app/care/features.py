@@ -458,7 +458,9 @@ async def family_tasks(session: AsyncSession, family_id: str, *, days_done: int 
 # ── spending ───────────────────────────────────────────────────────────────────
 
 
-async def spending(session: AsyncSession, family_id: str, month: str | None = None) -> dict:
+async def spending(session: AsyncSession, family_id: str, month: str | None = None, subject_id: str | None = None) -> dict:
+    """What was placed or booked in a month. subject_id: only what was for that person (their dashboard page; founder
+    2026-10-13, his mother's page counted his own orders). None: the whole family (the brain's spending tool)."""
     from app.tasks.models import Task
     from app.tasks.runtime import rupees
 
@@ -466,13 +468,10 @@ async def spending(session: AsyncSession, family_id: str, month: str | None = No
     y, m = (int(x) for x in month.split("-"))
     start = datetime(y, m, 1, tzinfo=clock.IST)
     end = datetime(y + (m == 12), (m % 12) + 1, 1, tzinfo=clock.IST)
-    tasks = list(
-        (
-            await session.execute(
-                select(Task).where(Task.family_id == family_id, Task.created_at >= start, Task.created_at < end).order_by(Task.created_at)
-            )
-        ).scalars()
-    )
+    q = select(Task).where(Task.family_id == family_id, Task.created_at >= start, Task.created_at < end)
+    if subject_id is not None:
+        q = q.where(Task.subject_id == subject_id)
+    tasks = list((await session.execute(q.order_by(Task.created_at))).scalars())
     items, by_service, by_person, by_kind = [], defaultdict(float), defaultdict(float), defaultdict(float)
     for t in tasks:
         r = t.result or {}

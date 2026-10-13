@@ -109,10 +109,16 @@ def stuck(item: dict, now: datetime | None = None) -> str | None:
     return None
 
 
-async def items(session: AsyncSession, family_id: str, *, open_only: bool = True, days: int = 7, limit: int = 60) -> list[dict]:
+async def items(session: AsyncSession, family_id: str, *, open_only: bool = True, days: int = 7, limit: int = 60,
+                subjects: list[str] | None = None) -> list[dict]:
+    """subjects: only the jobs for these people (a person's dashboard page: theirs and the family's shared ones; founder
+    2026-10-13, his mother's page listed his own orders). None: the whole family (the brain and WhatsApp)."""
     since = clock.now() - timedelta(days=days)
     tq = select(Task).where(Task.family_id == family_id)
     lq = select(OpenLoop).where(OpenLoop.family_id == family_id)
+    if subjects is not None:
+        tq = tq.where(Task.subject_id.in_(subjects))
+        lq = lq.where(OpenLoop.subject_id.in_(subjects))
     if open_only:
         tq = tq.where(Task.status.in_(("queued", "running", "needs_input", "awaiting_confirm")))
         lq = lq.where(OpenLoop.status == "open")

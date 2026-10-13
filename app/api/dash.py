@@ -80,10 +80,23 @@ def task_json(t: Task) -> dict:
     return {
         "id": str(t.id), "service": t.service, "serviceLabel": SKILLS[t.service]["label"], "kind": t.kind, "goal": t.goal,
         "details": d, "status": t.status, "phase": t.phase, "inputNeeded": t.input_needed, "cancelRequested": t.cancel_requested,
-        "result": t.result, "history": t.history, "requestedBy": t.requested_by, "hasLiveView": bool(t.agent_session),
-        "createdAt": t.created_at.isoformat(), "updatedAt": t.updated_at.isoformat(),
+        "result": t.result, "history": t.history, "requestedBy": t.requested_by, "subjectId": t.subject_id,
+        "hasLiveView": bool(t.agent_session), "createdAt": t.created_at.isoformat(), "updatedAt": t.updated_at.isoformat(),
         "audit": sandbox.audit_text(t),
     }
+
+
+async def person_tasks(session: AsyncSession, family_id: str, subject_id: str, limit: int) -> list[Task]:
+    """The newest orders and rides FOR this person (the one they were placed for, start_task's for_whom), never the
+    rest of the family's: every page is about one person (founder 2026-10-13: his mother's Orders & rides showed his)."""
+    q = select(Task).where(Task.family_id == family_id, Task.subject_id == subject_id).order_by(Task.created_at.desc()).limit(limit)
+    return list((await session.execute(q)).scalars())
+
+
+def page_subjects(elder_id: str) -> list[str]:
+    """Whose open jobs a person's page lists: theirs and the family's shared ones (subject "family"), never another
+    person's."""
+    return [elder_id, "family"]
 
 
 @router.get("/{family_id}/{elder_id}/overview")
@@ -98,11 +111,9 @@ async def overview(family_id: str, elder_id: str, session: DB, day: str | None =
         except Exception:  # noqa: BLE001 — show what there is
             await session.rollback()
     facts = await store.facts(session, family_id, elder_id)
-    loops = await store.live_loops(session, family_id, [elder_id, "family"])
+    loops = await store.live_loops(session, family_id, page_subjects(elder_id))
     events = await store.events(session, family_id, elder_id, day=day, limit=500)
-    tasks = list(
-        (await session.execute(select(Task).where(Task.family_id == family_id).order_by(Task.created_at.desc()).limit(30))).scalars()
-    )
+    tasks = await person_tasks(session, family_id, elder_id, 30)
     notes = await store.notes(session, family_id, [elder_id, "family"])
     meds = [f for f in facts if f.domain == "medicine" and f.status == "active"]
     linked = links.by_from(await links.links_for(session, family_id, elder_id))
@@ -327,9 +338,10 @@ async def save_note(family_id: str, elder_id: str, body: NoteIn, session: DB) ->
     return {"saved": True, "version": n.version}
 
 
-async def _task(session: AsyncSession, family_id: str, task_id: uuid.UUID) -> Task:
+async def _task(session: AsyncSession, family_id: str, task_id: uuid.UUID, subject_id: str) -> Task:
+    """A task of this person's page: one placed for someone else is not theirs to answer, cancel or watch from here."""
     t = await session.get(Task, task_id, with_for_update=True)
-    if not t or t.family_id != family_id:
+    if not t or t.family_id != family_id or t.subject_id != subject_id:
         raise HTTPException(status_code=404, detail="no such task")
     return t
 
@@ -342,7 +354,7 @@ class TaskInputIn(BaseModel):
 
 @router.post("/{family_id}/{elder_id}/tasks/{task_id}/input")
 async def task_input(family_id: str, elder_id: str, task_id: uuid.UUID, body: TaskInputIn, session: DB) -> dict:
-    t = await _task(session, family_id, task_id)
+    t = await _task(session, family_id, task_id, elder_id)
     result = await runtime.provide_input(session, t, kind=body.kind, value=body.value, by=body.actor.id, by_is_elder=False)
     await session.commit()
     if t.status == "queued":
@@ -363,7 +375,7 @@ class TaskCancelIn(BaseModel):
 
 @router.post("/{family_id}/{elder_id}/tasks/{task_id}/cancel")
 async def task_cancel(family_id: str, elder_id: str, task_id: uuid.UUID, body: TaskCancelIn, session: DB) -> dict:
-    t = await _task(session, family_id, task_id)
+    t = await _task(session, family_id, task_id, elder_id)
     result = await runtime.request_cancel(session, tools.task_agent(), t, by=body.actor.id, reason=body.reason)
     await session.commit()
     return {"result": result, "task": task_json(t)}
@@ -371,7 +383,7 @@ async def task_cancel(family_id: str, elder_id: str, task_id: uuid.UUID, body: T
 
 @router.get("/{family_id}/{elder_id}/tasks/{task_id}/live")
 async def task_live(family_id: str, elder_id: str, task_id: uuid.UUID, session: DB) -> dict:
-    t = await _task(session, family_id, task_id)
+    t = await _task(session, family_id, task_id, elder_id)
     if not t.agent_session:
         return {"url": None}
     try:
@@ -507,8 +519,8 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
             "trend": nums[-7:], "change": change, "redFlag": last.payload.get("red_flag"),
         }
 
-    loops = await store.live_loops(session, family_id, [elder_id, "family"])
-    tasks = list((await session.execute(select(Task).where(Task.family_id == family_id).order_by(Task.created_at.desc()).limit(8))).scalars())
+    loops = await store.live_loops(session, family_id, page_subjects(elder_id))
+    tasks = await person_tasks(session, family_id, elder_id, 8)
     pending = [f for f in await store.facts(session, family_id, elder_id, statuses=("pending",))]
     needs = [{"id": f"fact:{f.key}", "kind": "fact", "key": f.key, "title": f.text, "meta": f.note or "Reported in chat; waits for your OK"} for f in pending]
     needs += [
@@ -521,7 +533,7 @@ async def home(family_id: str, elder_id: str, session: DB) -> dict:
     from app.care import mood as care_mood
     from app.care import work as care_work
 
-    for r in await care_work.items(session, family_id):
+    for r in await care_work.items(session, family_id, subjects=page_subjects(elder_id)):
         if r.get("stuck") and r["source"] == "loop":
             needs.append({"id": r["id"], "kind": "stuck", "title": r["title"], "meta": f"Stuck ({r['stuck']}): {r['next_action']}"})
     for r in await features.stock(session, family_id, elder_id):
@@ -856,15 +868,17 @@ async def spending_view(family_id: str, elder_id: str, session: DB, month: str |
 
     if month and not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
         raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    return await features.spending(session, family_id, month)
+    # this person's orders and rides only (the family's month total is on the limits page, against the family's cap)
+    return await features.spending(session, family_id, month, subject_id=elder_id)
 
 
 @router.get("/{family_id}/{elder_id}/work")
 async def work_view(family_id: str, elder_id: str, session: DB, all: bool = False) -> dict:
-    """Every job the family handed over: state, who acts next, next action, deadline, and anything stuck."""
+    """Every job handed over for this person (and the family's shared ones): state, who acts next, next action, deadline,
+    and anything stuck."""
     from app.care import work
 
-    rows = await work.items(session, family_id, open_only=not all, days=14)
+    rows = await work.items(session, family_id, open_only=not all, days=14, subjects=page_subjects(elder_id))
     roster = await store.roster(session, family_id)
     names = {m.get("id"): m.get("name") for m in ([roster.elder, *roster.members] if roster else [])}
     for r in rows:
@@ -879,22 +893,23 @@ class BoundariesIn(BaseModel):
 
 @router.get("/{family_id}/{elder_id}/boundaries")
 async def boundaries_view(family_id: str, elder_id: str, session: DB) -> dict:
-    """The family's limits for orders and rides, who approves, this month's spend, and orders waiting for approval."""
+    """The family's limits for orders and rides, who approves, the whole family's spend this month (the monthly cap is
+    the family's), and this person's orders waiting for approval (never another person's)."""
     from app.care import boundaries
-    from app.tasks.models import Task
 
     policy = await boundaries.get(session, family_id)
     roster = await store.roster(session, family_id)
     names = {m.get("id"): m.get("name") for m in ([roster.elder, *roster.members] if roster else [])}
-    waiting = list((await session.execute(select(Task).where(Task.family_id == family_id, Task.status == "awaiting_confirm",
-                                                             Task.input_needed == "approve"))).scalars())
+    waiting = list((await session.execute(select(Task).where(Task.family_id == family_id, Task.subject_id == elder_id,
+                                                             Task.status == "awaiting_confirm", Task.input_needed == "approve"))).scalars())
     return {
         "policy": policy, "plain": boundaries.describe(policy, names),
         "approvers": [{"id": a, "name": names.get(a, a)} for a in boundaries.approvers(policy, roster) if a != boundaries.ANYONE],
         "members": [{"id": m.get("id"), "name": m.get("name"), "role": m.get("role")} for m in (roster.members if roster else [])],
         "monthSpent": await boundaries.month_spent(session, family_id),
         "categories": list(boundaries.CATEGORIES),
-        "waiting": [{"taskId": str(t.id), "title": task_json(t).get("title") or t.goal, **((t.details or {}).get("approval_needed") or {})} for t in waiting],
+        "waiting": [{"taskId": str(t.id), "title": t.goal, "subjectId": t.subject_id, **((t.details or {}).get("approval_needed") or {})}
+                    for t in waiting],
     }
 
 
