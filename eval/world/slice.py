@@ -63,7 +63,12 @@ def cover(families: list[dict], n: int, want: set[str] | None = None) -> list[st
 
 
 def slice_ids(name: str, families: list[dict] | None = None) -> list[str]:
-    families = families if families is not None else load()
+    if families is None:
+        families = load()
+        if not families:  # the family files are not in git: build the world (2 s, the same bytes as world.lock)
+            from eval.world.make import build
+
+            families = build()
     if name == "full":
         return sorted(f["id"] for f in families)
     if name == "ui":

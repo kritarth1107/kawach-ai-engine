@@ -58,7 +58,7 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - name: Build the world
-        run: PYTHONPATH=. python -m eval.world.make --check || PYTHONPATH=. python -m eval.world.make
+        run: PYTHONPATH=. python -m eval.world.make && PYTHONPATH=. python -m eval.world.make --check
       - name: Probes (shard ${{ matrix.shard }} of 4)
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_probes
