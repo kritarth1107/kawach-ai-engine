@@ -386,7 +386,39 @@ async def consolidate_job() -> dict:
                     await session.commit()
         except Exception:  # noqa: BLE001
             logger.exception("consolidate failed family=%s", fid)
-    return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired}
+    from app.care import dedupe
+
+    merged = await merge_facts_job(apply=dedupe.merge_mode() == "on") if dedupe.merge_mode() != "off" else {}
+    return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired, "duplicates": merged}
+
+
+@router.post("/jobs/merge-facts")
+async def merge_facts_job(apply: bool = False, family: str = "") -> dict:
+    """The same fact saved more than once (app.care.dedupe): listed, or with apply=true merged into one (undoable).
+    Nightly from consolidate (FACT_MERGE=dryrun lists, on applies); family= limits it to ids starting with that."""
+    from sqlalchemy import select as sql_select
+
+    from app.care import dedupe
+    from app.care.models import CareFact
+    from app.db.session import SessionLocal
+
+    async with SessionLocal() as session:
+        fids = sorted({r[0] for r in await session.execute(
+            sql_select(CareFact.family_id).where(CareFact.status == "active", ~CareFact.family_id.startswith("shadow:"),
+                                                ~CareFact.family_id.startswith("sim-")).distinct()) if r[0].startswith(family)})
+    out: dict = {}
+    for fid in fids:
+        try:
+            async with SessionLocal() as session:
+                found = await dedupe.merge_family(session, fid, apply_changes=apply)
+                if apply:
+                    await session.commit()
+            if found:
+                out[fid[:8]] = {sid[:8]: v for sid, v in found.items()}
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("merge facts failed family=%s", fid)
+            out[fid[:8]] = {"error": str(exc)[:160]}
+    return {"families": len(fids), "applied": apply, "found": out}
 
 
 _kicked: asyncio.Task | None = None

@@ -93,7 +93,10 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
     stale = stale or {}
     linked = care_links.by_from(list(links or []))
     by_domain: dict[str, list[CareFact]] = defaultdict(list)
+    activities = {f.key for f in rows if f.domain == "activity" and f.status == "active"}
     for f in rows:
+        if f.domain == "routine" and (f.value or {}).get("as_activity") in activities:
+            continue  # the same time is listed once, as the activity (app.care.dedupe)
         by_domain[f.domain].append(f)
     lines = [f"CARE RECORD — {name}"]
     if not rows:

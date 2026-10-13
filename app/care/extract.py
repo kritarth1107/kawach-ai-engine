@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.care import digest, store
+from app.care import dedupe, digest, store
 from app.care.domains import DOMAINS, HEALTH_DOMAINS, NONE_DOMAINS, fact_key, is_none_key, merged_value, slug
 from app.care.models import CareFact, MemoryNote, OpenLoop, Turn
 from app.brain.host import ShadowHost
@@ -125,11 +125,15 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             f = {**f, "name": "none", "details": {"none": True}, "links": []}  # "has none": never a medicine or an item to avoid
         if domain not in DOMAINS or not f.get("name") or not f.get("sentence"):
             continue
-        subject = f.get("about") if f.get("about") in member_ids else elder["id"]
+        subject = str(f.get("about")) if f.get("about") in member_ids else str(elder["id"])
         if is_none_key(fact_key(domain, f["name"])) and [x for x in await store.facts(session, family_id, subject, domains=[domain], statuses=("active", "pending"))
                                                          if not is_none_key(x.key)]:
             continue  # the record lists real ones: "none" is for an empty list
         key = fact_key(domain, f["name"])
+        same = await dedupe.check(session, family_id=family_id, subject_id=subject, domain=domain, key=key, text=f["sentence"],
+                                  value=f.get("details") or {})
+        if same:  # said before in other words: the saved fact, with every detail of both
+            key, f = same.fact.key, {**f, "sentence": same.text}
         existing = await store.active_fact(session, family_id, subject, key)
         details = f.get("details") or {}
         if existing and store._same(existing.value, merged_value(existing.value, details)):

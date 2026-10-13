@@ -244,14 +244,21 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         details["times"] = sorted({t for t in times if isinstance(t, str) and len(t) <= 5 and ":" in t})
         if details.get("food_timing") not in FOOD_TIMING:
             details.pop("food_timing", None)
+    from app.care import dedupe
+
+    key, sentence = fact_key(domain, a["name"]), a["sentence"]
+    # the same thing said another way goes to the fact already saved (one allergy was saved under four keys)
+    same = await dedupe.check(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=domain, key=key, text=sentence, value=details)
+    if same:
+        key, sentence = same.fact.key, same.text
     w = await store.write_fact(
         ctx.session,
         family_id=ctx.family_id,
         subject_id=subject,
         domain=domain,
-        key=fact_key(domain, a["name"]),
+        key=key,
         value=details,
-        text=a["sentence"],
+        text=sentence,
         source_kind=ctx.source_kind,
         source_ref=ctx.message_ref,
         stated_by=ctx.speaker.get("id"),
