@@ -63,6 +63,7 @@ class TurnCtx:
     voice_unsure: bool = False
     # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
     messaged: set = field(default_factory=set)
+    once: set = field(default_factory=set)  # side effects already done in this turn (a pin saved to a place)
     told_by_tasks: set = field(default_factory=set)
     # A WhatsApp location pin in this message, and whether the reply asks for one (a "Send location" button)
     location: dict | None = None
@@ -1733,6 +1734,20 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
             a = {**a, "buttons": None}
         else:
             a = {**a, "buttons": {"kind": "later", "key": f"{t.id}:{later.suggest_max(runtime._later_amount(t)) or ''}"}}
+    if (a.get("buttons") or {}).get("kind") == "order":
+        # only on the one confirm with its cart (sim 2026-10-14: yes / change / cancel went on the options message, before
+        # any cart or total existed)
+        from app.tasks import runtime
+
+        try:
+            t = await _task(ctx, str(a["buttons"].get("key") or "").partition(":")[0])
+        except ToolRefused:
+            t = None
+        fp = str(((t.details or {}) if t else {}).get("cart_fp") or "")[:8]
+        if t is None or t.input_needed != "confirm" or not fp:
+            a = {**a, "buttons": None}
+        else:
+            a = {**a, "buttons": {"kind": "order", "key": f"{t.id}:{fp}"}}
     if a.get("ask_location"):
         payload["location_request"] = True
     elif (a.get("buttons") or {}).get("kind") and (a.get("buttons") or {}).get("key"):
@@ -2028,6 +2043,8 @@ async def _task(ctx: TurnCtx, task_id: str):
                     "name": {"type": "string", "description": "The product as a store would list it, in English/brand words (you translate: 'doodh' → 'milk', 'anda' → 'eggs')"},
                     "qty": {"type": "integer"},
                     "must_match": {"type": "array", "items": {"type": "string"}, "description": "Traits they insisted on that must be exact: flavour, variant, brand, size, strength (e.g. ['peri peri'], ['Amul', '1 litre'])"},
+                    "restricted": {"type": "string", "enum": ["none", "tobacco", "gutka", "vape", "alcohol", "illegal"],
+                                   "description": "Your judgement: is this tobacco (cigarettes or their brands, bidi, hookah), gutka or pan masala, a vape, alcohol, or an illegal drug? none otherwise. Saheli never orders those"},
                     "max_price": {"type": "number", "description": "Rupees, when they gave a price limit ('100 tak', 'under 100', '80-100' → 100)"},
                     "cheapest": {"type": "boolean", "description": "They want the cheapest one ('sasta wala')"},
                     "restaurant": {"type": "string", "description": "Food: the restaurant they named, if any ('Haldiram se')"}},
@@ -2052,6 +2069,10 @@ async def _task(ctx: TurnCtx, task_id: str):
 )
 async def start_task(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
+
+    refused = await _restricted(ctx, a)
+    if refused:
+        return refused  # never searched, never a task (founder 2026-10-13: "it should not even try to order")
 
     if a.get("kind") not in ("order", "ride"):
         raise ToolRefused("Give kind: order (groceries, food, medicines) or ride.")
@@ -2165,9 +2186,12 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
         return {**(await _start_compare(ctx, a, stores, place=place)), **pin_note}
     for t in await runtime.live_tasks(ctx.session, ctx.family_id):
         if t.service == a["service"] and t.kind == a["kind"]:
-            return {"already_running": runtime.describe(t)}
+            same = runtime.same_store_again(t)
+            if same is not None:
+                return same  # (live 2026-10-13: "try again on Blinkit" got "already running", a promise, then silence)
+            await runtime.replace_look_up(ctx.session, t, by=ctx.speaker.get("id") or ctx.elder_id)
     task = await _create_task(ctx, a, a["service"], place=place)
-    return {**pin_note, "task_id": str(task.id), "status": "started",
+    return {**pin_note, "task_id": str(task.id), "status": "started", "update_coming": True,
             "next": ("A task update brings what the store has, numbered with your suggestion, for them to pick; then the one "
                      "confirm with the total. Nothing is ordered before that." if a["kind"] == "order" else
                      "A task update brings the fares, numbered, for them to pick; then the one confirm with the fare. Nothing is "
@@ -2250,6 +2274,30 @@ async def _own_home_elsewhere(ctx: TurnCtx, a: dict, place: dict) -> bool:
             and own["addressId"] != place.get("addressId"))
 
 
+async def _restricted(ctx: TurnCtx, a: dict) -> dict | None:
+    """Tobacco, gutka, vape, alcohol or an illegal drug: refused before anything starts. Two AI judgements, each enough to
+    refuse: the brain's own on each item (restricted), and a separate check of the item names (matcher.restricted_kinds);
+    code acts on their answers. The refusal and the alternatives come from app.care.restricted."""
+    from app.care import restricted
+    from app.tasks import matcher
+
+    if a.get("kind") != "order":
+        return None
+    items = [i for i in a.get("items") or [] if isinstance(i, dict)]
+    names = [str(i.get("name") or "") for i in items] or ([str(a.get("goal") or "")] if a.get("goal") else [])
+    said = [str(i.get("restricted") or "").lower() for i in items]
+    # the brain's own judgement refuses at once; else the separate check (a few seconds at most; if it cannot answer, the
+    # store look-up's own check still stops it before anything is shown)
+    checked = [] if any(k in matcher.KINDS for k in said) else await matcher.restricted_kinds(names) or []
+    kind = next((k for k in [*said, *checked] if k and k in matcher.KINDS), None)
+    if not kind:
+        return None
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_refused",
+                             summary=f"Not ordered ({kind}): {', '.join(n for n in names if n)[:160]}", actor_id=ctx.speaker.get("id"),
+                             payload={"kind": kind, "by_brain": kind in said, "by_check": kind in checked})
+    return {"status": "not started", **restricted.refusal(kind)}
+
+
 def _person(ctx: TurnCtx, a: dict) -> str | None:
     """The household member for_whom names; with only one person in the household, them."""
     names = _names(ctx)
@@ -2328,7 +2376,14 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: 
 
     from app.tasks.skills import SKILLS
 
-    busy = {t.service: t for t in await runtime.live_tasks(ctx.session, ctx.family_id) if t.kind == a["kind"]}
+    busy = {}
+    for t in await runtime.live_tasks(ctx.session, ctx.family_id):
+        if t.kind != a["kind"] or t.service not in stores:
+            continue
+        if runtime.same_store_again(t) is None:  # a finished look-up with nothing to pick: looked at again
+            await runtime.replace_look_up(ctx.session, t, by=ctx.speaker.get("id") or ctx.elder_id)
+        else:
+            busy[t.service] = t
     free = [s for s in stores if s not in busy]
     if not free:
         raise ToolRefused(f"Every one of these already has {'a ride' if a['kind'] == 'ride' else 'an order'} running: "
@@ -2336,7 +2391,7 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: 
     gid = uuid.uuid4().hex[:10]
     place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
     started = [await _create_task(ctx, a, s, extra={"compare": gid, **({"named": True} if named else {})}, place=place) for s in free]
-    out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started],
+    out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started], "update_coming": True,
                  "next": ("A task update brings the fares from every app, numbered with your suggestion marked, usually within a "
                           "minute: they pick, then after the login the one confirm with the fare. Nothing is booked before they say "
                           "yes to it." if a["kind"] == "ride" else
@@ -2483,6 +2538,10 @@ async def _save_pin(ctx: TurnCtx, place: dict, pin: dict, who: str | None = None
         return None
     if place.get("lat") is not None and place.get("lng") is not None and _km(place, pin) > PIN_SAVE_WITHIN_KM:
         return None
+    key = f"pin:{place['nickname']}:{float(pin['lat']):.6f},{float(pin['lng']):.6f}"
+    if key in ctx.once:
+        return place["nickname"]  # saved already in this turn (sim 2026-10-13: start_task called twice, the pin saved twice)
+    ctx.once.add(key)
     try:
         got = await ctx.host.call("save_place", {"place": place["nickname"], "lat": float(pin["lat"]), "lng": float(pin["lng"])},
                                   family_id=ctx.family_id, subject_id=who or ctx.elder_id, actor_id=ctx.actor_id)
@@ -2717,6 +2776,8 @@ async def remove_place(ctx: TurnCtx, a: dict) -> dict:
                     "must_match": {"type": "array", "items": {"type": "string"}, "description": "Traits they insisted on that must be exact: flavour, variant, brand, size, strength (e.g. ['peri peri'], ['Amul', '1 litre'])"},
                     "max_price": {"type": "number", "description": "Rupees, when they gave a price limit ('100 tak', 'under 100', '80-100' → 100)"},
                     "cheapest": {"type": "boolean", "description": "They want the cheapest one ('sasta wala')"},
+                    "restricted": {"type": "string", "enum": ["none", "tobacco", "gutka", "vape", "alcohol", "illegal"],
+                                   "description": "Your judgement, as for start_task: tobacco, gutka or pan masala, vape, alcohol or an illegal drug; else none"},
                     "restaurant": {"type": "string", "description": "Food: the restaurant they named, if any ('Haldiram se')"}},
                     "required": ["name"]}, "description": "change / add / more: the new item(s), one entry per product"},
         "target": {"type": "integer", "description": "change / remove / more: the number of the asked item it is about (from 'asked: 1. … 2. …' in the task)"},
@@ -2727,6 +2788,10 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
     from app.tasks import runtime
 
     task = await _task(ctx, a["task_id"])
+    if a.get("items") and task.kind == "order":
+        refused = await _restricted(ctx, {"kind": "order", "items": a["items"]})
+        if refused:
+            return {**refused, "task": runtime.describe(task), "next": "The order goes on without it: nothing was added or changed."}
     outcome = await runtime.provide_input(
         ctx.session, task, kind=a["kind"], value=str(a.get("value") or ""), by=ctx.speaker.get("id") or "", by_is_elder=ctx.speaker_is_elder,
         items=a.get("items"), target=a.get("target"), max_amount=a.get("max_amount"), no_max=bool(a.get("no_max")),

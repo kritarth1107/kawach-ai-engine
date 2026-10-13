@@ -542,3 +542,26 @@ def select_loop(OpenLoop, t):
     from sqlalchemy import select
 
     return select(OpenLoop).where(OpenLoop.dedupe_key == f"delivery:{t.id}")
+
+
+async def test_order_buttons_on_a_sent_message_go_only_on_the_confirm_too(db, at):
+    """Sim 2026-10-14: in a system turn the brain sent the options with yes / change / cancel buttons (send_message), before
+    any cart or total existed. Order buttons go only on the one confirm, carrying its cart check, by every path."""
+    at("2026-10-14 01:30")
+    await store.save_roster(db, FAM, E, [E, S])
+    t = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order", goal="milk",
+                             details={"items": [{"name": "milk"}]})
+    t.status, t.phase, t.input_needed = "awaiting_confirm", "browse", "go"
+    await db.commit()
+    host = SimHost()
+    ctx = tools.TurnCtx(session=db, host=host, family_id=FAM, elder=E, speaker=S, members=[E, S])
+    await tools.run(ctx, "send_message", {"to": ELDER, "text": "1. Amul Taaza milk ₹28. Shall I get this one?",
+                                          "buttons": {"kind": "order", "key": str(t.id)}})
+    assert not host.world.sent[-1].get("buttons"), "no order buttons on the options"
+    t.phase, t.input_needed = "prepare", "confirm"
+    t.details = {**t.details, "cart_fp": "abcdef123456"}
+    await db.commit()
+    await tools.run(ctx, "send_message", {"to": ELDER, "text": "2 x Amul Taaza ₹71 to Ghar, cash. Shall I place it?",
+                                          "buttons": {"kind": "order", "key": str(t.id)}})
+    ids = [b["id"] for b in host.world.sent[-1].get("buttons") or []]
+    assert ids and all(f"{t.id}:abcdef12" in i for i in ids)

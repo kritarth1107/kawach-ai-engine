@@ -365,6 +365,66 @@ def _fallback_head(group: list[Task]) -> str:
     return f"They asked for {label}: {why or 'it does not have it or does not deliver there'}. So the other {others} were looked at. "
 
 
+def _no_pick(t: Task) -> bool:
+    """A finished look-up that offers nothing to pick: it found nothing that fits (or only a login could show it, which is
+    still an offer)."""
+    if t.status != "awaiting_confirm" or t.input_needed != "go" or t.phase != "browse":
+        return False
+    if t.kind == "ride":
+        return not _ride_opts(t) and not (t.result or {}).get("login_required")
+    return bool(_found(t)) and not _offers(t, compare=bool(compare_group(t)))
+
+
+def same_store_again(t: Task) -> dict | None:
+    """start_task names a store that already has a live task of this kind. None: that task is a finished look-up with
+    nothing to pick, so it is looked at again (replace_look_up). Else what is true now, and whether an update will come
+    (live 2026-10-13: "already running" was read as "retrying", the person heard "I'll let you know", and nothing came)."""
+    if _no_pick(t):
+        return None
+    label = SKILLS[t.service]["label"]
+    if t.status in ("queued", "running"):
+        return {"already_running": describe(t), "update_coming": True,
+                "next": f"It is still working on {label}; its result comes in a task update. Say only that, in one short line."}
+    waiting = {"go": "their pick from the options already sent", "choice": "their pick of a fare", "confirm": "their yes to the total",
+               "otp": "the login code", "fee": "their yes or no to the cancellation fee", "approve": "an approval",
+               "later": "their answer to the question for later", "swap": "their choice of what the store has instead"}.get(t.input_needed or "", "")
+    return {"already_running": describe(t), "update_coming": False,
+            "next": (f"Nothing new is started on {label} and NO update will come by itself: it is waiting for {waiting or 'them'}. "
+                     "Never say you are retrying or will let them know; ask them for that, in one short line.")}
+
+
+async def replace_look_up(session: AsyncSession, t: Task, *, by: str) -> None:
+    """A finished look-up that found nothing to pick, asked for again: it ends here and a fresh look-up starts."""
+    t.status, t.input_needed = "cancelled", None
+    t.details = {**(t.details or {}), "replaced": True}
+    note(t, f"looked at again on {SKILLS[t.service]['label']} (asked by {by}): this look-up ends, a new one starts")
+
+
+def _cheapest(offered: list[Task]) -> str | None:
+    """Where the same thing costs least, across two or more stores (or apps) that offer it: "Blinkit, ₹54 for 2 x Amul
+    Taaza" / "Ola, Auto ₹128". Orders: among the stores that have the most of the items, exactly when any has them exactly,
+    the lowest total for the quantities asked. None when fewer than two stores have prices."""
+    priced = []
+    for t in offered:
+        if t.kind == "ride":
+            fares = [(_rupee_value(o.get("fare")), o) for o in _ride_opts(t) if _rupee_value(o.get("fare"))]
+            if fares:
+                f, o = min(fares, key=lambda x: x[0])
+                priced.append(((0, 0, f), f"{SKILLS[t.service]['label']}, {o.get('type')} ₹{f:.0f}"))
+            continue
+        chosen = [c for c in (t.details or {}).get("chosen") or [] if _rupee_value(c.get("price"))]
+        if not chosen:
+            continue
+        asked = (t.details or {}).get("items") or []
+        total = sum(_rupee_value(c.get("price")) * channels._qty_for(asked, c) for c in chosen)
+        what = "; ".join(f"{channels._qty_for(asked, c)} x {_label(c)}" for c in chosen[:3])
+        priced.append(((-len(chosen), -sum(1 for c in chosen if c.get("exact_match")), total), f"{SKILLS[t.service]['label']}, ₹{total:.0f} for {what}"))
+    if len(priced) < 2:
+        return None
+    best = min(priced, key=lambda x: x[0])
+    return best[1]
+
+
 def _compare_summary(group: list[Task], head: str = "") -> str:
     """Every store of a comparison in ONE update (founder 2026-10-11: options at all times; report the results from every
     store the person named): what each store has, numbered across the stores with Saheli's suggestion marked, and why a
@@ -412,6 +472,10 @@ def _compare_summary(group: list[Task], head: str = "") -> str:
                       "app." if ride else "It is not available on any of them. Tell the person plainly and offer another name, or the "
                       "family can order in the app.")
     multi = any(len((t.details or {}).get("items") or []) > 1 for t in group)
+    cheap = _cheapest(offered)
+    if cheap:
+        # founder 2026-10-13: "I can get it cheapest at XYZ" (the same items; prices as each store shows them)
+        top += f"Cheapest: {cheap}. Say it plainly in the message (e.g. \"cheapest at {cheap}\").\n"
     return top + (f"Say in one short line which {'apps' if ride else 'stores'} have nothing and why. " + _pick_ask(
         "on THAT option's store task (the [task …] above it)", multi, ride=ride, across=len(offered) > 1) + (" All of an order's items come from one store." if multi else "")
         + (f" A plain yes (the suggested one) is task_input go yes on task {best.id}." if best else ""))
@@ -468,6 +532,35 @@ def _store_score(t: Task):
     price = sum(_rupee_value(c.get("price")) * channels._qty_for(asked, c) for c in chosen) if asked else sum(_rupee_value(c.get("price")) for c in chosen)
     no_code = d.get("channel") == "connector" or bool(r.get("logged_in"))
     return (-len(chosen), -sum(1 for c in chosen if c.get("exact_match")), price, 0 if no_code else 1, _eta_minutes(r.get("eta")))
+
+
+_DOING = {"browse": "looking up what the store has", "prepare": "getting it ready on the store (logging in and building the cart or "
+            "fares)", "otp": "logging in with the code", "check": "checking the store's own order list", "cancel": "asking the store to "
+            "cancel it", "place": "placing it"}
+
+
+async def _stall_line(session: AsyncSession, t: Task, now: datetime) -> str | None:
+    """The stall watchdog: a task still working with nothing said to the person who asked for STALL (since it began
+    working, the last update they were told, or the last such line). The line says what it is doing now and that nothing
+    is to answer; at most STALL_LINES per task. Never for a store being asked to place it right now (said by the place step)."""
+    d = t.details or {}
+    lines = int(d.get("stall_lines") or 0)
+    if lines >= STALL_LINES:
+        return None
+    told = await session.scalar(select(func.max(TaskTold.at)).where(TaskTold.task_id == t.id, TaskTold.person == t.requested_by))
+    marks = [t.created_at, told, *(datetime.fromisoformat(d[k]) for k in ("active_from", "stall_at", "run_started") if d.get(k))]
+    quiet_since = max(m for m in marks if m is not None)
+    if now - quiet_since < STALL:
+        return None
+    if compare_group(t) and not d.get("compare_announced"):
+        return None  # a comparison has its own "still looking" line, then every store's options in one update
+    mins = max(1, int((now - (datetime.fromisoformat(d["active_from"]) if d.get("active_from") else t.created_at)).total_seconds() // 60))
+    t.details = {**d, "stall_lines": lines + 1, "stall_at": now.isoformat()}
+    label, done = SKILLS[t.service]["label"], _words(t)[0]
+    note(t, f"stall watchdog: nothing said for {int((now - quiet_since).total_seconds() // 60)} min; told them it is {_DOING.get(t.phase, 'working')}")
+    return (f"[Task update] {describe(t)}. STILL WORKING on {label} after {mins} min: {_DOING.get(t.phase, 'working on it')}; nothing is "
+            f"{done} yet and nothing to answer. Tell them honestly in one short line what is happening now and that the result "
+            "comes in an update (if it cannot be done, they will hear why and what they can do). Do not ask anything.")
 
 
 async def _reoffer_others(session: AsyncSession, task: Task, why: str) -> str | None:
@@ -568,6 +661,13 @@ async def choose_stores(sessions: async_sessionmaker, agent: BrowserAgent | None
             best = best_store(group)
             anchor = best or next((g for g in group if g.status in ("awaiting_confirm", "needs_input")), t)
             out.append((anchor, _compare_summary(group, head=_fallback_head(group)), group))
+            for g in group:
+                if _no_pick(g):
+                    # nothing to pick here: said in this update, and nothing is left open waiting (live 2026-10-13: the
+                    # stores that found nothing stayed open, a "try again" was told "already running", and 20 minutes
+                    # later "not placed yet" was asked)
+                    g.status, g.input_needed = "failed", None
+                    note(g, "nothing here to pick; the look-up on this store is over")
         await session.commit()
     return out
 
@@ -613,6 +713,10 @@ def task_max_cost() -> float:
 # (if they have an email); still none 5 minutes later → cancel it properly. Any answer starts the 20 minutes again.
 LADDER_ASK, LADDER_EMAIL, LADDER_CANCEL = timedelta(minutes=20), timedelta(minutes=5), timedelta(minutes=5)
 STILL_WORKING = timedelta(minutes=5)  # one "still working" line after this long with nothing to answer
+# The stall watchdog (founder 2026-10-13: "Saheli's message got stuck"): a task working with nothing said to the person for
+# this long gets an honest line of what is happening now; never more than STALL_LINES of them (the run's own time limit
+# ends it after that, said plainly).
+STALL, STALL_LINES = timedelta(minutes=int(os.getenv("STALL_MIN", "4"))), 3
 
 
 MAX_RETRIES = 1  # automatic retries of a browser run that crashed without a report (prepare only, never place)
@@ -2510,6 +2614,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     if task.phase == "check":
         return _check_outcome(task, out)
     if task.phase == "browse":
+        if d.get("restricted_found"):
+            from app.care import restricted
+
+            r = restricted.refusal("tobacco")
+            return "failed", (f"NOT ordered, and never will be: what {SKILLS[task.service]['label']} has for "
+                              f"{', '.join(d['restricted_found'])} is tobacco, alcohol or the like, which you never order. Say so plainly "
+                              f"in one line, kindly, and offer something harmless instead (for example {', '.join(r['alternatives'][:3])}).")
         if out.get("blocked"):
             return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
         return _browse_outcome(task, out)
@@ -3178,6 +3289,19 @@ async def _ai_pick(task: Task, report: dict, session: AsyncSession | None = None
                 ls[j].setdefault("for_item", n)
         for i in found:
             i.setdefault("for_item", names[0])
+    bad = {_pkey(ls[j]) for ls, r in zip(lists, res) for j in r.get("restricted") or [] if j < len(ls)}
+    gone = [n for n, ls, r in zip(names, lists, res) if ls and len(set(r.get("restricted") or [])) >= len(ls)]
+    if gone:
+        # Everything the store has for an asked item is restricted (the item itself was: cigarettes by a brand name the
+        # earlier checks missed): never offered; the task ends with the refusal (founder 2026-10-13).
+        task.details = {**d, "restricted_found": gone}
+        d = task.details
+    if bad:
+        # a restricted listing (a cigarette brand in a "mint" search) is never shown, picked or carted (founder 2026-10-13)
+        # a new dict, never an in-place change: the result may already be flushed, and a dict changed in place would compare
+        # equal to the new one, so the change would never be written (sim 2026-10-14: the cigarette stayed in the result)
+        task.result = {**(task.result or {}), "items": [i for i in (task.result or {}).get("items") or [] if _pkey(i) not in bad]}
+        note(task, f"{len(bad)} restricted listing(s) left out (tobacco, alcohol or the like)")
     key = (lambda n: n) if (tagged or len(items) > 1) else (lambda n: _groups(task, found)[0][0])
     matched = {key(n): {"exact": [_pkey(ls[i]) for i in r["exact"]],
                         "closest": _pkey(ls[r["closest"]]) if r.get("closest") is not None else None, "why": r.get("why")}
@@ -3759,21 +3883,16 @@ async def escalate(sessions: async_sessionmaker, agent: BrowserAgent, notify: No
                             "that it is taking a minute or two more and that you will come back with what each one has. Do not ask "
                             "anything.")))
                 continue
+            if t.status in ("queued", "running") and not (t.phase == "place" and d.get("place_started")):
+                line = await _stall_line(session, t, now)
+                if line:
+                    sends.append(("notify", t.family_id, t.requested_by, [t], line))
             if t.kind != "order" or t.phase == "check" or t.cancel_requested:
                 # the 20/25/30-minute ladder is for orders; a ride waiting on a person ends at its deadline; a store check, or
                 # an order they asked to stop, is not "not placed yet" (live 2026-10-13: asked, emailed and cancelled while
                 # she had said cancel four times)
                 continue
             start = datetime.fromisoformat(d["ladder_from"]) if d.get("ladder_from") else t.created_at
-            busy_since = datetime.fromisoformat(d["active_from"]) if d.get("active_from") else t.created_at
-            if (t.status in ("queued", "running") and not d.get("told_working") and now - busy_since >= STILL_WORKING
-                    and not d.get("ladder_asked_at")):
-                # Live 2026-10-10: Maa heard nothing for minutes while the browser agent worked. One short line, no question.
-                t.details = d = {**d, "told_working": True}
-                sends.append(("notify", t.family_id, t.requested_by, [t], (
-                    f"[Task update] {describe(t)}. Still working on it on {SKILLS[t.service]['label']} (the website is slow); nothing "
-                    "to answer. Tell them in one short line that it is taking a few more minutes and you will message when it is "
-                    "ready. Do not ask anything.")))
             asked = datetime.fromisoformat(d["ladder_asked_at"]) if d.get("ladder_asked_at") else None
             emailed = datetime.fromisoformat(d["ladder_emailed_at"]) if d.get("ladder_emailed_at") else None
             label = SKILLS[t.service]["label"]

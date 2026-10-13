@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 PROMPT = """You choose groceries and medicines for an elderly person in India from a store's search results.
 For each ITEM you get the store's LISTINGS (numbered). Return JSON only:
-{"picks": [{"item": <item number>, "exact": [<listing numbers that are exactly the item, best first>], "closest": <listing number or null>, "why": "<short reason>"}]}
+{"picks": [{"item": <item number>, "exact": [<listing numbers that are exactly the item, best first>], "closest": <listing number or null>, "restricted": [<listing numbers that are restricted>], "why": "<short reason>"}]}
+
+- restricted: every listing that is tobacco or a tobacco brand (cigarettes, bidi, hookah), gutka / pan masala / zarda /
+  khaini, a vape or e-cigarette, alcohol (beer, wine, spirits, by name or brand), or an illegal drug, whatever was asked
+  (a "mint" search can return a cigarette brand). Not restricted: non-alcoholic drinks, nicotine gum or patches (quit
+  aids), vinegar, sanitiser, chocolate or water that share a brand name. A restricted listing is never exact or closest.
 
 - exact: listings that ARE the product asked for: every trait in must_match is true of it (flavour, variant, brand,
   size, strength) and it is the same kind of product. A flavour or variant in the item's own name is asked for too,
@@ -84,9 +89,60 @@ async def choose(items: list[dict], listings: list[list[dict]], *, medicine: boo
             continue
         ls = listings[n]
         ok = lambda i, ls=ls: isinstance(i, int) and 1 <= i <= len(ls) and ls[i - 1].get("available") is not False  # noqa: E731
-        exact = [i - 1 for i in dict.fromkeys(p.get("exact") or []) if ok(i)]
-        closest = p.get("closest") - 1 if ok(p.get("closest")) and not exact else None
-        out[n] = {"exact": exact, "closest": closest, "why": str(p.get("why") or "")[:160]}
+        bad = {i - 1 for i in p.get("restricted") or [] if isinstance(i, int) and 1 <= i <= len(ls)}
+        exact = [i - 1 for i in dict.fromkeys(p.get("exact") or []) if ok(i) and i - 1 not in bad]
+        closest = p.get("closest") - 1 if ok(p.get("closest")) and not exact and p.get("closest") - 1 not in bad else None
+        out[n] = {"exact": exact, "closest": closest, "why": str(p.get("why") or "")[:160], **({"restricted": sorted(bad)} if bad else {})}
+    return out
+
+
+RESTRICTED_PROMPT = """Saheli orders groceries, food and medicines for families in India. She never orders harmful or illegal things.
+For each NAME (an item a person asked for, in any language or spelling, possibly misspelt) say whether it is one of:
+tobacco (cigarettes and their brands, bidi, cigars, hookah or shisha, rolling papers, chewing tobacco, snuff), gutka (gutka,
+pan masala, zarda, khaini, mawa and their brands), vape (vapes, e-cigarettes, pods, heated tobacco), alcohol (beer, wine,
+spirits, country liquor, toddy, alcopops, and their brands), illegal (an illegal drug or anything used to get high), or
+none. REFERENCE (examples, not complete): {reference}
+Not restricted (none): non-alcoholic drinks and mocktails, ginger ale, root beer, nicotine gum or patches (quit aids),
+vinegar (apple cider vinegar), sanitiser, cough syrup and other medicines, ordinary foods, chocolates or water that
+share a brand name (Cadbury Flake, Kingfisher water), stationery (Camel colours), mints, chewing gum, saunf, supari alone.
+JSON only: {{"kinds": ["tobacco" | "gutka" | "vape" | "alcohol" | "illegal" | "none", ... one per NAME, in order]}}"""
+
+KINDS = ("tobacco", "gutka", "vape", "alcohol", "illegal")
+
+
+_KIND_CACHE: dict[tuple[str, ...], tuple[float, list[str | None]]] = {}
+KIND_CACHE_S, KIND_TIMEOUT_S = 900.0, float(__import__("os").getenv("RESTRICTED_CHECK_TIMEOUT_S", "6"))
+
+
+async def restricted_kinds(names: list[str]) -> list[str | None] | None:
+    """Per name the restricted kind, or None; None for the whole when the model could not answer (the brain's own
+    structured judgement still stands). An AI judgement (founder 2026-10-13: cigarettes were being ordered); the lists in
+    app.care.restricted are its reference, never matched against the names in code."""
+    import time
+
+    names = [str(n or "").strip()[:120] for n in names]
+    if not any(names):
+        return [None for _ in names]
+    key = tuple(n.lower() for n in names)
+    hit = _KIND_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < KIND_CACHE_S:
+        return list(hit[1])  # the same order asked again (the address answer): not asked twice
+    from app.care import restricted
+
+    ref = "; ".join(f"{k}: {', '.join(v[:14])}" for k, v in {**restricted.HARMFUL, **restricted.ILLEGAL}.items())
+    try:
+        reply = await router.complete("classify", system_stable=RESTRICTED_PROMPT.format(reference=ref), effort="low", max_tokens=800,
+                                      timeout_s=KIND_TIMEOUT_S, messages=[{"role": "user", "content": [{"type": "text", "text": "\n".join(
+                                          f"NAME {i}: {n}" for i, n in enumerate(names, 1))}]}])
+        from app.care.extract import parse_json
+
+        kinds = (parse_json(reply.text) or {}).get("kinds") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("restricted check failed: %s", exc)
+        return None
+    out = [str(k).lower() if str(k).lower() in KINDS else None for k in kinds[:len(names)]]
+    out += [None] * (len(names) - len(out))
+    _KIND_CACHE[key] = (time.monotonic(), list(out))
     return out
 
 

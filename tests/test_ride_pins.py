@@ -148,3 +148,16 @@ async def test_a_bare_current_location_gets_its_address_for_the_app(db, at):
     t.phase = "prepare"
     goal = specialist_for("ola").goal(t)
     assert "Set the pickup to exactly '14, Sample Park Road, Raipur 492001'" in goal and "map point 21.260000, 81.640000" in goal
+
+
+async def test_a_pin_is_saved_once_when_the_ride_is_started_twice_in_one_turn(db, at):
+    """Sim 2026-10-13: the brain called start_task twice in one turn; the same pin was saved to Ghar twice."""
+    at("2026-10-12 08:00")
+    host = PlacesHost()
+    await tools.start_task(await _ctx(db, host, ref="wamid.t1"), dict(RIDE))
+    at("2026-10-12 08:01")
+    pin = {"lat": 21.2509, "lng": 81.6301, "name": "", "address": ""}
+    ctx = await _ctx(db, host, ref="wamid.t2", location=pin)
+    await tools.start_task(ctx, {**RIDE, "pickup_shared": True})
+    await tools.run(ctx, "start_task", {**RIDE, "pickup_shared": True})
+    assert host.saves == [{"place": "Ghar", "lat": 21.2509, "lng": 81.6301}]

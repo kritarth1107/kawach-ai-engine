@@ -1352,18 +1352,31 @@ async def test_a_product_the_store_refuses_is_swapped_for_the_next_best_and_the_
     assert t.input_needed == "confirm" and "Jabsons Roasted Wheat Khakhra (Methi)" in t.details["chosen"][0]["name"]
 
 
-async def test_maa_hears_once_that_it_is_taking_a_few_minutes(db, at, sessions):
+async def test_a_slow_store_is_never_silent_the_stall_watchdog_says_what_is_happening(db, at, sessions):
+    """Founder 2026-10-13 ("Saheli's message got stuck"): every 4 minutes of silence while it works, one honest line of what
+    is happening now; then the run's own time limit ends it, said plainly. Never a promise left hanging."""
     at("2026-10-10 20:08")
-    agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=99)
+    agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=999)
     h = Harness(sessions, agent)
-    await _order(db)
+    t = await _order(db)
     await h.tick()
-    at("2026-10-10 20:12")
+    at("2026-10-10 20:11")
     await h.tick()
     assert h.told == []
-    at("2026-10-10 20:14")
+    at("2026-10-10 20:12:30")
     await h.tick(); await h.tick()
-    assert len(h.told) == 1 and "Still working" in h.told[0] and "Do not ask anything" in h.told[0]
+    assert len(h.told) == 1 and "STILL WORKING on Swiggy Instamart after 4 min" in h.told[0] and "Do not ask anything" in h.told[0]
+    assert "getting it ready on the store" in h.told[0] and "nothing is placed yet" in h.told[0]
+    at("2026-10-10 20:15")
+    await h.tick()
+    assert len(h.told) == 1, "not again before another 4 quiet minutes"
+    at("2026-10-10 20:16:40")
+    await h.tick()
+    assert len(h.told) == 2 and "after 8 min" in h.told[1]
+    at("2026-10-10 20:21")
+    await h.tick()
+    await db.refresh(t)
+    assert t.status == "failed" and "took too long" in h.told[-1] and len(h.told) == 3
 
 
 async def test_an_agent_cart_with_a_product_it_could_not_add_is_not_asked_it_picks_the_next(db, at, sessions, monkeypatch):
