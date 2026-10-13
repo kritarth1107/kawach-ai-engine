@@ -26,6 +26,8 @@ class Person(BaseModel):
     id: str
     name: str = ""
     role: str = ""
+    relation: str = Field(default="", max_length=40)  # who they are to relation_to (the member who added them): "mother", "spouse"
+    relation_to: str = Field(default="", max_length=80)
 
 
 class Image(BaseModel):

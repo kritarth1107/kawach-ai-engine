@@ -42,10 +42,38 @@ def ist(day: str, hhmm: str) -> datetime:
     return datetime.fromisoformat(f"{day}T{hhmm}:00").replace(tzinfo=clock.IST).astimezone(timezone.utc)
 
 
+def relations(fam: dict) -> dict[str, tuple[str, str]]:
+    """Who each member is to the primary caregiver who added them, as the backend stores it (the invite's relationship).
+
+    The world's own "relation" is to the person cared for (a child is "son") or, for an elder, to their child; here both
+    become relative to the primary caregiver: a second child is their brother or sister, a patient their spouse's spouse."""
+    people = fam["people"]
+    primary = next((p for p in people if p["role"] == "primary caregiver"), None)
+    if primary is None:
+        return {}
+    out = {}
+    for p in people:
+        if p is primary:
+            continue
+        rel = p["relation"]
+        if rel == "patient":
+            rel = primary["relation"]  # the primary caregiver is the patient's spouse
+        elif p["role"] == "caregiver" and rel in ("son", "daughter") and not primary["careRecipient"]:
+            rel = "sister" if p["gender"] == "f" else "brother"  # both are children of the person cared for
+        out[p["id"]] = (rel, primary["id"])
+    return out
+
+
 def roster_of(fam: dict) -> tuple[dict, list[dict]]:
-    members = [{"id": p["id"], "name": p["name"], "role": BRAIN_ROLE[p["role"]]} for p in fam["people"]]
+    rel = relations(fam)
+
+    def member(p: dict) -> dict:
+        r = rel.get(p["id"])
+        return {"id": p["id"], "name": p["name"], "role": BRAIN_ROLE[p["role"]], **({"relation": r[0], "relation_to": r[1]} if r else {})}
+
+    members = [member(p) for p in fam["people"]]
     cared = next((p for p in fam["people"] if p["careRecipient"]), fam["people"][0])
-    return {"id": cared["id"], "name": cared["name"], "role": BRAIN_ROLE[cared["role"]]}, members
+    return member(cared), members
 
 
 @dataclass

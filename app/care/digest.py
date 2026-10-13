@@ -123,16 +123,34 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
     return "\n".join(lines)
 
 
+def relation(m: dict, names: dict[str, str]) -> str:
+    """", mother of Prem" from the relation the family gave when adding someone (it is to the member who added them)."""
+    rel = str(m.get("relation") or "").strip().lower()
+    if not rel or rel in {"other", "self"}:
+        return ""
+    to = names.get(str(m.get("relation_to") or ""))
+    if to and str(m.get("relation_to")) != str(m.get("id")):
+        return f", {rel} of {to}"
+    return f", relation given: {rel} (to the family member who added them)"
+
+
 def household(elder: dict, members: list[dict], speaker_id: str) -> str:
-    lines = [f"HOUSEHOLD\n  Care recipient: {elder.get('name')} (id {elder.get('id')})"]
+    roster = {str(m.get("id")): m for m in members}
+    who = {**roster.get(str(elder.get("id")), {}), **{k: v for k, v in elder.items() if v}}
+    names = {str(m.get("id")): str(m.get("name") or "") for m in [*members, elder] if m.get("name")}
+    lines = [f"HOUSEHOLD\n  Care recipient: {elder.get('name')} (id {elder.get('id')}){relation(who, names)}"]
     for m in members:
         if m.get("id") == elder.get("id"):
             continue
         you = "  ← speaking now" if m.get("id") == speaker_id else ""
-        lines.append(f"  {m.get('role', 'member')}: {m.get('name')} (id {m.get('id')}){you}")
+        lines.append(f"  {m.get('role', 'member')}: {m.get('name')} (id {m.get('id')}){relation(m, names)}{you}")
     if speaker_id == elder.get("id"):
         lines.append(f"  {elder.get('name')} is speaking now.")
     lines.append("  You can message only the people listed here. Helpers, neighbours, doctors and anyone else are not reachable by you.")
+    if len(members) > 1:
+        lines.append("  Relations are only the ones written here (and what the care record says). Never guess one: the person cared for may be the"
+                     " speaker's parent, spouse, grandparent, in-law or sibling, so where no relation is known use their name, not a word"
+                     " like Maa, Papa or your son.")
     return "\n".join(lines)
 
 

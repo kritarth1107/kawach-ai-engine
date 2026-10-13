@@ -35,6 +35,10 @@ def main(argv: list[str]) -> int:
             r = now[p]
             text += f"- NEW FAIL {p} ({r['language']}, {r['topic']}): {r['fails']} | {r['text'][:100]!r} → {str(r.get('reply'))[:140]!r}\n"
     judged = [json.loads(line) for p in sorted(d.rglob("judged.jsonl")) for line in p.read_text().splitlines() if line.strip()]
+    unjudged = sum(1 for j in judged if j.get("skipped"))
+    judged = [j for j in judged if not j.get("skipped")]
+    if unjudged:
+        text += f"\n{unjudged} picked replies were not judged: the judge's spend guard was reached.\n"
     if judged:
         from collections import Counter
 

@@ -151,6 +151,10 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
         if spend.process_spent() >= spent_cap:
             out.append({"probe": q["id"], "family": fam["id"], "skipped": "budget"})
             continue
+        if not q.get("text") and os.getenv("PROBES_BRIEFS") != "1":
+            # no written message (the writer could not get it right): the English brief would test the wrong language
+            out.append({"probe": q["id"], "family": fam["id"], "skipped": "no_text"})
+            continue
         # every probe starts from the family's own state (an earlier probe's chat must not decide this one)
         async with sessions() as s:
             await seed_family(s, fam, Seeded())
@@ -200,7 +204,8 @@ def summary(rows: list[dict], secs: float) -> str:
     by = lambda key: Counter((r[key], r["pass"]) for r in done)  # noqa: E731
     lines = [f"# Nightly probes {date.today().isoformat()}", "",
              f"{len(done)} probes, {sum(r['pass'] for r in done)} passed ({100 * sum(r['pass'] for r in done) / max(1, len(done)):.1f} %), "
-             f"{sum(1 for r in rows if r.get('skipped'))} skipped by the budget, {secs / 60:.0f} min", ""]
+             f"{sum(1 for r in rows if r.get('skipped') == 'budget')} skipped by the budget, "
+             f"{sum(1 for r in rows if r.get('skipped') == 'no_text')} with no written text, {secs / 60:.0f} min", ""]
     for key, title in (("language", "By language"), ("topic", "By topic"), ("household", "By household")):
         c = by(key)
         keys = sorted({k for k, _ in c})

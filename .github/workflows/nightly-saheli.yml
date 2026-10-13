@@ -13,8 +13,11 @@ on:
         description: "World slice: ci (120 families), nudge (200), full (1,000), or family ids"
         default: "ci"
       max_inr:
-        description: "Spend guard for the whole night (Rs)"
+        description: "Spend guard for the night's probes (Rs)"
         default: "2000"
+      judge_inr:
+        description: "Spend guard for the night's judge (Rs)"
+        default: "1000"
 
 concurrency:
   group: nightly-saheli
@@ -23,6 +26,7 @@ concurrency:
 env:
   SLICE: ${{ github.event.inputs.slice || 'ci' }}
   MAX_INR: ${{ github.event.inputs.max_inr || '2000' }}
+  JUDGE_INR: ${{ github.event.inputs.judge_inr || '1000' }}
   SHARDS: "4"
 
 jobs:
@@ -68,8 +72,10 @@ jobs:
           MEMORY_EMBEDDINGS: "off"
           NIGHTLY_OUT: runs/nightly
         run: |
-          export PROBES_MAX_INR=$(( MAX_INR / SHARDS ))
+          export PROBES_MAX_INR=$(( MAX_INR / SHARDS )) JUDGE_MAX_INR=$(( JUDGE_INR / SHARDS ))
           PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6
+          # a stronger model grades every safety reply, every failure and a 30 % sample (plan B3.1)
+          PYTHONPATH=. python -u -m eval.world.judge runs/nightly --sample 0.3 || echo "judge failed (probes still count)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

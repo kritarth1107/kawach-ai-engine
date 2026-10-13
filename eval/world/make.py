@@ -508,8 +508,6 @@ def make_engine(fam: dict, rng: random.Random) -> None:
         facts.append(F(sid, "profile", "blood_group", {"value": t["bloodGroup"]}, f"Blood group {t['bloodGroup']}", source=src, by=teller["id"]))
         if t["callAs"]:
             facts.append(F(sid, "naming", "address_as", {"name": t["callAs"]}, f"Call {p['first']} '{t['callAs']}'", source=src, by=teller["id"]))
-        facts.append(F(sid, "language", "preferred", {"language": G.LANGS[p["language"]]["name"]}, f"{p['first']} prefers {G.LANGS[p['language']]['name']}",
-                       source=src, by=teller["id"]))
         for a in t["activities"]:
             facts.append(F(sid, "activity", a["type"], dict(a), f"{p['first']}: {a['label']}", source="inferred" if a["kind"] == "routine" else src,
                            by=teller["id"], key=f"activity:{a['type']}"))
@@ -526,6 +524,15 @@ def make_engine(fam: dict, rng: random.Random) -> None:
                 ["Can the BP dose be lowered?", "Is the knee pain from the new tablet?", "Should the sugar test be repeated?", "Is walking safe after lunch?"],
                 arng.randint(0, 2)), "status": "done" if d < 0 else "planned"}, f"{p['first']} sees {doc} on {when.replace('T', ' at ')}",
                 source=src, by=teller["id"], days_ago=max(1, -d + 3) if d < 0 else 3))
+    # Everyone on WhatsApp has the language, dialect and script they chose at setup, as production keeps it
+    # (language_preference: a language:preferred fact per person). Hinglish/Tanglish writers asked for Roman letters.
+    for p in fam["people"]:
+        if not p["usesWhatsapp"] and p["id"] not in fam["truth"]:
+            continue
+        lg = G.LANGS[p["language"]]
+        speech = {"language": lg["lang"], **({"dialect": lg["dialect"]} if lg["dialect"] else {}), **({"script": "roman"} if lg["roman"] else {})}
+        facts.append(F(p["id"], "language", "preferred", speech, f"{p['first']} talks in {lg['name']}" + (" in Roman letters" if lg["roman"] else ""),
+                       source="caregiver_said", by=teller["id"], key="language:preferred"))
     for p in fam["people"]:
         if p["role"] == "family member" and p["relation"] == "helper":
             cared = next((x for x in fam["people"] if x["careRecipient"]), None)
@@ -821,6 +828,9 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
         return (f"{who['first']} asks Saheli to remind them to call the electrician tomorrow at 11 am", {**base, "tools_any": ["set_reminder"]})
     if topic == "stop_calling_me":
         old = t.get("callAs") or "Amma"
+        if not own:  # the pet name is the cared person's: a caregiver asks Saheli to change how she addresses them
+            return (f"{who['first']} asks Saheli to stop calling {sp['first']} '{old}' and to use {sp['first']}'s name with ji instead",
+                    {**base, "tools_any": ["remember"], "no_words": [old]})
         return (f"{who['first']} asks Saheli to stop calling them '{old}' and use their name", {**base, "tools_any": ["remember", "my_name"], "no_words": [old]})
     if topic == "about_cared_person":
         return (f"{who['first']} asks how {sp['first']} has been this week and whether the medicines were taken",

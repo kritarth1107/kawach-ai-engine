@@ -170,11 +170,15 @@ async def write_family(fam: dict) -> dict | None:
         fix = f"{user}\n\nYour previous answer had these problems; fix them and return the whole JSON again:\n- " + "\n- ".join(errs[:20])
         out = parse(await ask(SYSTEM, fix))
         errs = problems(fam, out)
-    if errs:
+    bad = {e.split(":")[0] for e in errs if re.match(r"w\d{4}-q\d+:", e)}
+    whole = [e for e in errs if not re.match(r"w\d{4}-q\d+:", e)]
+    if whole or len(bad) > len(fam["probes"]) // 2:
         print(f"  {fam['id']} ({fam['language']}): still {len(errs)} problems: {errs[:3]}")
         return None
+    if bad:  # keep the good ones; a probe with no text is skipped by the nightly run (never sent as the English brief)
+        print(f"  {fam['id']} ({fam['language']}): kept without {len(bad)} probe texts that still failed: {sorted(bad)}")
     return {"family": fam["id"], "language": fam["language"], "hash": input_hash(inp), "model": os.getenv("MODEL_ROUTES", ""),
-            "personas": out["personas"], "probes": {q["id"]: out["probes"][q["id"]] for q in fam["probes"]}}
+            "personas": out["personas"], "probes": {q["id"]: out["probes"][q["id"]] for q in fam["probes"] if q["id"] not in bad}}
 
 
 async def run(ids: list[str], parallel: int) -> int:
