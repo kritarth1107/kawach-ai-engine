@@ -6,7 +6,7 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.care import store, work
+from app.care import work
 from app.care.models import OpenLoop
 from app.tasks import credits, runtime
 from tests.test_tasks import CART, PLACED, FakeAgent, Harness, _order

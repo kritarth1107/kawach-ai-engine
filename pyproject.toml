@@ -44,13 +44,6 @@ select = ["E9", "F", "B", "ASYNC"]
 ignore = ["B007", "B008", "B904", "B905", "B039", "ASYNC109", "ASYNC230", "ASYNC240"]
 
 [tool.ruff.lint.per-file-ignores]
-# Ordering code and its tests belong to Order Engineer; these findings are passed on, not silently edited.
-"app/tasks/**" = ["F841", "B023"]
-"eval/order_*.py" = ["F401", "F841"]
-"tests/test_tasks.py" = ["F821", "F841"]
-"tests/test_order_*.py" = ["F401", "F841"]
-"tests/test_browser_use.py" = ["F401", "F841"]
-"tests/{test_later,test_no_book_before_confirm,test_ride_pins,test_for_whom}.py" = ["F401"]
 
 [tool.pyright]
 # Production runs Python 3.11 (Dockerfile); CI gates on scripts/pyright_gate.py (errors may only go down).

@@ -317,7 +317,6 @@ async def test_an_account_that_never_logged_in_is_stopped_at_once_and_never_chec
 
 
 async def test_the_not_placed_ladder_never_runs_on_a_check_or_after_a_cancel(db, at, sessions):
-    from datetime import timedelta
 
     from app.core import clock
 

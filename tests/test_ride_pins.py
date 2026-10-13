@@ -8,7 +8,6 @@ import pytest
 
 from app.brain import tools
 from app.care import store
-from app.core import clock
 from app.sim.world import SimHost
 from app.specialists.agents import specialist_for
 from app.tasks import matcher, runtime

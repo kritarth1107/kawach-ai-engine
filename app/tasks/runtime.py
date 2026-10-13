@@ -2915,8 +2915,6 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     place = (d.get("limits") or {}).get("place") or {}
     where = place.get("nickname") or place.get("pincode") or "their place"
     task.details = {**d, "browsed": True}
-    login = d.get("login")
-    code_to = f"the phone ending {login}" if login and login != "none" else "the family phone"
     if out.get("deliverable") is False:
         return "failed", (f"{label} does not deliver to {where} ({out.get('location_set') or out.get('problem') or 'not serviceable'}); "
                           "nothing was ordered. Offer another service.")

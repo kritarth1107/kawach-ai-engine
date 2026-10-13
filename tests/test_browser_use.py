@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.sim.agent import CART, OTP, PLACED, FakeAgent
 from app.tasks import browser_use, runtime
-from app.tasks.models import SkillNote, Task
 
 
 @pytest.fixture
@@ -107,7 +106,7 @@ async def test_route_that_worked_is_remembered(db, at, sessions):
 
     skills = (await db.execute(select(Skill).where(Skill.scope == "store", Skill.service == "zepto"))).scalars().all()
     assert [s.body for s in skills] == ["/ → /search → /cart → /checkout"] and skills[0].successes == 1
-    t2 = await runtime.create(db, family_id="fam-bu2", subject_id="e", requested_by="e", service="zepto", kind="order", goal="Dal",
+    await runtime.create(db, family_id="fam-bu2", subject_id="e", requested_by="e", service="zepto", kind="order", goal="Dal",
                               details={"items": [{"name": "Toor dal 1kg", "qty": 1}]})
     await db.commit()
     await h.tick()

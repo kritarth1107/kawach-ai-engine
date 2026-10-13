@@ -6,7 +6,6 @@ asked once, in time; any app, any store, both roles."""
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.brain import tools
@@ -343,8 +342,6 @@ async def test_a_booking_that_could_not_run_by_its_time_is_said(db, at, sessions
 async def test_the_question_for_later_has_one_tap_answers_that_carry_the_limit(db, at, sessions, monkeypatch):
     """Sim 2026-10-12: the brain left the limit out of the question and recorded "no limit" on a plain yes. The question
     carries buttons: yes (up to the suggested limit), any amount, no; a tap is data, in every Indian script."""
-    from app.brain import loop
-    from app.brain.loop import TurnRequest
     from app.care import outcomes
 
     monkeypatch.setenv("TASK_BROWSE_FIRST", "on")

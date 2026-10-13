@@ -17,7 +17,6 @@ The checks are this script's own (the fake store's catalogue names); production 
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import sys
 import uuid
@@ -617,7 +616,7 @@ async def missing_flavour_change_and_old_tap(c: Conversation):
     old = confirm_buttons(c)
     await c.say("doodh ek hi kar do")
     await _pick_again_if_asked(c, "pehla wala")
-    t = await c.ticks(lambda t: t.status == "awaiting_confirm" and t.input_needed == "confirm" and len(c.shop.carts) >= 2)
+    await c.ticks(lambda t: t.status == "awaiting_confirm" and t.input_needed == "confirm" and len(c.shop.carts) >= 2)
     cart = c.shop.carts[-1] if c.shop.carts else []
     c.check(any(l["qty"] == 1 and "Milk" in l["name"] for l in cart) and len(c.shop.carts) >= 2, f"change not made: {cart}")
     if old:
@@ -626,7 +625,7 @@ async def missing_flavour_change_and_old_tap(c: Conversation):
     new = confirm_buttons(c)
     if new and new != old:
         await c.say(new[0])
-        t = await c.ticks(lambda t: t.status == "done")
+        await c.ticks(lambda t: t.status == "done")
         c.check(len(c.shop.placed) == 1, f"not placed once after the new Yes ({len(c.shop.placed)})")
 
 
@@ -816,7 +815,7 @@ async def chennai_tamil_no_point_browser_agent_looks(c: Conversation):
     ids = confirm_buttons(c)
     if ids:
         await c.say(ids[0])
-        t = await c.ticks(lambda t: t.status == "done", most=8)
+        await c.ticks(lambda t: t.status == "done", most=8)
         c.check(len(c.shop.placed) == 1, f"not placed once ({len(c.shop.placed)})")
 
 
@@ -927,11 +926,11 @@ async def bangalore_ride_he_cancelled_it_himself_in_the_app(c: Conversation):
     await c.setup()
     await c.say("Book me an Ola mini from home to Bangalore airport")
     await _pin_if_asked(c, {"lat": 12.9301, "lng": 77.5828})
-    ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
+    await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
     await c.say("the mini")
     await c.ticks_any(lambda ts: any(t.service == "ola" and t.input_needed == "choice" for t in ts), most=10)
     await c.say("yes book it")
-    ts = await c.ticks_any(lambda ts: any(t.service == "ola" and t.status == "done" for t in ts), most=8)
+    await c.ticks_any(lambda ts: any(t.service == "ola" and t.status == "done" for t in ts), most=8)
     c.check([r["service"] for r in c.shop.rides] == ["ola"], f"not booked once on Ola: {c.shop.rides}")
     booked = c.maa_messages()[-1].get("text") if c.maa_messages() else ""
     c.check("4931" in _digits(booked), f"the booked message lacks the ride PIN: {booked}")
@@ -1115,11 +1114,11 @@ async def chennai_tamil_medicine_exact_strength_only(c: Conversation):
     ts = await c.ticks_any(lambda ts: bool(_offered(ts)) and _idle(ts), most=10)
     texts = [o["text"] for _, o in _offered(ts).values()]
     c.check(texts and all("Dolo 650" in x for x in texts), f"a medicine other than the one asked was offered: {texts}")
-    t = await _options_then_confirm(c, "முதல் ஒன்று", want="1", stores=("Apollo 24|7 Pharmacy", "PharmEasy", "Tata 1mg"))
+    await _options_then_confirm(c, "முதல் ஒன்று", want="1", stores=("Apollo 24|7 Pharmacy", "PharmEasy", "Tata 1mg"))
     ids = confirm_buttons(c)
     if ids:
         await c.say(ids[0])
-        t = await c.ticks(lambda t: t.status == "done", most=8)
+        await c.ticks(lambda t: t.status == "done", most=8)
         c.check(len(c.shop.placed) == 1, f"not placed once ({len(c.shop.placed)})")
 
 

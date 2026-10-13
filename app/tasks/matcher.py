@@ -83,7 +83,7 @@ async def choose(items: list[dict], listings: list[list[dict]], *, medicine: boo
         if not 0 <= n < len(items):
             continue
         ls = listings[n]
-        ok = lambda i: isinstance(i, int) and 1 <= i <= len(ls) and ls[i - 1].get("available") is not False  # noqa: E731
+        ok = lambda i, ls=ls: isinstance(i, int) and 1 <= i <= len(ls) and ls[i - 1].get("available") is not False  # noqa: E731
         exact = [i - 1 for i in dict.fromkeys(p.get("exact") or []) if ok(i)]
         closest = p.get("closest") - 1 if ok(p.get("closest")) and not exact else None
         out[n] = {"exact": exact, "closest": closest, "why": str(p.get("why") or "")[:160]}

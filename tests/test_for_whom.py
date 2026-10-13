@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.brain import tools
 from app.care import boundaries, store
-from app.sim.agent import CART, PLACED, FakeAgent
+from app.sim.agent import CART, FakeAgent
 from app.sim.world import SimHost
 from app.tasks import aftercare, runtime
 

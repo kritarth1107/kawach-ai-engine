@@ -1063,8 +1063,10 @@ class _FakeBlinkitTab:
         self.out.append({"id": m["id"], "result": res})
 
     async def recv(self):
+        import asyncio
         import json as _j
-        while not self.out:
+
+        while not self.out:  # noqa: ASYNC110 — a fake socket waiting for its next scripted answer
             await asyncio.sleep(0.05)
         return _j.dumps(self.out.pop(0))
 
@@ -1354,7 +1356,7 @@ async def test_maa_hears_once_that_it_is_taking_a_few_minutes(db, at, sessions):
     at("2026-10-10 20:08")
     agent = FakeAgent(script={"prepare": [CART]}, finish_after_polls=99)
     h = Harness(sessions, agent)
-    t = await _order(db)
+    await _order(db)
     await h.tick()
     at("2026-10-10 20:12")
     await h.tick()

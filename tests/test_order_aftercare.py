@@ -402,7 +402,7 @@ async def test_has_it_come_is_not_held_back_by_an_unanswered_placed_message(db, 
     router.reset_breakers()
     try:
         at("2026-10-11 10:00")
-        t = await _placed(db)
+        await _placed(db)
         # the "placed" update went out and she did not answer it (people rarely do)
         await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="assistant", text="आपका ऑर्डर हो गया है, 10 मिनट में आएगा।",
                              meta={"proactive": True, "ref": "task:abc"})

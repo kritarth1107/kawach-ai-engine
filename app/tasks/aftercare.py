@@ -160,7 +160,7 @@ async def open_followup(session: AsyncSession, task: Task) -> OpenLoop:
     """When an order or ride is placed: one follow-up that asks, a little after the store's time, whether it came."""
     from app.tasks.runtime import _eta_wait
 
-    now, kind, r = clock.now(), kind_of(task), task.result or {}
+    now, r = clock.now(), task.result or {}
     task.result = {**r, "placed_at": r.get("placed_at") or now.isoformat()}
     detail = {"stage": "arrival", "task_id": str(task.id), "placed_at": now.isoformat(), "next_action": NEXT["arrival"],
               "order_id": r.get("order_id") or r.get("ride_id"),
