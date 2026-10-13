@@ -193,3 +193,39 @@ jobs:
           gcloud run services describe ${{ env.SERVICE }} \
             --region=${{ env.GCP_REGION }} \
             --format='value(status.conditions[0].status)' | grep -qx True
+
+      # quality plan F7: after the engine deploy, the admin API runs the after-deploy scenarios and the live check against
+      # production (read-only; it emails the Kavach team on a problem). Red on any problem a deploy can cause.
+      - id: live-auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: https://kavach-admin-api-303943038694.asia-south1.run.app
+          id_token_include_email: true
+      - name: After-deploy check (live check, deploy scenarios)
+        env:
+          ID_TOKEN: ${{ steps.live-auth.outputs.id_token }}
+          AUDIENCE: https://kavach-admin-api-303943038694.asia-south1.run.app
+        run: |
+          set -uo pipefail
+          body=$(python3 -c 'import json, os; print(json.dumps({"trigger": "deploy", "service": "kawach-ai-engine", "sha": os.environ["GITHUB_SHA"]}))')
+          code=$(curl -sS -o out.json -w '%{http_code}' --max-time 150 -X POST "$AUDIENCE/admin/jobs/live-check" \
+            -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" -d "$body" || echo 000)
+          echo "admin API answered $code"
+          [ "$code" = "404" ] && { echo "::warning::the admin API has no live check yet (backend repo); skipped"; exit 0; }
+          [ "$code" = "200" ] || { echo "::error::the after-deploy check could not run ($code): $(head -c 300 out.json)"; exit 1; }
+          python3 - <<'PY'
+          import json, os
+          r = json.load(open("out.json"))
+          mark = {"ok": "✅", "warn": "⚠️", "unknown": "❔", "problem": "❌"}
+          lines = [f"### After-deploy check: {'all ok' if r['ok'] else 'problems: ' + ', '.join(r['problems'])}", "", "| | Check | Value |", "| --- | --- | --- |"]
+          lines += [f"| {mark.get(c['status'], c['status'])} | {c['label']} | {c['value'].replace('|', '/')} |" for c in r["checks"]]
+          open(os.environ["GITHUB_STEP_SUMMARY"], "a").write("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          for c in r["checks"]:
+              if c["key"] in r["problems"]:
+                  print(f"::error::{c['label']}: {c['value']}")
+          raise SystemExit(0 if r["ok"] else 1)
+          PY

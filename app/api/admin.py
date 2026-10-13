@@ -277,6 +277,28 @@ async def admin_export(family_id: str, subject: str, session: DB) -> dict:
     }
 
 
+@router.get("/latency")
+async def admin_latency(session: DB, hours: int = 1) -> dict:
+    """How long Saheli took to answer (the why-trail's turn time, message turns only) over the last hours: count, p50,
+    p90 and the slowest, in ms. Read by the hourly live check (quality plan F8); sims and shadow families are left out."""
+    import math
+    from datetime import timedelta
+
+    from app.care.why import TraceTurn
+    from app.core import clock
+
+    since = clock.now() - timedelta(hours=max(1, min(hours, 168)))
+    rows = (await session.execute(select(TraceTurn.ms).where(TraceTurn.at >= since, TraceTurn.kind == "message",
+                                                             ~TraceTurn.family_id.startswith("shadow:"), ~TraceTurn.family_id.startswith("sim-"))
+                                  .order_by(TraceTurn.ms))).scalars().all()
+    ms = [int(m or 0) for m in rows]
+
+    def pct(q: float) -> int | None:
+        return ms[min(len(ms) - 1, max(0, math.ceil(q * len(ms)) - 1))] if ms else None  # nearest rank
+
+    return {"hours": max(1, min(hours, 168)), "turns": len(ms), "p50Ms": pct(0.5), "p90Ms": pct(0.9), "maxMs": ms[-1] if ms else None}
+
+
 @router.get("/live")
 async def admin_live(session: DB, minutes: int = 30) -> dict:
     """What is going on right now (founder 2026-10-13: "watch live, every session ongoing"): conversations in the last
