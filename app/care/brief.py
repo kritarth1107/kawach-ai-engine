@@ -271,6 +271,7 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
     ref = f"brief:{cg}:{day}" + (f":{now.strftime('%H%M')}" if on_request else "")
     from app.brain.wake import quiet_for
 
+    night = False  # set in the loop (it always runs); the type gate cannot see that
     for attempt in range(2):
         started = clock.now()
         prompt = prompt_for(caregiver, roster.elder, day, text)
