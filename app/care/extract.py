@@ -249,8 +249,14 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             continue  # a backlog read late: yesterday's mood is not today's
         if await mood.last(session, family_id, subject, since=pending[0].at):
             continue  # Saheli noted their mood in this conversation already
-        if await mood.record(session, family_id=family_id, subject_id=subject, score=score, word=str(m.get("word") or ""),
-                             summary=str(m.get("summary") or mood.SCALE[score]), source="reread", at=when):
+        word, summary = str(m.get("word") or ""), str(m.get("summary") or mood.SCALE[score])
+        # this read sees only the newest lines: how they are is read again from the whole day and the problems reported
+        # (live 2026-10-13: "no fever" became "relieved" while loose motions went on)
+        seen = await mood.assess(session, family_id, str(subject), hint={"score": score, "word": word, "summary": summary}, now=when)
+        if seen:
+            score, word, summary = seen["score"], seen["word"], seen["summary"]
+        if await mood.record(session, family_id=family_id, subject_id=subject, score=score, word=word,
+                             summary=summary, source="reread", at=when):
             counts["moods"] = counts.get("moods", 0) + 1
 
     await session.execute(update(Turn).where(Turn.id.in_([t.id for t in pending])).values(extracted=True))

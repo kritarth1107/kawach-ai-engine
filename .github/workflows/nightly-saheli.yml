@@ -166,6 +166,17 @@ jobs:
           MEMORY_EMBEDDINGS: "off"
           NUDGE_EVAL_MAX_INR: ${{ env.NUDGE_INR }}
         run: PYTHONPATH=. python -u -m eval.nudge_quality --per-language 10 --out runs/nudge_quality
+      - name: The founder's points of 13 Oct with the production brain (restricted items, scope, health answers, relay, mood)
+        if: always()
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_nudgeq
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+          POINTS_MAX_INR: "60"
+          POINTS_OUT: runs/nudge_quality/founder_points.json
+        run: PYTHONPATH=. python -u -m eval.founder_points_eval --repeat 2 | tee runs/nudge_quality/founder_points.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:

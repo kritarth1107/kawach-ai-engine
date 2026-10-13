@@ -617,10 +617,16 @@ async def log_event(ctx: TurnCtx, a: dict) -> dict:
 
     score = mood.score_of(a.get("mood_score"))
     if a["kind"] == "mood" or score:
-        new = await mood.record(ctx.session, family_id=ctx.family_id, subject_id=subject, score=score, word=str(a.get("mood_word") or ""),
-                                summary=a["summary"], severity=a.get("severity") if a["kind"] == "mood" else None, actor_id=ctx.speaker.get("id"))
+        word, summary = str(a.get("mood_word") or ""), a["summary"]
+        # read again from the whole conversation and the problems they reported, not from this message alone
+        name = next((m.get("name") for m in [ctx.elder, *ctx.members] if m.get("id") == subject), "") or ""
+        seen = await mood.assess(ctx.session, ctx.family_id, subject, name=name, hint={"score": score, "word": word, "summary": summary})
+        if seen:
+            score, word, summary = seen["score"], seen["word"], seen["summary"]
+        new = await mood.record(ctx.session, family_id=ctx.family_id, subject_id=subject, score=score, word=word,
+                                summary=summary, severity=a.get("severity") if a["kind"] == "mood" else None, actor_id=ctx.speaker.get("id"))
         if a["kind"] == "mood":
-            return {"logged": a["summary"]} if new else {"logged": False, "why": "the same mood was noted a little while ago"}
+            return {"logged": summary, "word": word} if new else {"logged": False, "why": "the same mood was noted a little while ago"}
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind=a["kind"], summary=a["summary"],
         payload={"severity": a.get("severity", "info")}, actor_id=ctx.speaker.get("id"),
@@ -1132,13 +1138,27 @@ async def _order_label(ctx: TurnCtx, person: str) -> str:
     return f"{str(t.service or '').replace('_', ' ').title()} {'ride' if t.kind == 'ride' else 'order'}".strip()
 
 
-async def template_hint(ctx: TurnCtx, to: str, text: str) -> dict | None:
+def _clock_label(at=None) -> str:
+    t = clock.ist(at)
+    return t.strftime("%I:%M %p").lstrip("0")
+
+
+async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None = None) -> dict | None:
     """What reaches someone whose WhatsApp chat is closed (no message from them in 24 hours; founder 2026-10-12): the
     backend sends this Utility template, and the message itself waits for their next message. The nightly brief, an
     order's update, and news for a caregiver have one; a check-in, a question to the person cared for, and a message
     someone asked Saheli to pass on do not (they are not sent while the chat is closed)."""
     if not ctx.is_system:
-        return None
+        # Someone asked Saheli to send this (live 2026-10-13: a caregiver asked for his mother's missed reminders and the
+        # message could not reach her, her chat had been closed for weeks): it goes as the reminder notice, and the full
+        # message waits for her tap or reply.
+        saved = ((ctx.profiles.get(to) or {}).get("saved") or {}).get("language")
+        what = str((reminder or {}).get("what") or "").strip()[:60]
+        if not what:
+            sender = (str(ctx.speaker.get("name") or "").split() or ["your family"])[0]
+            what = f"a message from {sender}"
+        when = str((reminder or {}).get("at") or "").strip()[:20] or _clock_label()
+        return {"purpose": "reminder", "params": [what, when], **({"lang": saved} if saved else {})}
     ref = ctx.message_ref or ""
     if ref.startswith("checkin:"):
         return None
@@ -1165,6 +1185,9 @@ async def template_hint(ctx: TurnCtx, to: str, text: str) -> dict | None:
         "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback|order, key: the key given in the prompt (for order: the task id)}",
                     "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order", "later"]}, "key": {"type": "string"}}},
         "ask_location": {"type": "boolean", "description": "The message asks them to share a location: it goes with WhatsApp's 'Send location' button"},
+        "reminder": {"type": "object", "description": "When the message reminds them of something (a medicine, a task): what and when, "
+                     "e.g. {what: 'morning medicines', at: '8:00 AM'} (at empty = now). Used for the short notice when their chat is closed.",
+                     "properties": {"what": {"type": "string"}, "at": {"type": "string"}}},
     },
     ["to", "text"],
 )
@@ -1206,7 +1229,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         from app.care import outcomes
 
         payload["buttons"] = outcomes.buttons(a["buttons"]["kind"], a["buttons"]["key"], ctx.profiles.get(a["to"]), a["text"])
-    template = await template_hint(ctx, a["to"], a["text"])
+    template = await template_hint(ctx, a["to"], a["text"], a.get("reminder") if isinstance(a.get("reminder"), dict) else None)
     if template:
         payload["template"] = template
     res = await ctx.host.call(
@@ -2619,15 +2642,20 @@ async def add_doctor_question(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "weekly_report",
     "A care report for the last N days (default 7) to share with the doctor or family: adherence, readings, "
-    "symptoms, mood, alerts and orders, with a link to the printable report.",
+    "symptoms, mood, alerts and orders, with a link to the printable report. It also groups problems that came back in "
+    "the last 3 months (three falls with each one's date and circumstances) with a question for the doctor: use it when "
+    "they prepare for a doctor visit or ask what to tell the doctor.",
     {"days": {"type": "integer", "minimum": 1, "maximum": 31}, "about": ABOUT},
     [],
 )
 async def weekly_report(ctx: TurnCtx, a: dict) -> dict:
     from app.care import features
 
+    from app.care import symptom_patterns
+
     subject = ctx.subject(a.get("about"))
     r = await features.report(ctx.session, ctx.family_id, subject, int(a.get("days") or 7))
+    r["patterns"] = await symptom_patterns.patterns(ctx.session, ctx.family_id, subject)
     return {
         "summary": features.report_facts_text(_name_of(ctx, subject), r),
         "link": f"{DASHBOARD_URL}/dashboard/report?recipient={subject}&days={r['days']}",

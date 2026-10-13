@@ -672,7 +672,11 @@ async def appointment_question(family_id: str, elder_id: str, body: QuestionIn, 
 async def report_view(family_id: str, elder_id: str, session: DB, days: int = 7, name: str = "") -> dict:
     from app.care import features
 
+    from app.care import symptom_patterns
+
     r = await features.report(session, family_id, elder_id, days)
+    # repeated problems of the last 3 months, whatever the report's window (three falls weeks apart are one pattern)
+    r["patterns"] = await symptom_patterns.patterns(session, family_id, elder_id)
     r["narrative"] = await features.narrative(session, family_id, elder_id, name or "the care recipient", r)
     await session.commit()
     return r

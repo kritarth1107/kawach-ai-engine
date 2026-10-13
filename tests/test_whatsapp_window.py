@@ -133,3 +133,22 @@ def test_first_line_is_the_template_line():
     assert tools.first_line("*Kamla ji* ne dawa nahi li. Unhe call kar lijiye.") == "Kamla ji ne dawa nahi li"
     assert tools.first_line("आज सुबह की दवा छूट गई। शाम को फिर पूछूँगी।") == "आज सुबह की दवा छूट गई"
     assert len(tools.first_line("word " * 60)) <= 90
+
+
+async def test_a_message_a_caregiver_asks_saheli_to_send_reaches_a_closed_chat_as_the_reminder_notice(db, at):
+    # live 2026-10-13: a son asked for his mother's missed reminders; her chat had been closed for weeks and nothing went
+    at("2026-10-13 17:05")
+    await store.save_roster(db, FAM, MAA, [MAA, SON])
+    host = SimHost()
+    host.world.closed.add(MAA["id"])
+    c = tools.TurnCtx(session=db, host=host, family_id=FAM, elder=MAA, speaker=SON, members=[MAA, SON], message_ref="m-relay",
+                      profiles={MAA["id"]: {"saved": {"language": "hi"}}})
+    res = await tools.send_message(c, {"to": MAA["id"], "text": "माँ, सुबह की दवाइयाँ (Pantodac, Perinorm) अभी ले लीजिए अगर नहीं ली हैं।",
+                                        "reminder": {"what": "सुबह की दवाइयाँ", "at": "8:00 AM"}})
+    assert res["via"] == "template" and "short notice" in res["note"]
+    t = host.world.templates[-1]
+    assert t["purpose"] == "reminder" and t["params"] == ["सुबह की दवाइयाँ", "8:00 AM"] and t["lang"] == "hi"
+    assert (await store.recent_turns(db, FAM, MAA["id"]))[-1].meta.get("waiting") is True  # given in full when she writes
+    # a plain message passed on: the notice says who it is from, and the time is now
+    await tools.send_message(c, {"to": MAA["id"], "text": "रवि ने कहा है कि शाम को फ़ोन करेंगे।"})
+    assert host.world.templates[-1]["params"] == ["a message from Ravi", "5:05 PM"]

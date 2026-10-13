@@ -385,8 +385,12 @@ def report_facts_text(name: str, r: dict) -> str:
         vit[v["kind"]].append(v["value"])
     for k, vals in vit.items():
         lines.append(f"{(k or 'reading').upper()}: " + ", ".join(str(x) for x in vals[-7:]))
+    if r.get("patterns"):
+        from app.care import symptom_patterns
+
+        lines.append("Repeated problems (last 3 months):\n" + symptom_patterns.text(r["patterns"]))
     if r["symptoms"]:
-        lines.append("Symptoms: " + "; ".join(s["text"] for s in r["symptoms"][-6:]))
+        lines.append("Symptoms: " + "; ".join(f"{s['at'][:10]} {s['text']}" for s in r["symptoms"][-12:]))
     if r["mood"]:
         lines.append("Mood/sleep/meals: " + "; ".join(m["text"] for m in r["mood"][-5:]))
     if r["alerts"]:
@@ -397,7 +401,7 @@ def report_facts_text(name: str, r: dict) -> str:
 
 
 NARRATIVE_PROMPT = """You write the summary paragraph of a weekly care report that a family will show to the elder's doctor.
-Write 3-5 plain sentences: medicine adherence (with the numbers), readings and any trend, symptoms, mood/sleep, anything the doctor should ask about.
+Write 3-5 plain sentences: medicine adherence (with the numbers), readings and any trend, symptoms (a repeated problem as one pattern with how many times and each one's circumstances), mood/sleep, anything the doctor should ask about.
 Use only the facts given. No diagnosis, no advice, no greetings. English."""
 
 

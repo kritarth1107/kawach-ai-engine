@@ -92,8 +92,10 @@ KIND_PROMPTS = {
     ),
     "appointment": (
         "[Scheduled wake-up] {title}. Remind the person the appointment is for (send_message, in their language), and tell "
-        "the caregiver who saved it in one line if it is someone else. Mention the questions to ask from care_team if any, and "
-        "offer to book a cab (start_task ride) only if they want one. Then close_loop {id} and reply none."
+        "the caregiver who saved it in one line if it is someone else. Mention the questions to ask from care_team if any; call "
+        "weekly_report (days 30) and, if it shows repeated problems or symptoms, add in a few lines what to tell the doctor "
+        "(a repeated problem as one point with how many times and each one's circumstances). Offer to book a cab (start_task "
+        "ride) only if they want one. Then close_loop {id} and reply none."
     ),
     "followup": (
         "[Scheduled follow-up] {title} Ask person {owner} one short, warm question in their language with send_message, "

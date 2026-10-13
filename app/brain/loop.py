@@ -490,6 +490,11 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     problems = policy.reply_problems(final, known_text=known, avoid_words=avoid, user_text=req.text, unreachable=unreachable)
     if guards.leaked_reasoning(final):
         problems.append("the reply contains your private notes (thoughts, the time, who is speaking); write only the message to the person")
+    if guards.code_in_reply(final):
+        problems.append("the reply contains code or a technical/programming answer: you never answer coding, programming or technical "
+                        "development questions. Say in one short line that it is outside what you do (health, routines, schedules, "
+                        "family care) and that a search engine or a general AI assistant can help; a word with an everyday meaning "
+                        "(Python, Java) gets only that meaning")
     fresh = req.text + "\n" + "\n".join(a.get("args", {}).__repr__() for a in ctx.actions)
     now = clock.ist()
     problems += guards.ungrounded(
@@ -550,6 +555,11 @@ PARTIAL = {
 }
 
 
+SCOPE = {
+    "devanagari": "यह मेरे काम से बाहर है 🙏 मैं आपकी सेहत, दिनचर्या, शेड्यूल और परिवार की देखभाल में मदद करती हूँ। इसके लिए कोई सर्च इंजन या दूसरा AI असिस्टेंट बेहतर रहेगा।",
+    "indic": "Yeh mere kaam se bahar hai 🙏 Main aapki sehat, routine, schedule aur parivaar ki dekhbhaal mein madad karti hoon. Iske liye koi search engine ya doosra AI assistant behtar rahega.",
+    "english": "That's outside what I do 🙏 I help with your health, routines, schedules and family care. A search engine or a general AI assistant is better for that.",
+}
 ACK = {"devanagari": "जी, ठीक है 🙏", "mr": "हो, ठीक आहे 🙏", "indic": "Ji, theek hai 🙏", "english": "Okay, noted 🙏",
        "bengali": "ঠিক আছে 🙏", "tamil": "சரி 🙏", "telugu": "సరే 🙏", "kannada": "ಸರಿ 🙏", "malayalam": "ശരി 🙏",
        "gujarati": "ઠીક છે 🙏", "gurmukhi": "ਠੀਕ ਹੈ 🙏", "odia": "ଠିକ ଅଛି 🙏"}
@@ -809,6 +819,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else degraded).strip()
+    if final and final != "none" and not is_system and guards.code_in_reply(final):
+        logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line
+        final = guards.canned(ctx.profiles.get(req.speaker["id"]), SCOPE)
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Last line of defence: the model's own notes never reach a person, even when the rewrite leaked again or the
         # turn was a scheduled one (those skip the rewrite).

@@ -684,6 +684,19 @@ def leaked_reasoning(text: str) -> bool:
 TOOL_TEXT = re.compile(r"\bdefault_api\s*[:.]\s*\w+|<\/?(tool_call|function_call|tool_code)>|```(tool_code|tool_call)\b", re.I)
 
 
+CODE = re.compile(
+    r"```|^\s*(def \w+\(|class \w+[:(]|import \w+|from [\w.]+ import |#include\b|public (static )?(void|class)\b|function \w*\(|"
+    r"(const|let|var) \w+ ?=|console\.log\(|print\(|SELECT .+ FROM|<\?php|<script\b|\$ (pip|npm|sudo|git|cd|ls) )",
+    re.M | re.I,
+)
+
+
+def code_in_reply(text: str) -> bool:
+    """Saheli's own reply holds code or a command (founder 2026-10-13: she never answers coding or technical development
+    questions). Checks her output only, never what people wrote."""
+    return bool(CODE.search(text or ""))
+
+
 def leaked_tool_call(text: str, tool_names: Iterable[str] = ()) -> bool:
     """A tool call written into the reply as text ("default_api:remember{...}", "remember{"domain": ...}"): nothing was done,
     and the person would see code (world probe run 2026-10-13, a Marwari naming request)."""
