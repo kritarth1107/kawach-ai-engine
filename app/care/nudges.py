@@ -44,6 +44,7 @@ PARALLEL = 5  # people at a time (NUDGE_PARALLEL; tests share one connection and
 REPLY_WINDOW = timedelta(hours=6)  # a reply this soon after a nudge answers it
 SKIP_LOG_EVERY = timedelta(minutes=60)  # the same skip reason is logged at most this often per person
 MAX_LEN = {True: 220, False: 300}  # an elder / anyone else
+DOSES_AFTER_MIN = 120  # an unmarked item is a nudge option only this long after its time
 EARLY_BIRD_MAX, EARLY_BIRD_GAP = 2, timedelta(hours=2)
 FOLLOWUP_AFTER = (timedelta(minutes=5), timedelta(minutes=10))  # a reminder this long ago, unanswered, gets one question
 MODE_TTL = 60.0
@@ -470,12 +471,15 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
         return out
 
     if p.cared:
-        due_items = checkins.unmarked_due(schedule, now)
+        # Only items at least 2 hours past their time (the backend's own missed-dose follow-up has asked by then), once a
+        # day, naming each item and its time (live 2026-10-13: an evening "your morning medications?" fit anyone).
+        due_items = [i for i in checkins.unmarked_due(schedule, now) if (_hm(i.get("time")) or 24 * 60) <= m_now - DOSES_AFTER_MIN]
         if due_items:
             ids = ",".join(sorted(str(i.get("scheduleId")) for i in due_items))
             listed = "; ".join(f"{i.get('title')} at {i.get('time')}" for i in due_items[:6])
-            add("doses", f"today's items past their time that nobody marked: {listed} (ask once whether they were done)",
-                about=f"doses:{ids}", fld="doses", boost=2)
+            add("doses", f"today's items past their time that nobody marked: {listed} (ask once whether they were done, naming "
+                "each item and its time as listed here, never 'your medicines' in general)",
+                about=f"doses:{ids}", fld="doses", boost=2, cooldown=timedelta(hours=20))
     # Today's medicines are not options: their own reminders go at their time (a nudge once added "with lunch" to a dose).
     for r in reminders:
         for t in r.get("times") or []:

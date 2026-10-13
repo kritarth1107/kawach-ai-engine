@@ -686,3 +686,26 @@ async def test_a_good_answered_nudge_becomes_one_tuning_example_and_a_bad_one_do
     row.grade = {"pass": False, "issues": ["made_up"]}
     await db.commit()
     assert await ex.rows_to_learn_from(sessions, 30, "neutral") == []  # a graded failure never teaches
+
+
+async def test_an_unmarked_item_is_asked_about_only_two_hours_after_its_time_by_name_and_once_a_day(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    sched = {"items": [{"scheduleId": "s1", "title": "Thyronorm 50", "time": "10:00", "status": "missed"}]}
+
+    async def doses(when: str, ck=None) -> list:
+        at(when)
+        opts = await nudges.candidates(db, p, ck or nudges.Clock(None, None, 0, False), nudges.clock.now(), facts=[], acts=[],
+                                       schedule=sched, reminders=[])
+        return [o for o in opts if o.kind == "doses"]
+
+    assert await doses("2026-10-14 11:00") == []  # the backend's own missed-dose follow-up is still asking
+    got = await doses("2026-10-14 12:00")
+    assert len(got) == 1 and "Thyronorm 50 at 10:00" in got[0].why and "naming each item" in got[0].why
+    await nudges._log(db, p, nudges.clock.now(), kind="doses", status="sent", text="Did the 10 am Thyronorm happen?", fld="doses",
+                      about=got[0].about_ref, sent=True)
+    await db.commit()
+    sched["items"].append({"scheduleId": "s2", "title": "Ecosprin", "time": "13:00", "status": "missed"})
+    ck = nudges.Clock(None, None, 0, False, rows=await nudges.ledger_rows(db, FAM, MAA["id"]))
+    assert await doses("2026-10-14 16:00", ck) == []  # asked once today already
