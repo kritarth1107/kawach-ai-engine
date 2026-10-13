@@ -250,13 +250,21 @@ async def appointment_loops(session: AsyncSession, *, family_id: str, subject_id
     return out
 
 
+def _is_helper(f) -> bool:
+    """The home record also keeps the address and who they live with; only a fact with a person's field (a name, a
+    role or a phone) is a helper. Listing the address as a helper let the dashboard's Remove delete it (2026-10-14)."""
+    v = f.value if isinstance(f.value, dict) else {}
+    return any(v.get(k) for k in ("name", "role", "phone"))
+
+
 async def care_team(session: AsyncSession, family_id: str, subject_id: str) -> dict:
     rows = await store.facts(session, family_id, subject_id, domains=["doctor", "hospital", "contact", "home", "appointment"], statuses=("active",))
     card = await emergency(session, family_id, subject_id)
     appts = sorted((appointment_json(f) for f in rows if f.domain == "appointment"), key=lambda a: a["when"] or "")
     return {
         "doctors": card["doctors"], "hospital": card["hospital"], "contacts": card["contacts"],
-        "helpers": [{"name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "text": f.text, "phone": f.value.get("phone")} for f in rows if f.domain == "home"],
+        "helpers": [{"key": f.key, "name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "text": f.text, "phone": f.value.get("phone")}
+                    for f in rows if f.domain == "home" and _is_helper(f)],
         "upcoming": [a for a in appts if a["upcoming"]],
         "past": [a for a in reversed(appts) if not a["upcoming"]][:10],
     }

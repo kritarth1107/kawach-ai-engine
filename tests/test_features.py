@@ -152,3 +152,15 @@ async def test_spending_counts_only_placed_orders(db, at):
     await db.flush()
     s = await call(ctx(db), "spending", {"month": "2026-10"})
     assert s["total"] == 283 and s["count"] == 1 and s["byService"] == {"instamart": 283}
+
+
+async def test_care_team_helpers_are_people_not_the_home_address(db, at):
+    at("2026-10-02 09:00")
+    c = ctx(db)
+    await call(c, "remember", {"domain": "home", "name": "Sunita", "details": {"name": "Sunita", "role": "cook", "phone": "+91 90000 00011"}, "sentence": "Sunita cooks lunch"})
+    await call(c, "remember", {"domain": "home", "name": "Driver", "details": {"role": "driver"}, "sentence": "A driver comes on weekdays"})
+    await call(c, "remember", {"domain": "home", "name": "home_address", "details": {"address": "12 Park Road", "city": "Pune", "pincode": "411001"}, "sentence": "Lives at 12 Park Road"})
+    await call(c, "remember", {"domain": "home", "name": "lives_with", "details": {"with": "son", "city": "Pune"}, "sentence": "Lives with her son"})
+    team = await features.care_team(db, FAM, ELDER)
+    assert sorted(h["name"] for h in team["helpers"]) == ["Driver", "Sunita"]
+    assert all(h["key"].startswith("home:") for h in team["helpers"])
