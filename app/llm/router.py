@@ -228,22 +228,23 @@ async def complete(
 
     for route in live:
         try:
-            try:
-                reply = await call(route)
-            except ModelUnavailable as exc:
-                if exc.status != 429:
-                    raise
-                # Every 429 is logged, also the ones the retry clears (trust plan C5.1: measure before buying capacity).
-                logger.warning("llm_429 role=%s model=%s attempt=1", role, route.key)
-                # Shared-capacity 429s usually clear within a second or two: one short retry on the same fast model
-                # beats falling through to a slower one.
-                await asyncio.sleep(RETRY_429_S)
+            reply = None
+            for attempt, wait in enumerate((0.0, *RETRY_429_S), start=1):
+                if wait:
+                    await asyncio.sleep(wait)
                 try:
                     reply = await call(route)
-                except ModelUnavailable as again:
-                    if again.status == 429:
-                        logger.warning("llm_429 role=%s model=%s attempt=2", role, route.key)
-                    raise
+                    break
+                except ModelUnavailable as exc:
+                    if exc.status != 429:
+                        raise
+                    # Every 429 is logged, also the ones a retry clears (trust plan C5.1: measure before buying capacity).
+                    logger.warning("llm_429 role=%s model=%s attempt=%d", role, route.key, attempt)
+                    # Shared capacity usually frees within seconds: back off on the same model (health data stays in
+                    # India, founder D5, so there is often no other region to fall to) rather than give a weaker answer.
+                    if attempt > len(RETRY_429_S):
+                        raise
+            assert reply is not None
             inr = await spend.record(role, route.model, reply.usage or {})
             logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, route.key, reply.usage, inr)
             return reply
@@ -257,7 +258,7 @@ async def complete(
     raise AllModelsFailed("; ".join(errors))
 
 
-RETRY_429_S = 1.5
+RETRY_429_S: tuple[float, ...] = (1.5, 3.0, 6.0)  # about 10 s in all before the next route or AllModelsFailed
 
 
 def new_call_id() -> str:

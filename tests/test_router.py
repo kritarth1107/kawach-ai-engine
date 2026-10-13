@@ -21,7 +21,7 @@ class Scripted:
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    monkeypatch.setattr(router, "RETRY_429_S", 0)
+    monkeypatch.setattr(router, "RETRY_429_S", (0, 0, 0))
     router.reset_breakers()
     yield
     router.reset_breakers()
@@ -32,14 +32,24 @@ MSG = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
 async def test_falls_back_on_rate_limit_and_skips_tripped_model():
-    a, b = Scripted([ModelUnavailable(429, "quota"), ModelUnavailable(429, "quota")]), Scripted(["from b", "again b"])
+    a, b = Scripted([ModelUnavailable(429, "quota")] * 4), Scripted(["from b", "again b"])
     router.register_provider("a", a)
     router.register_provider("b", b)
     r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
     assert r.text == "from b" and r.model == "m2"
     r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
     assert r.text == "again b"
-    assert a.calls == ["m1", "m1"]  # one short retry, then the breaker is open: not tried on the second call
+    assert a.calls == ["m1"] * 4  # backed off three times, then the breaker is open: not tried on the second call
+
+
+async def test_a_longer_rate_limit_is_waited_out_on_the_same_model():
+    """Trust plan C5 (founder D5: health data stays in India, so Mumbai Flash is often the only route): back off on the
+    same model before falling to another route or a holding line."""
+    a, b = Scripted([ModelUnavailable(429, "q"), ModelUnavailable(429, "q"), ModelUnavailable(429, "q"), "from a"]), Scripted(["from b"])
+    router.register_provider("a", a)
+    router.register_provider("b", b)
+    r = await router.complete("brain", system_stable="s", messages=MSG, routes=ROUTES)
+    assert r.text == "from a" and b.calls == [] and a.calls == ["m1"] * 4
 
 
 async def test_a_passing_rate_limit_is_retried_on_the_same_fast_model():

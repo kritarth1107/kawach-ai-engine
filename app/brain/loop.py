@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 MAX_STEPS = 10
 # Thinking depth for brain turns. Scenarios pass at low; raise per deployment if quality needs it.
 BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
+# Hard turns (health, a correction, an upset person) think harder (trust plan C6). Off (same as BRAIN_EFFORT) until the
+# paid A/B on the test world shows medium is at least 5 points better at p90 <= 15 s (founder decision D3).
+BRAIN_EFFORT_HARD = os.getenv("BRAIN_EFFORT_HARD", BRAIN_EFFORT)
 HISTORY_TURNS = 40
 COMPACT_AFTER = 80
 
@@ -438,6 +441,44 @@ def _remember_imported(family_id: str, elder_id: str) -> None:
     _IMPORTED[(family_id, elder_id)] = True
 
 
+# What makes a turn hard, judged only from data and the brain's own tool choices (never from the person's words): a low
+# mood the mood reader logged today, a symptom or red flag in the last day, a correction of the record in the last 15
+# minutes, or, during the turn, a tool call that changes a health fact, the name, logs a symptom/mood or alerts someone.
+HARD_TOOLS = {"alert_caregiver", "confirm_change", "log_vital", "add_doctor_question", "undo_change", "forget"}
+HARD_DOMAINS = {"medicine", "allergy", "condition", "vital_target", "diet", "naming"}
+
+
+def hard_call(call) -> bool:
+    args = call.args if isinstance(getattr(call, "args", None), dict) else {}
+    if call.name in HARD_TOOLS or args.get("correction") or args.get("wrong"):
+        return True
+    if call.name in ("remember", "stop") and args.get("domain") in HARD_DOMAINS:
+        return True
+    return call.name == "log_event" and args.get("kind") in ("symptom", "mood")
+
+
+async def hard_start(session: AsyncSession, req: "TurnRequest") -> bool:
+    from sqlalchemy import select as _select
+
+    from app.care.models import CareEvent, CareFact
+
+    now = clock.now()
+    people = {req.speaker["id"], req.elder["id"]}
+    events = (await session.execute(_select(CareEvent.kind, CareEvent.payload).where(
+        CareEvent.family_id == req.family_id, CareEvent.subject_id.in_(people), CareEvent.at >= now - timedelta(hours=24),
+        CareEvent.kind.in_(("symptom", "red_flag", "mood"))))).all()
+    for kind, payload in events:
+        if kind in ("symptom", "red_flag"):
+            return True
+        score = (payload or {}).get("score")
+        if kind == "mood" and isinstance(score, (int, float)) and score <= 2:
+            return True
+    recent = (await session.execute(_select(CareFact.id).where(
+        CareFact.family_id == req.family_id, CareFact.recorded_at >= now - timedelta(minutes=15),
+        CareFact.status.in_(("pending", "retracted", "stopped", "superseded"))).limit(1))).first()
+    return recent is not None
+
+
 # Hard moments get the strongest model when one is configured (MODEL_ROUTES "brain_hard": e.g. Opus or Gemini Pro);
 # everything else stays on the fast one. BRAIN_ROLE lets a training run point Saheli at a tuned model ("brain_tuned").
 HARD_SITUATIONS = {"emergency", "grief", "med_question", "injection", "caregiver_stressed", "low_mood"}
@@ -763,6 +804,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
     brain_role = role_for(situation)
+    effort = BRAIN_EFFORT
+    if BRAIN_EFFORT_HARD != BRAIN_EFFORT and not is_system:
+        try:
+            effort = BRAIN_EFFORT_HARD if await hard_start(session, req) else BRAIN_EFFORT
+        except Exception:  # noqa: BLE001 — the turn goes on at the usual effort
+            logger.exception("hard-turn check failed family=%s", req.family_id)
     guarded = False
     degraded = ""
     tool_text_retried = False
@@ -778,7 +825,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 # On the last step there are no tools, so the person always gets a reply.
                 tools=None if last else tools.specs(),
                 max_tokens=6000,
-                effort=BRAIN_EFFORT,
+                effort=effort,
                 essential=not is_system,  # past the hard cap only people's messages get answers
             )
         except router.AllModelsFailed:
@@ -821,6 +868,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 "something, do it now with the tool; otherwise drop the claim. Then write only the corrected message to the person.)"
             )}]})
             continue
+        if effort != BRAIN_EFFORT_HARD and not is_system and any(hard_call(c) for c in reply.tool_calls):
+            effort = BRAIN_EFFORT_HARD  # the rest of this turn (the reply after the health change) thinks harder
+            logger.info("hard turn family=%s effort=%s", req.family_id, effort)
         results = []
         searches = sum(1 for a in ctx.actions if a["tool"] in ("recall", "search_records"))
         for call in reply.tool_calls:
