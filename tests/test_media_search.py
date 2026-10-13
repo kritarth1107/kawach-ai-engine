@@ -94,4 +94,4 @@ async def test_web_search_has_a_daily_limit_and_fails_plainly(db, at, monkeypatc
     monkeypatch.setenv("WEB_SEARCH_PER_FAMILY_DAY", "5")
     monkeypatch.setattr(websearch, "search", down)
     out, err = await tools.run(ctx(db), "web_search", {"question": "c"})
-    assert err and "do not guess" in out
+    assert err and "guess nothing specific to them" in out and "never mention looking it up" in out

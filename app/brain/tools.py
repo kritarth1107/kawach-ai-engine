@@ -1295,7 +1295,7 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     problems = await send_problems(ctx, a["to"], a["text"])
     if problems:
         raise ToolRefused("Not sent: " + "; ".join(problems) + ".")
-    a = {**a, "text": await _grounded_send(ctx, a["to"], a["text"])}
+    a = {**a, "text": await _grounded_send(ctx, str(a["to"]), str(a["text"]))}
     greeted, mid = guards.opening_state(await store.recent_turns(ctx.session, ctx.family_id, a["to"], limit=12), clock.now(), day_of=clock.ist_day)
     a = {**a, "text": guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)),
                                           ctx.profiles.get(a["to"]))}

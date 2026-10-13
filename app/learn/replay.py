@@ -23,7 +23,12 @@ class ReplayUnavailable(RuntimeError):
     """The replay run cannot happen here (not the test project, no test database, or no runner)."""
 
 
-async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases: int = 40) -> dict:
+_FROM_DB = object()
+
+
+async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases: int = 40, live=_FROM_DB, case_files: tuple[str, ...] = ()) -> dict:
+    """live: the playbook the candidate is compared with (default: the live one in `sessions`; the learn-gate workflow passes
+    production's). case_files: exported cases (jsonl) to add to the repo's."""
     if os.getenv("GCP_PROJECT_ID") != TEST_PROJECT or os.getenv("GOOGLE_CLOUD_PROJECT", TEST_PROJECT) != TEST_PROJECT:
         raise ReplayUnavailable("paid replay runs go to the sunny-ship test project only")
     url = os.getenv("REPLAY_DATABASE_URL", "").strip()
@@ -40,14 +45,16 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
     from app.quality.cases import as_row
     from app.quality.models import ReplayCase
 
-    cases = runner.load_cases([])
+    cases = runner.load_cases(list(case_files))
     async with sessions() as s:
         try:
             rows = list((await s.execute(select(ReplayCase).where(ReplayCase.status.in_(("open", "fixed"))))).scalars())
         except Exception:  # noqa: BLE001 — a database without the table: the repo's cases only
+            await s.rollback()
             rows = []
         cases += [as_row(r) for r in rows if r.anonymised or not r.family_id]
-        live, _canary = await learned.versions(s)
+        if live is _FROM_DB:
+            live, _canary = await learned.versions(s)
     cases = runner.choose(cases, max_cases)
     start = spend.process_spent()
     half = budget_inr / 2

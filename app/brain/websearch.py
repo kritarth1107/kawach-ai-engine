@@ -50,7 +50,7 @@ async def search(question: str) -> dict:
         model=os.getenv("WEB_SEARCH_MODEL", "gemini-3.5-flash"),
         contents=PROMPT + question.strip()[:400],
         config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())], temperature=0.2,
-                                           max_output_tokens=OUT_TOKENS, thinking_config=types.ThinkingConfig(thinking_level="LOW")),
+                                           max_output_tokens=OUT_TOKENS, thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)),
     ), timeout=TIMEOUT_S)
     import re
 

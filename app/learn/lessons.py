@@ -200,7 +200,9 @@ async def draft(sessions: async_sessionmaker) -> PlaybookVersion | None:
         return pb
 
 
-async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
+async def gate_and_canary(sessions: async_sessionmaker, version: int, replay: dict | None = None) -> dict:
+    """replay: the replay gate's result when it ran elsewhere (the learn-gate workflow in the test project, which posts it to
+    /v2/admin/learn/playbooks/{version}/replay); without it the gate is tried here (production: unavailable, so it waits)."""
     async with sessions() as session:
         pb = await session.get(PlaybookVersion, version)
         if not pb or pb.status != "draft":
@@ -209,7 +211,8 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
         if pb.gate["passed"]:
             # §10: a lesson must also pass the replay cases on the real model before it reaches anyone: every fixed case
             # still passes, and the failures it targets now pass. No replay runner yet means it waits as a draft.
-            replay = await replay_gate(sessions, pb)
+            if replay is None:
+                replay = await replay_gate(sessions, pb)
             pb.gate = {**pb.gate, "replay": replay}
             if replay.get("status") == "failed":
                 pb.gate["passed"] = False

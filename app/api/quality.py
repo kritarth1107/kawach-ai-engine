@@ -133,6 +133,62 @@ async def post_replay_results(body: ReplayResultsIn, session: DB, caller: Annota
     return {**out, "by": caller}
 
 
+def _pb_json(pb) -> dict | None:
+    if pb is None:
+        return None
+    return {"version": pb.version, "status": pb.status, "lessons": pb.lessons or {}, "examples": pb.examples or {}, "scope": pb.scope or [],
+            "note": pb.note or "", "gate": pb.gate or {}}
+
+
+@poster.get("/learn/waiting-draft")
+async def learn_waiting_draft(session: DB, caller: Annotated[str, Depends(verify_eval_poster)]) -> dict:
+    """The newest playbook draft waiting for its replay gate (trust plan §10.2 step 2), and the live playbook it is compared
+    with: the learn-gate workflow runs both through the replay cases in the test project and posts the result back."""
+    from sqlalchemy import select
+
+    from app.learn import playbook
+    from app.learn.models import PlaybookVersion
+
+    draft = (await session.execute(select(PlaybookVersion).where(PlaybookVersion.status == "draft")
+                                   .order_by(PlaybookVersion.version.desc()).limit(1))).scalars().first()
+    live, _canary = await playbook.versions(session)
+    return {"draft": _pb_json(draft), "live": _pb_json(live), "by": caller}
+
+
+class GateIn(BaseModel):
+    run_id: str = Field(default="", max_length=80)
+    regressions: list[str] = Field(default_factory=list, max_length=500)
+    fixed: list[str] = Field(default_factory=list, max_length=500)
+    skipped: list[str] = Field(default_factory=list, max_length=500)
+    n: int = 0
+    cost_inr: float = 0.0
+    live: int | None = None
+    error: str = Field(default="", max_length=500)
+
+
+@poster.post("/learn/playbooks/{version}/replay")
+async def learn_replay_result(version: int, body: GateIn, caller: Annotated[str, Depends(verify_eval_poster)]) -> dict:
+    """The replay gate's result for a waiting draft: no regression → its canary starts (20% of families); a regression → it
+    is rejected; an error → it keeps waiting (never a silent pass)."""
+    from app.db.session import SessionLocal
+
+    return await apply_gate(SessionLocal, version, body, caller)
+
+
+async def apply_gate(sessions, version: int, body: GateIn, caller: str) -> dict:
+    from app.learn import lessons
+
+    if body.error or not body.n:
+        replay = {"status": "unavailable", "why": (body.error or "no case ran")[:200], "run_id": body.run_id}
+    else:
+        replay = {"status": "failed" if body.regressions else "passed", "regressions": body.regressions, "fixed": body.fixed,
+                  "skipped": body.skipped, "n": body.n, "cost_inr": body.cost_inr, "live": body.live, "run_id": body.run_id, "by": caller}
+    out = await lessons.gate_and_canary(sessions, version, replay=replay)
+    if out.get("skipped"):
+        raise HTTPException(status_code=409, detail="that version is not a waiting draft")
+    return {"version": version, "status": out.get("status"), "replay": replay["status"]}
+
+
 @router.get("/calibration")
 async def calibration_view(session: DB, batch: str | None = None) -> dict:
     from app.db.session import SessionLocal
