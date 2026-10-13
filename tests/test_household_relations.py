@@ -6,7 +6,7 @@ is known Saheli is told not to guess."""
 
 from app.api.brain import Person
 from app.care import digest
-from eval.world.make import load
+from eval.world import make
 from eval.world.seed_engine import relations, roster_of
 
 PREM = {"id": "c1", "name": "Prem", "role": "primary caregiver"}
@@ -46,7 +46,7 @@ def test_the_relation_comes_through_the_api_model():
 
 def test_the_world_seeds_relations_the_way_the_backend_stores_them():
     by_house: dict[str, dict] = {}
-    for f in load():
+    for f in make.build():
         by_house.setdefault(f["household"], f)
     surgery = by_house["post_surgery"]
     patient = next(p for p in surgery["people"] if p["careRecipient"])
