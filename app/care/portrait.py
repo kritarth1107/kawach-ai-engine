@@ -53,18 +53,19 @@ def _value_text(value: dict, *keys: str) -> str | None:
 
 async def _said(session: AsyncSession, family_id: str, facts: list[CareFact]) -> dict[str, dict]:
     """The person's own words behind each fact: the message it was saved from, or what the re-read heard."""
-    refs = {f.source_ref: f for f in facts if f.source_ref}
+    refs: dict[str, CareFact] = {f.source_ref: f for f in facts if f.source_ref}
     out: dict[str, dict] = {}
     if refs:
         rows = (await session.execute(
             select(Turn.message_ref, Turn.text, Turn.at, Turn.meta).where(Turn.family_id == family_id, Turn.message_ref.in_(list(refs)))
         )).all()
         for ref, text, at, meta in rows:
-            if text and not text.startswith("["):
+            if ref in refs and text and not text.startswith("["):
                 out[str(refs[ref].id)] = {"text": text[:280], "at": at.isoformat(), "voice": bool((meta or {}).get("media")), "heard": False}
     for f in facts:
-        if str(f.id) not in out and (f.note or "").startswith("heard: "):
-            heard = f.note[len("heard: "):].strip().strip('"').strip()
+        note = f.note or ""
+        if str(f.id) not in out and note.startswith("heard: "):
+            heard = note[len("heard: "):].strip().strip('"').strip()
             if heard:
                 # the re-read's own pick of words: shown as heard in the chat, never as the message a fact was saved from
                 out[str(f.id)] = {"text": heard[:280], "at": f.recorded_at.isoformat(), "voice": False, "heard": True}
@@ -140,7 +141,7 @@ async def build(session: AsyncSession, family_id: str, subject_id: str, *, names
         "name": names.get(subject_id),
         "age": val("profile:age", "age", "value"),
         "callAs": val("naming:address_as", "name"),
-        "language": (by_key.get("language:preferred").text if by_key.get("language:preferred") else None),
+        "language": (lang.text if (lang := by_key.get("language:preferred")) else None),
         "livesWith": (lives.value.get("with") if lives and isinstance(lives.value.get("with"), str) else None),
         "city": (lives.value.get("city") if lives and isinstance(lives.value.get("city"), str) else None)
                 or next((h.value.get("city") for h in homes if isinstance(h.value.get("city"), str)), None),
