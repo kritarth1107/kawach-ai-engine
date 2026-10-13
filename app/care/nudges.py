@@ -1246,7 +1246,7 @@ Fail it for any of these (list each in issues):
 - tone: cold, pushy, alarming, lecturing, or wrong for who they are (an elder, a caregiver).
 Return only JSON: {"pass": true|false, "issues": ["made_up", ...], "note": "one line"}"""
 
-_review: dict = {"at": 0.0}
+_review: dict = {"at": None}  # None: never graded in this process (monotonic time starts near 0 in a fresh container)
 
 
 async def review(sessions: async_sessionmaker, *, now: datetime | None = None, limit: int = REVIEW_BATCH) -> dict:
@@ -1294,7 +1294,7 @@ async def learn(sessions: async_sessionmaker, *, now: datetime | None = None) ->
         out["reactions"] = await read_reactions(sessions, now=now)
     except Exception:  # noqa: BLE001
         logger.exception("nudge reactions failed")
-    if _time.monotonic() - _review["at"] >= REVIEW_EVERY:
+    if _review["at"] is None or _time.monotonic() - _review["at"] >= REVIEW_EVERY:
         _review["at"] = _time.monotonic()
         try:
             out["review"] = await review(sessions, now=now)

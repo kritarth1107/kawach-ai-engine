@@ -836,3 +836,17 @@ async def test_kinds_they_answer_become_one_visible_learning_that_weights_the_pi
     lr = await nudges.learned(db, FAM, MAA["id"], nudges.clock.now())
     assert lr.weight("reflect") > 0 > lr.weight("know")
     assert (await nudges.learn_topics(sessions))["saved"] == 0  # unchanged: no new version
+
+
+
+async def test_a_fresh_process_grades_at_once_even_when_its_clock_starts_near_zero(db, at, sessions, writer, monkeypatch):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    at("2026-10-14 11:00")
+    await run(sessions, SimHost(), mode="shadow")
+    monkeypatch.setattr(nudges, "_review", {"at": None})
+    monkeypatch.setattr(nudges._time, "monotonic", lambda: 12.0)  # a container started 12 s ago (live 13 Oct: never graded)
+    out = await nudges.learn(sessions)
+    assert out["review"]["graded"] == 1
+    assert "review" not in await nudges.learn(sessions)  # then once an hour
