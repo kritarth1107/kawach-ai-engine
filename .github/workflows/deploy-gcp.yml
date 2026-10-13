@@ -11,7 +11,9 @@ on:
 
 concurrency:
   group: deploy-ai-engine-gcp
-  cancel-in-progress: true
+  # a running deploy finishes; GitHub keeps only the newest waiting one (so the latest commit still wins). With pushes every
+  # few minutes and a 15-20 minute pipeline (tests, replay cases), cancelling in progress meant no deploy ever landed.
+  cancel-in-progress: false
 
 env:
   GCP_PROJECT_ID: kavach-care
