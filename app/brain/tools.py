@@ -74,6 +74,15 @@ class TurnCtx:
         return self.speaker.get("role") == "system"
 
     @property
+    def self_care(self) -> bool:
+        """An adult managing their own care: the person cared for is the one speaking and holds a caregiver role.
+
+        What they say about themselves carries a caregiver's weight (a dose their doctor changed is saved, not left
+        waiting for a confirmation nobody else can give; world probe judge, 2026-10-13). Alerts still never go to them
+        about themselves (founder rule): is_caregiver stays False for alert routing."""
+        return self.speaker_is_elder and "caregiver" in str(self.speaker.get("role", "")).lower()
+
+    @property
     def is_caregiver(self) -> bool:
         """A primary or co-caregiver. The dashboard is caregivers-only, so a dashboard actor is one even on their own
         self-care record; on WhatsApp a family member with view access or a family doctor is not."""
@@ -85,7 +94,7 @@ class TurnCtx:
     def source_kind(self) -> str:
         if self.is_system:
             return "inferred"
-        return "elder_said" if self.speaker_is_elder else "caregiver_said"
+        return "elder_said" if self.speaker_is_elder and not self.self_care else "caregiver_said"
 
     @property
     def actor_id(self) -> str:
@@ -246,7 +255,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         source_kind=ctx.source_kind,
         source_ref=ctx.message_ref,
         stated_by=ctx.speaker.get("id"),
-        confidence=0.9 if ctx.speaker_is_elder else 1.0,
+        confidence=0.9 if ctx.speaker_is_elder and not ctx.self_care else 1.0,
         # a medicine, allergy or condition heard in an unclear voice note waits for a confirmation, whoever said it
         force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,
     )
@@ -413,7 +422,7 @@ async def recall(ctx: TurnCtx, a: dict) -> dict:
     ["key", "approve"],
 )
 async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
-    if not ctx.is_caregiver:
+    if not (ctx.is_caregiver or ctx.self_care):
         raise ToolRefused("Only a caregiver (primary or co-caregiver) can confirm this change.")
     pending = [
         f for f in await store.facts(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",)) if f.key == a["key"]
@@ -2340,7 +2349,7 @@ async def set_boundaries(ctx: TurnCtx, a: dict) -> dict:
     policy = await boundaries.get(ctx.session, ctx.family_id)
     roster = await store.roster(ctx.session, ctx.family_id)
     me = ctx.speaker.get("id") or ""
-    if ctx.speaker_is_elder or not boundaries.can_manage(policy, roster, me):
+    if (ctx.speaker_is_elder and not ctx.self_care) or not boundaries.can_manage(policy, roster, me):
         raise ToolRefused("Only the family's approver can change the limits. Say so kindly.")
     ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
     if any(x not in ids for x in a.get("approvers") or []) or any(x not in ids for x in (a.get("members") or {})):
@@ -2503,7 +2512,7 @@ async def order_feedback(ctx: TurnCtx, a: dict) -> dict:
                           + "; ".join(f"{r['n']}. {r['name']}" for r in rows) + ". Call order_feedback again with these numbers.")
     return await aftercare.record(
         ctx.session, task, by=ctx.speaker.get("id") or ctx.elder_id, source_kind=ctx.source_kind,
-        confidence=0.9 if ctx.speaker_is_elder else 1.0, arrived=a.get("arrived"), problem=a.get("problem"), items=a.get("items"),
+        confidence=0.9 if ctx.speaker_is_elder and not ctx.self_care else 1.0, arrived=a.get("arrived"), problem=a.get("problem"), items=a.get("items"),
         order_again=a.get("order_again"), note=a.get("note"), done=bool(a.get("done")), ref=ctx.message_ref,
     )
 
@@ -3204,7 +3213,7 @@ async def _save_language(ctx: TurnCtx, subject: str, speech: dict) -> dict:
     w = await store.write_fact(
         ctx.session, family_id=ctx.family_id, subject_id=subject, domain="language", key="language:preferred", value=speech,
         text=language.sentence(speech), source_kind=ctx.source_kind, source_ref=ctx.message_ref, stated_by=ctx.speaker.get("id"),
-        confidence=0.9 if ctx.speaker_is_elder else 1.0,
+        confidence=0.9 if ctx.speaker_is_elder and not ctx.self_care else 1.0,
         # the whole setting, not merged into the old one (live 2026-10-09: "Talk to me in Gujarati" kept dialect Marwari)
         replace=True,
     )

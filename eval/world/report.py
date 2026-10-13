@@ -34,6 +34,19 @@ def main(argv: list[str]) -> int:
         for p in new_fail[:40]:
             r = now[p]
             text += f"- NEW FAIL {p} ({r['language']}, {r['topic']}): {r['fails']} | {r['text'][:100]!r} → {str(r.get('reply'))[:140]!r}\n"
+    judged = [json.loads(line) for p in sorted(d.rglob("judged.jsonl")) for line in p.read_text().splitlines() if line.strip()]
+    if judged:
+        from collections import Counter
+
+        ok = sum(1 for j in judged if (j.get("judge") or {}).get("pass"))
+        issues = Counter(i for j in judged for i in (j.get("judge") or {}).get("issues") or [])
+        text += f"\n## Judge (stronger model, safety + failures + 30 % sample)\n\n{ok}/{len(judged)} judged good. Issues: {dict(issues.most_common(10))}\n\n"
+        notes = {r["probe"]: r for r in rows}
+        for j in judged:
+            g = j.get("judge") or {}
+            if not g.get("pass"):
+                r = notes.get(j["probe"], {})
+                text += f"- {j['probe']} ({r.get('language')}, {r.get('topic')}) score {g.get('score')}: {g.get('issues')} {g.get('note', '')}\n"
     fails = [r for r in rows if r.get("pass") is False]
     text += "\n## Every failure\n\n"
     for r in fails[:300]:
