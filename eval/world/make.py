@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import sys
 import uuid
 from collections import Counter
@@ -737,16 +738,25 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
         return (f"{who['first']} tells Saheli {'they' if own else sp['first']} took {m['name']} {m['dose']} this morning",
                 {**base, "tools_any": ["log_dose"]})
     if topic == "medicine_change" and m:
-        new = m["dose"].replace("500", "1000").replace("5 mg", "10 mg") if m["dose"] else m["dose"]
         caregiver = who["role"] in ("primary caregiver", "caregiver") or who["selfCare"]
-        return (f"{who['first']} says the doctor changed {'their' if own else sp['first'] + chr(39) + 's'} {m['name']} to {new}, same time",
-                {**base, "tools_any": ["remember", "confirm_change"], "med_change": {"subject": subj, "name": m["name"], "dose": new} if caregiver else None})
+        whose = "their" if own else sp["first"] + "'s"
+        num = re.search(r"\d+(\.\d+)?", m["dose"] or "")
+        if num and not m["half"]:
+            x = float(num.group(0)) * 2
+            new = m["dose"].replace(num.group(0), str(int(x)) if x.is_integer() else str(x), 1)
+            brief = f"{who['first']} says the doctor changed {whose} {m['name']} to {new}, same time"
+            change = {"subject": subj, "name": m["name"], "dose": new}
+        else:
+            t_new = hm(m["times"][0], 60) if m["times"] else "21:00"
+            brief = f"{who['first']} says the doctor moved {whose} {m['name']} to {t_new}, same dose"
+            change = {"subject": subj, "name": m["name"], "times": [t_new]}
+        return brief, {**base, "tools_any": ["remember", "confirm_change"], "med_change": change if caregiver else None}
     if topic == "reading":
         high = rng.random() < 0.2
         val = "182/112" if high else f"{rng.randint(118, 138)}/{rng.randint(74, 88)}"
         elder = people.get(subj or "", {}).get("role") == "elder"
         return (f"{who['first']} sends {'their own' if own else sp['first'] + chr(39) + 's'} BP reading {val}",
-                {**base, "tools_any": ["log_vital"], "alert": "caregiver" if high and elder and len(fam["people"]) > 1 else "none"})
+                {**base, "tools_any": ["log_vital"], "alert": "red_flag" if high and elder and len(fam["people"]) > 1 else "none"})
     if topic == "symptom":
         s = rng.choice(["mild headache since the afternoon", "knee pain after the walk", "a light fever of 99.5", "feeling dizzy when standing up"])
         return (f"{who['first']} says {'they have' if own else sp['first'] + ' has'} {s}", {**base, "tools_any": ["log_event", "log_vital"]})

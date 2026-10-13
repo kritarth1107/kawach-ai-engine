@@ -27,6 +27,16 @@ def script_share(text: str, script: str) -> float:
     return ok / len(letters)
 
 
+def probe_script_ok(text: str, script: str, brief: str = "") -> bool:
+    """A probe is in its script once links and the Latin words it was given (medicine, store and place names) are set
+    aside: people write 'Metformin' inside a Hindi message."""
+    t = re.sub(r"https?://\S+", " ", text)
+    if script != "latin":
+        given = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z\-]+", brief)}
+        t = " ".join(w for w in re.split(r"\s+", t) if re.sub(r"[^A-Za-z\-]", "", w).lower() not in given)
+    return script_share(t, script) >= (0.85 if script == "latin" else 0.6)
+
+
 def brain_tools() -> set[str]:
     from app.brain import tools
 
@@ -130,8 +140,8 @@ def check(families: list[dict]) -> tuple[list[str], list[str]]:
                     errs.append(f"{q['id']}: expects unknown tool {t}")
             if q.get("text"):
                 lang = G.LANGS[q["language"]]
-                want = "latin" if lang["roman"] else lang["script"]
-                if script_share(q["text"], want) < 0.6:
+                want = "latin" if lang["roman"] or lang["lang"] == "en" else lang["script"]
+                if not probe_script_ok(q["text"], want, q["brief"]):
                     errs.append(f"{q['id']}: text not in {want} script")
                 if re.search(r"\+?\d[\d ]{9,}", q["text"]) and not re.search(r"\+9190000|\+99", q["text"]):
                     errs.append(f"{q['id']}: a phone-like number that is not fake")
@@ -167,7 +177,11 @@ def check(families: list[dict]) -> tuple[list[str], list[str]]:
 
 
 def main() -> int:
-    errs, report = check(load())
+    from eval.world.write import attach
+
+    families = load()
+    attach(families)  # the AI-written texts, where the cache matches the family
+    errs, report = check(families)
     print("\n".join(report))
     for e in errs[:200]:
         print("ERROR", e)
