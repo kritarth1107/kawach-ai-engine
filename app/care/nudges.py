@@ -60,7 +60,7 @@ REVIEW_BATCH = 15
 WINDOW = timedelta(hours=24) - timedelta(minutes=10)  # WhatsApp's free-message window, with the backend's margin
 SENT = ("sent", "shadow")  # a shadow nudge counts as sent for the clock and the ladder in shadow mode
 PRIORITY = {"doses": 9, "follow_up": 7, "upcoming": 6, "habit": 6, "collect": 4, "reflect": 4, "know": 3, "delight": 3,
-            "early_bird": 5, "reminder_followup": 8}
+            "early_bird": 5, "reminder_followup": 8, "meal": 7}
 SLOTS = (("morning", 5 * 60, 12 * 60), ("afternoon", 12 * 60, 17 * 60), ("evening", 17 * 60, 24 * 60))
 COLLECT_EVERY = {"feelings": timedelta(days=1), "sleep": timedelta(days=2), "readings": timedelta(days=4),
                  "weight": timedelta(days=20), "reports": timedelta(days=7), "water": timedelta(days=2), "meals": timedelta(days=2)}
@@ -201,7 +201,8 @@ async def read_clock(session: AsyncSession, family_id: str, person: str, gate: d
     rows = await ledger_rows(session, family_id, person)
     counted = SENT if mode == "shadow" else ("sent",)
     regular = [r for r in rows if r.status in counted and r.kind != "reminder_followup"]
-    outs = [t for t in (last_bot, _iso(gate.get("last_outbound_at"))) if t] + [_when(r) for r in rows if r.status in counted]
+    outs = [t for t in (last_bot, _iso(gate.get("last_outbound_at"))) if t] + [_when(r) for r in rows if r.status in counted
+                                                                                 and not (r.kind == "meal" and r.status == "shadow" and mode == "on")]
     last_out = max(outs, default=None)
     run = sum(1 for r in regular if last_in is None or _when(r) > last_in)
     morning = await morning_start(session, family_id, person, now)
@@ -270,7 +271,9 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
     if await outcomes_learn.avoid_now(session, p.family_id, p.id, now=now):
         return Due(p, empty, reason="learned_hour", mode=mode or cached_mode())  # they rarely answer at this hour (learned, visible)
     base = (CARED_EVERY if p.cared else CAREGIVER_EVERY) * (2 if lr.fewer else 1)
-    engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT)) if t], default=None)
+    # a meal question written in its own shadow (nudge.meals) went to nobody: it never holds back the hour's real nudge
+    engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT and not (r.kind == "meal" and r.status == "shadow")))
+                       if t], default=None)
     if engine_last and now - engine_last < base:
         return Due(p, empty, reason="talking" if last_user and now - last_user < base else "cadence")
     if busy:
@@ -296,6 +299,13 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         return Due(p, ck, reason="window_closed", mode=m)
     if gate.get("reason"):
         return Due(p, ck, reason=str(gate["reason"])[:60], mode=m)
+    if ck.run >= 2:  # near the escalation: once the caregiver is being told, the ladder adds nothing to that streak (B2)
+        try:
+            esc = await host.call("escalation_status", {"to": p.id}, family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id) or {}
+        except Exception:  # noqa: BLE001 — the ladder's own rules still hold
+            esc = {}
+        if esc.get("state") in ("pending", "deferred", "sent"):
+            return Due(p, ck, reason="escalating", mode=m)
     last = ck.last_activity
     if bird:
         if last is not None and now - last < CARED_EVERY:
@@ -570,6 +580,13 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
     likes = [f.text for f in facts if f.domain in ("preference", "dish", "occasion")][:4]
     if likes:
         add("delight", "something light from what they enjoy: " + "; ".join(likes), fld="delight", cooldown=timedelta(hours=8))
+    from app.care import meal_nudges
+
+    roster = await store.roster(session, fid)
+    elder = (roster.elder or {}) if roster else None
+    for m in await meal_nudges.options(session, p, ck.rows, now, acts=acts, elder=elder,
+                                       meals_mode=str(ck.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower()):
+        add(m["kind"], m["why"], about=m["about"], fld=m["fld"])
     return out
 
 
@@ -763,7 +780,7 @@ async def write_and_check(ctx: Context) -> tuple[dict | None, list[str]]:
 
 
 async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draft: dict, *, kind_default: str, mode: str,
-               now: datetime, run: int, about: str | None = None, recheck=None) -> str:
+               now: datetime, run: int, about: str | None = None, recheck=None, meals_mode: str | None = None) -> str:
     """Send (or, in shadow mode, only log) a checked nudge. The person's clock is read again under the family's lock right
     before it goes: if they wrote or anything else went out meanwhile, it is dropped (never mid-chat)."""
     from app.brain import guards
@@ -777,6 +794,8 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     fld = opt.field if opt else None
     about = about or (opt.about_ref if opt else None)
     text = str(draft.get("text") or "").strip()
+    if kind == "meal" and meals_mode != "on":
+        mode = "shadow"  # meal asks have their own switch (nudge.meals): in shadow they are written and logged, never sent
     async with sessions() as session:
         await _lock_family(session, p.family_id)
         if recheck is not None and not await recheck(session):
@@ -797,14 +816,18 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
             await session.commit()
             return "duplicate"
         try:
-            res = await host.call("send_whatsapp", {"to": p.id, "text": text}, family_id=p.family_id.removeprefix("shadow:"),
-                                  subject_id=p.id, actor_id=p.id)
+            # labelled for the backend's delivery ledger: a nudge counts toward "3 unanswered → the caregiver hears" (B2)
+            res = await host.call("send_whatsapp", {"to": p.id, "text": text, "kind": "nudge", "ref": row.ref},
+                                  family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id)
         except Exception as exc:  # noqa: BLE001
             row.status, row.reason = "failed", f"send:{type(exc).__name__}"
             await session.commit()
             return "failed"
+        row.wamid = str((res or {}).get("wamid") or "")[:120] or None
         if not (res or {}).get("delivered", True) or (res or {}).get("via") == "template":
-            row.status, row.reason = "failed", str((res or {}).get("reason") or "not_delivered")[:160]
+            # not said yet: the chat was closed (only the opener template went, or it waits for their next message)
+            row.status = "failed"
+            row.reason = ("waiting:opener" if (res or {}).get("via") == "template" else str((res or {}).get("reason") or "not_delivered"))[:160]
             await session.commit()
             return "failed"
         turn_id = await store.add_turn(session, family_id=p.family_id, thread_id=p.id, role="assistant", text=text, message_ref=row.ref,
@@ -881,7 +904,8 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                     return newest is None or seen is None or newest <= seen
 
                 out = await send(sessions, host, p, ctx, draft, kind_default="early_bird" if d.early_bird else "follow_up", mode=m,
-                                 now=now, run=d.clock.run, recheck=still_quiet)
+                                 now=now, run=d.clock.run, recheck=still_quiet,
+                                 meals_mode=str(d.clock.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower())
                 stats[out] = stats.get(out, 0) + 1
             except Exception:  # noqa: BLE001 — one person's problem never stops the others
                 logger.exception("regular nudge failed family=%s person=%s", r.family_id, p.id)
@@ -1012,7 +1036,7 @@ def followup_ladder_skips(rows: list[NudgeLedger]) -> bool:
 
 # ── replies ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-SAVE_WITH = (("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
+SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
              ("know:", "remember"), ("feelings", "log_event mood (and log_event symptom for a problem)"), ("sleep", "log_event"),
              ("reminder:", "log_activity or remember, whichever fits"))
 
@@ -1034,6 +1058,14 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
         return ""
     tool = next((t for prefix, t in SAVE_WITH if str(fld).startswith(prefix)), "the tool that fits (remember, log_activity, log_vital)")
     about = f" ({nudge['about_ref']})" if nudge.get("about_ref") else ""
+    if str(fld).startswith("meal:"):
+        slot = str(fld).split(":", 1)[1]
+        whom = str(nudge.get("about_ref") or "").partition(":for:")[2]
+        return (f"YOUR LAST MESSAGE TO THEM asked what {'person ' + whom if whom else 'they'} ate ({'today' if slot == 'day' else slot}): "
+                f"\"{(last.text or '')[:160]}\". If they answered, pass it to log_food (items with quantity and unit as they said"
+                + (f"; meal={slot}" if slot != "day" else "") + (f"; for_whom={whom}" if whom else "")
+                + "). If the amount is unclear, the tool returns one question with options: ask only that. If it does not answer it, "
+                "just answer what they wrote.")
     return (f"YOUR LAST MESSAGE TO THEM asked about {fld}{about}: \"{(last.text or '')[:160]}\". If what they wrote answers it, save it "
             f"with {tool}; if it does not, just answer what they wrote.")
 
@@ -1304,4 +1336,32 @@ async def learn(sessions: async_sessionmaker, *, now: datetime | None = None) ->
             out["topics"] = await learn_topics(sessions, now=now)
         except Exception:  # noqa: BLE001
             logger.exception("nudge topic learning failed")
+        try:
+            out["meals"] = await learn_meals(sessions, now=now)
+        except Exception:  # noqa: BLE001
+            logger.exception("meal learning failed")
     return out
+
+
+async def learn_meals(sessions: async_sessionmaker, *, now: datetime | None = None) -> dict:
+    """Hourly: each person's usual meal times and portions (the nutrition agent's learn_meal_habits) and the adaptive
+    asking mode (meal_nudges.learn_mode), all as visible learned facts."""
+    from app.care import meal_nudges
+
+    now = now or clock.now()
+    stats = {"modes": 0, "habits": 0}
+    hk = meal_nudges.hooks()
+    async with sessions() as session:
+        rosters = list((await session.execute(select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
+        for r in rosters:
+            for p in await people(session, r):
+                if hk is not None and p.cared:
+                    try:
+                        await hk[0].learn_meal_habits(session, r.family_id, p.id)
+                        stats["habits"] += 1
+                    except Exception:  # noqa: BLE001 — one person's habits never stop the rest
+                        logger.exception("meal habits failed family=%s", r.family_id)
+                if await meal_nudges.learn_mode(session, r.family_id, p.id, await ledger_rows(session, r.family_id, p.id, limit=60), now):
+                    stats["modes"] += 1
+        await session.commit()
+    return stats

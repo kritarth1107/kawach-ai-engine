@@ -38,6 +38,8 @@ class World:
     # regular nudges (nudge_gate): the admin flag, a pause, flows in progress per person, their last inbound message (ISO),
     # and messages the backend sent them itself (reminders, dose nudges, the morning schedule): {to, text, at}
     nudge_mode: str = "off"
+    meals_mode: str = "off"  # nudge.meals
+    escalations: dict[str, str] = field(default_factory=dict)  # person → none | pending | deferred | sent | replied
     paused: bool = False
     flows: dict[str, str] = field(default_factory=dict)
     inbound: dict[str, str] = field(default_factory=dict)
@@ -171,9 +173,11 @@ class SimHost:
                           key=lambda m: m["at"], reverse=True)[:5]
             flow = w.flows.get(to)
             reason = "paused" if w.paused else (f"active_flow:{flow}" if flow else ("window_closed" if to in w.closed else None))
-            return {"ok": reason is None, "reason": reason, "mode": w.nudge_mode, "window_open": to not in w.closed, "paused": w.paused,
+            return {"ok": reason is None, "reason": reason, "mode": w.nudge_mode, "meals_mode": w.meals_mode, "window_open": to not in w.closed, "paused": w.paused,
                     "active_flow": f"active_flow:{flow}" if flow else None, "last_inbound_at": w.inbound.get(to),
                     "last_outbound_at": outs[0]["at"] if outs else None, "last_outbound_preview": outs}
+        if tool == "escalation_status":
+            return {"unanswered": 0, "state": w.escalations.get(args.get("to") or subject_id, "none")}
         if tool == "send_template":
             if args.get("to") not in w.closed:
                 return {"sent": False, "reason": "chat open"}

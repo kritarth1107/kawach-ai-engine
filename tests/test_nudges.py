@@ -3,6 +3,9 @@ mid-chat, with the unanswered ladder, caregivers every 3 hours, early-bird messa
 minutes after an unanswered reminder, and shadow mode that sends nothing."""
 
 import json
+import re
+import sys
+import types
 
 import pytest
 from sqlalchemy import select
@@ -54,6 +57,11 @@ class Writer:
             await self.on_call()
         if self.script:
             return LLMReply(text=self.script.pop(0), tool_calls=[], model="fake", usage=self.usage)
+        pick = getattr(self, "pick", None)
+        found = pick and re.search(rf"- (o\d+) \[{pick}\]", self.seen[-1])
+        if found:
+            return LLMReply(text=json.dumps({"option_id": found.group(1), "text": LINES[(self.calls - 1) % len(LINES)]}),
+                            tool_calls=[], model="fake", usage=self.usage)
         return LLMReply(text=json.dumps({"option_id": "o1", "text": LINES[(self.calls - 1) % len(LINES)], "field": None,
                                          "expects_reply": True}), tool_calls=[], model="fake", usage=self.usage)
 
@@ -850,3 +858,226 @@ async def test_a_fresh_process_grades_at_once_even_when_its_clock_starts_near_ze
     out = await nudges.learn(sessions)
     assert out["review"]["graded"] == 1
     assert "review" not in await nudges.learn(sessions)  # then once an hour
+
+
+# 15. meal nudges (nutrition plan N5, founder N18): the nutrition agent's hooks are faked here (they land on their own)
+class Nutrition:
+    def __init__(self):
+        self.logged, self.pending, self.meals_logged, self.habits, self.setting = set(), [], 0, 0, {}
+
+    async def meal_logged(self, session, fid, pid, slot, day=None):
+        return (pid, slot) in self.logged
+
+    async def pending_confirmations(self, session, fid, pid):
+        return self.pending
+
+    async def progress(self, session, fid, pid, day=None):
+        return {"meals_logged": self.meals_logged}
+
+    async def learn_meal_habits(self, session, fid, pid):
+        self.habits += 1
+        return {}
+
+    async def get(self, session, fid, pid):
+        return {"tracking": "full", "ask": "adaptive", **self.setting.get(pid, {})}
+
+
+@pytest.fixture
+def food(monkeypatch):
+    n = Nutrition()
+    mod = types.ModuleType("app.nutrition")
+    mod.nudge_hooks, mod.settings = n, n  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "app.nutrition", mod)
+    return n
+
+
+async def meal_day(db, at, wake=None):
+    at("2026-10-14 09:00")
+    await family(db, (MAA, SON))
+    if wake:
+        await routine(db, MAA, "sleep", "03:00")
+        await routine(db, MAA, "wake_up", wake)
+
+
+async def meal_opts(db, at, when, rows=None, meals_mode="on", who=MAA, cared=True):
+    at(when)
+    p = nudges.Person(FAM, who["id"], who["name"], who["role"], cared, cared)
+    ck = nudges.Clock(None, None, 0, False, rows=rows if rows is not None else await nudges.ledger_rows(db, FAM, who["id"]),
+                      gate={"meals_mode": meals_mode})
+    return [o for o in await nudges.candidates(db, p, ck, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+            if o.kind == "meal"]
+
+
+async def test_lunch_is_asked_about_after_its_time_only_when_nothing_is_logged(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    assert await meal_opts(db, at, "2026-10-14 14:00") == []  # 13:30 lunch + 45 min not reached
+    got = await meal_opts(db, at, "2026-10-14 14:30")
+    assert [o.field for o in got] == ["meal:lunch"] and got[0].about_ref == "meal:2026-10-14:lunch"
+    food.logged.add((MAA["id"], "lunch"))
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []
+    food.logged.clear()
+    assert await meal_opts(db, at, "2026-10-14 16:45") == []  # past 3 h: left for the evening
+    assert await meal_opts(db, at, "2026-10-14 14:30", meals_mode="off") == []
+
+
+async def test_no_meal_question_without_the_nutrition_agent(db, at, sessions, writer):
+    await meal_day(db, at)
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []
+
+
+async def test_a_late_riser_has_no_morning_meals_and_breakfast_follows_their_wake_up(db, at, sessions, writer, food):
+    await meal_day(db, at, wake="13:30")
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # breakfast at 14:30 is not yet 45 min old; no 13:30 lunch
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 15:20")] == ["meal:breakfast"]
+
+
+async def test_a_meal_question_waits_for_a_dose_question_an_open_food_question_an_order_and_tracking_off(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    at("2026-10-14 14:10")
+    await nudges._log(db, p, nudges.clock.now(), kind="doses", status="sent", text="Did the 1 pm tablet happen?", sent=True)
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # within 30 min of a medicine question
+    assert len(await meal_opts(db, at, "2026-10-14 14:45")) == 1
+    food.pending = [{"kind": "question", "job_id": "j1", "reason": "quantity"}]
+    assert await meal_opts(db, at, "2026-10-14 14:45") == []
+    food.pending = [{"kind": "order_meal", "task_id": "t1", "since": "2026-10-14T13:05:00+05:30"}]
+    assert await meal_opts(db, at, "2026-10-14 14:45") == []  # aftercare asks "did you eat it?"
+    food.pending = []
+    food.setting[MAA["id"]] = {"tracking": "off"}
+    assert await meal_opts(db, at, "2026-10-14 14:45") == []
+
+
+async def test_at_most_three_meal_questions_a_day_three_hours_apart(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    at("2026-10-14 12:00")
+    await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text="What was breakfast?", fld="meal:breakfast",
+                      about="meal:2026-10-14:breakfast", sent=True)
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # 2.5 h after the last one
+    assert len(await meal_opts(db, at, "2026-10-14 15:05")) == 1
+    for i, when in enumerate(("2026-10-14 15:10", "2026-10-14 18:20")):
+        at(when)
+        await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text=f"meal {i}", fld="meal:lunch", about=f"x{i}", sent=True)
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 21:30") == []  # three today
+
+
+async def test_in_shadow_a_meal_question_is_logged_not_sent_and_the_regular_nudge_still_goes(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    at("2026-10-14 13:00")
+    await wrote(db, MAA, "ok")
+    host = SimHost()
+    host.world.nudge_mode = "on"
+    host.world.meals_mode = "shadow"
+    writer.pick = "meal"
+    at("2026-10-14 14:30")
+    await nudges.run(sessions, lambda f: host)
+    logged = await rows(db)
+    assert [(r.kind, r.status) for r in logged] == [("meal", "shadow")] and sent_to(host, MAA) == []
+    at("2026-10-14 14:35")
+    await nudges.run(sessions, lambda f: host)
+    assert len(sent_to(host, MAA)) == 1 and (await rows(db))[-1].kind != "meal"  # the hour's real nudge
+
+
+async def test_a_sent_meal_question_hands_the_answer_to_log_food(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    at("2026-10-14 13:00")
+    await wrote(db, MAA, "ok")
+    host = SimHost()
+    host.world.meals_mode = "on"
+    writer.pick = "meal"
+    at("2026-10-14 14:30")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 1 and (await rows(db))[-1].kind == "meal"
+    hint = await nudges.reply_hint(db, FAM, MAA["id"])
+    assert "log_food" in hint and "meal=lunch" in hint and "ask only that" in hint
+
+
+async def test_unanswered_meal_questions_move_to_an_evening_recap_then_pause_each_a_visible_learning(db, at, sessions, writer, food):
+    from app.care import meal_nudges
+
+    await meal_day(db, at)
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    for i, when in enumerate(("2026-10-12 14:30", "2026-10-12 21:30", "2026-10-13 14:30")):
+        at(when)
+        await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text=f"m{i}", fld="meal:lunch", about=f"a{i}", sent=True)
+    await db.commit()
+    at("2026-10-14 09:00")
+    assert await meal_nudges.learn_mode(db, FAM, MAA["id"], await nudges.ledger_rows(db, FAM, MAA["id"]), nudges.clock.now()) == "recap"
+    fact = await store.active_fact(db, FAM, MAA["id"], meal_nudges.MODE_KEY)
+    assert fact and "once in the evening" in fact.text
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # no per-meal question now
+    got = await meal_opts(db, at, "2026-10-14 21:40")
+    assert [o.field for o in got] == ["meal:day"]
+    for i in range(5):
+        at(f"2026-10-{15 + i} 21:35")
+        await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text=f"r{i}", fld="meal:day", about=f"r{i}", sent=True)
+    await db.commit()
+    at("2026-10-20 09:00")
+    assert await meal_nudges.learn_mode(db, FAM, MAA["id"], await nudges.ledger_rows(db, FAM, MAA["id"]), nudges.clock.now()) == "paused"
+    assert await meal_opts(db, at, "2026-10-20 21:40") == []
+
+
+async def test_a_caregiver_is_asked_once_in_the_evening_about_an_elder_who_does_not_write(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    assert await meal_opts(db, at, "2026-10-14 14:30", who=SON, cared=False) == []  # not in the evening
+    got = await meal_opts(db, at, "2026-10-14 21:40", who=SON, cared=False)
+    assert [o.field for o in got] == ["meal:day"] and got[0].about_ref.endswith(f":for:{MAA['id']}") and "Kamla" in got[0].why
+    food.meals_logged = 1  # the caregiver already told Saheli
+    assert await meal_opts(db, at, "2026-10-14 21:40", who=SON, cared=False) == []
+    food.meals_logged = 0
+    await wrote(db, MAA, "Aaj khana accha tha")  # the elder writes herself: she is asked, not her son
+    assert await meal_opts(db, at, "2026-10-14 21:40", who=SON, cared=False) == []
+
+
+# 16. the backend's delivery ledger (trust plan B1, B2, B3)
+async def test_a_nudge_is_labelled_for_the_delivery_ledger_and_keeps_its_wamid(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    sent = host.world.sent[-1]
+    row = (await rows(db))[-1]
+    assert sent["kind"] == "nudge" and sent["ref"] == row.ref and row.wamid == "wamid.sim1"
+
+
+async def test_only_the_opener_went_to_a_closed_chat_so_the_nudge_is_not_said_yet(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+
+    async def opener(tool, args, **kw):
+        if tool == "send_whatsapp":
+            return {"delivered": True, "via": "template", "waiting": True}
+        return await SimHost.call(host, tool, args, **kw)
+
+    host.call = opener
+    at("2026-10-14 11:00")
+    assert (await run(sessions, host)).get("failed") == 1
+    row = (await rows(db))[-1]
+    assert row.status == "failed" and row.reason == "waiting:opener"
+    assert not any(t.message_ref == row.ref for t in await store.recent_turns(db, FAM, MAA["id"]))  # not in her chat as said
+
+
+async def test_while_the_caregiver_is_being_told_the_ladder_adds_nothing(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    for when in ("2026-10-14 11:00", "2026-10-14 12:00"):
+        at(when)
+        await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 2
+    host.world.escalations[MAA["id"]] = "pending"
+    at("2026-10-14 14:00")
+    out = await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 2 and out["skipped"].get("escalating") == 1
+    host.world.escalations[MAA["id"]] = "replied"
+    at("2026-10-14 14:05")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 3

@@ -260,6 +260,7 @@ class NudgeLedger(Base):
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
     reaction: Mapped[str | None] = mapped_column(String(16), nullable=True)  # welcome | neutral | unwelcome | fewer | stop
     grade: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # {"pass", "issues", "note", "at"} (the hourly review)
+    wamid: Mapped[str | None] = mapped_column(String(120), nullable=True)  # WhatsApp's id (backend delivery ledger): receipts, replies
 
     __table_args__ = (
         Index("uq_nudge_ledger_slot", "family_id", "person_id", "slot_key", unique=True),
