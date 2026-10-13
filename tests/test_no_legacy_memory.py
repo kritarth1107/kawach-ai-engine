@@ -87,18 +87,32 @@ async def test_the_nightly_dream_writes_no_instinct_row(db, at, model):
     assert await counts(db) == before
 
 
-def test_the_v1_dream_no_longer_runs_with_the_nightly_job():
+def test_the_old_brain_is_gone():
+    """Founder D9: v1 chat, the Instinct inbox API, its agents, retrieval and dream are deleted after the move."""
+    for gone in ("api/chat.py", "api/memory.py", "api/care_brief.py", "api/documents.py", "api/families.py", "agents/saheli_graph.py",
+                 "agents/caregiver_agent.py", "agents/tools.py", "rag/memory_extract.py", "rag/retrieve.py", "rag/profile_render.py",
+                 "jobs/memory_context.py", "services/tenant.py"):
+        assert not (APP / gone).exists(), gone
     src = (APP / "jobs" / "dream.py").read_text()
-    main = src[src.index("def main()"):]
-    assert "dream_all_elders" not in main
+    assert "FamilyMemory" not in src and "dream_all_elders" not in src
+
+
+async def test_the_v1_routes_answer_404():
+    import httpx
+
+    from app.main import app
+
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        for path in ("/v1/chat", "/v1/memory/inbox", "/v1/memory/extract", "/v1/chat/caregiver", "/v1/care-brief/generate", "/v1/families"):
+            assert (await c.post(path, json={})).status_code == 404, path
 
 
 # Modules allowed to name the Instinct models: the definitions, the memory move (reads), the legacy-writes count (reads).
 ALLOWED = {"models/entities.py", "care/memory_unify.py", "api/one_memory.py"}
-# The old brain's modules, deleted after the move (founder D9). Until then they are never imported by a v2 path.
-V1 = re.compile(r"^(rag/|agents/(?!tool_client\.py)|api/chat\.py|api/memory\.py|jobs/dream\.py|jobs/memory_context\.py|api/documents\.py)")
+# Nothing of the old brain is left to exempt (founder D9: deleted after the move).
+V1 = re.compile(r"^$")
 # Shared v2 infrastructure that lives in the old folders: the embedder, the backend tool client, the schema helper.
-SHARED = ("app.rag.embeddings", "app.agents.tool_client", "app.jobs.dream import _ensure_v2_schema")
+SHARED = ("app.rag.embeddings", "app.agents.tool_client", "app.jobs.dream import _ensure_v2_schema")  # v2 infrastructure in the old folders
 WRITES = re.compile(r"\b(FamilyMemory|MemoryEntity|MemoryProfile)\s*\(|insert\(\s*(FamilyMemory|MemoryEntity|MemoryProfile)\b|"
                     r"update\(\s*(FamilyMemory|MemoryEntity|MemoryProfile)\b|(family_memories|memory_entities|memory_profiles)[^\n]*(INSERT|UPDATE)", re.I)
 

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import admin, brain, care_brief, dash, chat, documents, doctor_brief, families, health, memory, one_memory
+from app.api import admin, brain, dash, doctor_brief, health, one_memory
 from app.core.config import get_settings
 from app.db.migrate import ensure_indexes, ensure_schema
 from app.db.session import engine
@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title="Kavach AI Engine",
-        description="Standalone multi-family memory — RAG + LangGraph Saheli (Grok)",
+        description="Saheli: brain v2 and the care record (Postgres)",
         version="0.1.0",
         lifespan=lifespan,
     )
@@ -98,11 +98,6 @@ def create_app() -> FastAPI:
         }
 
     app.include_router(health.router)
-    app.include_router(families.router, prefix="/v1")
-    app.include_router(chat.router, prefix="/v1")
-    app.include_router(documents.router, prefix="/v1")
-    app.include_router(memory.router, prefix="/v1")
-    app.include_router(care_brief.router, prefix="/v1")
     app.include_router(doctor_brief.router, prefix="/v1")
     app.include_router(brain.router)
     app.include_router(dash.router)

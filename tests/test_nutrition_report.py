@@ -234,18 +234,6 @@ async def test_account_deletion_removes_her_food_data(db, at, nfake):
     assert ev == []
 
 
-async def test_the_erase_route_includes_the_food_log(db, at, nfake):
-    from app.rag.memory_lifecycle import erase_elder_memory
-
-    fid, eid = uuid.uuid4(), uuid.uuid4()
-    at("2026-10-14 08:30")
-    c = tools.TurnCtx(session=db, host=SimHost(), family_id=str(fid), elder={"id": str(eid), "name": "x"}, speaker={"id": str(eid), "name": "x", "role": "elder"},
-                      members=[{"id": str(eid)}], message_ref="m-erase")
-    await tools.run(c, "log_food", {"items": EGGS})
-    out = await erase_elder_memory(db, family_id=fid, elder_id=eid)
-    assert out["nutrition"]["nutrition_entries"] == 1
-
-
 def test_counters_read_tags_not_names():
     e = NutritionEntry(kind="food", status="active", quantity=3, unit="piece", nutrients={"protein_g": 18.9}, flags={"tags": ["egg"]}, name="Anything")
     w = NutritionEntry(kind="food", status="active", quantity=2, unit="glass", nutrients={"water_ml": 500}, flags={"tags": ["water"]}, name="Paani")
