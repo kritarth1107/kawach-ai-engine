@@ -145,7 +145,9 @@ async def check(session: AsyncSession, *, family_id: str, subject_id: str, domai
 GROUP_PROMPT = """You keep a person's care record free of duplicates. Below are the facts saved in one domain for one
 person. Group the ones that are about the same thing (the same allergy, place, person, doctor, rule, preference or
 medicine, even in other words, another language or with more or less detail). A group needs at least 2 facts. Different
-things never go together (milk allergy vs peanut allergy; a home in Raipur vs a home in Patna).
+things never go together (milk allergy vs peanut allergy; a home in Raipur vs a home in Patna). Facts that name the same
+person or place but say different things about it are different facts too (who someone is vs whom to call first; an
+address vs opening hours): group only facts where each one says nothing the others do not also mean.
 
 For each group: keep = the key to keep (the clearest one), drop = the other keys, sentence = one sentence keeping every
 detail from all of them (newer detail in place of what it corrects), details = the combined details object.
@@ -153,8 +155,8 @@ Return only JSON: {"groups": [{"keep": "...", "drop": ["..."], "sentence": "..."
 nothing repeats."""
 
 ROUTINE_PROMPT = """Below are a person's routine facts and their activities. List each routine fact that one activity
-already says: the same thing at the same time (wake-up, a meal, sleep, the gym). A routine fact with a different time,
-or something no activity covers, is not listed.
+already says in full: the same thing at the same time (wake-up, a meal, sleep, the gym). A routine fact with a different
+time, or with any part no single activity covers (a whole-day schedule with several items), is not listed.
 Return only JSON: {"covered": [{"routine": "routine:...", "activity": "activity:..."}]}"""
 
 

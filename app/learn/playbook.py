@@ -23,7 +23,7 @@ _cache: dict[str, tuple[float, PlaybookVersion | None, PlaybookVersion | None]] 
 
 
 def canary_percent() -> int:
-    return max(0, min(50, int(os.getenv("LEARN_CANARY_PERCENT", "10"))))
+    return max(0, min(50, int(os.getenv("LEARN_CANARY_PERCENT", "20"))))  # 20% of families try a new lesson first (§10)
 
 
 def arm_for(family_id: str) -> str:

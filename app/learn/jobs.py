@@ -34,9 +34,18 @@ async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> 
         except Exception as exc:  # noqa: BLE001 — one step must not stop the others
             logger.exception("learn step %s failed", name)
             out[name] = {"error": str(exc)[:200]}
+    if with_models:
+        # §10, every night: failures become rule proposals, safe ones go into the trial automatically (founder Q10), and
+        # a new draft is tried when no canary is running (the replay gate, then 20% of families, then everyone).
+        for name, fn in (("rule_proposals", lambda: review.propose_rules(sessions)), ("auto_rules", lambda: _auto_rules(sessions)),
+                         ("draft", lambda: _draft_if_idle(sessions))):
+            try:
+                out[name] = await fn()
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("learn %s failed", name)
+                out[name] = {"error": str(exc)[:200]}
     if with_models and clock.ist().weekday() == 6:  # Sunday night: review the week, then learn a new draft
-        for name, fn in (("calibration", lambda: review.calibrate(sessions)), ("rule_proposals", lambda: review.propose_rules(sessions)),
-                         ("gap_specs", lambda: review.gap_specs(sessions)), ("weekly", lambda: lessons.weekly(sessions))):
+        for name, fn in (("calibration", lambda: review.calibrate(sessions)), ("gap_specs", lambda: review.gap_specs(sessions))):
             try:
                 out[name] = await fn()
             except Exception as exc:  # noqa: BLE001
@@ -44,6 +53,29 @@ async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> 
                 out[name] = {"error": str(exc)[:200]}
     timing.reset_cache()
     return out
+
+
+async def _auto_rules(sessions: async_sessionmaker) -> dict:
+    async with sessions() as session:
+        out = await review.auto_approve(session)
+        await session.commit()
+    return out
+
+
+async def _draft_if_idle(sessions: async_sessionmaker) -> dict:
+    async with sessions() as session:
+        busy = (await session.execute(select(PlaybookVersion.version).where(PlaybookVersion.status.in_(("canary", "draft"))).limit(1))).first()
+    if busy:  # one trial at a time; a waiting draft is retried (it may have been waiting for the replay runner)
+        waiting = (await _waiting_draft(sessions))
+        return await lessons.gate_and_canary(sessions, waiting) if waiting else {"skipped": "a canary is running"}
+    return await lessons.weekly(sessions)
+
+
+async def _waiting_draft(sessions: async_sessionmaker) -> int | None:
+    async with sessions() as session:
+        row = (await session.execute(select(PlaybookVersion.version).where(PlaybookVersion.status == "draft")
+                                     .order_by(PlaybookVersion.version.desc()).limit(1))).first()
+    return row[0] if row else None
 
 
 async def overview(sessions: async_sessionmaker, *, weeks: int = 8) -> dict:

@@ -203,17 +203,49 @@ async def _corpus(db, situation, n_good, n_bad):
     await db.commit()
 
 
+def _replay(monkeypatch, status="passed", **extra):
+    async def fake(sessions, pb):
+        return {"status": status, **extra}
+    monkeypatch.setattr(lessons, "replay_gate", fake)
+
+
 async def test_weekly_draft_gate_and_canary(db, at, sessions, model, monkeypatch):
     at("2026-10-04 23:00")
     await db.execute(delete(PlaybookVersion))
     await _corpus(db, "med_question", 35, 20)
     monkeypatch.setenv("LEARN_MIN_EXAMPLES", "30")
+    _replay(monkeypatch)
     model([LLMReply(text='{"lessons": ["Keep it under two short lines for elders.", "Say the doctor decides, then say what you noted."], "examples": [1, 2]}',
                     tool_calls=[], model="fake")])
     out = await lessons.weekly(sessions)
     assert out["status"] == "canary" and out["gate"]["passed"]
     pb = await db.get(PlaybookVersion, out["draft"])
     assert pb.lessons["med_question"][0].startswith("Keep it under") and len(pb.examples["med_question"]) == 2
+
+
+async def test_a_draft_waits_until_the_replay_cases_can_run(db, at, sessions, model, monkeypatch):
+    """§10: no lesson reaches anyone before it passes the replay cases on the real model; without the runner it waits."""
+    at("2026-10-04 23:00")
+    await db.execute(delete(PlaybookVersion))
+    await _corpus(db, "med_question", 35, 20)
+    monkeypatch.setenv("LEARN_MIN_EXAMPLES", "30")
+    _replay(monkeypatch, "unavailable", why="replay runner not built yet")
+    model([LLMReply(text='{"lessons": ["Keep it under two short lines for elders."], "examples": [1]}', tool_calls=[], model="fake")])
+    out = await lessons.weekly(sessions)
+    assert out["status"] == "draft" and out["gate"]["replay"]["status"] == "unavailable"
+    _replay(monkeypatch)  # the runner arrives: the next night the waiting draft goes to its trial
+    assert (await lessons.gate_and_canary(sessions, out["draft"]))["status"] == "canary"
+
+
+async def test_a_lesson_that_brings_back_an_old_failure_is_rejected(db, at, sessions, model, monkeypatch):
+    at("2026-10-04 23:00")
+    await db.execute(delete(PlaybookVersion))
+    await _corpus(db, "med_question", 35, 20)
+    monkeypatch.setenv("LEARN_MIN_EXAMPLES", "30")
+    _replay(monkeypatch, "failed", regressions=["case-17 medical advice"])
+    model([LLMReply(text='{"lessons": ["Keep it under two short lines for elders."], "examples": [1]}', tool_calls=[], model="fake")])
+    out = await lessons.weekly(sessions)
+    assert out["status"] == "rejected" and not out["gate"]["passed"]
 
 
 async def test_gate_rejects_lessons_that_touch_rules(db, at, sessions, model, monkeypatch):
@@ -263,16 +295,55 @@ async def _canary(db, v=2):
     await db.commit()
 
 
-async def test_canary_better_waits_for_approval_then_promotes(db, at, sessions, monkeypatch):
+async def test_canary_not_worse_is_promoted_automatically(db, at, sessions, monkeypatch):
+    """Founder Q10: lessons go live on their own after a 2-day trial that is not worse; blocking brings the last one back."""
     at("2026-10-12 03:00")
     await _canary(db)
     monkeypatch.setenv("LEARN_CANARY_MIN_N", "50")
+    await _seed_log(db, "fam-c", 60, arm="canary", version=2, score=0.3)
+    await _seed_log(db, "fam-d", 60, arm="live", version=1, score=0.3)
+    await db.execute(ReplyLog.__table__.update().values(score=ReplyLog.score + (ReplyLog.id % 3) * 0.05))
+    await db.commit()
+    assert (await lessons.evaluate(sessions))["decision"] == "promoted"
+    db.expire_all()
+    assert (await db.get(PlaybookVersion, 2)).status == "live" and (await db.get(PlaybookVersion, 1)).status == "retired"
+    await lessons.block(sessions, 2, "founder")
+    db.expire_all()
+    assert (await db.get(PlaybookVersion, 1)).status == "live"
+
+
+async def test_canary_waits_at_least_two_days(db, at, sessions, monkeypatch):
+    at("2026-10-12 03:00")
+    await _canary(db)
+    await db.execute(PlaybookVersion.__table__.update().where(PlaybookVersion.version == 2).values(canary_since=clock.now() - timedelta(hours=30)))
+    await db.commit()
+    monkeypatch.setenv("LEARN_CANARY_MIN_N", "50")
+    await _seed_log(db, "fam-c", 60, arm="canary", version=2, score=0.7, days_ago=0)
+    await _seed_log(db, "fam-d", 60, arm="live", version=1, score=0.2, days_ago=0)
+    assert (await lessons.evaluate(sessions))["decision"] == "waiting"
+
+
+async def test_judge_failures_two_points_up_roll_back_even_on_few_replies(db, at, sessions, monkeypatch):
+    at("2026-10-12 03:00")
+    await _canary(db)
+    await _seed_log(db, "fam-c", 9, arm="canary", version=2, score=0.7, judge=True)
+    await _seed_log(db, "fam-c2", 1, arm="canary", version=2, score=0.7, judge=False)  # 10% fail
+    await _seed_log(db, "fam-d", 100, arm="live", version=1, score=0.2, judge=True)  # 0% fail
+    assert (await lessons.evaluate(sessions))["decision"] == "rolled_back"
+    assert (await db.get(PlaybookVersion, 2)).status == "rejected"
+
+
+async def test_canary_better_waits_for_approval_when_auto_promote_is_off(db, at, sessions, monkeypatch):
+    at("2026-10-12 03:00")
+    await _canary(db)
+    monkeypatch.setenv("LEARN_CANARY_MIN_N", "50")
+    monkeypatch.setenv("LEARN_AUTO_PROMOTE", "off")
     await _seed_log(db, "fam-c", 60, arm="canary", version=2, score=0.7)
     await _seed_log(db, "fam-d", 60, arm="live", version=1, score=0.2)
     await db.execute(ReplyLog.__table__.update().values(score=ReplyLog.score + (ReplyLog.id % 3) * 0.05))  # some spread
     await db.commit()
     res = await lessons.evaluate(sessions)
-    assert res["decision"] == "better" and (await db.get(PlaybookVersion, 2)).status == "canary"
+    assert res["decision"] == "not_worse" and (await db.get(PlaybookVersion, 2)).status == "canary"
     assert (await lessons.approve(sessions, 2, "founder"))["ok"]
     await db.refresh(await db.get(PlaybookVersion, 1))
     assert (await db.get(PlaybookVersion, 2)).status == "live" and (await db.get(PlaybookVersion, 1)).status == "retired"
@@ -395,6 +466,7 @@ async def test_end_to_end(db, at, sessions, model, monkeypatch):
         await db.commit()
     clock.set_now(t + timedelta(days=1))
     model([LLMReply(text='{"lessons": ["Keep it short and kind."], "examples": [1]}', tool_calls=[], model="fake")])
+    _replay(monkeypatch)
     out = await jobs.nightly(sessions, with_models=False)
     assert out["scored"] == 30 and out["corpus"]["added"] == 30
     weekly = await lessons.weekly(sessions)

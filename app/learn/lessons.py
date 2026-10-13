@@ -36,6 +36,8 @@ WINDOW_DAYS = 28
 MAX_LESSONS = 5
 LESSON_MAX_CHARS = 200
 CANARY_MAX_DAYS = 21
+CANARY_MIN_DAYS = 2  # a lesson runs on its share of families at least 2 days before it is promoted (§10)
+ROLLBACK_POINTS = 0.02  # the canary's judge failures 2 points above the rest: rolled back at once
 Z = 1.64  # one-sided ~95%
 
 PROMPT = """You help a WhatsApp care companion called Saheli learn *how to reply* from real, anonymised conversations
@@ -62,7 +64,7 @@ def min_examples() -> int:
 
 
 def min_n() -> int:
-    return int(os.getenv("LEARN_CANARY_MIN_N", "150"))
+    return int(os.getenv("LEARN_CANARY_MIN_N", "20"))
 
 
 def parse(text: str) -> dict:
@@ -204,6 +206,16 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
         if not pb or pb.status != "draft":
             return {"skipped": True}
         pb.gate = {**(pb.gate or {}), **gate(pb)}
+        if pb.gate["passed"]:
+            # §10: a lesson must also pass the replay cases on the real model before it reaches anyone: every fixed case
+            # still passes, and the failures it targets now pass. No replay runner yet means it waits as a draft.
+            replay = await replay_gate(sessions, pb)
+            pb.gate = {**pb.gate, "replay": replay}
+            if replay.get("status") == "failed":
+                pb.gate["passed"] = False
+            elif replay.get("status") != "passed":
+                await session.commit()
+                return {"version": version, "status": pb.status, "gate": pb.gate}
         if not pb.gate["passed"]:
             pb.status = "rejected"
         elif os.getenv("LEARN_AUTO_CANARY", "on") == "on":
@@ -214,6 +226,24 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int) -> dict:
         await session.commit()
         playbook.reset_cache()
         return {"version": version, "status": pb.status, "gate": pb.gate}
+
+
+async def replay_gate(sessions: async_sessionmaker, pb: PlaybookVersion) -> dict:
+    """Run the replay cases (trust plan C3) with this draft's playbook. {"status": passed|failed|unavailable, ...}."""
+    try:
+        from app.learn import replay
+    except ImportError:
+        return {"status": "unavailable", "why": "replay runner not built yet"}
+    run = getattr(replay, "run_for_playbook", None)
+    if run is None:
+        return {"status": "unavailable", "why": "replay runner has no run_for_playbook"}
+    try:
+        res = await run(sessions, pb, budget_inr=float(os.getenv("LEARN_REPLAY_MAX_INR", "150")))
+    except Exception as exc:  # noqa: BLE001 — a broken runner never lets a lesson through
+        logger.exception("replay gate failed version=%s", pb.version)
+        return {"status": "unavailable", "why": str(exc)[:200]}
+    regressions = list(res.get("regressions") or [])
+    return {"status": "failed" if regressions else "passed", **res}
 
 
 # ── canary decisions ───────────────────────────────────────────────────────────
@@ -246,21 +276,29 @@ async def evaluate(sessions: async_sessionmaker) -> dict:
                "judge_fail_live": round(rate([r for r in live if r.judge_pass is not None], lambda r: r.judge_pass is False), 4),
                "checked_at": clock.now().isoformat()}
         decision = "waiting"
-        if nc >= min_n() and nl >= min_n():
+        # Safety first, at any sample size: a canary that fails the judge 2 points more often than the rest, or annoys
+        # people more, is rolled back at once (§10).
+        judged_c = [r for r in c if r.judge_pass is not None]
+        worse_safety = (len(judged_c) >= 5 and res["judge_fail_canary"] > res["judge_fail_live"] + ROLLBACK_POINTS) or \
+            (nc >= 5 and res["annoyed_canary"] > res["annoyed_live"] + 0.03)
+        if worse_safety:
+            decision = "rolled_back"
+            canary.status = "rejected"
+        elif nc >= min_n() and nl >= min_n() and clock.now() - canary.canary_since >= timedelta(days=CANARY_MIN_DAYS):
             z = (mc - ml) / math.sqrt(vc / nc + vl / nl) if (vc + vl) > 0 else 0.0
             res["z"] = round(z, 3)
-            worse_safety = res["annoyed_canary"] > res["annoyed_live"] + 0.03 or res["judge_fail_canary"] > res["judge_fail_live"] + 0.05
-            if z <= -Z or worse_safety:
+            if z <= -Z:
                 decision = "rolled_back"
                 canary.status = "rejected"
-            elif z >= Z:
-                decision = "better"
+            else:
+                # not worse than the rest after two days: founder decision Q10 promotes it automatically
+                decision = "not_worse"
                 from app.learn import review
 
                 cal = await review.latest(sessions, "calibration")
                 if cal and cal.get("trusted") is False:
-                    decision = "better_but_grader_untrusted"
-                if os.getenv("LEARN_AUTO_PROMOTE", "off") == "on":
+                    decision = "not_worse_but_grader_untrusted"
+                elif os.getenv("LEARN_AUTO_PROMOTE", "on") == "on":
                     await _promote(session, canary, by="auto")
                     decision = "promoted"
         if decision == "waiting" and clock.now() - canary.canary_since > timedelta(days=CANARY_MAX_DAYS):

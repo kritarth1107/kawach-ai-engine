@@ -17,7 +17,7 @@ import random
 from datetime import timedelta
 from statistics import mean
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core import clock
@@ -169,6 +169,34 @@ async def decide_rule(sessions: async_sessionmaker, rule_id: int, *, approve: bo
         r.status, r.decided_by = ("approved" if approve else "rejected"), by
         await s.commit()
     return {"ok": True}
+
+
+AUTO_RULES_PER_WEEK = 3  # at most 3 new lessons a week go into a trial, so every change stays attributable (§10)
+
+
+async def auto_approve(session) -> dict:
+    """Founder decision Q10 (13 Oct): self-learning goes live automatically behind safety gates. A proposed rule that
+    passes the safety gate (no medical content, alerts, privacy or fixed rules: lessons.lesson_problems) is approved for
+    the next trial (the replay gate, then the canary, decide whether it stays); one that fails is dropped and listed for
+    the founder to read."""
+    from app.learn import lessons
+
+    week = clock.now() - timedelta(days=7)
+    used = (await session.execute(select(func.count()).select_from(RuleProposal).where(
+        RuleProposal.status.in_(("approved", "in_playbook")), RuleProposal.decided_by == "auto", RuleProposal.created_at >= week))).scalar_one()
+    out = {"approved": 0, "dropped": 0}
+    for r in (await session.execute(select(RuleProposal).where(RuleProposal.status == "proposed").order_by(RuleProposal.id))).scalars():
+        # a proposed rule may be a little longer than a style lesson; everything else is the lessons' safety gate
+        problems = [p for p in lessons.lesson_problems(r.rule) if p != "too long"] + (["too long"] if len(r.rule) > 400 else [])
+        if problems:
+            r.status, r.decided_by = "dropped", "auto"
+            r.why = (r.why + f" | dropped by the safety gate: {', '.join(problems)}")[:500]
+            out["dropped"] += 1
+        elif used < AUTO_RULES_PER_WEEK:
+            r.status, r.decided_by = "approved", "auto"
+            used += 1
+            out["approved"] += 1
+    return out
 
 
 async def approved_rules(session) -> dict[str, list[str]]:

@@ -170,7 +170,7 @@ async def test_calibration_low_agreement_blocks_promotion(db, at, sessions, mode
     monkeypatch.setenv("LEARN_CANARY_MIN_N", "50")
     await _log(db, "fam-c", 60, arm="canary", version=2, score=0.7)
     await _log(db, "fam-d", 60, arm="live", version=1, score=0.2)
-    assert (await lessons.evaluate(sessions))["decision"] == "better_but_grader_untrusted"
+    assert (await lessons.evaluate(sessions))["decision"] == "not_worse_but_grader_untrusted"
 
 
 async def test_calibration_skips_without_data(db, at, sessions, model):
@@ -241,6 +241,30 @@ async def test_rejected_rule_never_used(db, at, sessions, monkeypatch):
     assert (await lessons.weekly(sessions))["draft"] is None
 
 
+async def test_safe_rules_are_approved_automatically_unsafe_ones_dropped_and_listed(db, at, sessions):
+    """Founder Q10 / plan §10.6: automatic with safety gates; a rule touching doses, alerts or secrets never goes in;
+    at most 3 automatic rules a week."""
+    at("2026-10-11 23:00")
+    await db.execute(delete(RuleProposal))
+    safe = ["Never use more than one emoji.", "Ask how they slept before asking about lunch.", "Keep replies to elders under three lines.",
+            "In Bengali, use apni for elders."]
+    for r in safe:
+        db.add(RuleProposal(created_at=clock.now(), situation="general", rule=r, why="judge", status="proposed"))
+    db.add(RuleProposal(created_at=clock.now(), situation="med_question", rule="Tell them to take 2 tablets if the pain stays.", why="judge",
+                        status="proposed"))
+    db.add(RuleProposal(created_at=clock.now(), situation="general", rule="Skip the alert when it is late at night.", why="judge", status="proposed"))
+    await db.commit()
+    async with sessions() as s:
+        out = await review.auto_approve(s)
+        await s.commit()
+    assert out == {"approved": 3, "dropped": 2}
+    rows = {r.rule: r for r in (await db.execute(select(RuleProposal))).scalars()}
+    assert [rows[r].status for r in safe] == ["approved", "approved", "approved", "proposed"]  # the 4th waits for next week
+    assert rows["Tell them to take 2 tablets if the pain stays."].status == "dropped"
+    assert "safety gate" in rows["Skip the alert when it is late at night."].why
+    assert all(r.decided_by == "auto" for r in rows.values() if r.status != "proposed")
+
+
 async def test_general_rule_is_trialled_on_every_situation(db, at, sessions, monkeypatch):
     at("2026-10-11 23:00")
     await db.execute(delete(PlaybookVersion))
@@ -266,8 +290,9 @@ async def test_trial_compares_only_the_situations_it_changed(db, at, sessions, m
     await _log(db, "fam-c", 60, situation="med_question", arm="canary", version=2, score=0.7)
     await _log(db, "fam-d", 60, situation="med_question", arm="live", version=1, score=0.2)
     await _log(db, "fam-c", 200, situation="chit_chat", arm="canary", version=2, score=-0.8)  # unrelated, not its doing
+    monkeypatch.setenv("LEARN_AUTO_PROMOTE", "off")
     res = await lessons.evaluate(sessions)
-    assert res["decision"] == "better" and res["scope"] == ["med_question"] and res["n_canary"] == 60
+    assert res["decision"] == "not_worse" and res["scope"] == ["med_question"] and res["n_canary"] == 60
 
 
 # ── gap specs and the founder's view ──
