@@ -265,6 +265,10 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
     lr = await learned(session, p.family_id, p.id, now)
     if lr.stop:
         return Due(p, empty, reason="asked_stop", mode=mode or cached_mode())
+    from app.care import outcomes_learn
+
+    if await outcomes_learn.avoid_now(session, p.family_id, p.id, now=now):
+        return Due(p, empty, reason="learned_hour", mode=mode or cached_mode())  # they rarely answer at this hour (learned, visible)
     base = (CARED_EVERY if p.cared else CAREGIVER_EVERY) * (2 if lr.fewer else 1)
     engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT)) if t], default=None)
     if engine_last and now - engine_last < base:
@@ -335,6 +339,10 @@ class Context:
     expects_reply: bool = True
     ladder: int = 0
     cost: float = 0.0  # INR spent writing and checking it (every try), logged on its ledger row
+    avoid: list[str] = field(default_factory=list)  # names they asked never to be called (trust plan A3)
+    never: list[str] = field(default_factory=list)  # what the family said is wrong (rejected facts), never used or asked
+    memory: str = ""  # what the no-invention check counts as known (not Saheli's own earlier lines)
+    theirs: list[str] = field(default_factory=list)  # what they wrote lately
 
 
 def _hm(v) -> int | None:
@@ -370,8 +378,9 @@ async def last_messages(session: AsyncSession, family_id: str, person: str, gate
 async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: datetime, *, early_bird: bool = False,
                         only: list[Option] | None = None, extra: str = "") -> Context:
     from app.brain.loop import writing_profiles
-    from app.care import activities, checkins, language
+    from app.care import activities, checkins, language, naming
     from app.care import mood as care_mood
+    from app.care import rejected as rejected_facts
 
     fid = p.family_id
     facts = [f for f in await store.facts(session, fid, p.id) if f.status == "active"]
@@ -379,7 +388,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     for f in facts:
         by_domain.setdefault(f.domain, []).append(f)
     speech = next((language.normalise(f.value) for f in by_domain.get("language", []) if isinstance(f.value, dict)), None)
-    naming = next((f.value for f in by_domain.get("naming", []) if f.key == "naming:address_as"), {}) or {}
+    names = await naming.for_person(session, fid, p.id)
+    wrong = await rejected_facts.rejected(session, fid, p.id, now=now)
     local = clock.ist(now)
     recent = await last_messages(session, fid, p.id, ck.gate)
     nudges = [r for r in ck.rows if r.status in SENT][:10]
@@ -419,12 +429,14 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
             coming.append(f"appointment: {f.text}")
     mood = await care_mood.last(session, fid, p.id, since=now - timedelta(hours=24))
     symptoms = await checkins._symptoms_since(session, fid, p.id, ck.last_out, now)
-    known_facts = [f.text for f in facts if f.domain not in ("language",)][:24]
+    known_facts = [f.text for f in facts if f.domain not in ("language", "learned")][:24]
     notes = [n.body_md.strip()[:400] for n in (await store.notes(session, fid, [p.id]))[:2] if (n.body_md or "").strip()]
     max_len = MAX_LEN[p.elder]
     lines = [
-        f"PERSON: {p.name or 'them'}" + (f" (call them {naming.get('name')})" if naming.get("name") else "")
+        f"PERSON: {p.name or 'them'}" + (f" (call them {names['name']})" if names["name"] else "")
         + f"; {'the person cared for' if p.elder else ('caring for themselves' if p.cared else p.role or 'family member')}",
+        *([f"NEVER CALL THEM: {', '.join(names['avoid'])}"] if names["avoid"] else []),
+        *([rejected_facts.block(wrong)] if wrong else []),
         f"WRITE IN: {language.write_in(speech) if speech else 'the language and script they write to you in (their messages below); English if none'}",
         f"NOW: {local.strftime('%A %d %B, %H:%M')} IST",
         "LAST MESSAGES (oldest first):\n" + ("\n".join(f"  {clock.ist(at).strftime('%d %b %H:%M')} {who}: {t[:220]}" for at, who, t in recent) or "  (none yet)"),
@@ -445,8 +457,12 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     profiles = await writing_profiles(session, fid, [{"id": p.id}])
     saheli = [t for _, who, t in recent if who == "Saheli"] + [r.text for r in reversed(nudges) if r.text]
     known = "\n".join([*known_facts, *notes, *coming, *(t for _, _, t in recent), *(o.why for o in options), local.strftime("%A %d %B %H:%M")])
+    memory = "\n".join([*known_facts, *notes, *coming, *(o.why for o in options), *([mood.summary] if mood else []),
+                        *(e.summary for e in symptoms[-3:]), f"Now: {local.strftime('%A %d %B %H:%M')} IST"])
     return Context(person=p, text="\n".join(lines), known=known, recent=[t for _, _, t in recent], saheli_recent=saheli[-15:],
-                   profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run)
+                   profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run,
+                   avoid=names["avoid"], never=rejected_facts.terms(wrong), memory=memory,
+                   theirs=[t for _, who, t in recent if who == "them"])
 
 
 async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime, *, facts: list, acts: list[dict], schedule: dict,
@@ -659,7 +675,23 @@ def check(draft: dict, ctx: Context) -> list[str]:
     problems += [x for x in guards.language_problems(text, ctx.profile, who="they") if not x.startswith("do not mix scripts")]
     local = clock.ist()
     problems += guards.ungrounded(text, known=ctx.known, now_minutes=local.hour * 60 + local.minute)
+    from app.care import naming
+
+    for name in naming.uses_avoided(text, ctx.avoid):
+        problems.append(f"they asked never to be called \"{name}\": use the name in PERSON or none")
+    low = text.lower()
+    for term in ctx.never:
+        if term.lower() in low:
+            problems.append(f"\"{term}\" is something the family said is wrong: never use or ask about it")
     return problems
+
+
+async def grounded(ctx: Context, text: str) -> list[str]:
+    """The shared no-invention check (trust plan C4): every specific in the nudge must come from what Saheli knows or what
+    they wrote, never from her own earlier lines; her own health advice is a problem too."""
+    from app.brain import grounding
+
+    return grounding.problems(await grounding.check(text, memory=ctx.memory, their_messages=ctx.theirs, tool_results=[]))
 
 
 async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, status: str, reason: str = "", text: str = "",
@@ -723,7 +755,8 @@ async def write_and_check(ctx: Context) -> tuple[dict | None, list[str]]:
             draft = await compose(ctx, problems or None)
         except Exception as exc:  # noqa: BLE001
             return None, [f"compose_failed:{type(exc).__name__}"]
-        problems = check(draft, ctx) or await verify(ctx, str(draft.get("text") or ""))
+        text = str(draft.get("text") or "")
+        problems = check(draft, ctx) or await grounded(ctx, text) or await verify(ctx, text)
         if not problems:
             return draft, []
     return None, problems
@@ -1037,38 +1070,114 @@ async def everyone_rates(session: AsyncSession, now: datetime) -> dict[str, floa
     return rates
 
 
+KIND_LABEL = {"follow_up": "follow-ups on what they said", "upcoming": "what's coming up", "habit": "their habits",
+              "collect": "health check questions", "reflect": "how-was-your-day questions", "know": "get-to-know questions",
+              "delight": "light chat about what they enjoy", "doses": "questions about unmarked medicines",
+              "early_bird": "early-morning messages"}
+LEARNED = "learned:nudges_"  # every nudge learning is a visible, undoable fact under this prefix (trust plan A5)
+TOPICS_KEY = LEARNED + "topics"
+TOPICS_MIN_SENT, TOPICS_MIN_KIND = 8, 3
+
+
+def _until(f, now: datetime) -> bool:
+    return (_iso((f.value or {}).get("until")) or now) > now
+
+
 async def learned(session: AsyncSession, family_id: str, person: str, now: datetime) -> Learned:
-    """What their own replies taught: a stop or fewer they asked for, questions they did not want, and per kind how often
-    they answer (a Beta mean with everyone's rate as the prior, so one unanswered nudge does not bury a kind)."""
-    rows = (await session.execute(
-        select(NudgeLedger.kind, NudgeLedger.field, NudgeLedger.reaction, NudgeLedger.replied_at, NudgeLedger.sent_at)
-        .where(NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.status == "sent",
-               NudgeLedger.sent_at >= now - max(LEARN_DAYS, STOP_PAUSE, UNWELCOME_PAUSE))
-    )).all()
+    """What Saheli learned about their nudges, read from the visible learned:nudges_* facts only (the family sees each one
+    on the dashboard and can undo it; an undone one is simply not here and is not learned again for 60 days)."""
     out = Learned()
-    newest_reacted = max((r for r in rows if r.reaction and r.replied_at), key=lambda r: r.replied_at, default=None)
-    if newest_reacted is not None:  # only their latest word counts: a later warm reply lifts an earlier stop
-        if newest_reacted.reaction == "stop" and now - newest_reacted.replied_at < STOP_PAUSE:
+    for f in await store.facts(session, family_id, person, domains=["learned"], statuses=("active",)):
+        if not f.key.startswith(LEARNED):
+            continue
+        v = f.value or {}
+        if f.key == LEARNED + "pause" and _until(f, now):
             out.stop = True
-    out.fewer = any(r.reaction == "fewer" and r.replied_at and now - r.replied_at < FEWER_FOR for r in rows)
-    for r in rows:
-        if r.reaction == "unwelcome" and r.replied_at and now - r.replied_at < UNWELCOME_PAUSE:
-            if r.field:
-                out.unwelcome.add(r.field)
-            if r.kind in LIGHT_KINDS or not r.field:
-                out.unwelcome.add(r.kind)
-    if rows:
-        prior = await everyone_rates(session, now)
-        mine: dict[str, list[int]] = {}
-        for r in rows:
-            if r.sent_at and now - r.sent_at < LEARN_DAYS and r.kind != "reminder_followup":
-                n_r = mine.setdefault(r.kind, [0, 0])
-                n_r[0] += 1
-                n_r[1] += 1 if r.replied_at else 0
-        for kind, (n, rep) in mine.items():
-            g = prior.get(kind, 0.5)
-            out.rates[kind] = (rep + PRIOR * g) / (n + PRIOR)
+        elif f.key == LEARNED + "fewer" and _until(f, now):
+            out.fewer = True
+        elif f.key.startswith(LEARNED + "avoid_") and _until(f, now):
+            out.unwelcome |= {x for x in (v.get("field"), v.get("kind")) if x}
+        elif f.key == TOPICS_KEY:
+            out.rates = {str(k): float(r) for k, r in (v.get("rates") or {}).items() if isinstance(r, (int, float))}
     return out
+
+
+def _slug(x: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (x or "").lower()).strip("_")[:60] or "topic"
+
+
+def _about(kind: str, fld: str | None) -> str:
+    if kind in LIGHT_KINDS or not fld:
+        return KIND_LABEL.get(kind, kind.replace("_", " "))
+    head, _, rest = fld.partition(":")
+    return {"know": f"{rest.replace('_', ' ')} (a get-to-know question)", "reading": f"{rest} readings",
+            "activity": f"{rest.split(':')[0].replace('_', ' ')}"}.get(head, fld.replace(":", " ").replace("_", " "))
+
+
+async def save_reaction(session: AsyncSession, row: NudgeLedger, now: datetime) -> str | None:
+    """A stop, fewer or unwelcome reaction becomes a learned fact the family sees and can undo."""
+    from app.care import outcomes_learn
+
+    day = clock.ist(now).strftime("%d %b")
+    if row.reaction == "stop":
+        until = now + STOP_PAUSE
+        key, value = LEARNED + "pause", {"until": until.isoformat(), "from_nudge": str(row.id)}
+        text = f"Asked Saheli not to message on her own ({day}); she starts no conversations until {clock.ist(until):%d %b}."
+    elif row.reaction == "fewer":
+        until = now + FEWER_FOR
+        key, value = LEARNED + "fewer", {"until": until.isoformat(), "from_nudge": str(row.id)}
+        text = f"Finds Saheli's messages too frequent ({day}); she waits twice as long between them until {clock.ist(until):%d %b}."
+    elif row.reaction == "unwelcome":
+        until = now + UNWELCOME_PAUSE
+        light = row.kind in LIGHT_KINDS or not row.field
+        key = LEARNED + "avoid_" + _slug(row.kind if light else row.field or row.kind)
+        value = {"until": until.isoformat(), "kind": row.kind if light else None, "field": None if light else row.field, "from_nudge": str(row.id)}
+        text = f"Didn't want to be asked about {_about(row.kind, row.field)} ({day}); Saheli won't bring it up until {clock.ist(until):%d %b}."
+    else:
+        return None
+    return await outcomes_learn.save_learned(session, family_id=row.family_id, subject_id=row.person_id, key=key, value=value, text=text, now=now)
+
+
+async def learn_topics(sessions: async_sessionmaker, *, now: datetime | None = None) -> dict:
+    """Per person, the kinds of nudge they answer most and least (30 days, smoothed with every family's rate), saved as
+    one visible learned fact when it is clear and has changed; the picker weights options from it."""
+    from app.care import outcomes_learn
+
+    now = now or clock.now()
+    stats = {"people": 0, "saved": 0, "cooling": 0}
+    async with sessions() as session:
+        got = (await session.execute(
+            select(NudgeLedger.family_id, NudgeLedger.person_id, NudgeLedger.kind, func.count(), func.count(NudgeLedger.replied_at))
+            .where(NudgeLedger.status == "sent", NudgeLedger.sent_at >= now - LEARN_DAYS, NudgeLedger.kind != "reminder_followup",
+                   ~NudgeLedger.family_id.startswith("shadow:"))
+            .group_by(NudgeLedger.family_id, NudgeLedger.person_id, NudgeLedger.kind))).all()
+        prior = await everyone_rates(session, now)
+        by: dict[tuple[str, str], dict[str, tuple[int, int]]] = {}
+        for fid, pid, kind, n, rep in got:
+            by.setdefault((fid, pid), {})[kind] = (n, rep)
+        for (fid, pid), kinds in by.items():
+            if sum(n for n, _ in kinds.values()) < TOPICS_MIN_SENT:
+                continue
+            stats["people"] += 1
+            rates = {k: round((rep + PRIOR * prior.get(k, 0.5)) / (n + PRIOR), 2) for k, (n, rep) in kinds.items() if n >= TOPICS_MIN_KIND}
+            most = sorted((k for k, r in rates.items() if r >= 0.6), key=lambda k: -rates[k])
+            least = sorted((k for k, r in rates.items() if r <= 0.2), key=lambda k: rates[k])
+            if not most and not least:
+                continue
+            old = await store.active_fact(session, fid, pid, TOPICS_KEY)
+            if old and (old.value or {}).get("answered") == most and (old.value or {}).get("rarely") == least:
+                continue
+            text = ("Answers " + ", ".join(KIND_LABEL.get(k, k) for k in most) + " most" if most else "") \
+                + ("; " if most and least else "") \
+                + ("rarely answers " + ", ".join(KIND_LABEL.get(k, k) for k in least) if least else "") \
+                + ". Saheli leans on what they answer."
+            res = await outcomes_learn.save_learned(session, family_id=fid, subject_id=pid, key=TOPICS_KEY, now=now, text=text[0].upper() + text[1:],
+                                                    value={"rates": rates, "answered": most, "rarely": least,
+                                                           "evidence": {k: {"sent": n, "answered": rep} for k, (n, rep) in kinds.items()}})
+            stats["saved"] += res in ("created", "superseded")
+            stats["cooling"] += res == "cooling"
+        await session.commit()
+    return stats
 
 
 REACT = """You read how a person took one WhatsApp message that Saheli (a care companion) sent on her own, from what they
@@ -1119,6 +1228,7 @@ async def read_reactions(sessions: async_sessionmaker, *, now: datetime | None =
             row.cost_inr = round((row.cost_inr or 0.0) + _cost(rep), 4)
             stats["read"] += 1
             stats[row.reaction] += 1
+            await save_reaction(session, row, now)
         await session.commit()
     return stats
 
@@ -1190,4 +1300,8 @@ async def learn(sessions: async_sessionmaker, *, now: datetime | None = None) ->
             out["review"] = await review(sessions, now=now)
         except Exception:  # noqa: BLE001
             logger.exception("nudge review failed")
+        try:
+            out["topics"] = await learn_topics(sessions, now=now)
+        except Exception:  # noqa: BLE001
+            logger.exception("nudge topic learning failed")
     return out

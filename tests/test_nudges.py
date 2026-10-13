@@ -42,6 +42,9 @@ class Writer:
         if head.startswith("You grade one WhatsApp message"):
             self.graded = getattr(self, "graded", 0) + 1
             return LLMReply(text=json.dumps(getattr(self, "grade", {"pass": True, "issues": []})), tool_calls=[], model="fake", usage=self.usage)
+        if head.startswith("You check a WhatsApp reply from Saheli"):
+            self.grounded = getattr(self, "grounded", 0) + 1
+            return LLMReply(text=json.dumps({"claims": getattr(self, "claims", [])}), tool_calls=[], model="fake", usage=self.usage)
         if head.startswith("You check one WhatsApp message"):
             self.verified = getattr(self, "verified", 0) + 1
             return LLMReply(text=json.dumps(getattr(self, "verdict", {"ok": True})), tool_calls=[], model="fake", usage=self.usage)
@@ -606,7 +609,9 @@ async def test_a_question_they_did_not_want_rests_and_too_many_messages_doubles_
     await db.commit()
     await answered(db, at, sessions, writer, host, "Why do you keep asking me this? Leave it.", "unwelcome")
     lr = await nudges.learned(db, FAM, MAA["id"], nudges.clock.now())
-    assert row.field in lr.unwelcome and "reflect" in lr.unwelcome  # the question rests, and light talk rests as a kind
+    assert "reflect" in lr.unwelcome  # light talk rests as a kind
+    shown = await store.active_fact(db, FAM, MAA["id"], "learned:nudges_avoid_reflect")
+    assert shown and "Didn't want to be asked about how-was-your-day questions" in shown.text  # visible, undoable
     p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
     ck = nudges.Clock(None, None, 0, False)
     at("2026-10-14 18:00")
@@ -739,3 +744,95 @@ async def test_the_flag_is_read_every_run_even_when_nobody_is_due_so_old_check_i
     at("2026-10-14 10:25")
     await nudges.run(sessions, lambda f: host)
     assert nudges.cached_mode() == "on"
+
+
+
+# 14. trust plan: avoided names, rejected facts, no invention, learned hours, visible and undoable learnings
+async def test_a_nudge_never_uses_an_avoided_name_or_something_the_family_said_is_wrong(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="naming", key="naming:address_as",
+                           value={"name": "Amma", "avoid": ["Maa"]}, text="Call her Amma, never Maa", source_kind="caregiver_said")
+    await db.commit()
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    ctx = await nudges.build_context(db, SimHost(), p, nudges.Clock(None, None, 0, False), nudges.clock.now())
+    assert "NEVER CALL THEM: Maa" in ctx.text and ctx.avoid == ["Maa"]
+    bad = {"option_id": ctx.options[0].id, "text": "Maa, how was the walk in the park?"}
+    assert any("never to be called" in x for x in nudges.check(bad, ctx))
+    ctx.never = ["Metformin"]
+    bad = {"option_id": ctx.options[0].id, "text": "Is the metformin suiting you?"}
+    assert any("family said is wrong" in x for x in nudges.check(bad, ctx))
+
+
+async def test_an_invented_detail_found_by_the_no_invention_check_is_rewritten(db, at, sessions, writer, monkeypatch):
+    monkeypatch.setenv("GROUNDING_CHECK", "on")
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    writer.claims = [{"kind": "event", "quote": "Rohit called", "supported": False}]
+    at("2026-10-14 11:00")
+    out = await run(sessions, SimHost(), mode="shadow")
+    assert out["skipped"].get("guard") == 1 and writer.grounded == 3 and "Rohit called" in writer.seen[-1]
+    writer.claims = []
+    at("2026-10-14 12:00")
+    await run(sessions, SimHost(), mode="shadow")
+    assert [r.status for r in await rows(db)][-1] == "shadow"
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="assistant", text="Rohit called you, right?")
+    await db.commit()
+    ctx = await nudges.build_context(db, SimHost(), p, nudges.Clock(None, None, 0, False), nudges.clock.now())
+    assert "Rohit called" not in ctx.memory and "Now:" in ctx.memory  # her own earlier lines are never a source
+
+
+async def test_a_learned_bad_hour_holds_the_nudge(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="learned", key="learned:timing_messages",
+                           value={"avoid_hours": [11], "prefer_hours": [16, 17]}, text="Rarely answers 10–12", source_kind="learned")
+    await db.commit()
+    host = SimHost()
+    at("2026-10-14 11:00")
+    out = await run(sessions, host)
+    assert sent_to(host, MAA) == [] and out["skipped"].get("learned_hour") == 1
+    at("2026-10-14 12:00")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 1
+
+
+async def test_undoing_a_learned_stop_lets_nudges_come_back(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    await answered(db, at, sessions, writer, host, "Bas karo, itne message mat bhejo", "stop")
+    fact = await store.active_fact(db, FAM, MAA["id"], "learned:nudges_pause")
+    assert fact and "not to message on her own" in fact.text
+    at("2026-10-14 13:00")
+    assert (await run(sessions, host))["skipped"].get("asked_stop") == 1
+    fact.status = "stopped"  # the caregiver pressed Undo on the dashboard
+    await db.commit()
+    at("2026-10-14 14:00")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 2
+
+
+async def test_kinds_they_answer_become_one_visible_learning_that_weights_the_picks(db, at, sessions, writer):
+    at("2026-10-01 10:00")
+    await family(db, (MAA,))
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    for i in range(6):
+        for kind, answered_ in (("reflect", True), ("know", False)):
+            t = nudges.clock.now() + nudges.timedelta(hours=i * 3 + (1 if kind == "know" else 0))
+            r = await nudges._log(db, p, t, kind=kind, status="sent", text=f"{kind} {i}", sent=True)
+            r.replied_at = t + nudges.timedelta(minutes=10) if answered_ else None
+    await db.commit()
+    at("2026-10-03 10:00")
+    out = await nudges.learn_topics(sessions)
+    fact = await store.active_fact(db, FAM, MAA["id"], "learned:nudges_topics")
+    assert out["saved"] == 1 and fact.value["answered"] == ["reflect"] and fact.value["rarely"] == ["know"]
+    assert "Answers how-was-your-day questions most" in fact.text
+    lr = await nudges.learned(db, FAM, MAA["id"], nudges.clock.now())
+    assert lr.weight("reflect") > 0 > lr.weight("know")
+    assert (await nudges.learn_topics(sessions))["saved"] == 0  # unchanged: no new version
