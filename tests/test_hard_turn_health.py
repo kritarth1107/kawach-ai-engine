@@ -90,3 +90,14 @@ async def test_web_search_failure_still_answers_what_is_well_known(db, monkeypat
                         user_text="what are the side effects of amlodipine?")
     out, err = await tools.run(ctx, "web_search", {"question": "common side effects of amlodipine"})
     assert err and "Answer from what is well known" in out and "never mention looking it up" in out
+
+
+def test_extra_rules_and_low_effort_only_on_health_turns():
+    from app.brain import grounding
+
+    base = grounding._system(True, False)
+    health = grounding._system(True, True)
+    assert "dose_change" not in base and "doctor_note_missing" not in base  # the measured prompt (13/13 at minimal)
+    assert "5. doctor_note_missing" in health and '6. For each advice claim also add "dose_change"' in health
+    assert grounding._system(False, True).count("4. doctor_note_missing") == 1
+    assert grounding.effort_for(False) == "minimal" and grounding.effort_for(True) == "low"

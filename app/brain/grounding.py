@@ -50,13 +50,9 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
    activity (a dose, "X is fine to eat", a threshold, "you can skip it", how far to walk). source = "tool" when it repeats a
    TOOL RESULT (e.g. a web search) as general information, "doctor" when it repeats a doctor's instruction in MEMORY,
    "safety" when it is a safety step (call 112 or an ambulance, tell the family, see a doctor), else "none".
-   dose_change = true when it tells them to skip, hold off, delay, double, stop, start or change the amount or timing of a
-   medicine or dose ("hold off on that tablet tonight", "take two", "skip the missed dose", "don't take it now"), whatever
-   the reason given. Taking a due or late dose as prescribed, or keeping to the prescribed dose (not taking an extra or a
-   double one), is not a dose change.
 
 Return only JSON: {"claims": [{"kind": "...", "quote": "exact words", "supported": true|false, "prescriptive": true|false,
-"source": "tool|doctor|safety|none", "dose_change": true|false}]}. An empty list when there are no claims."""
+"source": "tool|doctor|safety|none"}]}. An empty list when there are no claims."""
 
 # Only when this turn looked health information up (web_search): health information always comes with when to see a doctor.
 _DOCTOR_RULE = """N. doctor_note_missing = true when the REPLY shares general health or medicine information (a medicine's side
@@ -84,11 +80,29 @@ _ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "
 PROMPT_ACTIONS = PROMPT.replace("what Saheli herself will do, ", "").replace("\nReturn only JSON", "\n" + _ACTIONS_RULE + "Return only JSON", 1)
 
 
+# Health turns only, with the doctor-note rule: her own dose decisions (13 Oct live: "hold off on that Magnesium tablet
+# tonight" passed as general information). Kept out of the other checks: every extra rule at effort "minimal" cost the
+# action/promise claims accuracy (eval/grounding_eval.py 10-12 of 13; KP, 14 Oct), so health turns are checked at "low".
+_DOSE_RULE = """M. For each advice claim also add "dose_change": true when it tells them to skip, hold off, delay, double, stop,
+   start or change the amount or timing of a medicine or dose ("hold off on that tablet tonight", "take two", "skip the
+   missed dose", "don't take it now"), whatever the reason given; false otherwise. Taking a due or late dose as prescribed,
+   or keeping to the prescribed dose (not taking an extra or a double one), is not a dose change.
+
+"""
+
+
 def _system(actions: bool, doctor_note: bool) -> str:
     base = PROMPT_ACTIONS if actions else PROMPT
     if doctor_note:
-        base = base.replace("\nReturn only JSON", "\n" + _DOCTOR_RULE.replace("N.", "5." if actions else "4.") + "Return only JSON", 1)
+        n = 5 if actions else 4
+        rules = _DOCTOR_RULE.replace("N.", f"{n}.") + _DOSE_RULE.replace("M.", f"{n + 1}.")
+        base = base.replace("\nReturn only JSON", "\n" + rules + "Return only JSON", 1)
     return base
+
+
+def effort_for(doctor_note: bool) -> str:
+    """Health turns carry two more rules: checked at "low" (13/13 in grounding_eval with them; minimal dropped to 10-12)."""
+    return os.getenv("GROUNDING_EFFORT_HEALTH", "low") if doctor_note else os.getenv("GROUNDING_EFFORT", "minimal")
 
 
 @lru_cache(maxsize=1)
@@ -162,7 +176,7 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
         from app.llm import router
 
         system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
-        reply = await router.complete("judge_fast", system_stable=system, effort=os.getenv("GROUNDING_EFFORT", "minimal"), max_tokens=4000, timeout_s=12,
+        reply = await router.complete("judge_fast", system_stable=system, effort=effort_for(doctor_note), max_tokens=4000, timeout_s=12,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")
