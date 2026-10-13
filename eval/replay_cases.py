@@ -240,7 +240,9 @@ async def run_once(sessions: async_sessionmaker, case: dict, n: int) -> dict:
     ctx = case.get("context") or {}
     if ctx.get("world"):
         return await run_world(sessions, case, n)
-    fid = f"replay-{str(case['id'])[:12]}-{n}"
+    import hashlib
+
+    fid = f"replay-{hashlib.sha256(str(case['id']).encode()).hexdigest()[:12]}-{n}"  # unique per case and run (cases run side by side)
     msg = message_of(case)
     if not msg:
         return {"passed": None, "why": "no message to replay"}
