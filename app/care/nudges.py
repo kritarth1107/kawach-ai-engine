@@ -301,6 +301,7 @@ class Context:
     max_len: int
     expects_reply: bool = True
     ladder: int = 0
+    cost: float = 0.0  # INR spent writing and checking it (every try), logged on its ledger row
 
 
 def _hm(v) -> int | None:
@@ -586,7 +587,14 @@ async def compose(ctx: Context, problems: list[str] | None = None) -> dict:
     text = ctx.text + (("\n\nYour last try had these problems; write it again without them:\n- " + "\n- ".join(problems)) if problems else "")
     reply = await router.complete("worker", system_stable=COMPOSE, effort="low", max_tokens=1500, timeout_s=40,
                                   messages=[{"role": "user", "content": [{"type": "text", "text": text}]}])
+    ctx.cost += _cost(reply)
     return parse(reply.text or "")
+
+
+def _cost(reply) -> float:
+    from app.llm import spend
+
+    return spend.cost_inr(reply.model or "", reply.usage or {})
 
 
 def check(draft: dict, ctx: Context) -> list[str]:
@@ -616,7 +624,8 @@ def check(draft: dict, ctx: Context) -> list[str]:
 
 
 async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, status: str, reason: str = "", text: str = "",
-               fld: str | None = None, about: str | None = None, run: int = 0, sent: bool = False) -> NudgeLedger | None:
+               fld: str | None = None, about: str | None = None, run: int = 0, sent: bool = False,
+               cost: float | None = None) -> NudgeLedger | None:
     """One ledger row (unique per person per minute: a second run in the same minute adds nothing)."""
     rid = uuid.uuid4()
     lane = "followup" if kind == "reminder_followup" else "regular"  # a follow-up and a regular nudge may share a minute
@@ -625,7 +634,7 @@ async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, st
     fld, about = short_ref(fld), short_ref(about)  # whatever the caller passed, it fits its column
     row = NudgeLedger(id=rid, family_id=p.family_id, person_id=p.id, kind=kind, slot_key=short_ref(f"{p.id}:{clock.ist(now).strftime('%Y-%m-%dT%H:%M')}:{lane}", 120) or "",
                       status=status, reason=reason[:160], ref=f"nudge:{rid}", text=text, field=fld, about_ref=about, planned_at=now,
-                      sent_at=now if sent else None, unanswered_run=run)
+                      sent_at=now if sent else None, unanswered_run=run, cost_inr=round(cost, 4) if cost else None)
     try:
         async with session.begin_nested():
             session.add(row)
@@ -635,11 +644,13 @@ async def _log(session: AsyncSession, p: Person, now: datetime, *, kind: str, st
     return row
 
 
-async def log_skip(session: AsyncSession, p: Person, now: datetime, reason: str, rows: list[NudgeLedger], kind: str = "regular") -> None:
-    """A skip is logged at most once an hour per person and reason (an asleep person is checked every run)."""
-    if any(r.status == "skipped" and r.reason == reason and r.kind == kind and now - r.planned_at < SKIP_LOG_EVERY for r in rows):
+async def log_skip(session: AsyncSession, p: Person, now: datetime, reason: str, rows: list[NudgeLedger], kind: str = "regular",
+                   cost: float | None = None) -> None:
+    """A skip is logged at most once an hour per person and reason (an asleep person is checked every run); one that cost
+    a model call is always logged, so the ledger holds every rupee."""
+    if not cost and any(r.status == "skipped" and r.reason == reason and r.kind == kind and now - r.planned_at < SKIP_LOG_EVERY for r in rows):
         return
-    await _log(session, p, now, kind=kind, status="skipped", reason=reason)
+    await _log(session, p, now, kind=kind, status="skipped", reason=reason, cost=cost)
 
 
 VERIFY = """You check one WhatsApp message Saheli is about to send, against the context she had. Reply with problems only for:
@@ -660,6 +671,7 @@ async def verify(ctx: Context, text: str) -> list[str]:
             {"role": "user", "content": [{"type": "text", "text": f"CONTEXT:\n{ctx.text}\n\nMESSAGE:\n{text}"}]}])
     except Exception:  # noqa: BLE001 — no second look available: the code checks stand
         return []
+    ctx.cost += _cost(rep)
     got = parse(rep.text or "")
     return [] if got.get("ok", True) else [str(x)[:160] for x in (got.get("problems") or ["the reviewer found a problem"])][:4]
 
@@ -693,16 +705,16 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     async with sessions() as session:
         await _lock_family(session, p.family_id)
         if recheck is not None and not await recheck(session):
-            await _log(session, p, now, kind=kind, status="skipped", reason="talking", text=text, fld=fld, about=about, run=run)
+            await _log(session, p, now, kind=kind, status="skipped", reason="talking", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
             await session.commit()
             return "talking"
         greeted, mid = guards.opening_state(await store.recent_turns(session, p.family_id, p.id, limit=12), clock.now(), day_of=clock.ist_day)
         text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
         if mode != "on":
-            await _log(session, p, now, kind=kind, status="shadow", text=text, fld=fld, about=about, run=run)
+            await _log(session, p, now, kind=kind, status="shadow", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
             await session.commit()
             return "shadow"
-        row = await _log(session, p, now, kind=kind, status="planned", text=text, fld=fld, about=about, run=run)
+        row = await _log(session, p, now, kind=kind, status="planned", text=text, fld=fld, about=about, run=run, cost=ctx.cost)
         if row is None:
             await session.commit()
             return "duplicate"
@@ -776,7 +788,7 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                 draft, problems = await write_and_check(ctx)
                 if draft is None:
                     async with sessions() as session:
-                        await log_skip(session, p, now, "guard:" + (problems[0][:60] if problems else "?"), d.clock.rows)
+                        await log_skip(session, p, now, "guard:" + (problems[0][:60] if problems else "?"), d.clock.rows, cost=ctx.cost)
                         await session.commit()
                     stats["skipped"]["guard"] = stats["skipped"].get("guard", 0) + 1
                     return
@@ -884,7 +896,8 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
             if draft is None:
                 stats["skipped"]["guard"] = stats["skipped"].get("guard", 0) + 1
                 async with sessions() as session:
-                    await _log(session, person, now, kind="reminder_followup", status="skipped", reason="guard:" + (problems[0][:60] if problems else "?"), about=about)
+                    await _log(session, person, now, kind="reminder_followup", status="skipped", reason="guard:" + (problems[0][:60] if problems else "?"),
+                               about=about, cost=ctx.cost)
                     await session.commit()
                 continue
             seen = max([ev.at, *(t for t in outbound if t <= ev.at + timedelta(seconds=90))])

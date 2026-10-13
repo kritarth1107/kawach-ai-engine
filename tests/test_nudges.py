@@ -30,21 +30,21 @@ class Writer:
     """The composer model, faked: a different line each call unless a test scripts its answers."""
 
     def __init__(self):
-        self.calls, self.script, self.on_call, self.seen = 0, [], None, []
+        self.calls, self.script, self.on_call, self.seen, self.usage = 0, [], None, [], {}
 
     async def complete(self, route, **kw):
         system = kw.get("system_stable") or ""
         if " ".join(system if isinstance(system, list) else [system]).startswith("You check one WhatsApp message"):
             self.verified = getattr(self, "verified", 0) + 1
-            return LLMReply(text=json.dumps(getattr(self, "verdict", {"ok": True})), tool_calls=[], model="fake")
+            return LLMReply(text=json.dumps(getattr(self, "verdict", {"ok": True})), tool_calls=[], model="fake", usage=self.usage)
         self.calls += 1
         self.seen.append(kw["messages"][-1]["content"][0]["text"])
         if self.on_call:
             await self.on_call()
         if self.script:
-            return LLMReply(text=self.script.pop(0), tool_calls=[], model="fake")
+            return LLMReply(text=self.script.pop(0), tool_calls=[], model="fake", usage=self.usage)
         return LLMReply(text=json.dumps({"option_id": "o1", "text": LINES[(self.calls - 1) % len(LINES)], "field": None,
-                                         "expects_reply": True}), tool_calls=[], model="fake")
+                                         "expects_reply": True}), tool_calls=[], model="fake", usage=self.usage)
 
 
 @pytest.fixture
@@ -522,3 +522,21 @@ async def test_a_nudge_about_many_unmarked_doses_is_logged_not_lost(db, at, sess
     await run(sessions, host, mode="shadow")
     logged = [r for r in await rows(db) if r.status == "shadow"]
     assert len(logged) == 1 and logged[0].kind == "doses" and len(logged[0].about_ref) <= 160
+
+
+async def test_every_ledger_row_that_cost_a_model_call_carries_what_it_cost(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    writer.usage = {"in": 5000, "out": 250}
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host, mode="shadow")
+    one = spend.cost_inr("fake", writer.usage)
+    logged = await rows(db)
+    assert [r.status for r in logged] == ["shadow"] and logged[0].cost_inr == pytest.approx(2 * one, rel=1e-3)  # writer + reviewer
+    writer.verdict = {"ok": False, "problems": ["not_personal: fits anyone"]}
+    at("2026-10-14 12:00")
+    await run(sessions, host, mode="shadow")
+    skipped = [r for r in await rows(db) if r.status == "skipped"]
+    assert len(skipped) == 1 and skipped[0].cost_inr == pytest.approx(6 * one, rel=1e-3)  # three tries, each written and reviewed
