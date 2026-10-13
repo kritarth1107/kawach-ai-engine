@@ -368,7 +368,10 @@ async def _send(sessions: async_sessionmaker, host: ToolHost, roster, family_id:
     async with sessions() as session:
         greeted, mid = guards.opening_state(await store.recent_turns(session, family_id, person, limit=12), clock.now(), day_of=clock.ist_day)
     text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
-    payload: dict = {"to": person, "text": text}
+    from app.brain.tools import delivery_kind
+
+    # the backend's delivery ledger: what it is (a check-in counts towards the no-reply alert) and the ref it came from
+    payload: dict = {"to": person, "text": text, "kind": delivery_kind(ref), "ref": ref[:160]}
     if buttons:
         from app.brain.loop import writing_profiles
         from app.care import outcomes
@@ -383,7 +386,8 @@ async def _send(sessions: async_sessionmaker, host: ToolHost, roster, family_id:
                               subject_id=roster.elder["id"], actor_id=roster.elder["id"])
         async with sessions() as session:
             await store.add_turn(session, family_id=family_id, thread_id=person, role="assistant", text=text,
-                                 meta={"proactive": True, "delivered": res.get("delivered"), "fallback_delivery": ref})
+                                 meta={"proactive": True, "delivered": res.get("delivered"), "fallback_delivery": ref,
+                                       **({"wamid": res["wamid"]} if res.get("wamid") else {})})
             await session.commit()
         logger.warning("system turn message delivered directly family=%s ref=%s", family_id, ref)
         return True

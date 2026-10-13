@@ -71,7 +71,7 @@ async def test_an_open_chat_gets_the_message_itself(db, at):
     await store.save_roster(db, FAM, MAA, [MAA, SON])
     host = SimHost()
     res = await tools.send_message(system_ctx(db, host, "wake:12:1"), {"to": SON["id"], "text": "Kamla ji has not answered since the morning check."})
-    assert res == {"delivered": True} and host.world.sent and not host.world.templates
+    assert res["delivered"] is True and res["wamid"].startswith("wamid.") and host.world.sent and not host.world.templates
 
 
 async def test_a_brief_for_a_closed_chat_waits_and_the_summary_template_tells_them(db, at):

@@ -59,6 +59,9 @@ class Waiting(BaseModel):
     purpose: str = Field(default="message", max_length=24)
     text: str = Field(max_length=4000)
     at: str = Field(default="", max_length=40)
+    # the backend already gave it to them, word for word, just before this message (trust plan B3.4: delivered on every
+    # message they send, even when the brain is busy); Saheli must not repeat it
+    delivered: bool = False
 
 
 class TurnIn(BaseModel):
@@ -158,7 +161,9 @@ async def push_event(body: EventIn, session: Annotated[AsyncSession, Depends(get
                 await store.add_turn(session, family_id=fid, thread_id=body.subject_id, role="assistant", text=line[:600],
                                      message_ref=f"reminder:{body.ref}" if body.ref else None,
                                      meta={"proactive": True, "via": "reminder", "ref": body.ref, "reminder_id": body.payload.get("reminderId"),
-                                           "slot": body.payload.get("slot")})
+                                           "slot": body.payload.get("slot"),
+                                           # the WhatsApp message id (backend delivery ledger, B1.3): receipts and replies link to it
+                                           **({"wamid": str(body.payload["wamid"])} if body.payload.get("wamid") else {})})
     await session.commit()
     return {"recorded": ids[0] is not None}
 

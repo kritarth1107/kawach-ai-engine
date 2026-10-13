@@ -52,7 +52,9 @@ async def test_due_loop_wakes_brain_and_sends_followup(db, at, fake_brain):
     at("2026-10-02 10:31")
     stats = await wake.wake_due(sessions, lambda fid: host)
     assert stats["ran"] == 1
-    assert host.world.sent == [{"to": ELDER["id"], "text": "Kamla ji, BP check kiya?", "at": host.world.sent[0]["at"]}]
+    sent = host.world.sent
+    assert sent == [{"to": ELDER["id"], "text": "Kamla ji, BP check kiya?", "at": sent[0]["at"], "kind": "message", "ref": sent[0]["ref"]}]
+    assert sent[0]["ref"].startswith("wake:")  # the backend ledger keeps what it was (a wake-up's follow-up is a message)
     assert "Scheduled wake-up" in fake_brain.seen[0]
     await db.refresh(loop)
     assert loop.detail["wakes"] == 1 and loop.status == "open"

@@ -266,7 +266,8 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
         if await checkins.went_out(session, fid, cg, ref, started - timedelta(seconds=5)):
             return "sent"
     # she sent nothing: the digest itself goes, so a brief is never lost
-    res = await host.call("send_whatsapp", {"to": cg, "text": f"Daily brief: {roster.elder.get('name') or ''}\n\n{text}"[:3900]},
+    res = await host.call("send_whatsapp", {"to": cg, "text": f"Daily brief: {roster.elder.get('name') or ''}\n\n{text}"[:3900],
+                                            "kind": "brief", "ref": f"{ref}:plain"},
                           family_id=fid.removeprefix("shadow:"), subject_id=roster.elder["id"], actor_id=roster.elder["id"])
     async with sessions() as session:
         await store.add_turn(session, family_id=fid, thread_id=cg, role="assistant", text=f"Daily brief ({day})",

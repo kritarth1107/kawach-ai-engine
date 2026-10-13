@@ -341,6 +341,16 @@ def waiting_block(req: TurnRequest) -> str:
     rows = [w for w in (req.waiting or []) if isinstance(w, dict) and str(w.get("text") or "").strip()]
     if not rows or req.speaker.get("role") == "system":
         return ""
+    given = [w for w in rows if w.get("delivered")]
+    rows = [w for w in rows if not w.get("delivered")]
+    out = []
+    if given:
+        lines = [f"  - {_waiting_at(w)} ({w.get('purpose') or 'message'}): {str(w.get('text'))[:1500]}" for w in given[:8]]
+        out.append("JUST GIVEN TO THE SPEAKER (their WhatsApp chat was closed, so these waited; the system sent them word for "
+                   "word right before this message): do not repeat them. They may be answering one of them; if what they wrote "
+                   "is about one, answer that.\n" + "\n".join(lines))
+    if not rows:
+        return "\n\n".join(out)
     lines = []
     for w in rows[:8]:
         try:
@@ -348,10 +358,18 @@ def waiting_block(req: TurnRequest) -> str:
         except ValueError:
             at = "earlier"
         lines.append(f"  - {at} ({w.get('purpose') or 'message'}): {str(w.get('text'))[:1500]}")
-    return ("WAITING FOR THE SPEAKER (their WhatsApp chat was closed, so these could not reach them; they got a short notice "
-            "and have now written): give these in this reply, first, in their language, as they stand now (check the care "
-            "record, tasks and events: say what changed since, and leave out what no longer applies), then answer what "
-            "they wrote.\n" + "\n".join(lines))
+    out.append("WAITING FOR THE SPEAKER (their WhatsApp chat was closed, so these could not reach them; they got a short notice "
+               "and have now written): give these in this reply, first, in their language, as they stand now (check the care "
+               "record, tasks and events: say what changed since, and leave out what no longer applies), then answer what "
+               "they wrote.\n" + "\n".join(lines))
+    return "\n\n".join(out)
+
+
+def _waiting_at(w: dict) -> str:
+    try:
+        return clock.ist(datetime.fromisoformat(str(w.get("at")).replace("Z", "+00:00"))).strftime("%d %b %H:%M")
+    except ValueError:
+        return "earlier"
 
 
 def reminders_block(req: TurnRequest) -> str:

@@ -158,7 +158,8 @@ class SimHost:
                 w.templates.append({"to": args.get("to"), **args["template"], "waiting": args.get("text"), "at": clock.now().isoformat()})
                 return {"delivered": True, "via": "template", "waiting": True}
             w.sent.append({**args, "at": clock.now().isoformat()})
-            return {"delivered": True}
+            # the backend returns the wamid Meta gave it (delivery ledger, B1.1)
+            return {"delivered": True, "wamid": f"wamid.sim{len(w.sent)}", "wamids": [f"wamid.sim{len(w.sent)}"]}
         if tool == "alert_care_team":
             w.team_alerts.append({**args, "at": clock.now().isoformat()})
             return {"sent": True, "to": 1}

@@ -1108,6 +1108,17 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     return problems
 
 
+def delivery_kind(ref: str | None) -> str:
+    """The backend ledger's kind for a message Saheli starts: a scheduled check-in, the nightly brief, or anything else
+    (news from a task, a relay, a follow-up she promised). Only check-ins and nudges count towards the no-reply alert."""
+    r = ref or ""
+    if r.startswith("checkin:"):
+        return "checkin"
+    if r.startswith("brief:"):
+        return "brief"
+    return "message"
+
+
 async def _no_answer_alert_loop(ctx: TurnCtx) -> bool:
     """This scheduled turn runs an open loop whose rule is to tell a caregiver when there is no answer."""
     ref = ctx.message_ref or ""
@@ -1255,6 +1266,11 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     template = await template_hint(ctx, a["to"], a["text"], a.get("reminder") if isinstance(a.get("reminder"), dict) else None)
     if template:
         payload["template"] = template
+    # the backend's delivery ledger (trust plan B1.1): what this message is, so a check-in counts towards the no-reply
+    # escalation and the wamid it returns links WhatsApp's receipts (delivered, read) back to this turn
+    payload["kind"] = delivery_kind(ctx.message_ref if ctx.is_system else None)
+    if ctx.is_system and ctx.message_ref:
+        payload["ref"] = ctx.message_ref[:160]
     res = await ctx.host.call(
         "send_whatsapp", payload,
         family_id=ctx.family_id.removeprefix("shadow:"), subject_id=ctx.elder_id, actor_id=ctx.actor_id,
@@ -1268,7 +1284,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     turn_id = await store.add_turn(
         ctx.session, family_id=ctx.family_id, thread_id=a["to"], role="assistant", text=a["text"],
         meta={"proactive": True, "delivered": res.get("delivered"), **({"via": "template", "waiting": True} if waiting else {}),
-              **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {})},
+              **({"ref": ctx.message_ref} if ctx.is_system and ctx.message_ref else {}),
+              **({"wamid": res["wamid"]} if res.get("wamid") else {})},
     )
     if waiting:
         res = {**res, "note": "Their WhatsApp chat was closed (no message from them in 24 hours): they got a short notice, "
