@@ -726,6 +726,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     brain_role = role_for(situation)
     guarded = False
     degraded = ""
+    tool_text_retried = False
     reply: router.LLMReply | None = None
     for step in range(MAX_STEPS):
         last = step == MAX_STEPS - 1
@@ -752,6 +753,15 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         msgs.append(reply.as_message())
         if not reply.tool_calls:
             text_now = (reply.text or "").strip()
+            if text_now and not last and not tool_text_retried and guards.leaked_tool_call(text_now, set(tools.names())):
+                # A tool call written as text did nothing and would reach the person as code: send it back once.
+                tool_text_retried = True
+                logger.error("tool call written as text family=%s", req.family_id)
+                msgs.append({"role": "user", "content": [{"type": "text", "text": (
+                    "(Your last answer was a tool call written as plain text: NOTHING was done, and the person would have seen code. "
+                    "If the action is still needed, call the tool through the tool interface now. Then write only the message for the person.)"
+                )}]})
+                continue
             if guarded or is_system or not text_now or last:
                 break
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data)
@@ -786,7 +796,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         msgs.append({"role": "tool", "results": results})
 
     final = (reply.text if reply else degraded).strip()
-    if final and final != "none" and guards.leaked_reasoning(final):
+    if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Last line of defence: the model's own notes never reach a person, even when the rewrite leaked again or the
         # turn was a scheduled one (those skip the rewrite).
         logger.error("leaked reasoning blocked family=%s", req.family_id)

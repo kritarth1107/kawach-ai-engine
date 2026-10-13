@@ -14,6 +14,7 @@ else; a problem goes back to the model once, with tools, so it can fix the text 
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from functools import lru_cache
 from collections import Counter
 
@@ -678,3 +679,16 @@ LEAK = re.compile(
 def leaked_reasoning(text: str) -> bool:
     """The model sometimes returns its notes ("thought\nToday is … IST. Subrata is speaking …") as the reply."""
     return bool(LEAK.search(text or ""))
+
+
+TOOL_TEXT = re.compile(r"\bdefault_api\s*[:.]\s*\w+|<\/?(tool_call|function_call|tool_code)>|```(tool_code|tool_call)\b", re.I)
+
+
+def leaked_tool_call(text: str, tool_names: Iterable[str] = ()) -> bool:
+    """A tool call written into the reply as text ("default_api:remember{...}", "remember{"domain": ...}"): nothing was done,
+    and the person would see code (world probe run 2026-10-13, a Marwari naming request)."""
+    t = text or ""
+    if TOOL_TEXT.search(t):
+        return True
+    names = "|".join(re.escape(n) for n in tool_names if n)
+    return bool(names) and bool(re.search(rf"(?<![\w-])({names})\s*(\{{\s*\"|\(\s*\w+\s*=)", t))

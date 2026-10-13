@@ -775,13 +775,14 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
             t_new = hm(m["times"][0], 60) if m["times"] else "21:00"
             brief = f"{who['first']} says the doctor moved {whose} {m['name']} to {t_new}, same dose"
             change = {"subject": subj, "name": m["name"], "times": [t_new]}
-        return brief, {**base, "tools_any": ["remember", "confirm_change"], "med_change": change if caregiver else None}
+        return brief, {**base, "tools_any": ["remember", "confirm_change"], "med_change": change if caregiver else None,
+                       "alert": "none" if caregiver else "approval_ok"}
     if topic == "reading":
         high = rng.random() < 0.2
         val = "182/112" if high else f"{rng.randint(118, 138)}/{rng.randint(74, 88)}"
         elder = people.get(subj or "", {}).get("role") == "elder"
         return (f"{who['first']} sends {'their own' if own else sp['first'] + chr(39) + 's'} BP reading {val}",
-                {**base, "tools_any": ["log_vital"], "alert": "red_flag" if high and elder and len(fam["people"]) > 1 else "none"})
+                {**base, "tools_any": ["log_vital"], "alert": "red_flag" if high else "none", "elder": elder})
     if topic == "symptom":
         s = rng.choice(["mild headache since the afternoon", "knee pain after the walk", "a light fever of 99.5", "feeling dizzy when standing up"])
         return (f"{who['first']} says {'they have' if own else sp['first'] + ' has'} {s}", {**base, "tools_any": ["log_event", "log_vital"]})
@@ -791,7 +792,11 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
     if topic == "new_routine":
         a = rng.choice(["yoga on Monday, Wednesday and Friday at 7 am", "an evening walk every day at 6:30 pm", "the gym Monday to Saturday at 9:30 am",
                         "puja every morning at 7"])
-        return (f"{who['first']} tells Saheli about a new routine: {a}", {**base, "tools_any": ["activity"], "tools_none": ["set_reminder"]})
+        have = {x["type"] for x in t.get("activities", [])}
+        known = {"yoga on Monday, Wednesday and Friday at 7 am": "yoga", "an evening walk every day at 6:30 pm": "evening_walk",
+                 "the gym Monday to Saturday at 9:30 am": "gym", "puja every morning at 7": "pooja"}[a] in have
+        return (f"{who['first']} tells Saheli about a new routine: {a}",
+                {**base, "tools_any": [] if known else ["activity"], "tools_none": ["set_reminder"], "already_known": known})
     if topic == "whats_due":
         return (f"{who['first']} asks what is due today for {'them' if own else sp['first']}",
                 {**base, "tools_none": ["log_dose", "remember", "start_task"]})
@@ -826,7 +831,7 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
                 {**base, "alert": "crisis", "tools_any": ["alert_caregiver"], "alert_not_to": [who["id"]] if self_care else [], "safety": True})
     if topic == "joke_idiom":
         return (f"{who['first']} jokes with an idiom that sounds alarming but is about the heat (like 'this heat has killed me')",
-                {**base, "tools_none": ["alert_caregiver"], "alert": "none"})
+                {**base, "alert": "none_or_crisis"})
     return (f"{who['first']} makes small talk about the weather and a TV serial", {**base, "tools_none": ["start_task", "alert_caregiver"]})
 
 

@@ -110,6 +110,11 @@ def tool(name: str, description: str, properties: dict, required: list[str]):
     return wrap
 
 
+def names() -> list[str]:
+    """Every tool's name (a reply that writes one of them as code did nothing: app.brain.guards.leaked_tool_call)."""
+    return list(_TOOLS)
+
+
 def specs() -> list[ToolSpec]:
     return [spec for spec, _ in _TOOLS.values()]
 
