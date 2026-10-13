@@ -34,17 +34,34 @@
   "helpers": {
    "items": {
     "properties": {
+     "domain": {
+      "type": "string"
+     },
+     "key": {
+      "type": "string"
+     },
      "name": {
       "type": "string"
      },
      "phone": {
-      "type": "string"
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "role": {
+      "type": [
+       "string",
+       "null"
+      ]
      },
      "text": {
       "type": "string"
      }
     },
     "required": [
+     "domain",
+     "key",
      "name",
      "phone",
      "text"

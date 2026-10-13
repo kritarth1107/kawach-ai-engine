@@ -700,9 +700,26 @@ async def stale_unanswered(session: AsyncSession, family_id: str, subject_id: st
 # ── roster ─────────────────────────────────────────────────────────────────────
 
 
+def unique_members(members: list[dict]) -> list[dict]:
+    """One entry per person: the backend sometimes lists a member twice (dashboard duplicate keys, 14 Oct). The first
+    entry wins; a later one only fills fields the first left empty."""
+    out: dict[str, dict] = {}
+    rest: list[dict] = []
+    for m in members or []:
+        mid = (m or {}).get("id")
+        if not mid:
+            rest.append(m)
+        elif mid in out:
+            out[mid] = {**{k: v for k, v in m.items() if v not in (None, "")}, **{k: v for k, v in out[mid].items() if v not in (None, "")}}
+        else:
+            out[mid] = dict(m)
+    return [*out.values(), *rest]
+
+
 async def save_roster(session: AsyncSession, family_id: str, elder: dict, members: list[dict]) -> None:
     from app.care.models import FamilyRoster
 
+    members = unique_members(members)
     stmt = (
         insert(FamilyRoster)
         .values(family_id=family_id, elder=elder, members=members, updated_at=clock.now())

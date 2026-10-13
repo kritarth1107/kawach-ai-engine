@@ -17,6 +17,9 @@
        },
        "taken": {
         "type": "integer"
+       },
+       "unmarked": {
+        "type": "integer"
        }
       },
       "required": [
@@ -55,6 +58,9 @@
          "type": "string"
         },
         "type": "array"
+       },
+       "unmarked": {
+        "type": "integer"
        }
       },
       "required": [
@@ -203,6 +209,12 @@
      },
      "redFlag": {
       "x-seen": "only null"
+     },
+     "unit": {
+      "type": [
+       "null",
+       "string"
+      ]
      },
      "value": {
       "type": "string"

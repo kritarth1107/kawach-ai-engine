@@ -153,3 +153,47 @@ async def test_a_fact_the_caregiver_says_was_never_true_goes_on_the_never_use_li
                            source_kind="inferred")
     await client.post(f"/v2/dash/{FAM}/{ELDER}/facts/stop", json={"actor": ACTOR, "domain": "routine", "name": "walk", "reason": "stopped"})
     assert [f.key for f in await rejected.rejected(db, FAM, ELDER)] == ["preference:ginger_tea"]  # an ended fact is not "wrong"
+
+
+# ── 14 Oct audit (Dashboard Builder): roster duplicates and care-team helpers ──
+
+async def test_a_member_listed_twice_is_saved_once(db):
+    from app.care import store
+
+    elder = {"id": "e-dup", "name": "Asha", "role": "elder"}
+    cg = {"id": "c-dup", "name": "Ravi", "role": "primary caregiver"}
+    await store.save_roster(db, "fam-dup", elder, [elder, cg, {"id": "c-dup", "name": "", "role": "caregiver", "relation": "son"}])
+    r = await store.roster(db, "fam-dup")
+    assert [m["id"] for m in r.members] == ["e-dup", "c-dup"]
+    assert r.members[1]["name"] == "Ravi" and r.members[1]["relation"] == "son", "the first entry wins; a later one only fills gaps"
+
+
+async def test_care_team_helpers_are_people_only_with_their_key(db):
+    from app.care import features, store
+
+    fam, sid = "fam-help", "e-help"
+    await store.write_fact(db, family_id=fam, subject_id=sid, domain="home", key="home:home_address",
+                           value={"address": "12 Park Road", "city": "Pune"}, text="Lives at 12 Park Road", source_kind="caregiver_said")
+    await store.write_fact(db, family_id=fam, subject_id=sid, domain="home", key="home:lives_with", value={"with": "family"},
+                           text="Lives with family", source_kind="caregiver_said")
+    await store.write_fact(db, family_id=fam, subject_id=sid, domain="home", key="home:cook_meena", value={"name": "Meena", "role": "cook"},
+                           text="Meena cooks lunch", source_kind="caregiver_said")
+    out = await features.care_team(db, fam, sid)
+    assert [h["name"] for h in out["helpers"]] == ["Meena"]
+    assert out["helpers"][0]["key"] == "home:cook_meena" and out["helpers"][0]["domain"] == "home"
+
+
+async def test_report_counts_unmarked_doses_and_gives_vital_units(db, at):
+    from app.care import features, store
+
+    at("2026-10-14 20:00")
+    fam, sid = "fam-rep", "e-rep"
+    await store.write_fact(db, family_id=fam, subject_id=sid, domain="medicine", key="medicine:amlo",
+                           value={"name": "Amlodipine", "dose": "5 mg", "times": ["08:00", "21:00"]}, text="Amlodipine 5 mg at 08:00 and 21:00",
+                           source_kind="caregiver_said")
+    await store.record_event(db, family_id=fam, subject_id=sid, kind="vital", summary="BP 140/90", payload={"kind": "bp", "value": "140/90"})
+    out = await features.report(db, fam, sid, days=2)
+    today = out["adherence"]["byDay"][-1]
+    assert today["expected"] == 2 and today["unmarked"] == 1, "only the 08:00 dose is due by 20:00, and nothing was marked"
+    assert out["adherence"]["byDay"][0]["unmarked"] == 2
+    assert out["vitals"][0]["unit"] == "mmHg"

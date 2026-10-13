@@ -179,7 +179,7 @@ async def build(session: AsyncSession, family_id: str, subject_id: str, *, names
 
     # the people around them: household members, then the record's family, contacts, doctors
     people: list[dict] = []
-    for m in members:
+    for m in store.unique_members(members):
         if m.get("id") and m.get("id") != subject_id:
             people.append({"id": m["id"], "name": m.get("name") or "", "relation": m.get("role") or "", "kind": "member"})
     seen = {p["name"].lower() for p in people}

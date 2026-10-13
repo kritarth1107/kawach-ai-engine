@@ -250,11 +250,14 @@ async def appointment_loops(session: AsyncSession, *, family_id: str, subject_id
     return out
 
 
-def _is_helper(f) -> bool:
-    """The home record also keeps the address and who they live with; only a fact with a person's field (a name, a
-    role or a phone) is a helper. Listing the address as a helper let the dashboard's Remove delete it (2026-10-14)."""
-    v = f.value if isinstance(f.value, dict) else {}
-    return any(v.get(k) for k in ("name", "role", "phone"))
+_PLACE_FIELDS = ("address", "address_line", "pincode", "pin_code", "latitude", "longitude", "landmark")
+
+
+def _is_helper(value: dict) -> bool:
+    """A home fact about a person (cook, maid, driver), not a place or a living arrangement."""
+    if any(value.get(k) for k in _PLACE_FIELDS):
+        return False
+    return bool(value.get("name") or value.get("phone") or value.get("role"))
 
 
 async def care_team(session: AsyncSession, family_id: str, subject_id: str) -> dict:
@@ -263,8 +266,11 @@ async def care_team(session: AsyncSession, family_id: str, subject_id: str) -> d
     appts = sorted((appointment_json(f) for f in rows if f.domain == "appointment"), key=lambda a: a["when"] or "")
     return {
         "doctors": card["doctors"], "hospital": card["hospital"], "contacts": card["contacts"],
-        "helpers": [{"key": f.key, "name": f.value.get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "text": f.text, "phone": f.value.get("phone")}
-                    for f in rows if f.domain == "home" and _is_helper(f)],
+        # the home domain also holds addresses and who they live with: only facts about a person (a name, a role or a
+        # phone) are helpers, with their key so the dashboard stops the right fact (14 Oct: "Remove" deleted an address)
+        "helpers": [{"name": (f.value or {}).get("name") or f.key.split(":", 1)[1].replace("_", " ").title(), "text": f.text,
+                     "phone": (f.value or {}).get("phone"), "role": (f.value or {}).get("role"), "key": f.key, "domain": f.domain}
+                    for f in rows if f.domain == "home" and _is_helper(f.value or {})],
         "upcoming": [a for a in appts if a["upcoming"]],
         "past": [a for a in reversed(appts) if not a["upcoming"]][:10],
     }
@@ -326,6 +332,11 @@ def wellbeing_text(name: str, w: dict) -> str:
 # ── weekly report ──────────────────────────────────────────────────────────────
 
 
+# the unit a reading is in when the person did not say one (temperature is left out: both °C and °F are common)
+VITAL_UNITS = {"bp": "mmHg", "sugar": "mg/dL", "weight": "kg", "height": "cm", "waist": "cm", "spo2": "%", "pulse": "bpm",
+               "body_fat": "%", "muscle_mass": "kg"}
+
+
 async def report(session: AsyncSession, family_id: str, subject_id: str, days: int = 7) -> dict:
     days = max(1, min(days, 31))
     end = clock.ist()
@@ -337,23 +348,34 @@ async def report(session: AsyncSession, family_id: str, subject_id: str, days: i
     per_day_expected = sum(len(f.value.get("times") or []) for f in meds)
 
     adherence = []
+    now_hm = clock.ist().strftime("%H:%M")
+    due_today = sum(1 for f in meds for t in (f.value.get("times") or []) if str(t) <= now_hm)
     for back in range(days - 1, -1, -1):
         d = clock.ist_day(clock.now() - timedelta(days=back))
         taken = sum(1 for e in evs if e.day == d and e.kind in TAKEN_KINDS)
         missed = sum(1 for e in evs if e.day == d and e.kind in MISSED_KINDS)
-        adherence.append({"day": d, "expected": per_day_expected, "taken": min(taken, per_day_expected) if per_day_expected else taken, "missed": missed})
+        taken_n = min(taken, per_day_expected) if per_day_expected else taken
+        due = due_today if back == 0 else per_day_expected  # today: only the doses whose time has come
+        # neither marked taken nor missed: shown as "not marked", never as "not missed" (14 Oct dashboard audit)
+        adherence.append({"day": d, "expected": per_day_expected, "taken": taken_n, "missed": missed,
+                          "unmarked": max(0, due - taken_n - missed)})
     by_med = []
     for f in meds:
         name = med_name(f)
         exp = len(f.value.get("times") or []) * days
         tk = sum(1 for e in evs if e.kind in TAKEN_KINDS and _dose_of(e, name))
         ms = sum(1 for e in evs if e.kind in MISSED_KINDS and _dose_of(e, name))
-        by_med.append({"name": name, "dose": f.value.get("dose"), "times": f.value.get("times") or [], "expected": exp, "taken": min(tk, exp) if exp else tk, "missed": ms})
+        tk_n = min(tk, exp) if exp else tk
+        due_m = exp - sum(1 for t in (f.value.get("times") or []) if str(t) > now_hm)
+        by_med.append({"name": name, "dose": f.value.get("dose"), "times": f.value.get("times") or [], "expected": exp, "taken": tk_n, "missed": ms,
+                       "unmarked": max(0, due_m - tk_n - ms)})
     total_exp = sum(a["expected"] for a in adherence)
     total_taken = sum(a["taken"] for a in adherence)
 
     vitals = [
-        {"at": e.at.isoformat(), "kind": (e.payload or {}).get("kind"), "value": (e.payload or {}).get("value"), "note": (e.payload or {}).get("note"), "redFlag": (e.payload or {}).get("red_flag")}
+        {"at": e.at.isoformat(), "kind": (e.payload or {}).get("kind"), "value": (e.payload or {}).get("value"),
+         "unit": (e.payload or {}).get("unit") or VITAL_UNITS.get(str((e.payload or {}).get("kind") or "")),
+         "note": (e.payload or {}).get("note"), "redFlag": (e.payload or {}).get("red_flag")}
         for e in evs if e.kind == "vital"
     ]
     from app.tasks.models import Task
