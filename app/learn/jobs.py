@@ -1,7 +1,8 @@
 """The learning loop's scheduled work.
 
-Nightly (inside Saheli's dream, after the families): score replies, grow the anonymised corpus, grade a small
-sample, decide on the canary, drop raw logs past retention. Weekly (Sunday night, or POST /v2/jobs/learn-weekly):
+Nightly (inside Saheli's dream, after the families): score replies, grow the anonymised corpus, decide on the canary,
+drop raw logs past retention. Every real reply is graded by the full-memory judge inside each family's night
+(app.quality.nightly); the scorer and the corpus read its verdict from reply_log.judge_pass. Weekly (Sunday night, or POST /v2/jobs/learn-weekly):
 learn a new playbook draft, gate it, start its canary.
 """
 
@@ -13,7 +14,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core import clock
-from app.learn import gaps, grader, lessons, review, scoring, timing
+from app.learn import gaps, lessons, review, scoring, timing
 from app.learn.models import LearningExample, PlaybookVersion, ReplyLog
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,6 @@ logger = logging.getLogger(__name__)
 async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> dict:
     out: dict = {}
     steps = [("scored", lambda: scoring.score_pending(sessions)), ("corpus", lambda: scoring.build_corpus(sessions))]
-    if with_models:
-        steps.append(("graded", lambda: grader.grade_sample(sessions)))
     from app.learn import corrections
 
     steps += [("canary", lambda: lessons.evaluate(sessions)), ("drift", lambda: review.drift(sessions)), ("pruned", lambda: scoring.prune(sessions)),

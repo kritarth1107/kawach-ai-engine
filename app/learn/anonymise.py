@@ -215,7 +215,8 @@ def _skeleton(key: str) -> str:
     return re.sub(r"[AIEOU]", "", key)
 
 
-def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] | tuple = ()) -> str:
+def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] | tuple = (), brand_medicines: bool = True) -> str:
+    """brand_medicines=False keeps medicine brand names (replay cases check medicine times against the record)."""
     t = text or ""
     t = URL.sub("[LINK]", t)
     t = EMAIL.sub("[EMAIL]", t)
@@ -227,7 +228,8 @@ def anonymise(text: str, *, names: list[str] | tuple = (), medicines: list[str] 
     for w in sorted(_med_words(medicines), key=len, reverse=True):
         meds.setdefault(w.lower(), f"[MED{chr(65 + len(meds) % 26)}]")
         t = re.sub(rf"\b{re.escape(w)}\w*", meds[w.lower()], t, flags=re.I)
-    t = re.sub(r"\b[A-Za-z]{4,}\b", lambda m: "[MED]" if m.group(0).lower() in brands() else m.group(0), t)
+    if brand_medicines:
+        t = re.sub(r"\b[A-Za-z]{4,}\b", lambda m: "[MED]" if m.group(0).lower() in brands() else m.group(0), t)
     people: dict[str, str] = {}
     words = sorted(_name_words(names), key=lambda w: (-len(w), w.lower()))  # same numbering on every rebuild
     for w in words:

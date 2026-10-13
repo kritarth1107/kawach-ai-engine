@@ -224,6 +224,8 @@ def main(argv: list[str]) -> int:
     url = os.getenv("DATABASE_URL") or ""
     rep = asyncio.run(run(opt("--families", 200), opt("--days", 7), opt("--tick", 5), url))
     fails = rep.pop("failures")
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "budget_report.json").write_text(json.dumps({**rep, "failures": fails}, ensure_ascii=False, indent=1))  # read by the nightly gate
     print(json.dumps(rep, indent=1))
     kinds = Counter(re.sub(r"^\S+ \S+: ", "", f).split(" at ")[0].split(" on ")[0][:40] for f in fails)
     print(f"{len(fails)} problems; by kind: {dict(kinds.most_common(8))}")

@@ -1,10 +1,10 @@
 """Watching the learning itself.
 
-- calibration (weekly): a sample the cheap grader already graded is graded again by the strong judge; how often they
-  agree. Below 80% the cheap grades are not trusted for promotions until fixed.
-- drift (nightly): last 7 days vs the 21 before, per situation: average score, reply rate, annoyed rate, grader
+- calibration (Sunday): people's yes/no on 30 of the full-memory judge's verdicts each month (app.quality.calibration);
+  below 85% agreement the judge's grades are not trusted for promotions until fixed.
+- drift (nightly): last 7 days vs the 21 before, per situation: average score, reply rate, annoyed rate, judge
   failures. A clear drop raises an alarm on the learning page (and in the logs, for a Cloud Monitoring alert).
-- rule proposals (weekly): from the week's grader failures, the strong model may propose a change to Saheli's rules.
+- rule proposals (weekly): from the week's judge failures, the strong model may propose a change to Saheli's rules.
   Proposals are only shown to the founder; approved ones enter the next playbook and go through its safety trial.
 - gap specs (weekly): the top "can't do yet" requests become short feature drafts (what, why, examples, likely tool).
 """
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import random
 from datetime import timedelta
 from statistics import mean
 
@@ -21,12 +20,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core import clock
-from app.learn import gaps, grader
+from app.learn import gaps
+from app.quality.judge import parse_json
 from app.learn.models import LearnReport, ReplyLog, RuleProposal
 
 logger = logging.getLogger(__name__)
-CALIBRATION_N = 30
-AGREEMENT_FLOOR = 0.8
 DRIFT_MIN_N = 40
 
 
@@ -43,35 +41,14 @@ async def latest(sessions, kind: str) -> dict | None:
         return {**r.data, "at": r.at.isoformat()} if r else None
 
 
-# ── grader calibration ─────────────────────────────────────────────────────────
+# ── judge calibration ──────────────────────────────────────────────────────────
 
 
 async def calibrate(sessions: async_sessionmaker) -> dict:
-    from app.llm import router
+    """People's yes/no on the full-memory judge's verdicts (trust plan C1.4; app.quality.calibration)."""
+    from app.quality import calibration
 
-    async with sessions() as s:
-        rows = list((await s.execute(
-            select(ReplyLog).where(ReplyLog.judge_pass.is_not(None), ReplyLog.at >= clock.now() - timedelta(days=14)).order_by(ReplyLog.id.desc()).limit(500)
-        )).scalars())
-    if len(rows) < 10:
-        return {"skipped": "not enough graded replies"}
-    pick = random.Random(clock.ist_day()).sample(rows, min(CALIBRATION_N, len(rows)))
-    items = "\n\n".join(f"#{i + 1} ({r.situation}; to {r.speaker_role})\n  They: {r.user_text[:400] or '(Saheli started)'}\n  Saheli: {r.text[:800]}"
-                        for i, r in enumerate(pick))
-    try:
-        out = await router.complete("judge", system_stable=grader.PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": items}]}],
-                                    max_tokens=4000, effort="low", essential=False)
-    except router.AllModelsFailed as exc:
-        return {"skipped": str(exc)[:120]}
-    strong = {v.get("n"): bool(v.get("pass", True)) for v in grader.parse(out.text).get("verdicts") or []}
-    pairs = [(r.judge_pass, strong[i + 1]) for i, r in enumerate(pick) if i + 1 in strong]
-    agree = sum(1 for a, b in pairs if a == b) / len(pairs) if pairs else None
-    data = {"n": len(pairs), "agreement": round(agree, 3) if agree is not None else None, "trusted": agree is None or agree >= AGREEMENT_FLOOR,
-            "cheap_fail_rate": round(sum(1 for a, _ in pairs if not a) / len(pairs), 3) if pairs else None,
-            "strong_fail_rate": round(sum(1 for _, b in pairs if not b) / len(pairs), 3) if pairs else None}
-    if agree is not None and agree < AGREEMENT_FLOOR:
-        logger.error("LEARN ALERT grader agreement %.0f%% < %.0f%%", agree * 100, AGREEMENT_FLOOR * 100)
-    return await _save(sessions, "calibration", data)
+    return await calibration.calibrate(sessions)
 
 
 # ── drift ──────────────────────────────────────────────────────────────────────
@@ -106,7 +83,7 @@ async def drift(sessions: async_sessionmaker) -> dict:
         if ra["annoyed"] > rb["annoyed"] + 0.05:
             alarms.append(f"{name}: more annoyed replies {rb['annoyed']:.0%} → {ra['annoyed']:.0%}")
         if ra["judge_fail"] is not None and rb["judge_fail"] is not None and ra["judge_fail"] > rb["judge_fail"] + 0.05:
-            alarms.append(f"{name}: grader failures up {rb['judge_fail']:.0%} → {ra['judge_fail']:.0%}")
+            alarms.append(f"{name}: judge failures up {rb['judge_fail']:.0%} → {ra['judge_fail']:.0%}")
         if ra["reply_rate"] is not None and rb["reply_rate"] is not None and ra["reply_rate"] < rb["reply_rate"] - 0.1:
             alarms.append(f"{name}: fewer people answer her messages {rb['reply_rate']:.0%} → {ra['reply_rate']:.0%}")
     for a in alarms:
@@ -117,7 +94,7 @@ async def drift(sessions: async_sessionmaker) -> dict:
 # ── rule proposals ─────────────────────────────────────────────────────────────
 
 PROPOSE = """You review a WhatsApp care companion (Saheli) for elderly people in India. Below are replies a quality
-grader FAILED this week, with the grader's note. If a clear, repeated problem would be fixed by a short new rule in her
+judge FAILED this week, with the judge's note. If a clear, repeated problem would be fixed by a short new rule in her
 instructions, propose it. At most 3 proposals; none if the failures are one-offs. Each rule: one or two sentences,
 general (no names), and never weaker on safety (alerts, doses, privacy). Return only JSON:
 {"proposals": [{"situation": "...", "rule": "...", "why": "...", "examples": [n, n]}]}"""
@@ -136,7 +113,7 @@ async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
 
     async with sessions() as s:
         fixed = corrections.for_proposals(await corrections.cases(s, days=7, limit=40))
-    lines = [f"[{r.situation}] They: {anonymise(r.user_text)[:200]} | Saheli: {anonymise(r.text)[:300]} | grader: {r.judge_note}" for r in fails]
+    lines = [f"[{r.situation}] They: {anonymise(r.user_text)[:200]} | Saheli: {anonymise(r.text)[:300]} | judge: {r.judge_note}" for r in fails]
     lines += fixed  # people's own corrections count most when there are few families
     if len(lines) < 3:
         return []
@@ -149,7 +126,7 @@ async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
         return []
     got = []
     async with sessions() as s:
-        for p in (grader.parse(out.text).get("proposals") or [])[:3]:
+        for p in (parse_json(out.text).get("proposals") or [])[:3]:
             rule = str(p.get("rule") or "").strip()
             if not rule or len(rule) > 400:
                 continue
@@ -232,5 +209,5 @@ async def gap_specs(sessions: async_sessionmaker) -> dict:
                                     max_tokens=2000, effort="low", essential=False)
     except router.AllModelsFailed:
         return {"specs": []}
-    data = {"specs": (grader.parse(out.text).get("specs") or [])[:5], "from": top}
+    data = {"specs": (parse_json(out.text).get("specs") or [])[:5], "from": top}
     return await _save(sessions, "gap_specs", data)

@@ -1,0 +1,99 @@
+name: Replay cases (before every engine deploy)
+
+# Trust plan C3: every FIXED replay case (an old bug, fixed once) runs on real Gemini in the sunny-ship TEST project with
+# the new code and the production model routes; a case fails only if 2 of 3 runs fail; any fixed case failing blocks the
+# deploy. OPEN cases run too and are reported (known bugs being fixed). Cases: the production table's nightly export
+# (anonymised, private bucket in the test project) plus the invented families in the repo. On master the results go back
+# to the engine, which flips an open case that passed to fixed (the fix loop). Under 10 minutes, about ₹200 a deploy.
+# Called by deploy-gcp.yml; started by hand (on a branch) it never deploys: dry_run shows what would be blocked.
+
+on:
+  workflow_call:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true: run and report only (never posts results)"
+        default: "true"
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_replay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ENGINE_URL: https://kawach-ai-engine-bcvowb5kfq-el.a.run.app
+      REPLAY_BUCKET: kavach-replay-cases-sunny
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pillow
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: The cases (the production export, anonymised) - the repo's invented families are added by the runner
+        run: |
+          mkdir -p runs
+          gcloud storage cp "gs://$REPLAY_BUCKET/cases/latest.jsonl" runs/cases.jsonl --project sunny-ship-508214-q1 \
+            || { echo "::warning::no exported cases yet; the repo's cases only"; : > runs/cases.jsonl; }
+          echo "exported cases: $(wc -l < runs/cases.jsonl)"
+      - name: Run every case (2 of 3; fixed failing = blocked)
+        id: run
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+          REPLAY_MAX_INR: "200"
+          REPLAY_DEADLINE_S: "540"
+        run: |
+          set +e
+          PYTHONPATH=. python -u -m eval.replay_cases runs/cases.jsonl --parallel 20 --max-cases 60 --out runs/replay
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          [ -f runs/replay/summary.md ] && cat runs/replay/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - id: auth
+        if: always() && github.ref_name == 'master' && inputs.dry_run != 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ENGINE_URL }}
+          id_token_include_email: true
+      - name: Results back to the engine (on master, an open case that passed becomes fixed)
+        if: always() && github.ref_name == 'master' && inputs.dry_run != 'true'
+        env:
+          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+        run: |
+          [ -f runs/replay/results.json ] || exit 0
+          python3 -c "import json,os; r=json.load(open('runs/replay/results.json')); s=r['summary']; s['run_id']='replay-'+os.environ['GITHUB_RUN_ID']; print(json.dumps({'commit': os.environ['GITHUB_SHA'], 'branch': os.environ['GITHUB_REF_NAME'], 'summary': s, 'results': [x for x in r['results'] if not str(x['id']).startswith(('founder-', 'seed-'))]}))" > body.json
+          curl -sS --fail-with-body -X POST "$ENGINE_URL/v2/admin/replay-results" -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" \
+            --data @body.json | head -c 400 || echo "::warning::could not post the replay results"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: replay-${{ github.run_id }}
+          path: runs/replay
+          retention-days: 30
+      - name: Block when a fixed case failed (an old bug came back)
+        if: always()
+        run: |
+          [ "${{ steps.run.outputs.code }}" = "0" ] || { echo "::error::a fixed replay case failed (2 of 3): the deploy is blocked (see the summary)"; exit 1; }

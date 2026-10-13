@@ -3,7 +3,7 @@
     SIM_PROJECT=… SIM_MAX_INR=150 .venv/bin/python eval/replay_failures.py [eval/fixtures/failures.jsonl] --yes
 
 Each case is sent to a fresh simulated family (the brain_scenarios one, with its care record) as the same kind of
-person; the grader then checks the new reply with the old failure's note in mind. Prints fixed / still failing.
+person; the judge then checks the new reply with the old failure's note in mind. Prints fixed / still failing.
 Runs in the simulator database and the training project, never production.
 """
 
@@ -37,7 +37,7 @@ def guard(argv: list[str]) -> None:
 async def main(argv: list[str]) -> int:
     guard(argv)
     from eval import brain_scenarios as bs
-    from app.learn import grader
+    from app.quality.judge import parse_json
     from app.llm import router, spend
     from app.sim.world import SimHost
 
@@ -69,7 +69,7 @@ async def main(argv: list[str]) -> int:
             out = await router.complete("judge", system_stable=RECHECK.format(note=c["note"][:300]),
                                         messages=[{"role": "user", "content": [{"type": "text", "text": f"They: {c['said']}\nNew reply: {reply}"}]}],
                                         max_tokens=400, effort="low", essential=False)
-            ok = bool(grader.parse(out.text).get("pass", False))
+            ok = bool(parse_json(out.text).get("pass", False))
         except router.AllModelsFailed as exc:
             print(f"  judge unavailable: {exc}")
             break

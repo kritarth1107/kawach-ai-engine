@@ -34,6 +34,38 @@ from eval.world.slice import slice_ids
 from eval.world.write import attach
 
 OUT = Path(os.getenv("NIGHTLY_OUT", "runs/nightly")) / date.today().isoformat()
+# The full world has ~12,000 probes (10-15 per family). Each night runs about one per family (~1,100), rotating so every
+# probe runs within NIGHT_EVERY nights, plus every safety (crisis) probe every night: ~30-40 per language, all judged.
+NIGHT_EVERY = int(os.getenv("NIGHT_EVERY", "11"))
+EST_INR_PER_PROBE = float(os.getenv("EST_INR_PER_PROBE", "1.3"))  # measured 13 Oct: ₹621 for 599 probes (₹1.04), plus second turns
+TEST_JUDGE = ["gemini:gemini-3.1-pro-preview"]  # invented families, sunny-ship: residency does not apply; a stronger judge
+
+
+def night_index(day: date | None = None) -> int:
+    return (day or date.today()).toordinal()
+
+
+def _bucket(probe_id: str, every: int) -> int:
+    import hashlib
+
+    return int(hashlib.sha256(probe_id.encode()).hexdigest()[:8], 16) % every
+
+
+def tonight(families: list[dict], every: int, day: date | None = None) -> dict[str, list[dict]]:
+    """{family id: tonight's probes}: probes whose rotation bucket is tonight's, and every crisis probe."""
+    if every <= 1:
+        return {f["id"]: list(f["probes"]) for f in families}
+    n = night_index(day) % every
+    return {f["id"]: [q for q in f["probes"] if q.get("topic") == "crisis" or _bucket(q["id"], every) == n] for f in families}
+
+
+def test_routes(routes: dict) -> dict:
+    """Production's routes for every role Saheli uses (the night tests what families get), with the test-only roles: the
+    person's second message (sim) and a stronger judge in the test project."""
+    routes = dict(routes)
+    routes.setdefault("sim", ["gemini:gemini-3.8-flash"])
+    routes["judge"] = list(TEST_JUDGE)
+    return routes
 
 
 def host_for_family(fam: dict):
@@ -141,13 +173,13 @@ def check(probe: dict, res, host, profile: dict | None, fam: dict) -> list[str]:
     return fails
 
 
-async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_cap: float) -> None:
+async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_cap: float, probes: list[dict] | None = None) -> None:
     from app.brain.loop import TurnRequest, run_turn, writing_profiles
     from app.llm import spend
 
     elder, members = roster_of(fam)
     people = {p["id"]: p for p in fam["people"]}
-    for q in fam["probes"]:
+    for q in fam["probes"] if probes is None else probes:
         if spend.process_spent() >= spent_cap:
             out.append({"probe": q["id"], "family": fam["id"], "skipped": "budget"})
             continue
@@ -168,7 +200,7 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
         before_sent, before_alerts = len(host.world.sent), len(host.world.alerts)
         t0 = time.monotonic()
         row = {"probe": q["id"], "family": fam["id"], "household": fam["household"], "language": q["language"], "topic": q["topic"], "who": who["key"],
-               "text": text, "written": bool(q.get("text"))}
+               "text": text, "written": bool(q.get("text")), "tier": fam["tier"]}
         try:
             images = photo_for(q) if q["topic"] == "photo" else []
             async with sessions() as s:
@@ -178,6 +210,7 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
             async with sessions() as s:
                 profile = (await writing_profiles(s, fam["familyId"], [speaker])).get(who["id"])
             fails = check(q, res, host, profile, fam)
+            row["language_ok"] = not any(f.startswith("language:") for f in fails)
             if fails and "?" in (res.reply or "") and any(f.startswith("expected one of") for f in fails):
                 # Saheli asked something first (whose medicine? which time?): they answer once, then the turn is judged as a whole
                 answer = await answer_as(who, q, text, res.reply)
@@ -190,6 +223,7 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
                 res.alerts = [*res.alerts, *res2.alerts]
                 res.reply = res2.reply
                 fails = check(q, res, host, profile, fam)
+                row["language_ok"] = not any(f.startswith("language:") for f in fails)
             row.update({"reply": res.reply, "tools": [a["tool"] for a in res.actions], "alerts": res.alerts, "model": res.model,
                         "actions": [{"tool": a["tool"], "ok": a.get("ok"), "args": a.get("args")} for a in res.actions],
                         "ms": int((time.monotonic() - t0) * 1000), "sent": host.world.sent[before_sent:], "team_alerts": len(host.world.team_alerts),
@@ -199,13 +233,16 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
         out.append(row)
 
 
-def summary(rows: list[dict], secs: float) -> str:
+def summary(rows: list[dict], secs: float, meta: dict | None = None) -> str:
     done = [r for r in rows if "pass" in r]
     by = lambda key: Counter((r[key], r["pass"]) for r in done)  # noqa: E731
     lines = [f"# Nightly probes {date.today().isoformat()}", "",
              f"{len(done)} probes, {sum(r['pass'] for r in done)} passed ({100 * sum(r['pass'] for r in done) / max(1, len(done)):.1f} %), "
              f"{sum(1 for r in rows if r.get('skipped') == 'budget')} skipped by the budget, "
              f"{sum(1 for r in rows if r.get('skipped') == 'no_text')} with no written text, {secs / 60:.0f} min", ""]
+    if meta:
+        lines += [f"Spend ₹{meta.get('spent', 0):.0f} of this run's cap ₹{meta.get('cap', 0):.0f} "
+                  f"(estimate ₹{meta.get('estimate', 0):.0f} for {meta.get('selected', 0)} probes)", ""]
     for key, title in (("language", "By language"), ("topic", "By topic"), ("household", "By household")):
         c = by(key)
         keys = sorted({k for k, _ in c})
@@ -222,7 +259,7 @@ def summary(rows: list[dict], secs: float) -> str:
     return "\n".join(lines) + "\n"
 
 
-async def main_async(ids: list[str], parallel: int, url: str, cap: float) -> int:
+async def main_async(ids: list[str], parallel: int, url: str, cap: float, every: int = 1, shard: tuple[int, int] | None = None) -> int:
     from app.api import brain as brain_api
     from app.brain.tools import set_task_agent
     from app.llm import spend
@@ -238,13 +275,23 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float) -> int
     world = make.build()
     attach(world)
     fams = [f for f in world if f["id"] in set(ids)]
+    picked = tonight(fams, every)
+    selected = sum(len(v) for v in picked.values())
+    estimate = selected * EST_INR_PER_PROBE
+    # The 13 Oct run skipped 59 % "by the budget": the night's ₹600 was split over 4 shards (₹150 each), each shard stopped at
+    # ₹154-156, and only the per-shard spend was printed, so it looked under the cap. Now each shard prints its own cap, its
+    # estimate and the night's share, and a budget skip makes the night fail (eval/world/report.py: probes executed < 95 %).
+    print(f"shard {shard[0] if shard else 0}/{shard[1] if shard else 1}: {len(fams)} families, {selected} probes tonight (every {every} nights), "
+          f"cap ₹{cap:.0f}, estimate ₹{estimate:.0f}", flush=True)
+    if cap < estimate:
+        print(f"::warning::the cap ₹{cap:.0f} is below the estimate ₹{estimate:.0f}: probes may be skipped and the night will fail", flush=True)
     rows: list[dict] = []
     sem = asyncio.Semaphore(parallel)
     t0 = time.monotonic()
 
     async def one(f: dict) -> None:
         async with sem:
-            await run_family(sessions, f, rows, cap)
+            await run_family(sessions, f, rows, cap, picked[f["id"]])
             n = sum(1 for r in rows if "pass" in r)
             if n and n % 50 < len(f["probes"]):
                 print(f"  {n} probes, {sum(r['pass'] for r in rows if 'pass' in r)} passed, ₹{spend.process_spent():.0f}, {time.monotonic() - t0:.0f}s")
@@ -254,7 +301,12 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float) -> int
     await engine.dispose()
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "probes.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-    text = summary(rows, time.monotonic() - t0) + f"\nSpent ₹{spend.process_spent():.0f}.\n"
+    meta = {"shard": list(shard) if shard else [0, 1], "families": len(fams), "selected": selected, "every": every, "cap": cap, "estimate": round(estimate, 1),
+            "spent": round(spend.process_spent(), 2), "executed": sum(1 for r in rows if "pass" in r),
+            "skipped_budget": sum(1 for r in rows if r.get("skipped") == "budget"), "no_text": sum(1 for r in rows if r.get("skipped") == "no_text"),
+            "errors": sum(1 for r in rows if r.get("error")), "minutes": round((time.monotonic() - t0) / 60, 1)}
+    (OUT / f"probes_meta_{meta['shard'][0]}.json").write_text(json.dumps(meta, indent=1))
+    text = summary(rows, time.monotonic() - t0, meta) + f"\nSpent ₹{spend.process_spent():.0f}.\n"
     (OUT / "probes.md").write_text(text)
     print(text[:3000])
     return 0
@@ -269,10 +321,13 @@ def production_routes() -> str | None:
 
 def main(argv: list[str]) -> int:
     if not os.getenv("MODEL_ROUTES") and production_routes():
-        routes = json.loads(production_routes() or "{}")
-        routes.setdefault("sim", ["gemini:gemini-3.8-flash"])  # the person's second message (not a production role)
-        os.environ["MODEL_ROUTES"] = json.dumps(routes)
+        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
     par = 8
+    every = 1
+    if "--every" in argv:  # the full world: tonight's rotation of probes (NIGHT_EVERY), not all 12,000
+        i = argv.index("--every")
+        every = int(argv[i + 1]) if argv[i + 1] != "night" else NIGHT_EVERY
+        argv = argv[:i] + argv[i + 2:]
     limit = None
     if "--parallel" in argv:
         i = argv.index("--parallel")
@@ -299,7 +354,7 @@ def main(argv: list[str]) -> int:
     ids = ids[:limit] if limit else ids
     if shard:
         ids = ids[shard[0]::shard[1]]
-    return asyncio.run(main_async(ids, par, os.getenv("DATABASE_URL") or "", cap))
+    return asyncio.run(main_async(ids, par, os.getenv("DATABASE_URL") or "", cap, every, shard))
 
 
 if __name__ == "__main__":

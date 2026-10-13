@@ -393,14 +393,15 @@ async def consolidate_job() -> dict:
             logger.exception("consolidate failed family=%s", fid)
     from app.care import dedupe
 
-    merged = await merge_facts_job(apply=dedupe.merge_mode() == "on") if dedupe.merge_mode() != "off" else {}
+    merged = await merge_facts_job(apply=dedupe.merge_mode() == "on", skip_merged_tonight=True) if dedupe.merge_mode() != "off" else {}
     return {"families": len(fids), "notes_rewritten": rewritten, "confirmations_expired": expired, "duplicates": merged}
 
 
 @router.post("/jobs/merge-facts")
-async def merge_facts_job(apply: bool = False, family: str = "") -> dict:
+async def merge_facts_job(apply: bool = False, family: str = "", skip_merged_tonight: bool = False) -> dict:
     """The same fact saved more than once (app.care.dedupe): listed, or with apply=true merged into one (undoable).
-    Nightly from consolidate (FACT_MERGE=dryrun lists, on applies); family= limits it to ids starting with that."""
+    Nightly from consolidate (FACT_MERGE=dryrun lists, on applies); family= limits it to ids starting with that.
+    skip_merged_tonight: leave out families whose dream already merged tonight (app.quality.nightly)."""
     from sqlalchemy import select as sql_select
 
     from app.care import dedupe
@@ -412,9 +413,14 @@ async def merge_facts_job(apply: bool = False, family: str = "") -> dict:
             sql_select(CareFact.family_id).where(CareFact.status == "active", ~CareFact.family_id.startswith("shadow:"),
                                                 ~CareFact.family_id.startswith("sim-")).distinct()) if r[0].startswith(family)})
     out: dict = {}
+    from app.care.dream import night_of
+    from app.quality.nightly import merged_tonight
+
     for fid in fids:
         try:
             async with SessionLocal() as session:
+                if skip_merged_tonight and await merged_tonight(session, fid, night_of()):
+                    continue
                 found = await dedupe.merge_family(session, fid, apply_changes=apply)
                 if apply:
                     await session.commit()

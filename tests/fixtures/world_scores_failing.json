@@ -1,0 +1,183 @@
+{
+ "version": 1,
+ "probes": {
+  "selected": 95,
+  "executed": 95,
+  "executed_pct": 100.0,
+  "skipped_budget": 0,
+  "no_text": 0,
+  "crashed": 0,
+  "shards": 1,
+  "shards_expected": null,
+  "spent_inr": 120.0,
+  "cap_inr": 800.0,
+  "every": 11
+ },
+ "code": {
+  "overall": {
+   "n": 95,
+   "pass": 95,
+   "pct": 100.0
+  },
+  "languages": {
+   "bn": {
+    "n": 25,
+    "pass": 25,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "hi": {
+    "n": 40,
+    "pass": 40,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "ml": {
+    "n": 30,
+    "pass": 30,
+    "pct": 100.0,
+    "too_few": false
+   }
+  },
+  "households": {
+   "self_young": {
+    "n": 25,
+    "pass": 25,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "two_elders": {
+    "n": 70,
+    "pass": 70,
+    "pct": 100.0,
+    "too_few": false
+   }
+  },
+  "topics": {
+   "reading": {
+    "n": 95,
+    "pass": 95,
+    "pct": 100.0,
+    "too_few": false
+   }
+  }
+ },
+ "judge": {
+  "missing": false,
+  "picked": 95,
+  "judged": 95,
+  "errors": 0,
+  "skipped_budget": 0,
+  "spent_inr": 110.0,
+  "route": "gemini:gemini-3.1-pro-preview",
+  "overall": {
+   "n": 95,
+   "pass": 90,
+   "pct": 94.7
+  },
+  "languages": {
+   "bn": {
+    "n": 25,
+    "pass": 25,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "hi": {
+    "n": 40,
+    "pass": 40,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "ml": {
+    "n": 30,
+    "pass": 25,
+    "pct": 83.3,
+    "too_few": false
+   }
+  },
+  "households": {
+   "self_young": {
+    "n": 25,
+    "pass": 25,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "two_elders": {
+    "n": 70,
+    "pass": 65,
+    "pct": 92.9,
+    "too_few": false
+   }
+  },
+  "topics": {
+   "reading": {
+    "n": 95,
+    "pass": 90,
+    "pct": 94.7,
+    "too_few": false
+   }
+  },
+  "issues": {
+   "cold_tone": 5
+  }
+ },
+ "language_correct": {
+  "n": 95,
+  "pass": 95,
+  "pct": 100.0,
+  "languages": {
+   "bn": {
+    "n": 25,
+    "pass": 25,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "hi": {
+    "n": 40,
+    "pass": 40,
+    "pct": 100.0,
+    "too_few": false
+   },
+   "ml": {
+    "n": 30,
+    "pass": 30,
+    "pct": 100.0,
+    "too_few": false
+   }
+  }
+ },
+ "safety": {
+  "crisis_probes": 0,
+  "missed_crisis_alerts": 0,
+  "alert_to_the_person": 0,
+  "made_up_medicine": 0,
+  "medical_advice": 0
+ },
+ "recall": {
+  "missing": false,
+  "n": 20,
+  "pass": 20,
+  "pct": 100.0,
+  "families": 1,
+  "errors": 0,
+  "by_kind": {
+   "life_detail": {
+    "n": 20,
+    "pass": 20,
+    "pct": 100.0,
+    "too_few": false
+   }
+  },
+  "languages": {
+   "hi": {
+    "n": 20,
+    "pass": 20,
+    "pct": 100.0,
+    "too_few": false
+   }
+  },
+  "memory_score": null,
+  "spent_inr": null
+ },
+ "fixture": "a deliberate failing night (trust plan C2): Malayalam judged below 90 % with 30 judged probes"
+}

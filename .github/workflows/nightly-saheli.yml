@@ -1,8 +1,17 @@
 name: Nightly Saheli (real AI on the synthetic world)
+run-name: "Nightly ${{ github.event_name == 'schedule' && 'full' || inputs.slice }}${{ inputs.fixture == 'true' && ' fixture' || '' }}"
 
 # Plan B3: every night at 01:00 IST the real brain answers the probes of the synthetic families (30 languages, every
 # household type), and a simulated week of every proactive job is checked against the message rules. Paid model calls
 # go to the sunny-ship TEST project only (never kavach-care). The world is synthetic, so logs and artifacts are safe.
+#
+# Trust plan C2: the scheduled night runs the FULL world (1,000 families): about one probe per family each night, rotating
+# so all ~12,000 run within 11 nights, plus every crisis probe; every reply judged (a stronger judge, 3.1 Pro, in the test
+# project); the story families' memory quiz scored (recall). The report publishes scores.json to the engine
+# (/v2/admin/eval-scores, shown on the admin Daily score page and in the 08:00 email) and FAILS the night (exit 1) when a
+# release bar breaks (eval/world/report.py). Engine deploys wait while the latest full night failed (scripts/nightly_gate.py).
+# Budget (the founder: not a concern): about ₹1,500-2,500 a night; the caps below are runaway guards above that.
+# Scheduled workflows run only from the default branch (master).
 
 on:
   schedule:
@@ -11,30 +20,44 @@ on:
     inputs:
       slice:
         description: "World slice: ci (120 families), nudge (200), full (1,000), or family ids"
-        default: "ci"
+        default: "full"
+      every:
+        description: "Run each family's probes every N nights (night = tonight's rotation; 1 = every probe of the slice)"
+        default: "night"
       max_inr:
-        description: "Spend guard for the night's probes (Rs)"
-        default: "2000"
+        description: "Spend guard for the night's probes, all shards together (Rs)"
+        default: "3200"
       judge_inr:
-        description: "Spend guard for the night's judge (Rs)"
-        default: "1000"
+        description: "Spend guard for the night's judge, all shards together (Rs)"
+        default: "3200"
+      recall_inr:
+        description: "Spend guard for the story families' recall (Rs)"
+        default: "700"
       nudge_inr:
         description: "Spend guard for the regular-nudge quality eval (Rs)"
         default: "400"
+      fixture:
+        description: "true: skip the run; put a stored failing scores.json through the gate (shows a failing night on purpose)"
+        default: "false"
 
 concurrency:
   group: nightly-saheli
   cancel-in-progress: false
 
 env:
-  SLICE: ${{ github.event.inputs.slice || 'ci' }}
-  MAX_INR: ${{ github.event.inputs.max_inr || '2000' }}
-  JUDGE_INR: ${{ github.event.inputs.judge_inr || '1000' }}
+  SLICE: ${{ github.event.inputs.slice || 'full' }}
+  EVERY: ${{ github.event.inputs.every || 'night' }}
+  MAX_INR: ${{ github.event.inputs.max_inr || '3200' }}
+  JUDGE_INR: ${{ github.event.inputs.judge_inr || '3200' }}
+  RECALL_INR: ${{ github.event.inputs.recall_inr || '700' }}
   NUDGE_INR: ${{ github.event.inputs.nudge_inr || '400' }}
+  FIXTURE: ${{ github.event.inputs.fixture || 'false' }}
   SHARDS: "4"
+  ENGINE_URL: https://kawach-ai-engine-bcvowb5kfq-el.a.run.app
 
 jobs:
   probes:
+    if: github.event.inputs.fixture != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 300
     permissions:
@@ -76,10 +99,21 @@ jobs:
           MEMORY_EMBEDDINGS: "off"
           NIGHTLY_OUT: runs/nightly
         run: |
-          export PROBES_MAX_INR=$(( MAX_INR / SHARDS )) JUDGE_MAX_INR=$(( JUDGE_INR / SHARDS ))
-          PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6
-          # a stronger model grades every safety reply, every failure and a 30 % sample (plan B3.1)
-          PYTHONPATH=. python -u -m eval.world.judge runs/nightly --sample 0.3 || echo "judge failed (probes still count)"
+          # each shard's own cap is its share of the night's (13 Oct: ₹600 over 4 shards = ₹150 each stopped 59 % of the probes;
+          # the probes now print their cap and estimate, and a budget skip fails the night)
+          export PROBES_MAX_INR=$(( MAX_INR / SHARDS ))
+          PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6 --every $EVERY
+      - name: Judge every reply (shard ${{ matrix.shard }}); no result is a failing night
+        if: always()
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_probes
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+        run: |
+          export JUDGE_MAX_INR=$(( JUDGE_INR / SHARDS ))
+          PYTHONPATH=. python -u -m eval.world.judge runs/nightly --sample 1
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -87,7 +121,56 @@ jobs:
           path: runs/nightly
           retention-days: 90
 
+  recall:
+    # the story families' memory quiz, scored (C2) and their memory score (A2), on a rotation of 25 families a night
+    if: github.event.inputs.fixture != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_recall
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - name: Build the world
+        run: PYTHONPATH=. python -m eval.world.make
+      - name: Recall (story families' quiz) and their memory score
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_recall
+          DEBUG: "false"
+          GCP_PROJECT_ID: sunny-ship-508214-q1
+          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          MEMORY_EMBEDDINGS: "off"
+          NIGHTLY_OUT: runs/nightly
+          RECALL_MAX_INR: ${{ env.RECALL_INR }}
+        run: PYTHONPATH=. python -u -m eval.world.recall $SLICE --families 25 --parallel 5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: probes-recall
+          path: runs/nightly
+          retention-days: 90
+
   message-week:
+    if: github.event.inputs.fixture != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     services:
@@ -129,6 +212,7 @@ jobs:
           retention-days: 90
 
   nudge-quality:
+    if: github.event.inputs.fixture != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -185,12 +269,13 @@ jobs:
           retention-days: 90
 
   report:
-    needs: [probes, message-week, nudge-quality]
-    if: always()
+    needs: [probes, recall, message-week, nudge-quality]
+    if: always() && github.event.inputs.fixture != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -213,17 +298,95 @@ jobs:
         with:
           pattern: "{message-week,nudge-quality}"
           path: extras
-      - name: Report
+      - name: Report and gate (scores.json; exit 1 when a release bar breaks)
+        id: gate
         run: |
-          args="tonight --out report.md"
+          set +e
+          args="tonight --out report.md --scores scores.json --extras extras"
           [ -d previous ] && args="$args --previous previous"
           PYTHONPATH=. python -m eval.world.report $args
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
           for f in extras/nudge-quality/report.md extras/message-week/runs/nudge_day_sim/report.md extras/message-week/nudge_day_sim/report.md; do
             [ -f "$f" ] && { echo; echo "---"; cat "$f"; } >> report.md
           done
           cat report.md >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+      - id: auth
+        if: always()
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ENGINE_URL }}
+          id_token_include_email: true
+      - name: Publish the number to the engine (eval_scores; a failing night on master emails the team)
+        if: always()
+        env:
+          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+          KIND: ${{ (github.event_name == 'schedule' || inputs.slice == 'full') && 'nightly' || 'fixture' }}
+        run: |
+          [ -f scores.json ] || { echo "no scores.json"; exit 0; }
+          python3 - <<'PY' > body.json
+          import json, os
+          sc = json.load(open("scores.json"))
+          print(json.dumps({"run_id": os.environ["GITHUB_RUN_ID"], "kind": os.environ["KIND"], "day": __import__("datetime").date.today().isoformat(),
+                            "passed": bool(sc.get("passed")), "commit": os.environ["GITHUB_SHA"], "branch": os.environ["GITHUB_REF_NAME"],
+                            "scores": sc, "failures": sc.get("failures") or []}))
+          PY
+          curl -sS --fail-with-body -X POST "$ENGINE_URL/v2/admin/eval-scores" -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" \
+            --data @body.json | head -c 600 || echo "::warning::could not post the scores to the engine"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: report
-          path: report.md
+          path: |
+            report.md
+            scores.json
           retention-days: 90
+      - name: Fail the night when a bar broke (no score is a failing score)
+        if: always()
+        run: |
+          [ "${{ steps.gate.outputs.code }}" = "0" ] || { echo "::error::the nightly world score broke a release bar (see the summary)"; exit 1; }
+
+  fixture:
+    # one deliberate failing night: a stored scores.json (invented numbers) through the same gate; stored as kind "fixture",
+    # so it never emails and never gates a deploy
+    if: github.event.inputs.fixture == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: The fixture night through the gate
+        id: gate
+        run: |
+          set +e
+          cp tests/fixtures/world_scores_failing.json scores.json
+          PYTHONPATH=. python -m eval.world.report --gate-only scores.json | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          token_format: id_token
+          id_token_audience: ${{ env.ENGINE_URL }}
+          id_token_include_email: true
+      - name: Store it as a fixture run
+        env:
+          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+        run: |
+          python3 -c "import json,os,datetime; sc=json.load(open('scores.json')); print(json.dumps({'run_id': os.environ['GITHUB_RUN_ID'], 'kind': 'fixture', 'day': datetime.date.today().isoformat(), 'passed': bool(sc.get('passed')), 'commit': os.environ['GITHUB_SHA'], 'branch': os.environ['GITHUB_REF_NAME'], 'scores': sc, 'failures': sc.get('failures') or []}))" > body.json
+          curl -sS --fail-with-body -X POST "$ENGINE_URL/v2/admin/eval-scores" -H "Authorization: Bearer $ID_TOKEN" -H "Content-Type: application/json" --data @body.json | head -c 400 || true
+      - name: Fail on the broken bar
+        run: |
+          [ "${{ steps.gate.outputs.code }}" = "0" ] || { echo "::error::fixture night: a release bar is broken, as intended"; exit 1; }

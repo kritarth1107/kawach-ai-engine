@@ -1,4 +1,4 @@
-"""Learning A2: turn traces and fine-tuning data, hard-moment routing, grader calibration, drift alarms, rule
+"""Learning A2: turn traces and fine-tuning data, hard-moment routing, judge calibration, drift alarms, rule
 proposals, situation-scoped trials, gap specs, failure export, the tuned-vs-base comparison. Scripted models only."""
 
 import json
@@ -151,14 +151,30 @@ async def test_brain_hard_counts_as_essential_spend():
     assert await spend.gate("brain_hard") == await spend.gate("brain")
 
 
-# ── grader calibration ──
+# ── judge calibration (people's yes/no on the full-memory judge's verdicts, app.quality.calibration) ──
+
+
+async def _verdicts(db, fam, n):
+    from app.quality.models import ReplyVerdict
+
+    rows = (await db.execute(select(ReplyLog).where(ReplyLog.family_id == fam).order_by(ReplyLog.id))).scalars().all()
+    for i, r in enumerate(rows[:n]):
+        db.add(ReplyVerdict(reply_id=r.id, family_id=fam, thread_id=r.thread_id, at=r.at, day=clock.ist(r.at).strftime("%Y-%m-%d"), kind=r.kind,
+                            passed=i % 2 == 0, issues=[] if i % 2 == 0 else ["tone"], verdict={}, judged_at=clock.now()))
+    await db.commit()
 
 
 async def test_calibration_low_agreement_blocks_promotion(db, at, sessions, model, monkeypatch):
-    at("2026-10-12 03:00")
+    from app.quality import calibration
+    from app.quality.models import JudgeLabel
+
+    at("2026-10-04 03:00")  # the first Sunday of October: a new batch
     await _log(db, "fam-cal", 20, judge=True)
-    verdicts = [{"n": i + 1, "pass": i % 2 == 0} for i in range(20)]
-    model([LLMReply(text=json.dumps({"verdicts": verdicts}), tool_calls=[], model="fake")])
+    await _verdicts(db, "fam-cal", 20)
+    assert (await calibration.make_batch(sessions))["created"] == 20
+    labels = (await db.execute(select(JudgeLabel).order_by(JudgeLabel.id))).scalars().all()
+    for k, lab in enumerate(labels):  # people agree with the judge on half
+        await calibration.label(sessions, lab.id, good=lab.judge_pass if k % 2 == 0 else not lab.judge_pass, by="team@kavach.care")
     cal = await review.calibrate(sessions)
     assert cal["n"] == 20 and cal["agreement"] == 0.5 and cal["trusted"] is False
     # a canary that scores better is not promoted on untrusted grades
@@ -173,7 +189,7 @@ async def test_calibration_low_agreement_blocks_promotion(db, at, sessions, mode
     assert (await lessons.evaluate(sessions))["decision"] == "not_worse_but_grader_untrusted"
 
 
-async def test_calibration_skips_without_data(db, at, sessions, model):
+async def test_calibration_skips_without_labels(db, at, sessions, model):
     at("2026-10-12 03:00")
     model()
     assert "skipped" in await review.calibrate(sessions)

@@ -129,3 +129,6 @@ class CapabilityGap(Base):
     category: Mapped[str] = mapped_column(String(32), index=True)
     asked: Mapped[str] = mapped_column(Text)  # anonymised
     how: Mapped[str] = mapped_column(String(24))  # said_cannot | tool_refused | unknown_tool
+
+
+from app.quality import models as _quality_models  # noqa: E402,F401  (registers the daily-score tables, trust plan C1/A2/C2)

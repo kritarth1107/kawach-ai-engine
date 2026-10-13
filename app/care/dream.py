@@ -172,6 +172,19 @@ async def dream_family(sessions: async_sessionmaker, roster: FamilyRoster, day: 
                 f"contradictions:{p['id']}",
                 lambda s, p=p: memory_upkeep.ask_about_contradictions(s, fid, p["id"], owner if owner != p["id"] else None)) or 0)
 
+    if with_models:
+        from app.quality import nightly as quality
+
+        if quality.enabled():
+            # the daily score (trust plan C1, A2): the duplicate merge, the full-memory judge on every message of the day,
+            # checks 2 and 3, the memory score and replay cases; after the night's own steps, before any brief
+            try:
+                with trace.use(night, family_id=fid):
+                    report["quality"] = await quality.family(sessions, roster, day)
+            except Exception as exc:  # noqa: BLE001 — the score must never cost the family its night
+                logger.exception("daily score failed family=%s", fid)
+                report["errors"].append(f"quality: {str(exc)[:120]}")
+
     async def mark(session):
         await store.record_event(session, family_id=fid, subject_id=(roster.elder or {}).get("id") or "family", kind="dream",
                                  summary=f"Reviewed {day}: {report['facts']} facts, {report['diary']} diary lines, {report['patterns']} new patterns",
@@ -205,7 +218,7 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
     return out
 
 
-async def dream_all(sessions: async_sessionmaker, *, budget_s: float = 240.0, with_models: bool = True) -> dict:
+async def dream_all(sessions: async_sessionmaker, *, budget_s: float = 240.0, with_models: bool = True, host=None) -> dict:
     day = night_of()
     started = time.monotonic()
     async with sessions() as session:
@@ -226,5 +239,13 @@ async def dream_all(sessions: async_sessionmaker, *, budget_s: float = 240.0, wi
         from app.learn import jobs as learn_jobs
 
         stats["learn"] = await learn_jobs.nightly(sessions, with_models=with_models)
+        if with_models:
+            from app.quality import nightly as quality
+
+            if quality.enabled():
+                try:  # check 1 from the delivery ledger, each family's overall and everyone's (trust plan C1)
+                    stats["quality"] = await quality.finish(sessions, day, host)
+                except Exception:  # noqa: BLE001
+                    logger.exception("daily score finish failed")
     logger.info("dream %s", stats)
     return stats

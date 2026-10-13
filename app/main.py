@@ -99,6 +99,11 @@ def create_app() -> FastAPI:
 
     app.include_router(calls.router)
     app.include_router(admin.router)
+    from app.api import quality
+
+    app.include_router(quality.router)  # the daily score (trust plan C1, A2, C2)
+    app.include_router(quality.poster)
+    app.include_router(quality.jobs)
     return app
 
 

@@ -14,7 +14,7 @@ from app.care import outcomes, store
 from app.care.models import FamilyRoster, OpenLoop
 from app.core import clock
 from app.learn import anonymise as anon
-from app.learn import gaps, grader, jobs, lessons, playbook, scoring, situations, timing
+from app.learn import gaps, jobs, lessons, playbook, scoring, situations, timing
 from app.learn.models import CapabilityGap, LearningExample, PlaybookVersion, ReplyLog
 from app.llm import router, spend
 from app.llm.router import LLMReply, ToolCall
@@ -175,18 +175,7 @@ async def test_corpus_only_from_consenting_families_and_anonymised(db, at, sessi
     assert all("Kamla" not in e.reply and "Ankit" not in e.reply for e in ex)
 
 
-# ── grader ──
-
-
-async def test_grader_marks_failures(db, at, sessions, model):
-    at("2026-10-03 03:00")
-    await _seed_log(db, "fam-g", 4, days_ago=1)
-    model([LLMReply(text='{"verdicts": [{"n": 1, "pass": false, "note": "preachy"}, {"n": 2, "pass": true}, {"n": 3, "pass": true}, {"n": 4, "pass": true}]}',
-                    tool_calls=[], model="fake")])
-    out = await grader.grade_sample(sessions)
-    assert out["graded"] == 4 and out["failed"] == 1
-    failed = (await db.execute(select(ReplyLog).where(ReplyLog.judge_pass.is_(False)))).scalars().one()
-    assert failed.judge_note == "preachy" and failed.score < 0.6
+# ── grader: retired; the full-memory judge's verdicts are tested in tests/test_daily_score.py ──
 
 
 # ── lessons, gate, canary ──

@@ -74,9 +74,9 @@ async def _ask(client, model: str, point: dict) -> tuple[list[str], str]:
 
 async def _judge(client, model: str, said: str, a: str, b: str) -> str:
     resp = await client.aio.models.generate_content(model=model, contents=f"{JUDGE}\n\nThey said: {said}\n\nA: {a}\n\nB: {b}")
-    from app.learn.grader import parse
+    from app.quality.judge import parse_json
 
-    return str(parse(resp.text or "").get("better") or "tie")
+    return str(parse_json(resp.text or "").get("better") or "tie")
 
 
 async def run(argv: list[str]) -> int:

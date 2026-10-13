@@ -4,6 +4,10 @@ on:
   push:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      override_nightly:
+        description: "The founder only: deploy even though the latest nightly failed (trust plan D8)"
+        default: "false"
 
 concurrency:
   group: deploy-ai-engine-gcp
@@ -54,8 +58,35 @@ jobs:
       - name: Types (errors may only go down; scripts/pyright_baseline.json)
         run: python scripts/pyright_gate.py
 
-  deploy:
+  nightly-gate:
+    # founder decision D8: no engine deploy while the latest full nightly failed, except the fix ([fixes-nightly]) or the
+    # founder's override (label nightly-override on its pull request, or override_nightly on a manual run by the founder)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Latest nightly
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          OVERRIDE_NIGHTLY: ${{ github.event.inputs.override_nightly }}
+        run: python3 scripts/nightly_gate.py
+
+  replay:
+    # trust plan C3: every fixed replay case on real Gemini (sunny-ship); one that fails 2 of 3 blocks the deploy
     needs: [test, lint]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/replay.yml
+    secrets: inherit
+
+  deploy:
+    needs: [test, lint, nightly-gate, replay]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -109,6 +140,10 @@ jobs:
           # /v2/admin: only the admin API's own identity, with its own secret (ENGINE_ADMIN_SECRET below)
           ADMIN_API_SA: kavach-admin-api@kavach-care.iam.gserviceaccount.com
           ENGINE_AUDIENCES: "https://kawach-ai-engine-303943038694.asia-south1.run.app,https://kawach-ai-engine-bcvowb5kfq-el.a.run.app"
+          # /v2/admin/eval-scores and /replay-results: the nightly and the replay job post as the GitHub deploy identity (trust plan C2, C3)
+          EVAL_POSTER_SA: github-deploy@kavach-care.iam.gserviceaccount.com
+          ADMIN_CONSOLE_URL: https://kavach-admin-bcvowb5kfq-el.a.run.app
+          REPLAY_EXPORT_BUCKET: kavach-replay-cases-sunny
           # Practice orders (app/tasks/practice.py): families whose orders stop at the store's last step. Set and cleared with
           # the repo variable PRACTICE_ORDER_FAMILIES, so every deploy keeps it (an env set by hand would be wiped here).
           PRACTICE_ORDER_FAMILIES: "${{ vars.PRACTICE_ORDER_FAMILIES }}"
