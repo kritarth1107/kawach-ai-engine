@@ -111,6 +111,9 @@ COLUMNS = [  # every one is required: the models select it
     ("nudge_ledger", "context", "TEXT"),
     ("nudge_ledger", "reaction", "VARCHAR(16)"),
     ("nudge_ledger", "grade", "JSONB"),
+    # trust plan A3: a correction from a person stays until a person changes it
+    ("care_facts", "pinned_at", "TIMESTAMPTZ"),
+    ("care_facts", "pinned_by", "VARCHAR(64)"),
 ]
 
 INDEXES = [

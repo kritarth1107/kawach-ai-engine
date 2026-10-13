@@ -233,10 +233,17 @@ async def complete(
             except ModelUnavailable as exc:
                 if exc.status != 429:
                     raise
+                # Every 429 is logged, also the ones the retry clears (trust plan C5.1: measure before buying capacity).
+                logger.warning("llm_429 role=%s model=%s attempt=1", role, route.key)
                 # Shared-capacity 429s usually clear within a second or two: one short retry on the same fast model
                 # beats falling through to a slower one.
                 await asyncio.sleep(RETRY_429_S)
-                reply = await call(route)
+                try:
+                    reply = await call(route)
+                except ModelUnavailable as again:
+                    if again.status == 429:
+                        logger.warning("llm_429 role=%s model=%s attempt=2", role, route.key)
+                    raise
             inr = await spend.record(role, route.model, reply.usage or {})
             logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, route.key, reply.usage, inr)
             return reply

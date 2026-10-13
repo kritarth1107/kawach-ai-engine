@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import dedupe, digest, store
 from app.care.domains import DOMAINS, HEALTH_DOMAINS, NONE_DOMAINS, fact_key, is_none_key, merged_value, slug
-from app.care.models import CareFact, MemoryNote, OpenLoop, Turn
+from app.care.models import CareFact, MemoryNote, Turn
 from app.brain.host import ShadowHost
 from app.care.redact import scrub_secrets
 from app.core import clock
@@ -98,8 +98,11 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     )
     from app.care import links
 
+    from app.care import rejected as care_rejected
+
     record = digest.care_record(elder.get("name", ""), await store.facts(session, family_id, elder["id"]),
-                                links=await links.links_for(session, family_id, elder["id"]))
+                                links=await links.links_for(session, family_id, elder["id"]),
+                                rejected=await care_rejected.rejected(session, family_id, elder["id"]))
     people = "\n".join(f"{pid}: {n}" for pid, n in names.items())
     reply = await router.complete(
         "extract",
@@ -132,6 +135,8 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         key = fact_key(domain, f["name"])
         same = await dedupe.check(session, family_id=family_id, subject_id=subject, domain=domain, key=key, text=f["sentence"],
                                   value=f.get("details") or {})
+        if same and same.rejected:
+            continue  # the family said this is wrong: a re-read never proposes it again (trust plan A3)
         if same:  # said before in other words: the saved fact, with every detail of both
             key, f = same.fact.key, {**f, "sentence": same.text}
         existing = await store.active_fact(session, family_id, subject, key)
@@ -303,12 +308,9 @@ async def consolidate_family(session: AsyncSession, family_id: str, *, min_lines
     return rewritten
 
 
-async def expire_stale_confirmations(session: AsyncSession, *, days: int = 14) -> int:
-    from datetime import timedelta
+async def expire_stale_confirmations(session: AsyncSession, *, days: int = 14) -> dict:
+    """Pending health facts: one final ask at day 14, archived at day 17 (app.care.pending, trust plan A4). Before, only the
+    question expired and the fact stayed pending forever."""
+    from app.care import pending
 
-    res = await session.execute(
-        update(OpenLoop)
-        .where(OpenLoop.kind == "confirm_fact", OpenLoop.status == "open", OpenLoop.created_at < clock.now() - timedelta(days=days))
-        .values(status="expired", updated_at=clock.now(), closed_note="no caregiver answer")
-    )
-    return res.rowcount or 0
+    return await pending.run(session)

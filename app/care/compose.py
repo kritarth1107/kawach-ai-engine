@@ -71,13 +71,15 @@ async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: st
     facts = await store.facts(session, family_id, subject_id, statuses=("active",))
     speech = next((language.normalise(f.value) for f in facts if f.domain == "language" and isinstance(f.value, dict)), None)
     naming = next((f.value for f in facts if f.key == "naming:address_as"), {}) or {}
+    avoid = [w for w in (naming.get("avoid") or []) if isinstance(w, str) and w.strip()]
     try:
         style = await skillbook.context_block(session, family_id, subject_id, person.get("name") or "them")
     except Exception:  # noqa: BLE001 — style is a nicety
         style = ""
     now = clock.ist()
     lines = [
-        f"PERSON: {person.get('name') or 'them'}" + (f" (call them {naming.get('name')})" if naming.get("name") else ""),
+        f"PERSON: {person.get('name') or 'them'}" + (f" (call them {naming.get('name')})" if naming.get("name") else "")
+        + (f"; NEVER call them {', '.join(avoid)}" if avoid else ""),
         f"LANGUAGE: {language.label(speech) if speech else 'the language they write in; English if unknown'}"
         + (f"; script: {language.script_for(speech)}" if speech and language.script_for(speech) else ""),
         f"NOW: {now.strftime('%A %H:%M')} IST" + (f"; the reminder is for {at}" if at else ""),
@@ -113,6 +115,12 @@ async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: st
             logger.exception("compose reminder failed family=%s", family_id)
             break
         text = _parse(reply.text)
+        from app.care import naming as care_naming
+
+        if care_naming.uses_avoided(text, avoid):  # "don't call me Maa" holds in reminders too (trust plan A3)
+            lines.append(f"The last try called them {', '.join(care_naming.uses_avoided(text, avoid))}, which they asked never to be called.")
+            text = ""
+            continue
         if fresh(text, recent):
             break
         text = ""

@@ -38,7 +38,7 @@ class CareFact(Base):
     key: Mapped[str] = mapped_column(String(160))
     value: Mapped[dict] = mapped_column(JSONB, default=dict)
     text: Mapped[str] = mapped_column(Text, default="")
-    # active | pending | superseded | stopped | retracted
+    # active | pending | superseded | stopped | retracted | archived (a pending fact nobody confirmed, trust plan A4)
     status: Mapped[str] = mapped_column(String(16), default="active")
     # elder_said | caregiver_said | prescription | lab | dashboard | import | inferred
     source_kind: Mapped[str] = mapped_column(String(24))
@@ -51,6 +51,9 @@ class CareFact(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     supersedes: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when a person (not an inference, import or learning) said or corrected it: only a person changes it again.
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pinned_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
         Index("ix_care_facts_subject", "family_id", "subject_id", "domain"),

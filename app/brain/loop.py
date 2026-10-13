@@ -155,13 +155,22 @@ async def writing_profiles(session: AsyncSession, family_id: str, people: list[d
     return out
 
 
+async def _rejected(session: AsyncSession, family_id: str, subject_id: str) -> list:
+    from app.care import rejected as care_rejected
+
+    return await care_rejected.rejected(session, family_id, subject_id)
+
+
 async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData | None = None) -> tuple[str, str, list[str]]:
     """The cached block: household, care record, notes. Also returns text for the reply guard and avoid-words."""
     rows = await data.facts(req.elder["id"]) if data else await store.facts(session, req.family_id, req.elder["id"])
     note_rows = await store.notes(session, req.family_id, [req.elder["id"], "family", req.speaker["id"]])
     stale = await freshness.stale_facts(session, req.family_id, req.elder["id"], rows)
+    from app.care import rejected as care_rejected
+
+    wrong = await care_rejected.rejected(session, req.family_id, req.elder["id"])
     record = digest.care_record(req.elder.get("name", "care recipient"), rows, stale,
-                                await links.links_for(session, req.family_id, req.elder["id"]))
+                                await links.links_for(session, req.family_id, req.elder["id"]), rejected=wrong)
     block = "\n\n".join(
         p for p in (digest.household(req.elder, req.members, req.speaker["id"]), record, digest.notes_block(note_rows)) if p
     )
@@ -175,7 +184,7 @@ async def family_block(session: AsyncSession, req: TurnRequest, data: TurnData |
         n.split()[0] for f in rows if f.domain in ("home", "contact", "doctor") and f.status == "active"
         for n in [str(f.value.get("name") or "")] if n and n.split()[0].lower() not in member_names and len(n.split()[0]) > 2
     })
-    return block, known, avoid + [f"__unreachable__{u}" for u in unreachable]
+    return block, known, avoid + [f"__unreachable__{u}" for u in unreachable] + [f"__rejected__{t}" for t in care_rejected.terms(wrong)]
 
 
 SYSTEM_ID = "saheli-scheduler"
@@ -275,7 +284,8 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
                 f"YOUR OWN CARE (the speaker's self care; use about={req.speaker['id']} for anything about them):\n"
                 + digest.care_record(req.speaker.get("name") or "the speaker", own,
                                      await freshness.stale_facts(session, req.family_id, req.speaker["id"], own),
-                                     await links.links_for(session, req.family_id, req.speaker["id"]))
+                                     await links.links_for(session, req.family_id, req.speaker["id"]),
+                                     rejected=await _rejected(session, req.family_id, req.speaker["id"]))
                 + ("\n" + digest.ledger(own_today) if own_today else "")
             )
     if req.speaker["id"] != req.elder["id"]:
@@ -484,10 +494,15 @@ async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]
 
 
 async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, *, avoid: list[str], unreachable: list[str],
-                         data: TurnData | None = None) -> list[str]:
+                         data: TurnData | None = None, wrong_terms: list[str] | None = None) -> list[str]:
     """Everything wrong with a reply before the person reads it (policy + guards)."""
     known = "\n".join(ctx.known)
     problems = policy.reply_problems(final, known_text=known, avoid_words=avoid, user_text=req.text, unreachable=unreachable)
+    from app.care import naming
+
+    for t in naming.uses_avoided(final, list(wrong_terms or [])):
+        if not naming.uses_avoided(req.text, [t]):  # unless they brought it up themselves in this message
+            problems.append(f"the reply mentions '{t}', which the family said is wrong; do not say, assume or use it")
     if guards.leaked_reasoning(final):
         problems.append("the reply contains your private notes (thoughts, the time, who is speaking); write only the message to the person")
     if guards.code_in_reply(final):
@@ -700,7 +715,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     data = TurnData(session, req)
     fam_block, known_record, avoid = await family_block(session, req, data)
     unreachable = [w.removeprefix("__unreachable__") for w in avoid if w.startswith("__unreachable__")]
-    avoid = [w for w in avoid if not w.startswith("__unreachable__")]
+    wrong_terms = [w.removeprefix("__rejected__") for w in avoid if w.startswith("__rejected__")]
+    avoid = [w for w in avoid if not w.startswith(("__unreachable__", "__rejected__"))]
     dynamic, known_turn = await turn_context(session, req, data)
     data.history_full = True
     msgs = await history(session, req, data)
@@ -787,7 +803,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 continue
             if guarded or is_system or not text_now or last:
                 break
-            problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data)
+            problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
+                                            wrong_terms=wrong_terms)
             if not problems:
                 break
             guarded = True

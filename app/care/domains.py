@@ -55,6 +55,10 @@ SOURCE_RANK = {
     "inferred": 1,
 }
 
+# What a person said or set (chat, dashboard, a prescription or lab report they gave). These pin a fact; inferred,
+# import and learned writes never overwrite a pinned one (trust plan A3).
+PERSON_SOURCES = {"prescription", "lab", "caregiver_said", "dashboard", "elder_said"}
+
 COMMON_ALLERGENS = ("nut", "milk", "gluten", "egg", "shellfish", "soy")
 
 FOOD_TIMING = ("before_food", "after_food", "with_food", "empty_stomach", "any")
@@ -91,6 +95,19 @@ def merged_value(old: dict | None, new: dict | None) -> dict:
     for k, v in (new or {}).items():
         if v not in (None, "", []):
             out[k] = v
+    return out
+
+
+def naming_value(old: dict | None, new: dict | None) -> dict:
+    """Names they asked not to be called only grow: a later naming change keeps them, and a word leaves the list only when
+    a person says so (`unavoid`, a structured field the brain fills). "Don't call me Maa" holds forever (trust plan A3)."""
+    out = dict(new or {})
+    unavoid = {str(w).strip().lower() for w in (out.pop("unavoid", None) or []) if str(w).strip()}
+    seen: dict[str, str] = {}
+    for w in [*((old or {}).get("avoid") or []), *(out.get("avoid") or [])]:
+        if isinstance(w, str) and w.strip() and w.strip().lower() not in unavoid:
+            seen.setdefault(w.strip().lower(), w.strip())
+    out["avoid"] = list(seen.values())
     return out
 
 

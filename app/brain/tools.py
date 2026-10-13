@@ -181,7 +181,8 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
     "not be told), doctors, hospital, helpers. The same domain+name updates the existing fact. For medicine, give "
     "details {name, dose, times: ['HH:MM', ...], food_timing, days: [0-6, Monday=0] or omit for daily, "
     "instructions}; their reminders follow these times. For naming, use name 'address_as' with details "
-    "{name: what to call them, avoid: [every word they asked never to be called]}. For an allergy, details "
+    "{name: what to call them, avoid: [every word they asked never to be called]}; the avoid list only grows, so add "
+    "unavoid: [word] only when the person themselves says that word is fine again. For an allergy, details "
     "{allergen, reaction}. For family rules, names like 'call_first', 'payer', 'do_not_tell', 'neighbour'. When they say "
     "how it connects to something else, add links: a medicine is 'for' a condition or 'prescribed_by' a doctor, an "
     "appointment is 'with_doctor', a person is 'related_to' another (as: son, neighbour). To add a link to something "
@@ -249,6 +250,8 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     key, sentence = fact_key(domain, a["name"]), a["sentence"]
     # the same thing said another way goes to the fact already saved (one allergy was saved under four keys)
     same = await dedupe.check(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=domain, key=key, text=sentence, value=details)
+    if same and same.rejected:
+        same = None  # a person saying it again makes it a new fact from a person (the rejection was about the old one)
     if same:
         key, sentence = same.fact.key, same.text
     w = await store.write_fact(
@@ -328,18 +331,22 @@ async def _sync_medicine(ctx: TurnCtx, subject: str, key: str, value: dict, *, a
     "stop",
     "End a fact: a medicine that was stopped, a diet rule lifted, a routine that no longer happens, an allergy "
     "that was a mistake. A stop the elder reports for a health fact waits for a caregiver to confirm.",
-    {"domain": {"type": "string", "enum": sorted(DOMAINS)}, "name": {"type": "string"}, "reason": {"type": "string"}, "about": ABOUT},
+    {"domain": {"type": "string", "enum": sorted(DOMAINS)}, "name": {"type": "string"}, "reason": {"type": "string"}, "about": ABOUT,
+     "wrong": {"type": "boolean", "description": "true when they say it was never true (a mistake, wrongly saved), not that it "
+                                                 "ended; Saheli then never proposes or uses it again"}},
     ["domain", "name", "reason"],
 )
 async def stop(ctx: TurnCtx, a: dict) -> dict:
     subject = ctx.subject(a.get("about"))
     key = fact_key(a["domain"], a["name"])
+    from app.care.rejected import REJECTED_NOTE
+
     w = await store.stop_fact(
         ctx.session,
         family_id=ctx.family_id,
         subject_id=subject,
         key=key,
-        reason=a["reason"],
+        reason=(REJECTED_NOTE + a["reason"]) if a.get("wrong") else a["reason"],
         source_kind=ctx.source_kind,
         stated_by=ctx.speaker.get("id"),
         source_ref=ctx.message_ref,
@@ -434,6 +441,13 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     pending = [
         f for f in await store.facts(ctx.session, ctx.family_id, ctx.elder_id, statuses=("pending",)) if f.key == a["key"]
     ]
+    if not pending and a.get("approve") and not a.get("link_to"):
+        # a fact filed away because nobody confirmed it in time comes back when a caregiver keeps it (trust plan A4)
+        from app.care import pending as care_pending
+
+        archived = [f for f in await store.facts(ctx.session, ctx.family_id, ctx.elder_id, statuses=("archived",)) if f.key == a["key"]]
+        if archived and await care_pending.restore(ctx.session, archived[-1].id, by=ctx.speaker["id"]):
+            pending = [archived[-1]]
     if a.get("link_to") or not pending:
         from app.care import links
 

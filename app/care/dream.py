@@ -180,7 +180,7 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
     from app.care.extract import expire_stale_confirmations
     from app.tasks.models import SkillNote
 
-    out = {"skill_notes_removed": 0, "confirmations_expired": 0}
+    out: dict = {"skill_notes_removed": 0, "confirmations_expired": 0}
     async with sessions() as session:
         services = [r[0] for r in await session.execute(select(SkillNote.service).distinct())]
         for svc in services:

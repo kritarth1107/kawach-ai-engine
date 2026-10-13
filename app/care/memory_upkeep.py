@@ -143,11 +143,7 @@ async def health(session: AsyncSession, family_id: str, subject_id: str) -> list
         for c in policy.order_conflicts(f.text, allergies, []):
             issues.append({"kind": "allergy_conflict", "key": f"allergy:{f.key}", "problem": f"{f.text} vs {c}",
                            "ask": f"{(f.value or {}).get('name')} is in the medicines, but there's an {c}. Has the doctor checked this?"})
-    week_ago = clock.now() - timedelta(days=7)
-    for f in rows:
-        if f.status == "pending" and f.recorded_at < week_ago:
-            issues.append({"kind": "stale_pending", "key": f"pending:{f.key}", "problem": f"waiting for a caregiver since {clock.ist_day(f.recorded_at)}: {f.text}",
-                           "ask": f"A change has been waiting a week for your OK: \"{f.text}\". Should I keep it or drop it?"})
+    # a pending fact gets one final ask at day 14 and is archived at day 17 (app.care.pending), not asked here
     people: dict[str, list[CareFact]] = defaultdict(list)
     for f in active:
         if f.domain in ("doctor", "contact", "home") and (f.value or {}).get("name"):

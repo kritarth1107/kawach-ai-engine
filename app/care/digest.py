@@ -85,10 +85,14 @@ def link_text(links: list | None) -> str:
     return (" — " + " | ".join(bits)) if bits else ""
 
 
-def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = None, links: list | None = None) -> str:
+def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = None, links: list | None = None,
+                rejected: list | None = None) -> str:
     """stale: {key: "over 4 months ago"} from app.care.freshness, marked so old facts are re-checked before acting.
-    links: the person's care links (app.care.links), each shown on the line of the item it starts from."""
+    links: the person's care links (app.care.links), each shown on the line of the item it starts from.
+    rejected: what the family said is wrong (app.care.rejected), listed as "never say or use".
+    A PINNED line was said or corrected by a person: only a person changes it (trust plan A3)."""
     from app.care import links as care_links
+    from app.care import rejected as care_rejected
 
     stale = stale or {}
     linked = care_links.by_from(list(links or []))
@@ -99,6 +103,11 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
             continue  # the same time is listed once, as the activity (app.care.dedupe)
         by_domain[f.domain].append(f)
     lines = [f"CARE RECORD — {name}"]
+    naming = next((f for f in rows if f.key == "naming:address_as" and f.status == "active"), None)
+    avoid = [w for w in ((naming.value or {}).get("avoid") or []) if isinstance(w, str)] if naming else []
+    if naming and ((naming.value or {}).get("name") or avoid):
+        call = (naming.value or {}).get("name")
+        lines.append("ALWAYS: " + (f"call them {call}. " if call else "") + (f"NEVER call them {', '.join(avoid)} (they asked; this holds in every message)." if avoid else ""))
     if not rows:
         lines.append("(Nothing saved yet. Do not assume any medicine, allergy, diet or dish.)")
     for domain in ORDER + sorted(set(by_domain) - set(ORDER)):
@@ -113,7 +122,8 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
             else:
                 confirmed = "" if f.confirmed_by or f.source_kind != "elder_said" else ", unconfirmed"
                 old = f"; last confirmed {stale[f.key]}, check it is still right before acting on it" if f.key in stale else ""
-                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed}{old}){link_text(linked.get(f.key))}")
+                pin = ", PINNED" if getattr(f, "pinned_at", None) else ""
+                lines.append(f"  - [{f.key}] {f.text} ({tag}{confirmed}{old}{pin}){link_text(linked.get(f.key))}")
     shown = {f.key for f in rows if f.status == "active"}
     people = [(ref, ls) for ref, ls in linked.items() if ref not in shown and care_links.domain_of(ref) in care_links.PEOPLE]
     if people:
@@ -123,6 +133,9 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
     missing = [TITLES[d] for d in ("allergy", "medicine", "diet") if d not in by_domain]
     if missing and rows:
         lines.append(f"Not on file: {', '.join(missing)}. Never guess these.")
+    never = care_rejected.block(list(rejected or []))
+    if never:
+        lines.append(never)
     return "\n".join(lines)
 
 

@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import versions
-from app.care.domains import NONE_DOMAINS, is_none_key, medicine_slug, merged_value, needs_confirmation
+from app.care.domains import HEALTH_DOMAINS, NONE_DOMAINS, PERSON_SOURCES, is_none_key, medicine_slug, merged_value, naming_value, needs_confirmation
 from app.care.models import CareEvent, CareFact, MemoryNote, OpenLoop, ThreadSummary, Turn
 from app.care.redact import scrub_secrets
 from app.core import clock, trace
@@ -110,10 +110,17 @@ async def write_fact(
     """
     now = clock.now()
     old = await active_fact(session, family_id, subject_id, key)
+    if old and old.pinned_at and source_kind not in PERSON_SOURCES and domain not in HEALTH_DOMAINS:
+        # A person said or corrected this; an inference, import or learning never changes it (trust plan A3). A health fact
+        # is not dropped: the change waits as pending for a caregiver (needs_confirmation below).
+        logger.info("kept pinned fact family=%s key=%s against %s", family_id, old.key, source_kind)
+        return FactWrite("kept_pinned", old)
     if old:
         key = old.key
         if not replace:
             value = merged_value(old.value, value)
+    if domain == "naming" and not replace:  # an undo or restore carries the exact value a person chose
+        value = naming_value(old.value if old else None, value)
     if old and _same(old.value, value):
         if source_kind in ("caregiver_said", "dashboard", "prescription") and stated_by and not old.confirmed_by:
             old.confirmed_by = stated_by
@@ -137,6 +144,8 @@ async def write_fact(
         supersedes=old.id if old else None,
         note=note,
     )
+    if source_kind in PERSON_SOURCES:
+        row.pinned_at, row.pinned_by = now, (stated_by or source_kind)[:64]
     if force_confirm or (old and needs_confirmation(domain, source_kind, old.source_kind, changes_existing=True)):
         row.status = "pending"
         if force_confirm:
@@ -199,6 +208,9 @@ async def stop_fact(
     old = await active_fact(session, family_id, subject_id, key)
     if not old:
         return None
+    if old.pinned_at and source_kind not in PERSON_SOURCES and old.domain not in HEALTH_DOMAINS:
+        logger.info("kept pinned fact family=%s key=%s against a stop by %s", family_id, old.key, source_kind)
+        return FactWrite("kept_pinned", old)
     key = old.key
     now = clock.now()
     if force_confirm or needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
@@ -263,6 +275,7 @@ async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve:
         if row.status == "stopped":
             row.valid_to = now
         row.confirmed_by = by
+        row.pinned_at, row.pinned_by = now, by[:64]  # a caregiver decided it: pinned (trust plan A3)
     else:
         row.status = "retracted"
         row.valid_to = now

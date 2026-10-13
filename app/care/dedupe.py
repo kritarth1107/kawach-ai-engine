@@ -78,6 +78,9 @@ or preference, even in other words, another language, or with more, less or chan
 NOT the same (milk allergy vs peanut allergy; a home in Raipur vs a home in Patna; a son vs a daughter), and one saved
 fact naming two things does not make each of them a duplicate of the other.
 
+A SAVED line marked [rejected:…] is something the family said is WRONG: if NEW says that same thing, answer with that
+marked key ("rejected:…").
+
 Return only JSON: {"same_as": "<the saved key>" or null, "covered": true when the saved fact already says everything NEW
 says, "sentence": "when same_as is set and not covered: one sentence for the record keeping every detail of both, newer
 detail in place of what it corrects"}"""
@@ -88,18 +91,27 @@ class Same:
     fact: CareFact
     covered: bool
     text: str
+    rejected: bool = False  # the family said this is wrong (app.care.rejected): an inference never writes it again
 
 
 async def check(session: AsyncSession, *, family_id: str, subject_id: str, domain: str, key: str, text: str,
                 value: dict | None) -> Same | None:
     """The saved fact that NEW repeats, or None. Never blocks a write: any failure means "new"."""
-    if not check_enabled() or domain not in CHECK_DOMAINS or is_none_key(key):
+    if is_none_key(key):
+        return None
+    from app.care import rejected as care_rejected
+
+    wrong = [f for f in await care_rejected.rejected(session, family_id, subject_id) if f.domain == domain]
+    exact = next((f for f in wrong if f.key == key), None)
+    if exact is not None and not await store.active_fact(session, family_id, subject_id, key):
+        return Same(exact, True, exact.text, rejected=True)  # the very key the family rejected: any domain, no model
+    if not check_enabled() or domain not in CHECK_DOMAINS:
         return None
     if await store.active_fact(session, family_id, subject_id, key):
         return None  # same key: write_fact merges it
     saved = [f for f in await store.facts(session, family_id, subject_id, domains=[domain], statuses=("active",))
              if not is_none_key(f.key)]
-    if not saved:
+    if not saved and not wrong:
         return None
     new = f"[{key}] {text} | {json.dumps(value or {}, ensure_ascii=False, sort_keys=True)[:300]}"
     try:
@@ -107,12 +119,18 @@ async def check(session: AsyncSession, *, family_id: str, subject_id: str, domai
 
         reply = await router.complete("judge_fast", system_stable=SAME_PROMPT, effort="low", max_tokens=400, timeout_s=10,
                                       messages=[{"role": "user", "content": [{"type": "text", "text":
-                                                 "SAVED\n" + "\n".join(_line(f) for f in saved[:40]) + f"\n\nNEW\n{new}"}]}])
+                                                 "SAVED\n" + ("\n".join(_line(f) for f in saved[:40]) or "- none")
+                                                 + "".join(f"\n- [rejected:{f.key}] SAID TO BE WRONG: {f.text}" for f in wrong[:20])
+                                                 + f"\n\nNEW\n{new}"}]}])
     except Exception:  # noqa: BLE001 — the fact is saved as new; the nightly merge catches a duplicate
         logger.warning("duplicate check failed family=%s domain=%s", family_id, domain)
         return None
     data = _json(reply.text or "")
-    hit = next((f for f in saved if f.key == data.get("same_as")), None)
+    same_as = str(data.get("same_as") or "")
+    if same_as.startswith("rejected:"):
+        hit_wrong = next((f for f in wrong if f.key == same_as.removeprefix("rejected:")), None)
+        return Same(hit_wrong, True, hit_wrong.text, rejected=True) if hit_wrong else None
+    hit = next((f for f in saved if f.key == same_as), None)
     if hit is None:
         return None
     covered = data.get("covered") is True
@@ -208,6 +226,9 @@ async def apply(session: AsyncSession, family_id: str, subject_id: str, groups: 
         keep = next((f for f in facts if f.key == g.keep), None)
         if keep is None or len(facts) < 2:
             continue
+        pinned = [f for f in facts if f.pinned_at]
+        if pinned and not keep.pinned_at:
+            keep = max(pinned, key=lambda f: f.pinned_at or f.recorded_at)  # what a person said is the one kept (trust plan A3)
         top = _strongest(facts)
         value: dict = {}
         for f in sorted(facts, key=lambda x: x.recorded_at):
