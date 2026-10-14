@@ -211,26 +211,6 @@ def describe(p: dict | None) -> str:
             "family member's language")
 
 
-# Everyday English words that have a word in every Indian language. Only these count as mixing scripts: names,
-# medicines and brands (Telma, metformin, Volini), links and codes may stay as written.
-COMMON_ENGLISH = ENGLISH | set("""
-good morning evening night afternoon today tomorrow yesterday time medicine medicines tablet tablets doctor take taken
-please sorry okay done sure day week month food water walk sleep remind reminder call family health feel feeling better
-well nice great happy sad tired pain check reading order delivery come coming going home house now later soon after
-before again some any all every much many more little first next last right wrong yes don't can't let's i'm it's
-""".split())
-
-
-def latin_words(text: str) -> list[str]:
-    """Everyday English words written in Roman letters (lower case: a capitalised word is usually a name or brand)."""
-    out = []
-    for w in re.findall(r"\S+", text or ""):
-        core = w.strip(".,!?;:()'\"")
-        if core and core[0].islower() and core.lower() in COMMON_ENGLISH:
-            out.append(core)
-    return out
-
-
 def language_problems(text: str, p: dict | None, who: str = "they") -> list[str]:
     if not p or len(words(text)) < 4:
         return []
@@ -253,10 +233,8 @@ def language_problems(text: str, p: dict | None, who: str = "they") -> list[str]
         return [f"write to {('them' if who == 'they' else who)} in {t.capitalize()} script ({SCRIPT_LANG.get(t, t)}), not in Roman letters or English"]
     if t != "indic" and got != t:
         return [f"write to {('them' if who == 'they' else who)} in {t.capitalize()} script ({SCRIPT_LANG.get(t, t)}), not in {got} script"]
-    mixed = latin_words(text)
-    if len(mixed) >= 3:
-        return [f"do not mix scripts: write the English words ({', '.join(mixed[:4])}) in {got.capitalize()} script too "
-                "(numbers stay 0-9; a medicine or brand name may stay as written)"]
+    # Founder 14 Oct: a reply already in the right script may keep the English words people text (reminder, BP, doctor).
+    # Register (bookish vs spoken) is judged, not matched against a word list.
     return []
 
 

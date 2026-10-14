@@ -70,6 +70,18 @@ def overall(rows: list[dict], ok) -> dict:
     return {"n": len(rows), "pass": p, "pct": pct(p, len(rows))}
 
 
+def _bar_pass(r: dict) -> bool:
+    """Bookish register is scored every night. It lowers the bar only when that reply's model is Gemini.
+
+    While sunny-ship refuses, the night runs on Bedrock and the live brain is Gemini, so a bookish miss here is counted
+    and does not fail the night. A Gemini reply that is only bookish does fail it."""
+    if r["jpass"]:
+        return True
+    if set(r.get("issues") or []) == {"bookish"} and "gemini" not in str(r.get("model") or ""):
+        return True
+    return False
+
+
 def _lang_ok(r: dict) -> bool:
     if "language_ok" in r:
         return bool(r["language_ok"])
@@ -95,9 +107,10 @@ def scores(rows: list[dict], judged: list[dict], probe_metas: list[dict], judge_
         "judge": {"missing": not good, "picked": sum(int(m.get("picked") or 0) for m in judge_metas) or len(judged), "judged": len(good),
                   "errors": sum(1 for j in judged if j.get("error")), "skipped_budget": sum(1 for j in judged if j.get("skipped")),
                   "spent_inr": round(sum(float(m.get("spent") or 0) for m in judge_metas), 1), "route": judge_metas[0].get("route") if judge_metas else None,
-                  "overall": overall(jrows, lambda r: r["jpass"]), "languages": group(jrows, lambda r: r.get("language"), lambda r: r["jpass"]),
-                  "households": group(jrows, lambda r: r.get("household"), lambda r: r["jpass"]), "topics": group(jrows, lambda r: r.get("topic"), lambda r: r["jpass"]),
-                  "issues": dict(Counter(i for r in jrows for i in r["issues"]).most_common())},
+                  "overall": overall(jrows, _bar_pass), "languages": group(jrows, lambda r: r.get("language"), _bar_pass),
+                  "households": group(jrows, lambda r: r.get("household"), _bar_pass), "topics": group(jrows, lambda r: r.get("topic"), _bar_pass),
+                  "issues": dict(Counter(i for r in jrows for i in r["issues"]).most_common()),
+                  "bookish": sum(1 for r in jrows if "bookish" in r["issues"])},
         "language_correct": {**overall(done, _lang_ok), "languages": group(done, lambda r: r.get("language"), _lang_ok)},
     }
     crisis = [r for r in done if r.get("topic") == "crisis"]
@@ -195,6 +208,7 @@ def published(sc: dict, fails: list[str]) -> str:
              f"- probes: {p['executed']} of {p['selected']} executed ({p['executed_pct']}%), {p['skipped_budget']} skipped by the budget; "
              f"spent ₹{p['spent_inr']:.0f} of ₹{p['cap_inr']:.0f}",
              f"- judge ({j.get('route')}): {j['overall']['pct']}% of {j['overall']['n']} judged; {j['errors']} not graded; ₹{j['spent_inr']:.0f}",
+             f"- register: {j.get('bookish', 0)} replies sounded bookish (fails the night only when the brain is Gemini)",
              f"- code checks: {c['overall']['pct']}% of {c['overall']['n']}",
              f"- language correct: {sc['language_correct']['pct']}%",
              f"- recall: {sc['recall'].get('pct')}% of {sc['recall'].get('n', 0)} quiz answers" + (" (missing)" if sc["recall"].get("missing") else ""),

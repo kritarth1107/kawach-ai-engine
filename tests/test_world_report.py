@@ -32,6 +32,19 @@ def sc_for(rs, js, *, selected=None, recall=None, jmeta=None, extras=None):
                          recall if recall is not None else story(), None, extras or {})
 
 
+def test_bookish_is_counted_and_fails_the_night_only_on_gemini():
+    rs = rows("hi", 20)
+    rs[0]["model"] = "bedrock:openai.gpt-oss-120b-1:0"
+    rs[1]["model"] = "gemini:gemini-3.5-flash"
+    js = judged(rs)
+    js[0]["judge"] = {"pass": False, "issues": ["bookish"]}
+    js[1]["judge"] = {"pass": False, "issues": ["bookish"]}
+    sc = sc_for(rs, js)
+    assert sc["judge"]["bookish"] == 2
+    assert sc["judge"]["overall"]["pass"] == 19  # the Bedrock bookish miss does not lower the bar; the Gemini one does
+    assert "register:" in report.published(sc, report.gate(sc))
+
+
 def test_per_language_percentages_for_code_and_judge():
     rs = rows("hi", 20, fail=1) + rows("ta", 10, fail=0)
     sc = sc_for(rs, judged(rs[:20], fail=2) + judged(rs[20:]))

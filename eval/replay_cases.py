@@ -12,7 +12,8 @@ test's failures in eval/fixtures/replay_seeds.jsonl; the test world's probe fail
 FIXED cases still all run, on the same checks. While the gate is on Bedrock, a fixed case that already fails on that
 model (eval/fixtures/bedrock_fixed_baseline.json) is listed and does not block. A fixed case that passes on the
 baseline and fails after a change does: that is a code regression. OPEN cases are reported only. Gemini in
-kavach-care is never called. Gemini replay is sunny-ship only, and only when that project answers.
+kavach-care is never called. Gemini replay is sunny-ship only, and only when that project answers. Register cases
+(eval/fixtures/register_2026-10-14.jsonl) run on that Gemini call and are skipped, without a model call, until then.
 Time and cost: about 20 cases at a time, under 10 minutes, a cap of REPLAY_MAX_INR (₹200); when the cases outgrow that,
 one per failure kind is kept (the newest real ones first, then the rest round-robin).
 
@@ -313,7 +314,21 @@ async def verdict(case: dict, res) -> dict:
 WORLD: dict[str, dict] = {}
 
 
+def on_gemini() -> bool:
+    """True when this process is on a Gemini route (sunny-ship answered). Never true for kavach-care: apply() refuses it."""
+    from eval.live_routes import vertex_routes
+
+    try:
+        routes = json.loads(os.environ.get("MODEL_ROUTES") or "{}")
+    except json.JSONDecodeError:
+        return False
+    return bool(vertex_routes(routes))
+
+
 async def run_case(sessions: async_sessionmaker, case: dict, deadline: float, cap: float) -> dict:
+    if case.get("when") == "gemini" and not on_gemini():
+        return {"id": case["id"], "status": case["status"], "kind": case.get("kind"), "source": case.get("source"),
+                "passed": None, "skipped": "waits for sunny-ship; Gemini replay never calls kavach-care", "runs": []}
     from app.llm import spend
 
     runs: list[dict] = []
@@ -512,6 +527,7 @@ async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out
 
 SEEDS = Path(__file__).parent / "fixtures" / "replay_seeds.jsonl"  # invented families: the hard-turn test's failures of 13 Oct (open)
 MISREAD = Path(__file__).parent / "fixtures" / "misread_2026-10-14.jsonl"  # invented families: brain misreads of 14 Oct (open)
+REGISTER = Path(__file__).parent / "fixtures" / "register_2026-10-14.jsonl"  # bookish vs spoken; runs when sunny-ship answers
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -520,6 +536,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and MISREAD.exists():
         cases += [json.loads(line) for line in MISREAD.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and REGISTER.exists():
+        cases += [json.loads(line) for line in REGISTER.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]
@@ -542,7 +560,11 @@ def main(argv: list[str]) -> int:
     par = int(argv[argv.index("--parallel") + 1]) if "--parallel" in argv else 20
     mx = int(argv[argv.index("--max-cases") + 1]) if "--max-cases" in argv else MAX_CASES
     out = Path(argv[argv.index("--out") + 1]) if "--out" in argv else Path("runs/replay")
-    cases = choose(load_cases(argv), mx)
+    loaded = load_cases(argv)
+    gemini_cases = [c for c in loaded if c.get("when") == "gemini"]
+    rest = [c for c in loaded if c.get("when") != "gemini"]
+    # Register cases always stay in the list. On Bedrock they skip before any model call; on sunny-ship they run first.
+    cases = (gemini_cases + choose(rest, mx)) if on_gemini() else (choose(rest, mx) + gemini_cases)
     print(f"{len(cases)} replay cases ({sum(1 for c in cases if c['status'] == 'fixed')} fixed, {sum(1 for c in cases if c['status'] == 'open')} open), "
           f"cap ₹{cap:.0f}, {par} at a time", flush=True)
     return asyncio.run(main_async(cases, par, os.getenv("DATABASE_URL") or "", cap, out))

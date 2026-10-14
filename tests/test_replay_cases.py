@@ -265,6 +265,33 @@ async def _none():
     return None
 
 
+def test_register_cases_cover_the_bookish_lines_and_wait_for_sunny_ship():
+    from app.brain.persona import PERSONA, REPLY_FORMAT
+
+    cases = [json.loads(line) for line in runner.REGISTER.read_text().splitlines() if line.strip()]
+    assert {"hi", "hinglish", "bn", "ta"} <= {c["lang"] for c in cases}
+    assert all(c["status"] == "open" and c["when"] == "gemini" for c in cases)
+    assert all("sounds like a real person texting today" in c["rubric"] for c in cases)
+    assert any("स्मृति" in c["bad_reply"] for c in cases) and any("सहेली सहेली" in c["bad_reply"] for c in cases)
+    assert all("91337bfa" not in json.dumps(c) for c in cases)
+    assert "stay English" in PERSONA and "real person texting today" in REPLY_FORMAT
+
+
+async def test_register_cases_skip_until_sunny_ship_answers(monkeypatch):
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1"]}))
+    case = next(c for c in runner.load_cases([]) if c["id"] == "register-reminder-hi")
+    got = await runner.run_case(None, case, deadline=0, cap=0)
+    assert got["passed"] is None and "sunny-ship" in got["skipped"] and got["runs"] == []
+
+    async def fake_once(sessions, c, n):
+        return {"passed": True, "why": "natural"}
+
+    monkeypatch.setattr(runner, "run_once", fake_once)
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash"]}))
+    ran = await runner.run_case(None, case, deadline=10**12, cap=10**6)
+    assert ran["passed"] is True and ran["runs"]
+
+
 def test_misread_cases_cover_each_failure_in_the_main_languages():
     cases = [json.loads(line) for line in runner.MISREAD.read_text().splitlines() if line.strip()]
     kinds = {c["kind"] for c in cases}

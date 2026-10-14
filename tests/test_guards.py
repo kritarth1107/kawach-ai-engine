@@ -79,12 +79,14 @@ def test_saved_language_dialect_and_roman_request():
     assert g.canned_key(hinglish := g.profile(["Haan beta, dawai le li hai", "kya hua"])) == "devanagari", hinglish
 
 
-def test_no_mixed_scripts():
+def test_everyday_english_words_stay_inside_the_right_script():
+    """Founder 14 Oct: reminder, time, doctor, BP stay the English words people text. A reply in the wrong language still fails."""
     hindi = g.profile(["मेरी दवा कब है", "ठीक है"])
-    assert g.language_problems("आपकी medicine का time हो गया है, please अभी ले लीजिए।", hindi)
+    assert not g.language_problems("रात 10 बजे reminder set हो गया।", hindi)
+    assert not g.language_problems("आपकी medicine का time हो गया है, please अभी ले लीजिए।", hindi)
     assert not g.language_problems("आपका BP 130/80 है, OTP 4821 आया है, देखिए https://kavach.care/x", hindi)
-    # Medicines, brands and names stay as written: only everyday English words count.
     assert not g.language_problems("माँ जी, Telma 40 और metformin खाने के बाद, फिर Volini gel रात को लगाइए। Riya ने बताया।", hindi)
+    assert g.language_problems("Your reminder is set for ten.", hindi)
 
 
 def test_urdu_script_and_language_merge():

@@ -3,7 +3,8 @@ name: Replay cases (before every engine deploy)
 # Trust plan C3: every replay case runs on Bedrock in ap-south-1 (never Gemini in kavach-care). A fixed case fails
 # only if 2 of 3 runs fail. It blocks the deploy only when it is not already on the Bedrock model baseline: a miss
 # the model has at today's master is listed, and a case that passed there and fails after a change is a code regression.
-# Gemini replay is sunny-ship only, and the gate stays on Bedrock when that project refuses. A provider-wide Bedrock
+# Gemini replay is sunny-ship only, and the gate stays on Bedrock when that project refuses. Register cases
+# (bookish vs spoken) run on that Gemini call and skip, with no model call, until sunny-ship answers. A provider-wide Bedrock
 # refusal is UNAVAILABLE (exit 0). OPEN cases run too and are reported. Called by deploy-aws.yml.
 
 on:
