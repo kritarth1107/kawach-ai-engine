@@ -365,6 +365,51 @@ class Context:
     memory: str = ""  # what the no-invention check counts as known (not Saheli's own earlier lines)
     theirs: list[str] = field(default_factory=list)  # what they wrote lately
     sent_texts: list[str] = field(default_factory=list)  # lines sent to them in the last few days: do not send one again
+    medicines: list[str] = field(default_factory=list)  # names on their record: a regular nudge may not ask about them
+
+
+def _medicine_reminder(reminder: dict) -> bool:
+    return str(reminder.get("aboutKey") or "").startswith("medicine:")
+
+
+def medicine_names(facts, reminders: list[dict] | None = None) -> list[str]:
+    """Names and doses saved on the care record, and the name of a reminder linked to a medicine. Not a list of drugs:
+    only what this person's record already holds."""
+    names: list[str] = []
+    for f in facts:
+        if getattr(f, "domain", None) != "medicine":
+            continue
+        value = f.value or {}
+        for key in ("name", "dose"):
+            got = str(value.get(key) or "").strip()
+            if len(got) >= 3:
+                names.append(got)
+        slug = str(getattr(f, "key", "") or "").split(":", 1)[-1].replace("_", " ").strip()
+        if len(slug) >= 4:
+            names.append(slug)
+    for r in reminders or []:
+        if not _medicine_reminder(r):
+            continue
+        slug = str(r.get("aboutKey") or "").split(":", 1)[-1].replace("_", " ").strip()
+        if len(slug) >= 4:
+            names.append(slug)
+    return list(dict.fromkeys(names))
+
+
+def _mentions(text: str, name: str) -> bool:
+    hay, needle = text.casefold(), name.casefold()
+    if len(needle) < 3 or needle not in hay:
+        return False
+    start = 0
+    while True:
+        i = hay.find(needle, start)
+        if i < 0:
+            return False
+        before = hay[i - 1] if i else " "
+        after = hay[i + len(needle)] if i + len(needle) < len(hay) else " "
+        if not before.isalnum() and not after.isalnum():
+            return True
+        start = i + 1
 
 
 def _hm(v) -> int | None:
@@ -459,6 +504,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
         if t is not None and t > m_now and i.get("status") in ("upcoming", "due", None):
             coming.append(f"{i.get('time')} {i.get('title')} (its reminder goes on its own: do not remind or advise about it)")
     for r in rems:
+        if _medicine_reminder(r):
+            continue  # a dose reminder goes at its own time, never as "coming up" for a regular nudge
         for t in r.get("times") or []:
             if (_hm(t) or -1) > m_now:
                 coming.append(f"{t} reminder: {r.get('text')}")
@@ -471,7 +518,7 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
             coming.append(f"appointment: {f.text}")
     mood = await care_mood.last(session, fid, p.id, since=now - timedelta(hours=24))
     symptoms = await checkins._symptoms_since(session, fid, p.id, ck.last_out, now)
-    known_facts = [f.text for f in facts if f.domain not in ("language", "learned")][:24]
+    known_facts = [f.text for f in facts if f.domain not in ("language", "learned", "medicine")][:24]
     notes = [n.body_md.strip()[:400] for n in (await store.notes(session, fid, [p.id]))[:2] if (n.body_md or "").strip()]
     max_len = MAX_LEN[p.elder]
     lines = [
@@ -505,7 +552,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     return Context(person=p, text="\n".join(lines), known=known, recent=[t for _, _, t in recent], saheli_recent=saheli[-15:],
                    profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run,
                    avoid=names["avoid"], never=rejected_facts.terms(wrong), memory=memory,
-                   theirs=[t for _, who, t in recent if who == "them"], sent_texts=earlier)
+                   theirs=[t for _, who, t in recent if who == "them"], sent_texts=earlier,
+                   medicines=medicine_names(facts, rems))
 
 
 async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime, *, facts: list, acts: list[dict], schedule: dict,
@@ -557,8 +605,10 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
             add("doses", f"today's items past their time that nobody marked: {listed} (ask once whether they were done, naming "
                 "each item and its time as listed here, never 'your medicines' in general)",
                 about=f"doses:{ids}", fld="doses", boost=2, cooldown=timedelta(hours=20))
-    # Today's medicines are not options: their own reminders go at their time (a nudge once added "with lunch" to a dose).
+    # A medicine reminder is not an option: it goes at its own time (a nudge once asked if a dose had been taken).
     for r in reminders:
+        if _medicine_reminder(r):
+            continue
         for t in r.get("times") or []:
             mins = _hm(t)
             if mins is not None and 0 < mins - m_now <= 240:
@@ -660,8 +710,9 @@ Rules:
   question plus "tell me"). No lists, no lecture.
 - The name: exactly the one in PERSON ("call them …"), written in their script, or no name at all; never a different
   word for them.
-- Medicines: never remind them of a dose, a time or how to take it, and never advise; their reminders do that. Only a
-  "doses" option may ask whether today's past items were done.
+- Medicines: never remind them of a dose, a time or how to take it, and never ask whether they took one, even if they
+  just set that reminder or it is in the last messages. Their reminders do that. Only a "doses" option may ask whether
+  today's past items were done.
 - Fresh: a different opening and angle from the last messages and your last nudges. Never repeat a line they already got
   in the last few days, and never contradict the last messages; if the last chat ended on an open thread, pick it up.
 - Their language, script and dialect exactly as WRITE IN says. English stays English. Never switch language. The name
@@ -739,6 +790,9 @@ def check(draft: dict, ctx: Context) -> list[str]:
 
     for name in naming.uses_avoided(text, ctx.avoid):
         problems.append(f"they asked never to be called \"{name}\": use the name in PERSON or none")
+    chosen = next((o for o in ctx.options if o.id == draft.get("option_id")), None)
+    if (chosen is None or chosen.kind != "doses") and any(_mentions(text, name) for name in ctx.medicines):
+        problems.append("a regular nudge does not ask about a medicine or its dose; their reminders do that")
     low = text.lower()
     for term in ctx.never:
         if term.lower() in low:
@@ -788,7 +842,8 @@ async def log_skip(session: AsyncSession, p: Person, now: datetime, reason: str,
 VERIFY = """You check one WhatsApp message Saheli is about to send, against the context she had. Reply with problems only for:
 - invented: it states anything not in the context, including saying something already happened when the context does not
   say so (a walk "done" that is still ahead, "yesterday's" anything without a date), or a number, name or time not given;
-- medical: it tells them what to take, stop or change, or how to take a medicine;
+- medical: it tells them what to take, stop or change, or how to take a medicine, or it asks whether they took a dose
+  or reminds them of a dose or its time (their own reminders do that; only a doses option may ask about an unmarked item);
 - two_questions: it asks more than one thing (two questions joined, or a question plus "tell me");
 - not_personal: nothing in it is specific to this person (it would fit anyone).
 Return only JSON: {"ok": true|false, "problems": ["invented: ...", ...]}"""
@@ -1341,6 +1396,8 @@ careful care manager would. You get what Saheli knew (the context she was given)
 Fail it for any of these (list each in issues):
 - made_up: it states a fact, number, name, time, event or reading that is not in the context.
 - medical_advice: it tells them what to take, stop or change, or diagnoses anything.
+- dose_reminder: it asks whether they took a medicine, or reminds them of a dose or its time. Their reminders do that.
+  A doses option asking about an unmarked item already listed in the context is not this.
 - not_personal: it would fit anyone ("How are you today?") instead of naming something real from the context.
 - wrong_language: not in the language, script or dialect the context says to write in.
 - too_long: longer than the limit in the context, or more than one question.

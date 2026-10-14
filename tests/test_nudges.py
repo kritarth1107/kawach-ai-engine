@@ -385,6 +385,21 @@ def test_the_check_rejects_repeats_long_texts_two_questions_wrong_script_and_inv
     assert nudges.check({**ok, "text": "What made you smile this evening, Kamla ji?"}, ctx(profile=deva))  # they read Devanagari
 
 
+def test_a_regular_nudge_does_not_ask_about_a_saved_medicine_in_any_script():
+    dose = "Since our 6:30 AM reminders start tomorrow, did you manage to take your Thyronorm 75 this morning before work got too busy?"
+    assert any("medicine" in p for p in nudges.check({"option_id": "o1", "text": dose}, ctx(medicines=["Thyronorm"])))
+    assert not any("medicine" in p for p in nudges.check({"option_id": "o1", "text": "What made you smile this evening?"}, ctx(medicines=["Thyronorm"])))
+    doses = ctx(medicines=["Thyronorm"], options=[nudges.Option(id="o1", kind="doses", why="Thyronorm 75 at 06:30 unmarked")])
+    assert not any("medicine" in p for p in nudges.check({"option_id": "o1", "text": dose}, doses))
+    caregiver = ctx(medicines=["Thyronorm"], person=nudges.Person(FAM, SON["id"], "Ravi", "caregiver", False, False))
+    assert any("medicine" in p for p in nudges.check({"option_id": "o1", "text": dose}, caregiver))
+    hi = "थायरोनॉर्म की सुबह वाली गोली हो गई?"
+    assert any("medicine" in p for p in nudges.check({"option_id": "o1", "text": hi}, ctx(medicines=["थायरोनॉर्म"])))
+    from eval.nudge_quality import dose_case_problems
+
+    assert dose_case_problems() == []
+
+
 async def test_a_draft_that_keeps_failing_is_tried_three_times_then_skipped(db, at, sessions, writer):
     at("2026-10-14 10:00")
     await family(db, (MAA,))
@@ -397,6 +412,33 @@ async def test_a_draft_that_keeps_failing_is_tried_three_times_then_skipped(db, 
     assert writer.calls == 3 and sent_to(host, MAA) == []
     assert out["skipped"].get("guard") == 1
     assert (await rows(db))[-1].reason.startswith("guard:")
+
+
+async def test_a_regular_nudge_that_asks_about_a_new_medicine_is_not_sent(db, at, sessions, writer):
+    at("2026-10-14 08:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA, "Please remind me about Thyronorm 75 at 6:30 from tomorrow")
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="medicine", key="medicine:thyronorm",
+                           value={"name": "Thyronorm", "dose": "75", "times": ["06:30"]},
+                           text="Thyronorm 75 at 06:30, starting tomorrow", source_kind="user_said")
+    await db.commit()
+    bad = json.dumps({"option_id": "o1", "text": "Since our 6:30 AM reminders start tomorrow, did you manage to take your Thyronorm 75 this morning before work got too busy?"})
+    writer.script = [bad, bad, bad]
+    host = SimHost()
+    at("2026-10-14 09:15")
+    out = await run(sessions, host)
+    assert sent_to(host, MAA) == [] and out["skipped"].get("guard") == 1
+    assert "medicine" in (await rows(db))[-1].reason
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    now = nudges.clock.now()
+    opts = await nudges.candidates(db, p, nudges.Clock(None, None, 0, False), now, facts=[], acts=[], schedule={"items": []},
+                                   reminders=[{"reminderId": "m", "text": "Thyronorm 75", "times": ["11:00"], "aboutKey": "medicine:thyronorm"},
+                                              {"reminderId": "w", "text": "evening walk", "times": ["11:00"]}])
+    assert not any("Thyronorm" in o.why or "medicine" in (o.about_ref or "") for o in opts)
+    assert any("walk" in o.why for o in opts)
+    got = await nudges.build_context(db, host, p, nudges.Clock(None, None, 0, False), now)
+    know = got.text.split("WHAT YOU KNOW ABOUT THEM:")[1].split("COMING UP")[0]
+    assert "Thyronorm" not in know and "Thyronorm" in got.medicines
 
 
 # 10. their reply answers it

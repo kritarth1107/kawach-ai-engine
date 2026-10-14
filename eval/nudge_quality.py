@@ -30,6 +30,39 @@ from app.core import clock
 
 from app.care.nudges import GRADE  # noqa: E402  (one rubric for the eval and the hourly review of real nudges)
 
+# A regular nudge asked about a dose an hour after the reminder was set, before any schedule existed.
+DOSE_CASE = {
+    "medicine": "Thyronorm",
+    "also": "थायरोनॉर्म",
+    "message": "Since our 6:30 AM reminders start tomorrow, did you manage to take your Thyronorm 75 this morning before work got too busy?",
+    "devanagari": "थायरोनॉर्म की सुबह वाली गोली हो गई?",
+}
+
+
+def dose_case_problems() -> list[str]:
+    """The code check, with no model call: a regular nudge that names their medicine is blocked, in either script.
+    A doses option may still ask about an unmarked item."""
+    from app.care.nudges import Context, Option, Person, check
+
+    def look(text: str, kind: str, names: list[str]) -> list[str]:
+        got = Context(person=Person("00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002",
+                                     "Priya", "self", True, True),
+                      text="", known="", recent=[], saheli_recent=[], profile=None,
+                      options=[Option(id="o1", kind=kind, why="the evening")], max_len=220, medicines=names)
+        return check({"option_id": "o1", "text": text}, got)
+
+    en = look(DOSE_CASE["message"], "reflect", [DOSE_CASE["medicine"]])
+    hi = look(DOSE_CASE["devanagari"], "follow_up", [DOSE_CASE["also"]])
+    allowed = look(DOSE_CASE["message"], "doses", [DOSE_CASE["medicine"]])
+    missed = []
+    if not any("medicine" in p for p in en):
+        missed.append("english")
+    if not any("medicine" in p for p in hi):
+        missed.append("devanagari")
+    if any("medicine" in p for p in allowed):
+        missed.append("a doses option was blocked")
+    return missed
+
 
 async def grade(ctx_text: str, message: str) -> dict:
     from app.llm import router
@@ -99,6 +132,9 @@ async def run(per_language: int, url: str, cap: float, parallel: int) -> list[di
         for f in fams:
             await seed_family(s, f, Seeded())
         await s.commit()
+    dose = dose_case_problems()
+    if dose:
+        return [{"family": "dose-case", "language": "en", "pass": False, "issues": ["dose_reminder"], "note": "; ".join(dose)}]
     clock.set_now(ist(make.TODAY.isoformat(), "11:00") + timedelta(days=0))
     sem = asyncio.Semaphore(parallel)
     out: list[dict] = []
@@ -128,7 +164,8 @@ def report(rows: list[dict]) -> str:
     issues = Counter(i for r in done for i in r.get("issues") or [])
     lines = [f"# Regular nudges: quality eval ({len(done)} written and graded)", "",
              f"{ok}/{len(done)} pass ({100 * ok / max(1, len(done)):.0f} %); made-up facts {issues.get('made_up', 0)}; "
-             f"medical advice {issues.get('medical_advice', 0)}. Bar: 90 %, 0, 0.", "", f"Issues: {dict(issues.most_common())}", "",
+             f"medical advice {issues.get('medical_advice', 0)}; dose reminders {issues.get('dose_reminder', 0)}. Bar: 90 %, 0, 0, 0.",
+             "", f"Issues: {dict(issues.most_common())}", "",
              "| language | pass | fail |", "|---|---|---|"]
     by = defaultdict(lambda: [0, 0])
     for r in done:
@@ -163,7 +200,8 @@ def main(argv: list[str]) -> int:
         print("::warning::nudge eval unavailable: the provider refused every call")
         return 0
     issues = Counter(i for r in done for i in r.get("issues") or [])
-    good = done and sum(r["pass"] for r in done) / len(done) >= 0.9 and not issues.get("made_up") and not issues.get("medical_advice")
+    good = (done and sum(r["pass"] for r in done) / len(done) >= 0.9 and not issues.get("made_up")
+            and not issues.get("medical_advice") and not issues.get("dose_reminder"))
     return 0 if good else 1
 
 
