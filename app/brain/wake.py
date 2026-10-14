@@ -361,7 +361,7 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
             words = await in_their_words(sessions, family_id, deliver_to, plain)
             if await _send(sessions, host, roster, family_id, deliver_to, words, f"{ref}:news", buttons=buttons):
                 delivered = "composed"
-    elif must and not delivered and not soft and fallback and fallback.strip():
+    elif must and not delivered and not soft and fallback and fallback.strip() and deliver_to:
         # A saved line with the numbers already in it (a meal confirmation). The brain sent nothing, so this goes directly.
         logger.error("update sent as the written line (the brain sent nothing) family=%s ref=%s", family_id, ref)
         if await _send(sessions, host, roster, family_id, deliver_to, fallback.strip(), f"{ref}:plain"):
