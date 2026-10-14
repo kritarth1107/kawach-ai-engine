@@ -1,9 +1,10 @@
 """A missing fact is data, and a follow-up wake is the clock time they gave."""
 
 from datetime import datetime
+from types import SimpleNamespace
 
 from app.brain.tools import wake_from_clock
-from app.care.gaps import asked_keys, food_gaps, ledger_topics, nudge_covers, pick, render
+from app.care.gaps import _slept, asked_keys, food_gaps, ledger_topics, nudge_covers, pick, render
 from app.core import clock
 
 
@@ -24,6 +25,9 @@ def test_a_nudge_sent_today_covers_that_meal_water_or_sleep():
     assert nudge_covers("sleep", "sleep:when", today, today) == "sleep"
     assert nudge_covers("water", "water:count", "2026-10-14", today) is None
     assert nudge_covers("collect", "sleep", today, today) is None
+    assert _slept(SimpleNamespace(kind="sleep", payload={}))
+    assert _slept(SimpleNamespace(kind="activity_done", payload={"type": "sleep"}))
+    assert not _slept(SimpleNamespace(kind="routine", payload={"key": "routine:cook"}))
     left = [("water", "no water"), ("sleep", "when")]
     assert pick(left, {"water", "sleep"}) == []
     assert "gap_asked" in render("Riyan", left)

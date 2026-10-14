@@ -81,6 +81,13 @@ def pick(items: list[tuple[str, str]], asked: set[str]) -> list[tuple[str, str]]
     return out
 
 
+def _slept(event) -> bool:
+    """A sleep or routine event already saved today, including an activity logged as sleep."""
+    payload = event.payload or {}
+    key = str(payload.get("key") or "")
+    return event.kind == "sleep" or payload.get("type") == "sleep" or (event.kind in ("activity_done", "routine") and "sleep" in key)
+
+
 def _water(payload: dict | None, nutrients: dict | None) -> bool:
     p = payload or {}
     n = nutrients or {}
@@ -133,9 +140,10 @@ async def _items(session: AsyncSession, family_id: str, person: str) -> list[tup
         r.meal == "water" for r in entries)
     had_meal = any(not _water(e.payload, None) for e in events) or any(
         r.kind == "food" and r.meal != "water" and not _water(None, r.nutrients) for r in entries)
-    rest = await store.events(session, family_id, person, day=day, kinds=["sleep", "routine"])
+    rest = await store.events(session, family_id, person, day=day, kinds=["sleep", "activity_done", "routine"])
     facts = [f for f in await store.facts(session, family_id, person) if f.status == "active"]
-    sleep = bool(rest) or any(f.key in ("activity:sleep", "routine:sleep") or (f.value or {}).get("type") == "sleep" for f in facts)
+    sleep = any(_slept(e) for e in rest) or any(
+        f.key in ("activity:sleep", "routine:sleep") or (f.value or {}).get("type") == "sleep" for f in facts)
     preference = any(f.domain == "preference" for f in facts)
     habits = [("habit:" + r["key"].split(":")[-1], f"today's {r['label']} has no result yet")
               for r in await activities.status(session, family_id, person)
