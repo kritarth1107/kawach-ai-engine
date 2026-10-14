@@ -54,7 +54,7 @@ class LLMReply:
 
 @dataclass(frozen=True)
 class Route:
-    provider: str  # claude | gemini | fake
+    provider: str  # claude | gemini | bedrock | fake
     model: str
     location: str = "global"
 
@@ -181,6 +181,10 @@ def _provider(name: str) -> Provider:
             from app.llm.providers.gemini import GeminiProvider
 
             _providers[name] = GeminiProvider()
+        elif name == "bedrock":
+            from app.llm.providers.bedrock import BedrockProvider
+
+            _providers[name] = BedrockProvider()
         else:
             raise KeyError(f"No provider registered for {name}")
     return _providers[name]

@@ -41,6 +41,10 @@ _USD = {
     "opus": (5.00, 25.00),
     "sonnet": (3.00, 15.00),
     "haiku": (1.00, 5.00),
+    # Bedrock Mumbai on-demand list prices (AWS Price List API, 14 Oct 2026)
+    "kimi-k3": (3.30, 16.50),
+    "qwen3-next": (0.17, 1.44),
+    "gpt-oss": (0.18, 0.71),
 }
 CACHE_DISCOUNT = 0.25  # cached input tokens cost about a quarter
 ESSENTIAL_ROLES = {"brain", "vision"}
@@ -94,7 +98,7 @@ def hard_cap() -> float:
 
 def _family(model: str) -> str:
     m = model.lower()
-    for k in ("flash", "haiku", "sonnet", "opus", "pro"):
+    for k in ("kimi-k3", "qwen3-next", "gpt-oss", "flash", "haiku", "sonnet", "opus", "pro"):
         if k in m:
             return k
     return "pro"  # unknown: assume the expensive end
