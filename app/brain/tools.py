@@ -374,7 +374,9 @@ async def stop(ctx: TurnCtx, a: dict) -> dict:
         force_confirm=ctx.voice_unsure and a["domain"] in HEALTH_DOMAINS,
     )
     if not w:
-        return {"result": "not_found", "key": key}
+        return {"result": "not_found", "key": key,
+                "note": "No care-record fact by that name. A logged event, a note, or something they say was a joke or never true "
+                        "is removed with forget (one call, for the event and any matching fact), not with stop."}
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind="fact_" + w.result,
         summary=f"{a['name']}: {a['reason']}", payload={"key": key}, actor_id=ctx.speaker.get("id"),
@@ -1687,12 +1689,15 @@ async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None 
 
 @tool(
     "send_message",
-    "Send a WhatsApp message to someone in the family other than the person you are replying to: pass a message "
-    "on to the elder from a caregiver, or, on a scheduled wake-up, start the follow-up you promised. Your normal "
-    "reply already goes to the speaker; do not use this for that.",
+    "Send a WhatsApp message to someone in the family: pass a message on, or, on a scheduled wake-up, start the "
+    "follow-up you promised. Your normal reply already goes to the person you are talking to, so do not use this for "
+    "that — except when they ask for a voice note of particular words ('send a voice note saying …', 'send it to me, "
+    "I will forward it'): then call this with voice true, to them or to another family member. voice speaks those "
+    "exact words as a WhatsApp voice note. A song is sing, not this. Changing whether replies are spoken is voice_replies.",
     {
         "to": {"type": "string", "description": "Person id from HOUSEHOLD"},
         "text": {"type": "string"},
+        "voice": {"type": "boolean", "description": "true: also send this text as a spoken WhatsApp voice note (to the person you are replying to, or to another family member)"},
         "buttons": {"type": "object", "description": "Optional one-tap answers: {kind: outcome|visit|feedback|order, key: the key given in the prompt (for order: the task id)}",
                     "properties": {"kind": {"type": "string", "enum": ["outcome", "visit", "feedback", "order", "later"]}, "key": {"type": "string"}}},
         "ask_location": {"type": "boolean", "description": "The message asks them to share a location: it goes with WhatsApp's 'Send location' button"},
@@ -1706,8 +1711,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     ids = {m.get("id") for m in ctx.members} | {ctx.elder_id}
     if a["to"] not in ids:
         raise ToolRefused("Send only to people in HOUSEHOLD, by id.")
-    if a["to"] == ctx.speaker.get("id"):
-        raise ToolRefused("Your reply already goes to the speaker.")
+    if a["to"] == ctx.speaker.get("id") and not a.get("voice"):
+        raise ToolRefused("Your reply already goes to the speaker. To send them these words as a voice note, call send_message with voice true.")
     if a["to"] in ctx.told_by_tasks:
         raise ToolRefused("Not sent: the task system is telling this person about the order and the cancel right now, with what "
                           "to do. Do not message them about it.")
@@ -1723,6 +1728,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     a = {**a, "text": guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(a["text"], greeted_today=greeted, mid_conversation=mid)),
                                           ctx.profiles.get(a["to"]))}
     payload = {"to": a["to"], "text": a["text"]}
+    if a.get("voice"):
+        payload["voice"] = True
     if (a.get("buttons") or {}).get("kind") == "later":
         # only on the question of a booking set for later (sim 2026-10-12: they went on a ride's fare confirm for now)
         from app.tasks import later, runtime
@@ -1769,8 +1776,11 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
     )
     if res.get("reason") == "outside_window":
         # nothing reached them: not part of their chat, and it does not count as said (a check-in is tried again later)
-        return {**res, "note": "Not sent: their WhatsApp chat is closed (no message from them in 24 hours), and nothing can "
-                               "reach them until they write."}
+        note = ("Not sent: their WhatsApp chat is closed (no message from them in 24 hours), and nothing can "
+                "reach them until they write.")
+        if payload.get("voice"):
+            note += " The voice note was not sent either."
+        return {**res, "note": note}
     ctx.messaged.add(a["to"])
     waiting = res.get("via") == "template"
     turn_id = await store.add_turn(
@@ -1800,6 +1810,15 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
                              tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace or None)
     except Exception:  # noqa: BLE001 — learning must never stop a message
         logger.exception("learning log failed (send_message)")
+    if payload.get("voice"):
+        heard = res.get("voice")
+        if heard == "sent":
+            extra = "These words also went as a WhatsApp voice note."
+        elif heard in ("none", "failed", "stale"):
+            extra = "The text was sent. The voice note could not be made this time; do not say they heard it."
+        else:
+            extra = "These words were sent to go as a WhatsApp voice note as well."
+        res = {**res, "note": (str(res["note"]) + " " if res.get("note") else "") + extra}
     return res
 
 
@@ -3461,10 +3480,14 @@ async def learning_consent(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "forget",
-    "Forget something on request: hides matching memory notes lines and logged events (they can be restored from the "
-    "dashboard). Use when someone says 'forget that', 'that was wrong, remove it', or asks you not to remember something. "
-    "For a care-record fact (medicine, allergy, rule) use stop instead.",
-    {"what": {"type": "string", "description": "Words that identify what to forget, e.g. 'fight with Rahul'"}, "about": ABOUT},
+    "Remove something they asked to delete, take back, or said was a joke or never true. One call hides matching "
+    "logged events and memory-note lines, and stops matching care-record facts (a medicine, an allergy, a condition, "
+    "a rule). Use this, not stop, when they say delete it, remove it from the system, forget it, or that it was a joke. "
+    "stop is only for a real fact that ended (a medicine they no longer take). what is the words of the saved event or "
+    "fact, not their whole sentence. never_true when they say it was a joke, a mistake, or never happened.",
+    {"what": {"type": "string", "description": "Words of the saved event or fact to remove, e.g. 'chest wound' or 'fight with Rahul'"},
+     "never_true": {"type": "boolean", "description": "true when they say it was a joke, never true, or saved by mistake, so it is never said again"},
+     "about": ABOUT},
     ["what"],
 )
 async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
@@ -3474,7 +3497,8 @@ async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
     if not ctx.speaker_is_elder and subjects[0] == ctx.elder_id:
         subjects.append("family")
     return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "",
-                                      source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind)
+                                      source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind,
+                                      never_true=bool(a.get("never_true")))
 
 
 # ── memory history: what changed, and undo ─────────────────────────────────────

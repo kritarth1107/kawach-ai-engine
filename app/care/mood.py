@@ -115,7 +115,9 @@ async def assess(session: AsyncSession, family_id: str, subject_id: str, *, name
              if t.at and t.at >= now - LOOK_BACK and (t.text or "").strip() and (t.text or "").strip().lower() != "none"][-24:]
     problems = list((await session.execute(
         select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == subject_id,
-                                CareEvent.kind.in_(("symptom", "vital", "red_flag")), CareEvent.at >= now - PROBLEMS_BACK)
+                                CareEvent.kind.in_(("symptom", "vital", "red_flag")),
+                                CareEvent.payload["forgotten"].astext.is_(None),
+                                CareEvent.at >= now - PROBLEMS_BACK)
         .order_by(CareEvent.at)
     )).scalars())
     if not turns and not problems:

@@ -163,7 +163,10 @@ class SimHost:
                 return {"delivered": True, "via": "template", "waiting": True}
             w.sent.append({**args, "at": clock.now().isoformat()})
             # the backend returns the wamid Meta gave it (delivery ledger, B1.1)
-            return {"delivered": True, "wamid": f"wamid.sim{len(w.sent)}", "wamids": [f"wamid.sim{len(w.sent)}"]}
+            out = {"delivered": True, "wamid": f"wamid.sim{len(w.sent)}", "wamids": [f"wamid.sim{len(w.sent)}"]}
+            if args.get("voice"):
+                out["voice"] = "sent"  # the backend speaks the text and sends a voice note
+            return out
         if tool == "alert_care_team":
             w.team_alerts.append({**args, "at": clock.now().isoformat()})
             return {"sent": True, "to": 1}

@@ -639,7 +639,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
 
 # Tools that change something; once one has run, a failed turn is kept rather than retried elsewhere.
 WRITE_TOOLS = {
-    "remember", "stop", "note", "confirm_change", "fact_still_true", "set_boundaries", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
+    "remember", "stop", "forget", "note", "confirm_change", "fact_still_true", "set_boundaries", "log_dose", "log_vital", "log_event", "set_reminder", "open_loop",
     "close_loop", "send_message", "alert_caregiver", "start_task", "task_input", "cancel_task", "done_in_app", "set_stock",
     "add_doctor_question", "assign_family_task", "health_record",
     "log_food", "change_food", "nutrition_target", "pantry", "nutrition_settings", "nutrition_report",

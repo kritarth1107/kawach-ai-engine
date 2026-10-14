@@ -323,7 +323,12 @@ async def profile_card(session: AsyncSession, family_id: str, person: dict) -> s
     from app.care import baselines
 
     pid = person["id"]
+    from app.care.rejected import REJECTED_NOTE
+
     facts = await store.facts(session, family_id, pid, statuses=("active",))
+    pending = await store.facts(session, family_id, pid, statuses=("pending",))
+    withdrawn = {f.key for f in pending if (f.value or {}).get("stopped") and str(f.note or "").startswith(REJECTED_NOTE)}
+    facts = [f for f in facts if f.key not in withdrawn]
     by: dict[str, list[CareFact]] = defaultdict(list)
     for f in facts:
         by[f.domain].append(f)
@@ -366,14 +371,16 @@ async def save_profile_card(session: AsyncSession, family_id: str, person: dict)
 # ── forget and restore ─────────────────────────────────────────────────────────
 
 
-async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str, source_kind: str = "caregiver_said") -> dict:
+async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str, source_kind: str = "caregiver_said", never_true: bool = False) -> dict:
     """Hide memories matching `what` (notes lines, events) and end matching links (a health link from someone weaker than
-    who set it only waits for a caregiver). Care-record facts are stopped instead (with history)."""
+    who set it only waits for a caregiver). Matching care-record facts are stopped too (with history). never_true: they
+    said it was a joke or never happened, so it is not read back and not proposed again."""
     from app.care import links, memory_index
+    from app.care.rejected import REJECTED_NOTE
 
     words = [w for w in re.findall(r"\w{3,}", (what or "").lower())]
     if not words:
-        return {"forgotten": 0}
+        return {"forgotten": 0, "note": "Nothing to remove. Call forget with the words of the saved event or fact."}
     removed_lines, rewrites = [], []
     notes = list((await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id, MemoryNote.subject_id.in_(subject_ids))
                                         .execution_options(populate_existing=True))).scalars())
@@ -387,10 +394,24 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     events = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids)))).scalars()
     hide = [e for e in events if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten")]
     ended_links, waiting_links = await links.forget_matching(session, family_id, subject_ids, words, by=by, source_kind=source_kind)
+    facts = list((await session.execute(select(CareFact).where(
+        CareFact.family_id == family_id, CareFact.subject_id.in_(subject_ids), CareFact.status == "active"))).scalars())
+    matched_facts = [f for f in facts if all(w in f"{f.text} {f.key}".lower() for w in words)]
+    why = f"asked to remove: {what[:180]}"
+    if never_true:
+        why = REJECTED_NOTE + why
+    stopped_keys: list[str] = []
+    waiting_keys: list[str] = []
+    for f in matched_facts:
+        w = await store.stop_fact(session, family_id=family_id, subject_id=f.subject_id, key=f.key, reason=why,
+                                  source_kind=source_kind, stated_by=by)
+        if w is None or w.result == "kept_pinned":
+            continue
+        (stopped_keys if w.result == "stopped" else waiting_keys).append(f.key)
     # the record first, so each note's version can point at it (undoing any of them restores the whole forget)
     eid = await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
                                    payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True,
-                                            "links": ended_links},
+                                            "links": ended_links, "facts": [*stopped_keys, *waiting_keys]},
                                    actor_id=by)
     for note, body, drop in rewrites:
         title = note.title
@@ -401,10 +422,22 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     for e in hide:
         e.payload = {**(e.payload or {}), "forgotten": True, "forgotten_by": by}
         await memory_index.unindex(session, family_id, f"event:{e.id}")
-    out = {"forgotten": len(removed_lines) + len(hide) + len(ended_links)}
+    out: dict[str, object] = {"forgotten": len(removed_lines) + len(hide) + len(ended_links) + len(stopped_keys) + len(waiting_keys)}
+    if stopped_keys:
+        out["facts"] = stopped_keys
+    if waiting_keys:
+        out["facts_waiting"] = waiting_keys
+    said: list[str] = []
+    if out["forgotten"] == 0:
+        said.append("Nothing matched. Call forget again with the words of the saved event or fact. A logged event is removed with forget, not with stop.")
+    else:
+        said.append("Removed from memory. Do not mention it again.")
+    if waiting_keys:
+        said.append("A health fact waits for a caregiver before the record ends it; do not state it as true meanwhile.")
     if waiting_links:
         out["links_waiting"] = len(waiting_links)
-        out["note"] = "A link between a medicine and its condition, doctor or record goes only once a caregiver confirms."
+        said.append("A link between a medicine and its condition, doctor or record goes only once a caregiver confirms.")
+    out["note"] = " ".join(said)
     return out
 
 

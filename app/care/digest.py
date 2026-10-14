@@ -99,6 +99,10 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
     from app.care import rejected as care_rejected
 
     stale = stale or {}
+    # a pending stop marked never-true: the active line must not be read as fact while a caregiver confirms
+    withdrawn = {f.key for f in rows if f.status == "pending" and (f.value or {}).get("stopped") and str(f.note or "").startswith(care_rejected.REJECTED_NOTE)}
+    taken_back = [f for f in rows if f.status == "active" and f.key in withdrawn]
+    rows = [f for f in rows if f.key not in withdrawn]
     linked = care_links.by_from(list(links or []))
     by_domain: dict[str, list[CareFact]] = defaultdict(list)
     activities = {f.key for f in rows if f.domain == "activity" and f.status == "active"}
@@ -140,6 +144,8 @@ def care_record(name: str, rows: list[CareFact], stale: dict[str, str] | None = 
     never = care_rejected.block(list(rejected or []))
     if never:
         lines.append(never)
+    if taken_back:
+        lines.append("Never say, assume or use (they said this was a joke or never true):\n" + "\n".join(f"  - {f.text}" for f in taken_back[:15] if f.text))
     return "\n".join(lines)
 
 
@@ -209,7 +215,7 @@ def notes_block(rows: list[MemoryNote], *, max_chars: int = 6000) -> str:
 
 
 def ledger(day_events: list[CareEvent]) -> str:
-    day_events = [e for e in day_events if e.kind != "dose_corrected"]  # an answer they corrected did not happen
+    day_events = [e for e in day_events if e.kind != "dose_corrected" and not (e.payload or {}).get("forgotten")]  # a correction, or something they asked removed, did not happen
     if not day_events:
         return "TODAY SO FAR: nothing logged yet (no reminders sent, no doses marked)."
     lines = ["TODAY SO FAR (IST, from the ledger; this is what actually happened):"]

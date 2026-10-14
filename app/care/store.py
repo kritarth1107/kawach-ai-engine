@@ -382,7 +382,10 @@ async def events(
     kinds: list[str] | None = None,
     limit: int = 200,
 ) -> list[CareEvent]:
-    q = select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == subject_id)
+    q = select(CareEvent).where(
+        CareEvent.family_id == family_id, CareEvent.subject_id == subject_id,
+        CareEvent.payload["forgotten"].astext.is_(None),  # a person asked this hidden; it is not read back
+    )
     if day:
         q = q.where(CareEvent.day == day)
     if since:
@@ -676,7 +679,12 @@ async def recall(
         .order_by(CareFact.recorded_at.desc())
         .limit(limit)
     )
-    for f in fact_rows.scalars():
+    facts = list(fact_rows.scalars())
+    # a joke or a mistake they took back is not a past fact to quote (the note is app.care.rejected.REJECTED_NOTE)
+    never = {f.key for f in facts if f.status == "pending" and str(f.note or "").startswith("rejected: ")}
+    for f in facts:
+        if f.key in never or str(f.note or "").startswith("rejected: "):
+            continue
         hits.append(Hit("fact", f.recorded_at, fact_label(f), f"fact:{f.id}"))
 
     hits.sort(key=lambda h: h.when, reverse=True)

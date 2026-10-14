@@ -50,6 +50,7 @@ async def events(session: AsyncSession, family_id: str, subject_id: str, *, days
     now = now or clock.now()
     return list((await session.execute(
         select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == subject_id, CareEvent.kind.in_(KINDS),
+                                CareEvent.payload["forgotten"].astext.is_(None),
                                 CareEvent.at >= now - timedelta(days=days)).order_by(CareEvent.at)
     )).scalars())
 

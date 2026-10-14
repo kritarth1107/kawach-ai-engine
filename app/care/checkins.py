@@ -377,6 +377,7 @@ async def _symptoms_since(session: AsyncSession, family_id: str, subject: str, s
     start = max(since or now - timedelta(days=2), now - timedelta(days=2))
     return list((await session.execute(
         select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == subject, CareEvent.kind == "symptom",
+                                CareEvent.payload["forgotten"].astext.is_(None),
                                 CareEvent.at > start).order_by(CareEvent.at)
     )).scalars())
 
