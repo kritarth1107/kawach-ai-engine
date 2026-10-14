@@ -1001,6 +1001,29 @@ async def test_a_learned_meal_time_moves_the_ask(db, at, sessions, writer, food)
     assert [o.field for o in await meal_opts(db, at, "2026-10-14 15:50")] == ["meal:lunch"]
 
 
+async def test_a_question_already_asked_in_chat_today_is_not_asked_again(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    at("2026-10-13 14:30")
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Asked in conversation: meal:lunch",
+                             payload={"topic": "meal:lunch", "sent": True, "via": "conversation"})
+    await db.commit()
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 14:30")] == ["meal:lunch"]  # yesterday's chat does not count
+    at("2026-10-14 14:00")
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Asked in conversation: meal:2026-10-14:lunch",
+                             payload={"topic": "meal:2026-10-14:lunch", "sent": True, "via": "conversation"})
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 21:30")] == ["meal:dinner"]
+    at("2026-10-14 11:50")
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Asked in conversation: water",
+                             payload={"topic": "water", "sent": True, "via": "conversation"})
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Asked in conversation: sleep:when",
+                             payload={"topic": "sleep:when", "sent": True, "via": "conversation"})
+    await db.commit()
+    assert await habit_opts(db, at, "2026-10-14 12:10", "water") == []
+    assert await habit_opts(db, at, "2026-10-14 09:00", "sleep") == []
+
+
 async def test_a_sleep_answer_is_saved_as_sleep(db, at, sessions, writer, food):
     await meal_day(db, at)
     at("2026-10-14 08:00")

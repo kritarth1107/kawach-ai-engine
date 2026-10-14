@@ -158,8 +158,28 @@ async def _sleep_today(session: AsyncSession, family_id: str, person: str, day: 
     return False
 
 
+def _chat_covers(topics: set[str], *keys: str) -> bool:
+    """A check-in topic written today (gap_asked) already asked this."""
+    if topics & set(keys):
+        return True
+    return any(t.startswith(tuple(k + ":" for k in keys)) for t in topics)
+
+
+def _meal_slot_asked(topics: set[str], slot: str, today: str) -> bool:
+    """A chat ask of 'meal', 'meal:day', this slot, or meal:<today>:<slot> already covered it. Another slot did not."""
+    return bool(topics & {"meal", "meal:day", f"meal:{slot}", f"meal:{today}:{slot}", f"meal:{today}:day"})
+
+
+async def _chat_topics(session: AsyncSession, family_id: str, person: str, today: str, now: datetime) -> set[str]:
+    """Topics Saheli already asked in conversation today (check-in events), not ones from earlier days."""
+    from app.care import checkins
+
+    return {topic for topic, at in (await checkins._asked(session, family_id, person, now)).items()
+            if topic and clock.ist_day(at) == today}
+
+
 async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: datetime, acts: list[dict], nh, settings,
-                     today: str, m_now: int, local: datetime) -> dict | None:
+                     today: str, m_now: int, local: datetime, topics: set[str]) -> dict | None:
     """The one habit question this person is due: a meal (including their own, for a caregiver), else water, else sleep."""
     fid, pid = p.family_id, p.id
     s = await settings.get(session, fid, pid)
@@ -170,7 +190,7 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
     if how == "recap" and not open_food:
         at = await recap_at(session, fid, pid)
         meal_asked = [r for r in sent if r.kind == "meal" and clock.ist_day(r.sent_at or r.planned_at) == today]
-        if not meal_asked and at <= m_now <= at + RECAP_WINDOW:
+        if not meal_asked and not _chat_covers(topics, "meal") and at <= m_now <= at + RECAP_WINDOW:
             meal_at = await times(session, fid, pid, acts)
             missing = [slot for slot, t in meal_at.items() if t < m_now and not await nh.meal_logged(session, fid, pid, slot, day=today)]
             if missing:
@@ -186,6 +206,8 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
                 continue
             if any(r.about_ref == f"meal:{today}:{slot}" for r in sent):
                 continue
+            if _meal_slot_asked(topics, slot, today):
+                continue
             start = local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=t - 120)
             if any(o >= start for o in ordered):
                 continue  # a delivered meal from an order: aftercare asks "did you eat it?"
@@ -196,7 +218,7 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
                                "and roughly how much; nothing about medicines"})
         if due:
             return due[-1]  # the latest meal only
-    if not await _water_today(nh, session, fid, pid, today):
+    if not await _water_today(nh, session, fid, pid, today) and not _chat_covers(topics, "water"):
         for t in reversed(await water_times(session, fid, pid)):
             if not t <= m_now <= t + WATER_FOR:
                 continue
@@ -206,7 +228,7 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
             return {"kind": "water", "about": about, "fld": "water:count",
                     "why": f"how much water they have had today (usually around {_clock(t)}), nothing logged yet: one easy question, "
                            "glasses or ml; nothing about medicines"}
-    if not await _sleep_today(session, fid, pid, today):
+    if not await _sleep_today(session, fid, pid, today) and not _chat_covers(topics, "sleep"):
         at = await sleep_at(session, fid, pid)
         about = f"sleep:{today}"
         if at <= m_now <= at + SLEEP_FOR and not any(r.about_ref == about for r in sent):
@@ -236,10 +258,11 @@ async def options(session: AsyncSession, p, rows: list[NudgeLedger], now: dateti
         return []
     local = clock.ist(now)
     m_now = local.hour * 60 + local.minute
-    own = await _own_habit(session, p, sent, now, acts, nh, settings, today, m_now, local)
+    topics = await _chat_topics(session, fid, p.id, today, now)
+    own = await _own_habit(session, p, sent, now, acts, nh, settings, today, m_now, local, topics)
     if own:
         return [own]
-    if p.cared or not elder or not elder.get("id"):
+    if p.cared or not elder or not elder.get("id") or _chat_covers(topics, "meal"):
         return []
     if not await silent_elder(session, fid, elder["id"], now):
         return []
