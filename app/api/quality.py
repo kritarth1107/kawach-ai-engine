@@ -130,7 +130,22 @@ async def post_replay_results(body: ReplayResultsIn, session: DB, caller: Annota
     await session.execute(insert(EvalScore).values(**values).on_conflict_do_update(
         index_elements=[EvalScore.run_id, EvalScore.kind], set_={k: v for k, v in values.items() if k not in ("run_id", "kind")}))
     await session.commit()
-    return {**out, "by": caller}
+    emailed = None
+    if body.summary.get("unavailable") and body.branch in ("master", "main"):
+        # the gate could not test (the provider refused every case): the team hears when the streak starts
+        from sqlalchemy import select
+
+        from app.brain.host import LiveHost
+        from app.quality import report
+
+        gate = await report.replay_gate(session)
+        if gate.get("runs") == 1:
+            row = (await session.execute(select(EvalScore).where(EvalScore.run_id == run_id, EvalScore.kind == "replay"))).scalar_one()
+            try:
+                emailed = await report.replay_unavailable(LiveHost(), row, str(gate.get("since")))
+            except Exception as exc:  # noqa: BLE001 — stored either way; the page and the morning email show it
+                emailed = {"error": str(exc)[:200]}
+    return {**out, "by": caller, "emailed": emailed}
 
 
 def _pb_json(pb) -> dict | None:

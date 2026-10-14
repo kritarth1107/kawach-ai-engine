@@ -136,6 +136,11 @@ async def test_two_of_three_and_a_reintroduced_bug_blocks(monkeypatch, tmp_path)
         return None
 
     monkeypatch.setattr(runner, "create_async_engine", lambda url, **kw: Eng())
+
+    async def answers():
+        return None
+
+    monkeypatch.setattr(runner, "preflight", answers)  # never a real model call in tests
     import eval.world.seed_engine as se
 
     monkeypatch.setattr(se, "prepare", prepare)
@@ -184,6 +189,11 @@ async def test_run_for_playbook_reports_regressions_and_fixes(monkeypatch, sessi
 
     monkeypatch.setattr(runner, "run_cases", fake_run)
     monkeypatch.setattr(runner, "load_cases", lambda argv: [{"id": x, "status": "fixed", "kind": "k"} for x in "abcd"])
+
+    async def answers():
+        return None
+
+    monkeypatch.setattr(runner, "preflight", answers)
     got = await learn_replay.run_for_playbook(sessions, cand, budget_inr=50)
     assert got["regressions"] == ["a"] and got["fixed"] == ["b"] and got["skipped"] == ["d"] and got["n"] == 4 and got["playbook"] == 9
     assert seen[1] is cand  # the candidate replaced the live playbook in the second run

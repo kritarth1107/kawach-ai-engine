@@ -165,8 +165,12 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
     clock.set_now(None)
     rows = []
     try:
+        from eval import sensitive
+
         for _ in range(repeat):
             for c in CASES:
+                if not sensitive.founder_case_allowed(c.key, where="nightly"):
+                    continue  # illegal-substance cases paused (eval/sensitive.py)
                 if spend.process_spent() >= cap:
                     rows.append({"case": c.key, "skipped": "budget"})
                     continue

@@ -122,6 +122,7 @@ async def page(session: AsyncSession, *, days: int = 30, day: str | None = None)
     from app.quality import cases
 
     replay_counts = await cases.counts(session)
+    replay_counts["gate"] = await replay_gate(session)
     try:
         learned = await lessons(session)
     except Exception:  # noqa: BLE001 — the page must not fail on the learning lookup
@@ -221,6 +222,9 @@ async def email(session: AsyncSession, day: str | None = None) -> tuple[str, str
     rc = data.get("replay") or {}
     if rc:
         lines.append(f"Replay cases: {rc.get('open', 0)} open, {rc.get('fixed', 0)} fixed (fixed ones guard every engine deploy)")
+        gate = rc.get("gate") or {}
+        if gate.get("unavailable"):
+            lines.append(f"REPLAY GATE UNAVAILABLE since {gate.get('since')}: {gate.get('why')} (deploys go on untested by real Gemini)")
     cal = data.get("calibration") or {}
     if cal.get("batch"):
         lines.append(f"Judge calibration {cal['batch']}: {cal.get('labelled', 0)} of {cal.get('size', 0)} labelled"
@@ -265,6 +269,35 @@ async def send(sessions, host, day: str | None = None, *, force: bool = False) -
             s.add(LearnReport(kind="morning_report", at=clock.now(), data={"day": sent_day, "subject": subject}))
             await s.commit()
     return {"sent": ok, "day": sent_day, "subject": subject, "result": res if not ok else None}
+
+
+async def replay_gate(session: AsyncSession) -> dict:
+    """The pre-deploy replay gate's state from its latest runs (kind "replay" in eval_scores): unavailable since when, and why
+    (KP 14 Oct: a run in which the model provider refused every case tests nothing; the deploy goes on, loudly)."""
+    rows = list((await session.execute(select(EvalScore).where(EvalScore.kind == "replay").order_by(EvalScore.created_at.desc()).limit(50))).scalars())
+    if not rows or not (rows[0].scores or {}).get("unavailable"):
+        return {"unavailable": False, "last": rows[0].created_at.isoformat() if rows else None}
+    streak = []
+    for r in rows:
+        if not (r.scores or {}).get("unavailable"):
+            break
+        streak.append(r)
+    return {"unavailable": True, "since": clock.ist(streak[-1].created_at).strftime("%d %b %H:%M IST"), "runs": len(streak),
+            "why": str((rows[0].scores or {}).get("why") or "")[:240], "last": rows[0].created_at.isoformat()}
+
+
+async def replay_unavailable(host, row: EvalScore, since: str) -> dict:
+    """The first replay run of an unavailable streak: the team hears at once (later runs only show on the page and the email)."""
+    from app.tasks.credits import OPS
+
+    why = str((row.scores or {}).get("why") or "")
+    text = "\n".join([f"The pre-deploy replay gate is UNAVAILABLE since {since} (run {row.run_id}, commit {row.commit[:12]}).", "",
+                      f"Why: {why}", "",
+                      "No replay case got a real verdict, so engine deploys now go on untested by real Gemini (the test job still has to pass).",
+                      "The gate restores itself on the next run that reaches the model.", f"Open: {admin_url()}/daily-score"])
+    return await host.call("team_report", {"subject": f"Replay gate UNAVAILABLE since {since}"[:160], "text": text,
+                                           "html": "".join(f"<div>{html.escape(ln) or '&nbsp;'}</div>" for ln in text.splitlines())},
+                           family_id=OPS, subject_id=OPS, actor_id=OPS)
 
 
 async def nightly_failed(host, row: EvalScore) -> dict:

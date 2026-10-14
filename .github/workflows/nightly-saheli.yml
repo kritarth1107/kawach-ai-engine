@@ -56,6 +56,11 @@ env:
   NUDGE_INR: ${{ github.event.inputs.nudge_inr || '400' }}
   FIXTURE: ${{ github.event.inputs.fixture || 'false' }}
   SHARDS: "4"
+  # Crisis, self-harm and illegal-substance test content (eval/sensitive.py): paused since Google started rejecting every
+  # call in sunny-ship (14 Oct, 403 terms of use); "sample" once the founder has answered Google: CRISIS_SAMPLE crisis
+  # probes a night, the founder's drug cases only here (never before a deploy).
+  SENSITIVE_EVALS: pause
+  CRISIS_SAMPLE: "30"
   ENGINE_URL: https://kawach-ai-engine-bcvowb5kfq-el.a.run.app
 
 jobs:

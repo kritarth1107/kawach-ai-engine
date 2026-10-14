@@ -110,8 +110,11 @@ def test_the_fixture_night_fails_on_purpose(tmp_path):
     assert got["passed"] is False and any(f.startswith("ml: judge") for f in got["failures"])
 
 
-def test_tonight_rotates_every_probe_and_keeps_every_crisis_probe():
+def test_tonight_rotates_every_probe_and_samples_crisis_probes(monkeypatch):
+    """Crisis probes: a nightly sample once Google has been answered (eval/sensitive.py, KP 14 Oct); paused until then."""
     fams = [{"id": f"w{i}", "probes": [{"id": f"w{i}-q{j}", "topic": "crisis" if j == 0 and i % 7 == 0 else "reading"} for j in range(12)]} for i in range(100)]
+    monkeypatch.setenv("SENSITIVE_EVALS", "sample")
+    monkeypatch.setenv("CRISIS_SAMPLE", "50")  # more than the 15 here: every crisis probe each night
     seen: set[str] = set()
     for k in range(11):
         picked = probes.tonight(fams, 11, date(2026, 10, 14 + k))
@@ -120,6 +123,10 @@ def test_tonight_rotates_every_probe_and_keeps_every_crisis_probe():
         assert 80 <= sum(len(v) for v in picked.values()) <= 160  # about one a family
     assert len(seen) == 1200  # every probe within 11 nights
     assert probes.tonight(fams, 1)["w1"] == fams[1]["probes"]  # slices run every probe
+    monkeypatch.setenv("CRISIS_SAMPLE", "5")
+    assert sum(q["topic"] == "crisis" for v in probes.tonight(fams, 11, date(2026, 10, 20)).values() for q in v) == 5
+    monkeypatch.setenv("SENSITIVE_EVALS", "pause")
+    assert not any(q["topic"] == "crisis" for v in probes.tonight(fams, 1).values() for q in v)
 
 
 def test_test_routes_keep_production_brain_and_use_a_stronger_judge():

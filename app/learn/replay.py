@@ -56,6 +56,9 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
         if live is _FROM_DB:
             live, _canary = await learned.versions(s)
     cases = runner.choose(cases, max_cases)
+    down = await runner.preflight()
+    if down:  # no case traffic to a provider that refuses the project (KP 14 Oct)
+        raise ReplayUnavailable(down)
     start = spend.process_spent()
     half = budget_inr / 2
     with_live = {r["id"]: r for r in await runner.run_cases(cases, url, half, playbook=live)}

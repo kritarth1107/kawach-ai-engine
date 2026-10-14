@@ -215,8 +215,14 @@ async def complete(
         raise AllModelsFailed(str(exc)) from exc
     if mode == "cheap":
         candidates, effort = spend.cheapest(candidates), "low"
-    live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway
-    errors: list[str] = []
+    from app.llm import policy_block
+
+    errors: list[str] = [f"{r.key}: provider refused by policy ({policy_block.blocked(r.provider)}); not sent" for r in candidates
+                         if policy_block.blocked(r.provider)]
+    candidates = [r for r in candidates if not policy_block.blocked(r.provider)]  # a policy refusal is never retried
+    if not candidates:
+        raise AllModelsFailed("; ".join(errors))
+    live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway (never past a policy refusal)
 
     async def call(route: Route) -> LLMReply:
         return await asyncio.wait_for(
@@ -232,7 +238,9 @@ async def complete(
             timeout=timeout_s,
         )
 
-    for route in live:
+    queue = list(live)
+    while queue:
+        route = queue.pop(0)
         try:
             reply = None
             for attempt, wait in enumerate((0.0, *RETRY_429_S), start=1):
@@ -257,6 +265,14 @@ async def complete(
         except ModelUnavailable as exc:
             trip(route, exc.status)
             errors.append(f"{route.key}: {exc.status} {str(exc)[:120]}")
+            if policy_block.is_policy_refusal(exc.status, str(exc)):
+                # the whole provider (project) refuses: no other route of it, no retry, for the block window
+                policy_block.note(route.provider, str(exc))
+                logger.error("llm policy refusal provider=%s role=%s: %s", route.provider, role, str(exc)[:160])
+                queue = [r for r in queue if r.provider != route.provider]
+                if not queue:
+                    raise AllModelsFailed("; ".join(errors)) from exc
+                continue
         except asyncio.TimeoutError:
             trip(route, None)
             errors.append(f"{route.key}: timeout")

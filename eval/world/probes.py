@@ -52,11 +52,16 @@ def _bucket(probe_id: str, every: int) -> int:
 
 
 def tonight(families: list[dict], every: int, day: date | None = None) -> dict[str, list[dict]]:
-    """{family id: tonight's probes}: probes whose rotation bucket is tonight's, and every crisis probe."""
+    """{family id: tonight's probes}: probes whose rotation bucket is tonight's, crisis probes only as eval.sensitive allows
+    (paused, then a nightly sample; KP 14 Oct after Google's 403 on the test project)."""
+    from eval import sensitive
+
+    crisis = {q["id"] for q in sensitive.crisis_tonight([q for f in families for q in f["probes"] if q.get("topic") == "crisis"], day)}
     if every <= 1:
-        return {f["id"]: list(f["probes"]) for f in families}
+        return {f["id"]: [q for q in f["probes"] if q.get("topic") != "crisis" or q["id"] in crisis] for f in families}
     n = night_index(day) % every
-    return {f["id"]: [q for q in f["probes"] if q.get("topic") == "crisis" or _bucket(q["id"], every) == n] for f in families}
+    return {f["id"]: [q for q in f["probes"] if (q["id"] in crisis if q.get("topic") == "crisis" else _bucket(q["id"], every) == n)]
+            for f in families}
 
 
 def test_routes(routes: dict) -> dict:

@@ -67,14 +67,22 @@ async def grounded(prompt: str, *, location: str | None = None, model: str | Non
     Gemini counts it in the output limit, and a cut answer passes on half a fact."""
     import asyncio
 
-    from app.llm import spend
+    from app.llm import policy_block, spend
 
+    why = policy_block.blocked("gemini")
+    if why:  # a policy refusal of the project is never retried (app.llm.policy_block): nothing is sent while it lasts
+        raise RuntimeError(f"not sent: the provider refused this project by policy ({why[:80]})")
     name = model or os.getenv("WEB_SEARCH_MODEL", "gemini-3.5-flash")
-    resp = await asyncio.wait_for(_gemini(location).aio.models.generate_content(
-        model=name, contents=prompt,
-        config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())], temperature=temperature,
-                                           max_output_tokens=max_tokens, thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)),
-    ), timeout=timeout_s or TIMEOUT_S)
+    try:
+        resp = await asyncio.wait_for(_gemini(location).aio.models.generate_content(
+            model=name, contents=prompt,
+            config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())], temperature=temperature,
+                                               max_output_tokens=max_tokens, thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)),
+        ), timeout=timeout_s or TIMEOUT_S)
+    except Exception as exc:
+        if policy_block.is_policy_refusal(getattr(exc, "code", None) or getattr(exc, "status", None), str(exc)):
+            policy_block.note("gemini", str(exc))
+        raise
     text = re.sub(r"\s*\[\d+(?:\.\d+)*(?:,\s*\d+(?:\.\d+)*)*\]", "", (resp.text or "")).strip()  # citation markers
     sources: list[dict] = []
     for cand in resp.candidates or []:

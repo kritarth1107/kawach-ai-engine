@@ -26,6 +26,7 @@ os.environ.setdefault("MEMORY_EMBEDDINGS", "off")
 
 import asyncio
 import json
+import re
 import sys
 import time
 import uuid
@@ -79,9 +80,13 @@ def founder_cases() -> list[dict]:
                         "Mentioning one or two key side effects she looked up, with a check-with-the-doctor or pharmacist note, is expected (founder rule), not a fault."),
         "relay": ([{"type": "must_tool", "tools": ["send_message"]}], "A caregiver's 'remind Maa' is sent to the elder at once."),
     }
+    from eval import sensitive
+
     out = []
     for c in fp.CASES:
         key = next((k for k in rules if c.key.startswith(k)), None)
+        if not sensitive.founder_case_allowed(c.key, where="deploy"):
+            continue  # illegal-substance cases run only in the nightly (founder_points_eval), never before every deploy
         if key is None:
             continue  # the mood case checks a stored mood, not a reply
         assertion, rubric = rules[key]
@@ -377,11 +382,67 @@ async def run_cases(cases: list[dict], url: str, cap: float, *, parallel: int = 
     return results
 
 
+async def preflight() -> str | None:
+    """ONE tiny call on the brain route before any case (KP 14 Oct): when the provider refuses it by policy (or auth, or a
+    5xx), no case traffic is sent at all and the run is "unavailable". Returns why, or None when the model answered."""
+    from app.llm import router
+
+    try:
+        await router.complete("brain", system_stable="Reply with one word.", messages=[{"role": "user", "content": [{"type": "text", "text": "ok?"}]}],
+                              max_tokens=200, effort="low", timeout_s=60, essential=False)
+    except Exception as exc:  # noqa: BLE001
+        text = str(exc)
+        if PROVIDER_DOWN.search(text) or "refused by policy" in text or "terms of use" in text:
+            return f"the preflight call was refused: {text[:200]}"
+        return None  # a 429 or a timeout is not the provider being down: the cases decide
+    return None
+
+
+PROVIDER_DOWN = re.compile(r"PERMISSION_DENIED|UNAUTHENTICATED|\b(401|403|500|502|503|504)\b|INTERNAL|UNAVAILABLE")
+
+
+def provider_down(r: dict) -> bool:
+    """Every run of this case crashed on the model provider (a 403 policy block, auth, a 5xx), not on Saheli's behaviour."""
+    runs = r.get("runs") or []
+    return bool(runs) and all(str(x.get("why") or "").startswith("crashed:") and PROVIDER_DOWN.search(str(x.get("why"))) for x in runs)
+
+
+def unavailable(results: list[dict]) -> str | None:
+    """Why the gate could not test anything (KP 14 Oct): no case ran, or every case that ran crashed on the provider.
+    A mix, where some cases got a real verdict and a fixed one failed, still blocks."""
+    if not results:
+        return "no replay case ran"
+    real = [r for r in results if r["passed"] is not None and not provider_down(r)]
+    if real:
+        return None
+    down = next((r for r in results if provider_down(r)), None)
+    if down is None:
+        return "no replay case ran (time or budget)"
+    why = str(down["runs"][-1].get("why") or "")
+    m = PROVIDER_DOWN.search(why)
+    return f"the model provider refused every case ({m.group(0) if m else 'error'}): {why[8:200]}"
+
+
 async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out: Path) -> int:
     from app.llm import spend
 
     t0 = time.monotonic()
-    results = await run_cases(cases, url, cap, parallel=parallel)
+    down = await preflight()
+    results = [] if down else await run_cases(cases, url, cap, parallel=parallel)
+    down = down or unavailable(results)
+    if down:
+        # the gate could not test: the deploy may go on (the test job still decides), loudly; it restores itself on the next
+        # run that gets a real verdict
+        summary = {"cases": len(cases), "unavailable": True, "why": down, "passed": False, "fixed_failed": 0, "spent_inr": round(spend.process_spent(), 2),
+                   "cap_inr": cap, "seconds": round(time.monotonic() - t0), "failures": [f"replay gate unavailable: {down}"]}
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1, default=str))
+        text = (f"# Replay cases before deploy: GATE UNAVAILABLE\n\n**{down}**\n\nNo case got a real verdict, so nothing was tested. The deploy "
+                "goes on only because the test job passed; the team is emailed and the admin Daily score page shows it. The gate is back "
+                "on the next run that reaches the model.\n")
+        (out / "summary.md").write_text(text)
+        print(f"::warning::replay gate UNAVAILABLE: {down}")
+        return 0
     fixed_bad = [r for r in results if r["status"] == "fixed" and r["passed"] is not True and not (r.get("skipped") or "").startswith(("no message", "the probe"))]
     summary = {"cases": len(cases), "fixed": sum(1 for c in cases if c["status"] == "fixed"), "open": sum(1 for c in cases if c["status"] == "open"),
                "fixed_failed": len(fixed_bad), "open_passed": sum(1 for r in results if r["status"] == "open" and r["passed"]),

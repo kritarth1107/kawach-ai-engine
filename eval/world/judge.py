@@ -123,6 +123,8 @@ async def judge_rows(rows: list[dict], families: dict[str, dict], parallel: int 
                     g = parse_json(rep.text or "")
                 except Exception as exc:  # noqa: BLE001
                     g = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+                    if "refused" in str(exc) or "terms of use" in str(exc):
+                        break  # a policy refusal is never retried (app.llm.policy_block)
                 if "pass" in g:
                     break
             if "pass" not in g:
