@@ -94,6 +94,15 @@ def configured_roles() -> set[str]:
         return set()
 
 
+GOOGLE_PROVIDERS = {"gemini", "claude"}  # claude here is Claude on Vertex
+ROLES_IN_USE = ("brain", "worker", "extract", "classify", "judge", "judge_fast", "learn", "vision", "speech", "nutrition")
+
+
+def google_bound_roles() -> list[str]:
+    """Roles whose every route needs Google (Vertex): on a host without Google (the AWS copy) MODEL_ROUTES must move them."""
+    return [r for r in ROLES_IN_USE if all(x.provider in GOOGLE_PROVIDERS for x in routes_for(r))]
+
+
 def routes_for(role: str) -> list[Route]:
     """MODEL_ROUTES env (JSON {role: [specs]}) overrides the defaults per role."""
     override = os.getenv("MODEL_ROUTES", "").strip()

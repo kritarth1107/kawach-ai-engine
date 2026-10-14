@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.admin import caller_email, verify_admin_caller
+from app.api.admin import admin_secret_ok, caller_check_on, caller_email, verify_admin_caller
 from app.core.security import verify_api_secret
 from app.db.session import get_db
 
@@ -31,7 +31,11 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 
 
 async def verify_eval_poster(request: Request) -> str:
-    """Only the nightly workflow's service account (a Google ID token for the engine's audience)."""
+    """Only the nightly workflow's service account (a Google ID token for the engine's audience). With the caller check
+    off (ENGINE_CALLER_CHECK=off, never on Cloud Run): the admin secret instead."""
+    if not caller_check_on():
+        admin_secret_ok(request)
+        return "unchecked"
     allowed = {e.strip().lower() for e in os.environ.get("EVAL_POSTER_SA", "").split(",") if e.strip()}
     if not allowed:
         raise HTTPException(status_code=503, detail="eval score posting is switched off")

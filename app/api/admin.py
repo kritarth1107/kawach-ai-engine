@@ -1,7 +1,9 @@
 """Admin console routes (/v2/admin), separate from the public /v2 API and secured differently.
 
 Only the admin API service (kavach-admin-api) may call them: its Google identity (ADMIN_API_SA) plus its own secret
-(ENGINE_ADMIN_SECRET), never the backend's X-Kavach-Secret. Unset either and the routes answer 503 (switched off).
+(ENGINE_ADMIN_SECRET), never the backend's X-Kavach-Secret. Unset either and the routes answer 503 (switched off). On a
+host without Google identities (the AWS copy, private network) ENGINE_CALLER_CHECK=off leaves the secret only; never on
+Cloud Run.
 Conversations, care records and exports are reached only after the admin API checked break-glass permission, a
 reason and wrote its audit entry.
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import logging
 import os
 import time
 from typing import Annotated
@@ -21,6 +24,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+
+logger = logging.getLogger(__name__)
 
 
 def _decode(part: str) -> dict:
@@ -67,14 +72,34 @@ def caller_email(authorization: str | None, *, on_cloud_run: bool | None = None,
     return str(payload.get("email", "")).lower()
 
 
-async def verify_admin_caller(request: Request) -> None:
+def caller_check_on() -> bool:
+    """The Google identity check on admin and score-posting calls. ENGINE_CALLER_CHECK=off is for a host without Google
+    identities (the AWS copy: the engine on a private network, its callers holding ENGINE_ADMIN_SECRET). On Cloud Run
+    (K_SERVICE set) the check always stays on, whatever the setting says."""
+    if os.environ.get("ENGINE_CALLER_CHECK", "on").strip().lower() != "off":
+        return True
+    if os.environ.get("K_SERVICE"):
+        logger.error("ENGINE_CALLER_CHECK=off ignored on Cloud Run: the caller check stays on")
+        return True
+    return False
+
+
+def admin_secret_ok(request: Request) -> None:
+    """The shared admin secret (at least 32 characters; unset = admin routes off)."""
     secret = os.environ.get("ENGINE_ADMIN_SECRET", "")
-    allowed = os.environ.get("ADMIN_API_SA", "").lower()
-    if len(secret) < 32 or not allowed:
+    if len(secret) < 32:
         raise HTTPException(status_code=503, detail="admin routes are switched off")
     if not hmac.compare_digest(request.headers.get("x-admin-secret", ""), secret):
         raise HTTPException(status_code=401, detail="bad admin secret")
-    if caller_email(request.headers.get("authorization")) != allowed:
+
+
+async def verify_admin_caller(request: Request) -> None:
+    allowed = os.environ.get("ADMIN_API_SA", "").lower()
+    check = caller_check_on()
+    if check and not allowed:
+        raise HTTPException(status_code=503, detail="admin routes are switched off")
+    admin_secret_ok(request)
+    if check and caller_email(request.headers.get("authorization")) != allowed:
         raise HTTPException(status_code=403, detail="caller not allowed")
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from dataclasses import dataclass
 
@@ -28,6 +29,24 @@ INDEX_LOCK_TIMEOUT = "60s"  # a concurrent index build blocks nobody while it wa
 TRIES = 5
 
 EXTENSIONS = ("vector", "pg_trgm")
+
+# Every pgvector column and the text it is made from (app.jobs.reembed rebuilds them). Their dimension follows EMBED_DIM.
+VECTOR_COLUMNS = [
+    ("memory_vectors", "embedding", "text", "key"),
+    ("family_memories", "embedding", "content", "id"),
+    ("memory_entities", "body_embedding", "body_md", "id"),
+    ("memory_snippets", "embedding", "content", "id"),
+    ("document_chunks", "embedding", "content", "id"),
+]
+VECTOR_DIM = ("SELECT a.atttypmod FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid "
+              "JOIN pg_namespace n ON n.oid = c.relnamespace "
+              "WHERE n.nspname = current_schema() AND c.relname = :t AND a.attname = :c AND NOT a.attisdropped")
+
+
+def embed_dim() -> int:
+    from app.core.config import get_settings
+
+    return int(get_settings().embed_dim)
 
 # ── v1 memory layer (family_memories and its entity tables) ──
 
@@ -54,7 +73,7 @@ INSTINCT_TABLES = [
             owner_user_id VARCHAR(128),
             review_by DATE,
             body_md TEXT DEFAULT '',
-            body_embedding vector(768),
+            body_embedding vector({dim}),
             sources JSONB DEFAULT '[]',
             version INTEGER DEFAULT 1,
             dirty BOOLEAN DEFAULT FALSE,
@@ -233,6 +252,40 @@ async def ensure_columns(engine: AsyncEngine, columns: list[tuple[str, str, str]
                          COLUMN_THERE, {"t": table, "c": column}, required=True)
 
 
+async def vector_dims(conn: AsyncConnection, cat: Catalog) -> dict[tuple[str, str], int]:
+    """The dimension of each pgvector column there is (-1: none declared)."""
+    out = {}
+    for table, column, _, _ in VECTOR_COLUMNS:
+        if (table, column) in cat.columns:
+            out[(table, column)] = int((await conn.execute(text(VECTOR_DIM), {"t": table, "c": column})).scalar() or -1)
+    return out
+
+
+async def ensure_vector_dims(engine: AsyncEngine, cat: Catalog, dim: int | None = None) -> list[str]:
+    """Vector columns follow EMBED_DIM (a new embedder, e.g. Bedrock on the AWS copy). A column of another dimension holds
+    another embedder's vectors, which mean nothing to the new one: with EMBED_DIM_MIGRATE=on the column is changed and
+    emptied (one short lock each, retried; recall uses words until `python -m app.jobs.reembed` refills it). Without it
+    the start stops, so a wrong EMBED_DIM never clears a live index and the old revision keeps serving."""
+    dim = dim or embed_dim()
+    async with engine.connect() as conn:
+        have = await vector_dims(conn, cat)
+    wrong = [(t, c, d) for (t, c), d in have.items() if d not in (-1, dim)]
+    if not wrong:
+        return []
+    if os.getenv("EMBED_DIM_MIGRATE", "off").strip().lower() != "on":
+        cols = ", ".join(f"{t}.{c} vector({d})" for t, c, d in wrong)
+        raise RuntimeError(f"schema: {cols} but EMBED_DIM is {dim}. Set EMBED_DIM_MIGRATE=on once to change them (their vectors "
+                           "are cleared), then run python -m app.jobs.reembed")
+    changed = []
+    for table, column, d in wrong:
+        await _alter(engine, f"vector {table}.{column} {d}→{dim}",
+                     f"ALTER TABLE {table} ALTER COLUMN {column} TYPE vector({dim}) USING NULL",
+                     VECTOR_DIM + f" AND a.atttypmod = {dim}", {"t": table, "c": column}, required=True)
+        log.warning("schema: %s.%s is now vector(%d) and empty: run python -m app.jobs.reembed", table, column, dim)
+        changed.append(f"{table}.{column}")
+    return changed
+
+
 async def ensure_schema(engine: AsyncEngine) -> None:
     """The live path (engine start, night and restore jobs): tables, columns and constraints now. Indexes come from
     ensure_indexes(), which the engine runs after it starts serving."""
@@ -248,7 +301,7 @@ async def ensure_schema(engine: AsyncEngine) -> None:
             await conn.run_sync(Base.metadata.create_all)  # checks first: an existing table is never touched
             for name, ddl in INSTINCT_TABLES:
                 if name not in cat.tables:
-                    await conn.execute(text(ddl))
+                    await conn.execute(text(ddl.replace("{dim}", str(embed_dim()))))
 
     err = await _retry("tables", tables)
     if err is not None:
@@ -256,6 +309,7 @@ async def ensure_schema(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         cat = await read_catalog(conn)
     await ensure_columns(engine, INSTINCT_COLUMNS + COLUMNS, cat)
+    await ensure_vector_dims(engine, cat)
     for name, table, ddl in INSTINCT_CONSTRAINTS:
         if table in cat.tables and name not in cat.constraints:
             await _alter(engine, f"constraint {name}", f"ALTER TABLE {table} ADD CONSTRAINT {name} {ddl}",
@@ -322,5 +376,5 @@ async def run_instinct_migrations(conn: AsyncConnection) -> None:
             await conn.execute(text(f"CREATE EXTENSION IF NOT EXISTS {ext}"))
     for name, ddl in INSTINCT_TABLES:
         if name not in cat.tables:
-            await conn.execute(text(ddl))
+            await conn.execute(text(ddl.replace("{dim}", str(embed_dim()))))
     await _apply(conn, INSTINCT_COLUMNS, INSTINCT_INDEXES, INSTINCT_CONSTRAINTS)

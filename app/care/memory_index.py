@@ -5,7 +5,8 @@ when someone says "wahi dard phir se". Results are ranked by meaning, words, imp
   and never fade from recall; ordinary memories fade with age (half-life ~45 days)
 - the index is filled at night (the dream) and on demand; if no embedder is available (Vertex down, tests), recall
   falls back to keywords + importance + recency, so nothing breaks
-- embedder: Vertex text-multilingual (app.rag.embeddings) by default; tests and the simulator can set a fake one
+- embedder: Vertex text-multilingual (app.rag.embeddings) by default, Bedrock on the AWS copy (EMBED_PROVIDER); tests and
+  the simulator can set a fake one
 - the index always says what is true now (D-12, 2026-10-11: an old dose and a corrected note line came back next to
   the new ones, both "(active)"): a fact's row is relabelled the moment its status changes (an earlier value says when
   it ended, a turned-down proposal is dropped), a note line is dropped the moment a write takes it out of its note
@@ -62,8 +63,9 @@ BREAKER_SECONDS = 300.0
 _broken_until = 0.0
 
 
-async def embed(texts: list[str]) -> list[list[float]] | None:
-    """Embeddings, or None (keyword recall only) when off, failing, or slow. A failure pauses tries for 5 minutes."""
+async def embed(texts: list[str], *, query: bool = False) -> list[list[float]] | None:
+    """Embeddings, or None (keyword recall only) when off, failing, or slow. A failure pauses tries for 5 minutes.
+    query=True: the texts are search queries (Cohere on Bedrock embeds those differently from memories)."""
     global _broken_until
     import asyncio
     import os
@@ -78,7 +80,7 @@ async def embed(texts: list[str]) -> list[list[float]] | None:
 
         if not embeddings_available():
             return None
-        return await asyncio.wait_for(embed_texts(texts), timeout=EMBED_TIMEOUT if len(texts) == 1 else 60)
+        return await asyncio.wait_for(embed_texts(texts, query=query), timeout=EMBED_TIMEOUT if len(texts) == 1 else 60)
     except Exception:  # noqa: BLE001 — recall works without meaning-search
         _broken_until = time.monotonic() + BREAKER_SECONDS
         logger.warning("embeddings unavailable for %ss; keyword recall only", int(BREAKER_SECONDS))
@@ -360,7 +362,7 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
     for rank, h in enumerate(keyword):
         scores[h.ref] = scores.get(h.ref, 0) + 1.0 / (60 + rank)
         hits[h.ref] = h
-    vec = await embed([query]) if query.strip() else None
+    vec = await embed([query], query=True) if query.strip() else None
     if vec:
         rows = list((await session.execute(
             select(MemoryVector).where(MemoryVector.family_id == family_id, MemoryVector.subject_id.in_(subject_ids),

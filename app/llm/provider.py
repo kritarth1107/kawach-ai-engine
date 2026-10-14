@@ -1,4 +1,6 @@
-"""Unified chat provider — Vertex AI (GCP), Azure Foundry, Ollama, or xAI fallback."""
+"""Unified chat provider — Vertex AI (GCP), Azure Foundry, Ollama, or xAI fallback; LLM_PROVIDER=router sends these
+older calls (the doctor brief) through Saheli's model routes (app.llm.router, MODEL_ROUTES role "worker"), as on the AWS
+copy, where there is no Vertex."""
 
 from __future__ import annotations
 
@@ -47,6 +49,10 @@ def get_caregiver_chat_llm():
 
 async def chat_invoke_messages(messages: list[BaseMessage]) -> AIMessage:
     settings = get_settings()
+    if _router_mode():
+        system = "\n\n".join(stringify_ai_content(m.content) for m in messages if isinstance(m, SystemMessage))
+        user = "\n\n".join(stringify_ai_content(m.content) for m in messages if not isinstance(m, SystemMessage))
+        return AIMessage(content=await _router_invoke(system, user))
     if vertex_provider.vertex_configured():
         result = await vertex_provider.chat_invoke_messages(messages)
         return result if isinstance(result, AIMessage) else AIMessage(content=str(result))
@@ -55,10 +61,24 @@ async def chat_invoke_messages(messages: list[BaseMessage]) -> AIMessage:
     return response if isinstance(response, AIMessage) else AIMessage(content=str(response))
 
 
+def _router_mode() -> bool:
+    return get_settings().llm_provider.strip().lower() == "router"
+
+
+async def _router_invoke(system: str, user: str) -> str:
+    from app.llm import router
+
+    reply = await router.complete("worker", system_stable=system, effort="low", max_tokens=4000,
+                                  messages=[{"role": "user", "content": [{"type": "text", "text": user}]}])
+    return (reply.text or "").strip()
+
+
 async def chat_invoke(system: str, user: str) -> str:
     settings = get_settings()
     provider = settings.llm_provider.strip().lower()
 
+    if provider == "router":
+        return await _router_invoke(system, user)
     if provider == "vertex" and vertex_provider.vertex_configured():
         return await vertex_provider.chat_invoke(system, user)
     if provider == "ollama" and settings.ollama_base_url:
@@ -81,6 +101,11 @@ async def chat_invoke(system: str, user: str) -> str:
 def llm_provider_label() -> str:
     settings = get_settings()
     provider = settings.llm_provider.strip().lower()
+
+    if provider == "router":
+        from app.llm import router
+
+        return "router:" + ",".join(r.key for r in router.routes_for("worker"))
 
     if provider == "vertex" and vertex_provider.vertex_configured():
         return vertex_provider.llm_provider_label()

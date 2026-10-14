@@ -37,6 +37,16 @@ async def cleanup_memory_index(sessions) -> None:
         logging.getLogger(__name__).exception("memory index cleanup failed; the nightly pass will catch up")
 
 
+def warn_google_routes() -> None:
+    """Without Google (no GCP_PROJECT_ID: the AWS copy) every model role must route elsewhere; say which do not."""
+    import logging
+
+    from app.llm import router as llm_router
+
+    if not get_settings().gcp_project_id.strip() and (roles := llm_router.google_bound_roles()):
+        logging.getLogger(__name__).error("no Google configured, but MODEL_ROUTES sends these roles to Vertex only: %s", roles)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
@@ -47,6 +57,7 @@ async def lifespan(app: FastAPI):
 
     llm_spend.configure(SessionLocal)
     await cleanup_memory_index(SessionLocal)
+    warn_google_routes()
     yield
     if not indexes.done():
         indexes.cancel()

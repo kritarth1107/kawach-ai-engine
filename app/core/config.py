@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     memory_gcs_bucket: str = ""
     vertex_embedding_model: str = "text-multilingual-embedding-002"
     embed_dim: int = 768
+    # Embeddings: "" (today: Vertex when GCP_PROJECT_ID is set, else the fallbacks below) | vertex | bedrock (the AWS copy).
+    # bedrock: EMBED_MODEL amazon.titan-embed-text-v2:0 (256/512/1024) or cohere.embed-multilingual-v3 (1024) in
+    # EMBED_REGION; EMBED_DIM must match, and a changed EMBED_DIM needs EMBED_DIM_MIGRATE=on once (app.db.migrate).
+    embed_provider: str = ""
+    embed_model: str = ""
+    embed_region: str = "ap-south-1"
 
     # Azure AI Foundry / OpenAI-compatible (chat + embeddings)
     azure_openai_api_key: str = ""
