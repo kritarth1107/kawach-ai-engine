@@ -116,4 +116,16 @@ jobs:
             > /tmp/td.json
           REV=$(aws ecs register-task-definition --cli-input-json file:///tmp/td.json --query taskDefinition.revision --output text)
           aws ecs update-service --cluster kavach --service "$SERVICE" --task-definition "$FAMILY:$REV" >/dev/null
+          # Dream runs this same image and env. A stored kavach-dream revision otherwise stays on
+          # whatever the last hand edit was (15 Oct 02:00 ran a 12-hour-old task and emptied the
+          # vector columns). The job must not migrate those columns; the server does that.
+          jq '.family = "kavach-dream"
+            | .containerDefinitions |= map(
+                if .name == "engine" then
+                  .command = ["python", "-m", "app.jobs.dream", "--all"]
+                  | .environment = ((.environment // [])
+                      | map(if .name == "EMBED_DIM_MIGRATE" then .value = "off" else . end)
+                      | if any(.[]; .name == "EMBED_DIM_MIGRATE") then . else . + [{"name":"EMBED_DIM_MIGRATE","value":"off"}] end)
+                else . end)' /tmp/td.json > /tmp/dream.json
+          aws ecs register-task-definition --cli-input-json file:///tmp/dream.json --query taskDefinition.revision --output text
           aws ecs wait services-stable --cluster kavach --service "$SERVICE"
