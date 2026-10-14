@@ -100,14 +100,15 @@ def score_of(r: ReplyLog) -> float:
     return max(-1.0, min(1.0, round(s, 3)))
 
 
-async def score_pending(sessions: async_sessionmaker, *, limit: int = 3000) -> int:
-    """Score messages old enough to have had a reaction."""
+async def score_pending(sessions: async_sessionmaker, *, limit: int = 3000, family_id: str | None = None) -> int:
+    """Score messages old enough to have had a reaction. family_id: only that family (a simulation keeps one clock per family)."""
     cutoff = clock.now() - SCORE_AFTER
     done = 0
     async with sessions() as session:
-        rows = list((await session.execute(
-            select(ReplyLog).where(ReplyLog.scored_at.is_(None), ReplyLog.at <= cutoff).order_by(ReplyLog.at).limit(limit)
-        )).scalars())
+        q = select(ReplyLog).where(ReplyLog.scored_at.is_(None), ReplyLog.at <= cutoff)
+        if family_id is not None:
+            q = q.where(ReplyLog.family_id == family_id)
+        rows = list((await session.execute(q.order_by(ReplyLog.at).limit(limit))).scalars())
         for r in rows:
             window = REPLY_WINDOW_REPLY if r.kind == "reply" else REPLY_WINDOW
             nxt = (await session.execute(

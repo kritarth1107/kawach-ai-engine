@@ -885,15 +885,20 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
 # ── the run ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
-async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = None, mode: str | None = None) -> dict:
-    """Every few minutes: each person a regular nudge is due for gets one (or a shadow row). Returns counts by outcome."""
+async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = None, mode: str | None = None,
+              families: set[str] | None = None) -> dict:
+    """Every few minutes: each person a regular nudge is due for gets one (or a shadow row). Returns counts by outcome.
+    families: only these (a simulation runs each family on its own clock)."""
     from app.care import checkins
     from app.tasks import runtime
 
     now = now or clock.now()
     stats: dict = {"people": 0, "due": 0, "sent": 0, "shadow": 0, "skipped": {}, "mode": mode or env_mode() or cached_mode()}
     async with sessions() as session:
-        rosters = list((await session.execute(select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
+        q = select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:"))
+        if families is not None:
+            q = q.where(FamilyRoster.family_id.in_(sorted(families)))
+        rosters = list((await session.execute(q)).scalars())
     work: list[tuple[FamilyRoster, Person]] = []
     for r in rosters:
         async with sessions() as session:
@@ -1104,6 +1109,8 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
     """When their last message from Saheli was a nudge that asked for something, a line for the turn: save their answer."""
     last = next((t for t in reversed(await store.recent_turns(session, family_id, person, limit=6)) if t.role == "assistant"), None)
     nudge = ((last.meta or {}).get("nudge") or {}) if last else {}
+    if not isinstance(nudge, dict):
+        nudge = {}  # only a regular nudge carries its ask here; anything else is not one
     fld = nudge.get("field")
     if last is None or not fld or clock.now() - last.at > REPLY_WINDOW:
         return ""
@@ -1406,16 +1413,19 @@ async def learn(sessions: async_sessionmaker, *, now: datetime | None = None) ->
     return out
 
 
-async def learn_meals(sessions: async_sessionmaker, *, now: datetime | None = None) -> dict:
+async def learn_meals(sessions: async_sessionmaker, *, now: datetime | None = None, families: set[str] | None = None) -> dict:
     """Hourly: each person's usual meal times and portions (the nutrition agent's learn_meal_habits) and the adaptive
-    asking mode (meal_nudges.learn_mode), all as visible learned facts."""
+    asking mode (meal_nudges.learn_mode), all as visible learned facts. families: only these (a simulation)."""
     from app.care import meal_nudges
 
     now = now or clock.now()
     stats = {"modes": 0, "habits": 0}
     hk = meal_nudges.hooks()
     async with sessions() as session:
-        rosters = list((await session.execute(select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")))).scalars())
+        q = select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:"))
+        if families is not None:
+            q = q.where(FamilyRoster.family_id.in_(sorted(families)))
+        rosters = list((await session.execute(q)).scalars())
         for r in rosters:
             for p in await people(session, r):
                 if hk is not None:

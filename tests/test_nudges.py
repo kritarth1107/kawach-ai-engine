@@ -1285,3 +1285,26 @@ async def test_five_silent_hours_are_dropped_and_asks_move_to_a_fast_hour(db, at
     assert fact and 14 in (fact.value or {}).get("avoid_hours", []) and (fact.value or {}).get("prefer_hour") == 19
     assert await meal_opts(db, at, "2026-10-14 14:50") == []
     assert [o.field for o in await meal_opts(db, at, "2026-10-14 19:50")] == ["meal:lunch"]
+
+
+async def test_a_run_for_named_families_leaves_the_others_alone(db, at, sessions, writer):
+    """A simulation runs each family on its own clock: a run for one family never nudges another."""
+    at("2026-10-14 10:00")
+    await family(db)
+    await wrote(db, MAA)
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await nudges.run(sessions, lambda f: host, mode="on", families={"fam-someone-else"})
+    assert sent_to(host, MAA) == []
+    await nudges.run(sessions, lambda f: host, mode="on", families={FAM})
+    assert sent_to(host, MAA) == [LINES[0]]
+
+
+async def test_a_last_message_that_is_not_a_regular_nudge_gives_no_hint_and_no_crash(db, at):
+    """Only a regular nudge carries its ask in meta.nudge (a dict); any other shape there is not one."""
+    at("2026-10-14 10:00")
+    await family(db)
+    await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="assistant", text="Telma 40 at 9 in 15 minutes",
+                         meta={"proactive": True, "nudge": "pre"})
+    await db.commit()
+    assert await nudges.reply_hint(db, FAM, MAA["id"]) == ""

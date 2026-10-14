@@ -44,6 +44,7 @@ from app.llm import spend
 from app.llm import router
 from app.sim.agent import FakeAgent
 from app.sim.world import SimHost
+from eval import learn_month
 from eval.month_families import FAMILIES, aggressive_events
 
 START = datetime(2026, 10, 5)  # a Monday
@@ -220,6 +221,7 @@ class Fam:
     silent_days: dict = field(default_factory=dict)  # person -> set(day)
     last_extract: datetime | None = None
     backend_alerts: list[dict] = field(default_factory=list)
+    learn: object = None  # eval/learn_month.py state (SIM_LEARN_SCORE=1)
 
     @property
     def people(self) -> dict:
@@ -300,6 +302,8 @@ def schedule_answer(f: Fam, who_id: str, at: datetime, saheli_text: str, *, kind
     if day in f.silent_days.get(who_id, set()):
         return
     chance = p["answers"] * (0.25 if kind == "pre" else 1.0)
+    if kind == "proactive":
+        chance = learn_month.answer_chance(f, who_id, at, chance)
     if f.rng.random() < chance:
         f.push(at + timedelta(minutes=f.rng.randint(2, 45)), "answer", {"who": who_id, "saheli": saheli_text})
 
@@ -378,12 +382,14 @@ async def fire_nudge(f: Fam, at: datetime, kind: str, row: dict) -> None:
     text_ = nudge_text(kind, row, p["name"].split()[0])
     async with SessionLocal() as session:
         if kind == "daily":
-            await store.add_turn(session, family_id=f.family_id, thread_id=subject, role="assistant", text=text_, meta={"proactive": True, "nudge": kind})
+            await store.add_turn(session, family_id=f.family_id, thread_id=subject, role="assistant", text=text_,
+                                 meta={"proactive": True, "via": "reminder", "ref": f"daily:{day}"})  # as app/api/brain.py records them
         else:
             await store.record_event(session, family_id=f.family_id, subject_id=subject, kind="reminder_sent",
                                      summary=f"{label}: {row['title']} {row.get('dose') or ''} at {row['time']}",
                                      ref=f"nudge:{row['scheduleId']}:{day}:{kind}")
-            await store.add_turn(session, family_id=f.family_id, thread_id=subject, role="assistant", text=text_, meta={"proactive": True, "nudge": kind})
+            await store.add_turn(session, family_id=f.family_id, thread_id=subject, role="assistant", text=text_,
+                                 meta={"proactive": True, "via": "reminder", "ref": f"nudge:{row['scheduleId']}:{day}:{kind}"})
         await session.commit()
     if kind in ("due",):
         f.host.world.reminders_sent.append({"dateKey": day, "scheduleId": row["scheduleId"], "subject": subject, "item": f"{row['title']} at {row['time']}", "delivered": True, "at": at.isoformat()})
@@ -447,7 +453,7 @@ async def write_as(f: Fam, who_id: str, ask: str) -> str:
     txt = await llm("sim", SIM_PROMPT, (
         f"YOU: {p['name']}, {p['relation']} in the {f.spec['key']} family, {f.spec['city']}. {p['persona']}\n"
         f"WHAT YOU KNOW ABOUT YOUR FAMILY'S CARE: {f.spec['truth']}\nCURRENT MEDICINES: {json.dumps(f.truth_meds, ensure_ascii=False)}\n\n"
-        f"YOUR RECENT CHAT WITH SAHELI:\n{recent_summary(f, who_id) or '(none yet)'}\n\nNOW: {ask}"
+        f"YOUR RECENT CHAT WITH SAHELI:\n{recent_summary(f, who_id) or '(none yet)'}{learn_month.person_context(f, who_id)}\n\nNOW: {ask}"
     ), tokens=3000, meta={"group": group_of(f), "family": f.spec["key"], "person": who_id})
     return "" if not txt or txt.upper().startswith("NONE") else txt.strip().strip('"')
 
@@ -665,6 +671,11 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
 
         spec = {**spec, "events": sorted([*spec["events"], *learning_events(spec)], key=lambda e: (e[0], e[1]))}
         f.spec = spec
+    if os.getenv("SIM_SAFE") == "1":
+        spec = {**spec, "events": learn_month.safe_events(spec["events"])}
+        f.spec = spec
+    if learn_month.ON:
+        f.learn = learn_month.setup(f)
     for e in spec["events"]:
         if "silence" in e[3].lower():
             f.silent_days.setdefault(e[2], set()).add(e[0])
@@ -688,6 +699,8 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
             if e[0] == day and "silence" not in e[3].lower():
                 f.push(day_dt(day, e[1]), "event", {"who": e[2], "intent": e[3], "expect": e[4]})
         await plan_day(f, day)
+        if f.learn:
+            learn_month.plan_day(f, day)
         for hh in EXTRACT_HOURS:
             f.push(day_dt(day, f"{hh:02d}:15"), "extract", {})
         # Saheli's night (same as production): facts, diary, baselines, patterns, tidy notes.
@@ -761,8 +774,13 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
                     from app.api.brain import CHECKIN_PROMPT
 
                     await system_turn(f, CHECKIN_PROMPT, at, "Sunday caregiver check-in")
+                elif kind.startswith("L:"):
+                    await learn_month.handle(f, at, kind, pl)
             except Exception as exc:  # noqa: BLE001
-                f.checks.append({"day": day, "who": kind, "event": f"{kind} crashed", "pass": False, "fails": [f"{type(exc).__name__}: {str(exc)[:200]}"]})
+                import traceback
+
+                where = " | ".join([ln.strip() for ln in traceback.format_exc().splitlines() if ln.strip().startswith("File ")][-3:])
+                f.checks.append({"day": day, "who": kind, "event": f"{kind} crashed", "pass": False, "fails": [f"{type(exc).__name__}: {str(exc)[:200]} @ {where[-400:]}"]})
         await daily_audit(f, day)
         await judge_day(f, day)
         if day == days:
@@ -776,6 +794,7 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
         print(f"  [{spec['key']}] day {day}: {len(day_msgs)} msgs, {failed} judged bad, audit {len(f.audits[-1]['issues'])} issues, {int(time.monotonic() - t_day)} s")
     clock.set_now(None)
     log.close()
+    learn_month.dump(f, outdir)
     return f
 
 
@@ -850,8 +869,8 @@ async def main(argv: list[str]) -> int:
 
     # every table, so create_all makes them all in a fresh simulator database (memory_vectors was missing)
     for mod in ("app.care.baselines", "app.care.memory_index", "app.care.models", "app.care.skillbook", "app.care.versions",
-                "app.learn.models", "app.llm.spend", "app.models.entities", "app.specialists.channels", "app.tasks.models",
-                "app.tasks.sandbox"):
+                "app.care.why", "app.learn.models", "app.llm.spend", "app.models.entities", "app.nutrition.entries",
+                "app.nutrition.models", "app.quality.models", "app.specialists.channels", "app.tasks.models", "app.tasks.sandbox"):
         importlib.import_module(mod)
     from app.tasks import models as task_models  # noqa: F401
     from app.care import baselines  # noqa: F401  (every table the brain reads must exist)
@@ -889,6 +908,18 @@ async def main(argv: list[str]) -> int:
     # The run's own budget is checked per family-day with spend.process_spent(); the global daily caps are left
     # alone (they count every run of the day and would silence judges mid-run).
     spend.configure(SessionLocal)
+    cap = int(os.getenv("SIM_MAX_CONCURRENT_LLM", "0") or 0)
+    if cap:
+        # at most this many model requests in flight across all families (a shared test project's limit)
+        gate = asyncio.Semaphore(cap)
+        prov = router._provider("gemini")
+        orig = prov.complete
+
+        async def limited(*a, **k):
+            async with gate:
+                return await orig(*a, **k)
+
+        prov.complete = limited  # type: ignore[method-assign]
     print(f"Budget ₹{sim_budget():.0f} for {len(chosen)} families × {days} days (estimate ₹{31 * len(chosen) * days:.0f}).")
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
@@ -907,7 +938,7 @@ async def main(argv: list[str]) -> int:
             return await run_family(spec, days, outdir)
 
     fams = await asyncio.gather(*(one(s) for s in chosen))
-    rep = report(fams, int(time.monotonic() - started)) + "\n".join(learning_summary(fams)) + f"\n\nEstimated model spend this run: ₹{spend.process_spent():.0f} (budget ₹{sim_budget():.0f}).\n"
+    rep = report(fams, int(time.monotonic() - started)) + "\n".join(learning_summary(fams)) + learn_month.report(fams) + f"\n\nEstimated model spend this run: ₹{spend.process_spent():.0f} (budget ₹{sim_budget():.0f}).\n"
     (outdir / "report.md").write_text(rep)
     print("\n" + rep + f"\n\nSaved to {outdir}")
     return 0

@@ -462,3 +462,16 @@ async def test_end_to_end(db, at, sessions, model, monkeypatch):
     assert weekly["status"] == "canary"
     view = await jobs.overview(sessions)
     assert view["messages"] == 30 and view["corpus"] == 30 and view["playbooks"][0]["status"] == "canary"
+
+
+async def test_scoring_one_family_leaves_the_others_for_later(db, at, sessions):
+    """A simulation scores each family on its own clock; the nightly job (no family) scores everyone."""
+    t0 = at("2026-10-02 10:00")
+    for fam in ("fam-s1", "fam-s2"):
+        db.add(ReplyLog(family_id=fam, thread_id=ELDER["id"], turn_id=None, at=t0, kind="proactive", situation="followup",
+                        speaker_role="system", lang="en", user_text="", text="How was lunch?", text_len=13, tools=[],
+                        playbook_version=0, arm="live", sent_hour=10))
+    await db.commit()
+    clock.set_now(t0 + timedelta(hours=7))
+    assert await scoring.score_pending(sessions, family_id="fam-s1") == 1
+    assert await scoring.score_pending(sessions) == 1
