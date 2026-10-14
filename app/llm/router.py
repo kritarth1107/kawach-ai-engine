@@ -237,18 +237,33 @@ async def complete(
     started = time.monotonic()
 
     async def call(route: Route) -> LLMReply:
-        return await asyncio.wait_for(
-            _provider(route.provider).complete(
-                route,
-                system_stable=[scrub(b) for b in stable if b],
-                system_dynamic=scrub(system_dynamic),
-                messages=messages,
-                tools=tools or [],
-                max_tokens=max_tokens,
-                effort=effort,
-            ),
-            timeout=timeout_s,
-        )
+        t0 = time.monotonic()
+        try:
+            reply = await asyncio.wait_for(
+                _provider(route.provider).complete(
+                    route,
+                    system_stable=[scrub(b) for b in stable if b],
+                    system_dynamic=scrub(system_dynamic),
+                    messages=messages,
+                    tools=tools or [],
+                    max_tokens=max_tokens,
+                    effort=effort,
+                ),
+                timeout=timeout_s,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            if route.provider == "gemini":
+                from app.obs.emf import note
+                status = getattr(exc, "status", None)
+                note("Kavach/Gemini", role, errors=0 if status == 429 else 1, throttles=1 if status == 429 else 0,
+                     latency_ms=(time.monotonic() - t0) * 1000)
+            raise
+        if route.provider == "gemini":
+            from app.obs.emf import note
+            note("Kavach/Gemini", role, latency_ms=(time.monotonic() - t0) * 1000)
+        return reply
 
     async def first_of(route: Route) -> LLMReply:
         """The call, and when it is slow the same request once more on the same model: the first answer wins and the other

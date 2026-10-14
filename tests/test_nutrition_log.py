@@ -76,6 +76,17 @@ async def test_the_same_meal_again_attaches_and_does_not_save_twice(db, at, nfak
     assert len(await active(db)) == n + 2
 
 
+async def test_retrying_the_same_whatsapp_message_does_not_log_food_again(db, at, nfake):
+    at("2026-10-14 21:00")
+    args = {"meal": "dinner", "items": [{"name": "chapati", "quantity": 2, "unit": "piece"}]}
+    first, err = await call(db, "log_food", args, ref="wamid.meal1")
+    assert not err and first["result"] == "saved", first
+    n = len(await active(db))
+    again, err = await call(db, "log_food", {"meal": "dinner", "items": [{"name": "chapati", "quantity": 4, "unit": "piece"}]}, ref="wamid.meal1")
+    assert not err and again.get("already")
+    assert len(await active(db)) == n
+
+
 async def test_a_repeat_while_it_is_still_saving_does_not_start_another(db, at, nfake, monkeypatch):
     at("2026-10-14 21:00")
     monkeypatch.setenv("NUTRITION_INLINE_S", "0.01")

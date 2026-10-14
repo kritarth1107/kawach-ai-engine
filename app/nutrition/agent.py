@@ -727,6 +727,10 @@ async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str
             job.ask = ask
     else:
         ask = clean_ask(args)
+        if who.message_ref:
+            prior = await jobs.by_source(session, who.family_id, who.message_ref)
+            if prior is not None:
+                return _attach(prior)
         if ask.get("items") and not any(ask.get(k) for k in ("from_photo", "label_photo", "skipped", "from_order_task")):
             existing = await jobs.same_recent(session, who.family_id, subject_id, who.speaker_id, ask)
             if existing is not None:

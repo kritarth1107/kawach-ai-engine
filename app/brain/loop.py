@@ -837,8 +837,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 select(Turn).where(Turn.family_id == req.family_id, Turn.meta["reply_to"].astext == req.message_ref)
             )
         ).scalar_one_or_none()
-        await session.commit()
-        return TurnResult(reply=prior.text if prior else "", actions=[], alerts=[], duplicate=True)
+        if prior is not None:
+            await session.commit()
+            return TurnResult(reply=prior.text, actions=[], alerts=[], duplicate=True)
+        # The line was saved and the process died before the reply. Continue, so the reply is not lost.
+        logger.warning("unfinished turn retried family=%s ref=%s", req.family_id, req.message_ref)
 
     from app.care import outcomes
 

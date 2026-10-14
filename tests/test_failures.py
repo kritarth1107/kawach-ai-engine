@@ -102,3 +102,34 @@ async def test_unknown_tool_and_bad_args_do_not_crash(db, at, model):
     ])
     out = await run_turn(db, SimHost(), _req("dawai le li", "a4"))
     assert out.reply == "Theek hai ji." and all(not a.get("ok", True) for a in out.actions if a["tool"] == "log_dose")
+
+
+async def test_a_turn_killed_before_the_reply_is_answered_once(db, at, model):
+    at("2026-10-15 10:00")
+    await _seed(db)
+    await store.add_turn(db, family_id=FAM, thread_id=ELDER["id"], role="user", text="BP ki dawai le li",
+                         speaker_id=ELDER["id"], message_ref="wamid.kill")
+    await db.commit()
+    model([LLMReply(text="ठीक है, नोट कर लिया।", tool_calls=[], model="fake")])
+    out = await run_turn(db, SimHost(), _req("BP ki dawai le li", "wamid.kill"))
+    assert out.reply == "ठीक है, नोट कर लिया।" and not out.duplicate
+    again = await run_turn(db, SimHost(), _req("BP ki dawai le li", "wamid.kill"))
+    assert again.duplicate and again.reply == out.reply
+
+
+async def test_the_same_message_does_not_log_a_dose_twice(db, at):
+    import json
+
+    from app.brain import tools
+
+    at("2026-10-15 10:00")
+    await _seed(db)
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, SON],
+                        message_ref="wamid.dose1")
+    first, err = await tools.run(ctx, "log_dose", {"medicine": "BP", "outcome": "taken"})
+    second, err2 = await tools.run(ctx, "log_dose", {"medicine": "BP", "outcome": "taken"})
+    assert not err and not err2
+    assert json.loads(second).get("already") is True
+    rows = [e for e in await store.events(db, FAM, ELDER["id"], kinds=["dose_taken"]) if "BP" in (e.summary or "")]
+    assert len(rows) == 1
+    assert json.loads(first).get("already") is not True

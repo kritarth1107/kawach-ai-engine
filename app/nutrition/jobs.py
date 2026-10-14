@@ -36,6 +36,14 @@ def inline_seconds() -> float:
     return float(os.getenv("NUTRITION_INLINE_S", "8"))
 
 
+async def by_source(session: AsyncSession, family_id: str, source_ref: str) -> NutritionJob | None:
+    """The job this WhatsApp message already started. A retry must not log the meal again."""
+    return (await session.execute(
+        select(NutritionJob).where(NutritionJob.family_id == family_id, NutritionJob.source_ref == source_ref)
+        .order_by(NutritionJob.created_at).limit(1)
+    )).scalars().first()
+
+
 async def create(session: AsyncSession, *, family_id: str, subject_id: str, requested_by: str, ask: dict, source_ref: str | None,
                  channel: str) -> NutritionJob:
     now = clock.now()

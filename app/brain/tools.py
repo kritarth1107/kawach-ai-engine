@@ -620,10 +620,12 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         recent = await store.events(ctx.session, ctx.family_id, subject, since=clock.now() - timedelta(hours=3), kinds=["dose_taken"])
         earlier = [e for e in recent if first in (e.summary or "").lower() or first in json.dumps(e.payload or {}).lower()]
     summary = f"{name}: {a['outcome']}" + ("" if today else f" (for {day})") + (f" ({a['note']})" if a.get("note") else "")
-    await doses.record(
+    saved = await doses.record(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind=f"dose_{a['outcome']}", medicine=name, summary=summary,
         day=day, time=a.get("time"), actor_id=ctx.speaker.get("id"), ref=ctx.message_ref and f"{ctx.message_ref}:{slug(name)}:{day}",
     )
+    if saved is None:
+        return {"logged": summary, "already": True}
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
         tool_name, {"title": name, "dateKey": day, "note": a.get("note") or a["outcome"], **({"time": a["time"]} if a.get("time") else {})},
