@@ -1,0 +1,90 @@
+name: Deploy AI engine to AWS
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-engine-aws
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  ECR: 743887469650.dkr.ecr.ap-south-1.amazonaws.com/kawach-ai-engine
+  FAMILY: kavach-engine
+  SERVICE: engine
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: python -m pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt ruff==0.17.0 pyright==1.1.414
+      - run: ruff check app eval tests
+      - run: python scripts/pyright_gate.py
+
+  deploy:
+    needs: [test, lint]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
+          aws-region: ap-south-1
+      - name: Build and push
+        env:
+          IMAGE: ${{ env.ECR }}:${{ github.sha }}
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
+          docker build -t app:build .
+          curl -fsS -o /tmp/rds-ca.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+          user=$(docker inspect -f '{{.Config.User}}' app:build)
+          user=${user:-root}
+          mkdir -p /tmp/ca-wrap && cp /tmp/rds-ca.pem /tmp/ca-wrap/rds-ca.pem
+          printf 'FROM app:build\nUSER root\nCOPY --chmod=644 rds-ca.pem /etc/ssl/certs/rds-global-bundle.pem\nUSER %s\n' "$user" > /tmp/ca-wrap/Dockerfile
+          docker build -t "$IMAGE" /tmp/ca-wrap
+          docker push "$IMAGE"
+      - name: Roll the live service (image only)
+        env:
+          IMAGE: ${{ env.ECR }}:${{ github.sha }}
+        run: |
+          aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition \
+            | jq --arg IMG "$IMAGE" --arg NAME "kawach-ai-engine" '
+                .containerDefinitions |= map(if ((.image | split("/") | last | split(":")[0]) == $NAME) then .image = $IMG else . end)
+                | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            > /tmp/td.json
+          REV=$(aws ecs register-task-definition --cli-input-json file:///tmp/td.json --query taskDefinition.revision --output text)
+          aws ecs update-service --cluster kavach --service "$SERVICE" --task-definition "$FAMILY:$REV" >/dev/null
+          aws ecs wait services-stable --cluster kavach --service "$SERVICE"
