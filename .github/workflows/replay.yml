@@ -1,10 +1,10 @@
 name: Replay cases (before every engine deploy)
 
-# Trust plan C3: every FIXED replay case (an old bug, fixed once) runs on the live Bedrock routes in ap-south-1
-# (gpt-oss-120b, Kimi for photos) with the new code; a case fails only if 2 of 3 runs fail; any fixed case failing blocks
-# the deploy. A provider-wide refusal is UNAVAILABLE (exit 0): the deploy goes on if the tests passed, and the team is
-# emailed. OPEN cases run too and are reported. Cases: the repo's invented families, plus the production export when the
-# old bucket is still readable. Called by deploy-aws.yml. Under 15 minutes.
+# Trust plan C3: every replay case runs on Bedrock in ap-south-1 (never Gemini in kavach-care). A fixed case fails
+# only if 2 of 3 runs fail. It blocks the deploy only when it is not already on the Bedrock model baseline: a miss
+# the model has at today's master is listed, and a case that passed there and fails after a change is a code regression.
+# Gemini replay is sunny-ship only, and the gate stays on Bedrock when that project refuses. A provider-wide Bedrock
+# refusal is UNAVAILABLE (exit 0). OPEN cases run too and are reported. Called by deploy-aws.yml.
 
 on:
   workflow_call:
@@ -55,7 +55,7 @@ jobs:
           MEMORY_EMBEDDINGS: "off"
           NIGHTLY_OUT: runs/replay
         run: PYTHONPATH=. python -m eval.live_routes --preflight
-      - name: Run every case (2 of 3; fixed failing = blocked)
+      - name: Run every case (2 of 3; a new fixed failure blocks)
         id: run
         if: steps.pre.outputs.down != 'true'
         env:
@@ -119,4 +119,4 @@ jobs:
             echo "replay gate unavailable: deploy continues if the tests passed"
             exit 0
           fi
-          [ "${{ steps.run.outputs.code }}" = "0" ] || { echo "::error::a fixed replay case failed (2 of 3): the deploy is blocked (see the summary)"; exit 1; }
+          [ "${{ steps.run.outputs.code }}" = "0" ] || { echo "::error::a fixed case that passes on the Bedrock model baseline failed (2 of 3): the deploy is blocked (see the summary)"; exit 1; }

@@ -200,6 +200,71 @@ async def test_run_for_playbook_reports_regressions_and_fixes(monkeypatch, sessi
     assert seen[1] is cand  # the candidate replaced the live playbook in the second run
 
 
+def test_the_gate_never_calls_gemini_in_kavach_care(monkeypatch):
+    from eval import live_routes
+
+    monkeypatch.setenv("GCP_PROJECT_ID", "kavach-care")
+    monkeypatch.delenv("MODEL_ROUTES", raising=False)
+    with pytest.raises(SystemExit):
+        live_routes.apply()
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash@kavach-care"]}))
+    with pytest.raises(SystemExit):
+        live_routes.apply()
+
+
+def test_gemini_replay_is_only_kept_for_sunny_ship(monkeypatch):
+    from eval import live_routes
+
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash"]}))
+    routes = live_routes.apply()
+    assert routes["brain"][0].startswith("bedrock:openai.gpt-oss") and live_routes.vertex_routes(routes) == []
+    monkeypatch.setenv("GCP_PROJECT_ID", live_routes.SUNNY)
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash"]}))
+    assert live_routes.apply()["brain"] == ["gemini:gemini-3.5-flash"]
+
+
+async def test_a_bedrock_model_miss_does_not_block_and_a_new_fixed_failure_does(monkeypatch, tmp_path):
+    """The check still fails the case. Only a miss that is not on the model baseline blocks the deploy."""
+    rows = {
+        "fixed-known": {"id": "fixed-known", "status": "fixed", "kind": "k", "source": "s", "passed": False, "runs": [{"passed": False, "why": "judge: no alternative"}]},
+        "fixed-new": {"id": "fixed-new", "status": "fixed", "kind": "k", "source": "s", "passed": False, "runs": [{"passed": False, "why": "did not call any of ['send_message']"}]},
+        "fixed-ok": {"id": "fixed-ok", "status": "fixed", "kind": "k", "source": "s", "passed": True, "runs": [{"passed": True, "why": ""}]},
+    }
+
+    async def fake_case(sessions, c, deadline, cap):
+        return rows[c["id"]]
+
+    class Eng:
+        async def dispose(self):
+            pass
+
+    monkeypatch.setattr(runner, "run_case", fake_case)
+    monkeypatch.setattr(runner, "create_async_engine", lambda url, **kw: Eng())
+    monkeypatch.setattr(runner, "preflight", lambda: _none())
+    import eval.world.seed_engine as se
+
+    monkeypatch.setattr(se, "prepare", lambda engine: _none())
+    monkeypatch.setattr(se, "assert_local", lambda url: None)
+    monkeypatch.setattr(runner, "model_baseline", lambda: {"fixed-known"})
+    cases = [{"id": i, "status": "fixed", "kind": "k"} for i in rows]
+    code = await runner.main_async(cases, 3, "postgresql://localhost/x", 100.0, tmp_path)
+    res = json.loads((tmp_path / "results.json").read_text())
+    assert code == 1 and res["summary"]["passed"] is False
+    assert res["summary"]["fixed_failed"] == 2  # both fails are still recorded
+    assert any(x.startswith("fixed-known") for x in res["summary"]["model_failures"])
+    assert res["summary"]["failures"] == ["fixed-new (k): did not call any of ['send_message']"]
+    text = (tmp_path / "summary.md").read_text()
+    assert "BLOCKED" in text and "fixed-known" in text and "model baseline" in text
+
+
+async def _none():
+    return None
+
+
 def test_misread_cases_cover_each_failure_in_the_main_languages():
     cases = [json.loads(line) for line in runner.MISREAD.read_text().splitlines() if line.strip()]
     kinds = {c["kind"] for c in cases}

@@ -9,7 +9,10 @@ test's failures in eval/fixtures/replay_seeds.jsonl; the test world's probe fail
 - what must hold is checked: by code where it can (an avoided name or rejected item not used, a tool called or not, the
   medicine time as on record, the script, the length), and by the judge for the rubric line (grounding, advice, promises);
 - each case runs up to 3 times and fails only if 2 of 3 fail (model randomness).
-FIXED cases block the deploy when they fail (an old bug came back); OPEN cases are reported only (known, being fixed).
+FIXED cases still all run, on the same checks. While the gate is on Bedrock, a fixed case that already fails on that
+model (eval/fixtures/bedrock_fixed_baseline.json) is listed and does not block. A fixed case that passes on the
+baseline and fails after a change does: that is a code regression. OPEN cases are reported only. Gemini in
+kavach-care is never called. Gemini replay is sunny-ship only, and only when that project answers.
 Time and cost: about 20 cases at a time, under 10 minutes, a cap of REPLAY_MAX_INR (₹200); when the cases outgrow that,
 one per failure kind is kept (the newest real ones first, then the rest round-robin).
 
@@ -382,20 +385,46 @@ async def run_cases(cases: list[dict], url: str, cap: float, *, parallel: int = 
     return results
 
 
+BASELINE = Path(__file__).parent / "fixtures" / "bedrock_fixed_baseline.json"
+
+
+def model_baseline() -> set[str]:
+    """Fixed case ids that fail on the Bedrock eval route at the recorded master. A model miss, not a code regression."""
+    if not BASELINE.exists():
+        return set()
+    data = json.loads(BASELINE.read_text())
+    return {str(i) for i in data.get("failing") or []}
+
+
 async def preflight() -> str | None:
     """ONE tiny call on the brain route before any case (KP 14 Oct): when the provider refuses it by policy (or auth, or a
-    5xx), no case traffic is sent at all and the run is "unavailable". Returns why, or None when the model answered."""
+    5xx), no case traffic is sent at all and the run is "unavailable". A refused sunny-ship Gemini route is not that:
+    the run continues on Bedrock. Returns why, or None when the model answered."""
     from app.llm import router
+    from eval.live_routes import use_bedrock, vertex_routes
 
+    async def once() -> str | None:
+        try:
+            await router.complete("brain", system_stable="Reply with one word.", messages=[{"role": "user", "content": [{"type": "text", "text": "ok?"}]}],
+                                  max_tokens=200, effort="low", timeout_s=60, essential=False)
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc)
+            if PROVIDER_DOWN.search(text) or "refused by policy" in text or "terms of use" in text:
+                return f"the preflight call was refused: {text[:200]}"
+            return None  # a 429 or a timeout is not the provider being down: the cases decide
+        return None
+
+    why = await once()
+    raw = os.getenv("MODEL_ROUTES", "").strip()
     try:
-        await router.complete("brain", system_stable="Reply with one word.", messages=[{"role": "user", "content": [{"type": "text", "text": "ok?"}]}],
-                              max_tokens=200, effort="low", timeout_s=60, essential=False)
-    except Exception as exc:  # noqa: BLE001
-        text = str(exc)
-        if PROVIDER_DOWN.search(text) or "refused by policy" in text or "terms of use" in text:
-            return f"the preflight call was refused: {text[:200]}"
-        return None  # a 429 or a timeout is not the provider being down: the cases decide
-    return None
+        routes = json.loads(raw) if raw else {}
+    except json.JSONDecodeError:
+        routes = {}
+    if why and vertex_routes(routes):
+        print(f"sunny-ship refused; replaying on Bedrock ({why[:160]})", flush=True)
+        use_bedrock()
+        why = await once()
+    return why
 
 
 PROVIDER_DOWN = re.compile(r"PERMISSION_DENIED|UNAUTHENTICATED|\b(401|403|500|502|503|504)\b|INTERNAL|UNAVAILABLE")
@@ -443,25 +472,39 @@ async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out
         (out / "summary.md").write_text(text)
         print(f"::warning::replay gate UNAVAILABLE: {down}")
         return 0
+    def line(r: dict) -> str:
+        return f"{r['id']} ({r['kind']}): {(r['runs'][-1] if r['runs'] else {}).get('why') or r.get('skipped')}"
+
     fixed_bad = [r for r in results if r["status"] == "fixed" and r["passed"] is not True and not (r.get("skipped") or "").startswith(("no message", "the probe"))]
+    base = model_baseline()
+    known = [r for r in fixed_bad if r["id"] in base]
+    regressions = [r for r in fixed_bad if r["id"] not in base]
     summary = {"cases": len(cases), "fixed": sum(1 for c in cases if c["status"] == "fixed"), "open": sum(1 for c in cases if c["status"] == "open"),
-               "fixed_failed": len(fixed_bad), "open_passed": sum(1 for r in results if r["status"] == "open" and r["passed"]),
+               "fixed_failed": len(fixed_bad), "model_baseline": sorted(base),
+               "model_failures": [line(r) for r in known], "regressions": [line(r) for r in regressions],
+               "open_passed": sum(1 for r in results if r["status"] == "open" and r["passed"]),
                "open_failed": sum(1 for r in results if r["status"] == "open" and r["passed"] is False),
                "skipped": sum(1 for r in results if r["passed"] is None), "spent_inr": round(spend.process_spent(), 2), "cap_inr": cap,
-               "seconds": round(time.monotonic() - t0), "passed": not fixed_bad,
-               "failures": [f"{r['id']} ({r['kind']}): {(r['runs'][-1] if r['runs'] else {}).get('why') or r.get('skipped')}" for r in fixed_bad]}
+               "seconds": round(time.monotonic() - t0), "passed": not regressions,
+               "failures": [line(r) for r in regressions]}
     out.mkdir(parents=True, exist_ok=True)
     (out / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1, default=str))
     lines = [f"# Replay cases before deploy: {'PASSED' if summary['passed'] else 'BLOCKED'}", "",
-             f"{summary['cases']} cases ({summary['fixed']} fixed, {summary['open']} open); fixed failing: {summary['fixed_failed']}; "
-             f"open now passing: {summary['open_passed']}; skipped: {summary['skipped']}; ₹{summary['spent_inr']:.0f} of ₹{cap:.0f}; {summary['seconds']} s", ""]
+             f"{summary['cases']} cases ({summary['fixed']} fixed, {summary['open']} open); fixed failing: {summary['fixed_failed']} "
+             f"({len(known)} on the Bedrock model baseline, {len(regressions)} code regressions); "
+             f"open now passing: {summary['open_passed']}; skipped: {summary['skipped']}; ₹{summary['spent_inr']:.0f} of ₹{cap:.0f}; {summary['seconds']} s",
+             "", "Bedrock model baseline (fails on today's model, still checked, not a code regression):",
+             *(f"- {i}" for i in summary["model_baseline"]), ""]
     for r in sorted(results, key=lambda r: (r["status"] != "fixed", r["passed"] is True)):
         last = r["runs"][-1] if r["runs"] else {}
         mark = "PASS" if r["passed"] else "SKIP" if r["passed"] is None else "FAIL"
-        lines.append(f"- {mark} [{r['status']}] {r['id']} ({r['source']}, {r['kind']}): {sum(1 for x in r['runs'] if x.get('passed'))}/{len(r['runs'])} "
+        note = " model baseline" if r["id"] in base and r["passed"] is not True else ""
+        lines.append(f"- {mark} [{r['status']}] {r['id']} ({r['source']}, {r['kind']}){note}: {sum(1 for x in r['runs'] if x.get('passed'))}/{len(r['runs'])} "
                      f"{(last.get('why') or r.get('skipped') or '')[:200]}")
     (out / "summary.md").write_text("\n".join(lines) + "\n")
-    print("\n".join(lines[:3]))
+    print("\n".join(lines[:4]))
+    for f in summary["model_failures"]:
+        print(f"  model baseline (not blocking): {f}")
     for f in summary["failures"]:
         print(f"  BLOCKING: {f}")
     return 0 if summary["passed"] else 1

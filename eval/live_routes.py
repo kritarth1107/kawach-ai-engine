@@ -1,10 +1,9 @@
-"""The live engine's model routes, for the nightly world and the replay gate.
+"""Model routes for the nightly world and the replay gate.
 
-Copied from the kavach-engine task in ap-south-1. Deploys swap the image only, so this file must not be edited to change
-what families get, and nothing here writes the task definition back.
-
-Text roles start at gpt-oss-120b. Photos start at Kimi K3. The fallbacks are the ones already on the task. Paid eval
-calls Bedrock in ap-south-1 and never Vertex (not sunny-ship, not kavach-care).
+EVAL is the Bedrock route the gate calls. It stays on Bedrock while sunny-ship refuses Gemini. LIVE is a copy of the
+production task and may later point at Gemini in kavach-care; the gate never calls that project. Gemini replay is
+allowed only in sunny-ship, and only when a preflight call answers. Deploys swap the image only: nothing here writes
+the task definition back.
 """
 
 from __future__ import annotations
@@ -16,8 +15,11 @@ import re
 import sys
 from pathlib import Path
 
-# Exact MODEL_ROUTES from kavach-engine (read 14 Oct 2026). sim is eval-only: the person's next line in a probe.
-LIVE: dict[str, list[str]] = {
+SUNNY = "sunny-ship-508214-q1"
+CARE = "kavach-care"
+# The gate and the nightly. Bedrock ap-south-1, copied from the task on 14 Oct before the brain moved back to Gemini.
+# Do not point this at kavach-care: no test or eval traffic goes there.
+EVAL: dict[str, list[str]] = {
     "brain": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1", "bedrock:in.moonshotai.kimi-k3@ap-south-1"],
     "classify": ["bedrock:qwen.qwen3-next-80b-a3b@ap-south-1", "bedrock:openai.gpt-oss-120b-1:0@ap-south-1"],
     "extract": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1", "bedrock:qwen.qwen3-next-80b-a3b@ap-south-1"],
@@ -29,8 +31,10 @@ LIVE: dict[str, list[str]] = {
     "vision": ["bedrock:in.moonshotai.kimi-k3@ap-south-1", "bedrock:qwen.qwen3-vl-235b-a22b@ap-south-1"],
     "worker": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1", "bedrock:in.moonshotai.kimi-k3@ap-south-1"],
 }
+# What families get. The gate does not follow this when it names Gemini in kavach-care.
+LIVE: dict[str, list[str]] = {k: list(v) for k, v in EVAL.items()}
 SIM = "bedrock:openai.gpt-oss-120b-1:0@ap-south-1"
-VERTEX_PROJECTS = {"kavach-care", "sunny-ship-508214-q1"}
+VERTEX_PROJECTS = {CARE, SUNNY}
 # A refusal of the account (policy, auth, 5xx). A 429 is capacity, not a refusal: the run still judges what it got.
 DOWN = re.compile(
     r"PERMISSION_DENIED|UNAUTHENTICATED|AccessDenied|UnrecognizedClient|ExpiredToken|InvalidClient"
@@ -38,10 +42,21 @@ DOWN = re.compile(
 )
 
 
+def project() -> str:
+    return os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
+
+
 def for_eval() -> dict[str, list[str]]:
-    routes = {k: list(v) for k, v in LIVE.items()}
+    """Bedrock routes. Never Gemini in kavach-care, even after LIVE moves there."""
+    routes = {k: list(v) for k, v in EVAL.items()}
     routes["sim"] = [SIM]
     return routes
+
+
+def _calls_care(routes: dict) -> bool:
+    if project() == CARE:
+        return True
+    return any(CARE in str(spec) for specs in routes.values() for spec in specs)
 
 
 def is_provider_down(text: str) -> bool:
@@ -58,11 +73,7 @@ def vertex_routes(routes: dict) -> list[str]:
 
 
 def apply() -> dict[str, list[str]]:
-    """Point this process at the live Bedrock routes. Refuses a Vertex project or a Gemini/Claude route."""
-    project = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
-    if project in VERTEX_PROJECTS:
-        print("Refusing: nightly and replay call Bedrock in ap-south-1, never Vertex (sunny-ship or kavach-care).")
-        raise SystemExit(2)
+    """Point this process at Bedrock. Gemini is kept only for sunny-ship; kavach-care is refused."""
     raw = os.getenv("MODEL_ROUTES", "").strip()
     if raw:
         try:
@@ -72,20 +83,28 @@ def apply() -> dict[str, list[str]]:
             raise SystemExit(2) from None
     else:
         routes = for_eval()
-        os.environ["MODEL_ROUTES"] = json.dumps(routes)
-    bad = vertex_routes(routes)
-    if bad:
-        print("Refusing: a nightly or replay route still calls Vertex: " + ", ".join(bad[:8]))
+    if _calls_care(routes):
+        print("Refusing: replay and nightly never call Gemini in kavach-care.")
         raise SystemExit(2)
+    if vertex_routes(routes):
+        if project() != SUNNY:
+            print("Gemini replay runs only in sunny-ship, and only when that project answers. This run stays on Bedrock.")
+            routes = for_eval()
+        # sunny-ship Gemini stays. preflight drops it if the project refuses.
+    os.environ["MODEL_ROUTES"] = json.dumps(routes)
     os.environ.setdefault("WEB_SEARCH_PROVIDER", "off")
     os.environ.setdefault("MEMORY_EMBEDDINGS", "off")
     os.environ.setdefault("LLM_PROVIDER", "router")
     return routes
 
 
-async def ping() -> str | None:
-    """One short brain call. Returns why the provider refused it, or None when it answered (a timeout is not a refusal)."""
-    apply()
+def use_bedrock() -> dict[str, list[str]]:
+    """Drop a refused sunny-ship route and continue on Bedrock."""
+    os.environ["MODEL_ROUTES"] = json.dumps(for_eval())
+    return apply()
+
+
+async def _ping_once() -> str | None:
     from app.llm import router
 
     try:
@@ -104,6 +123,17 @@ async def ping() -> str | None:
             return text[:200]
         return None
     return None
+
+
+async def ping() -> str | None:
+    """One short brain call. A refused sunny-ship Gemini route falls back to Bedrock and is tried once more."""
+    routes = apply()
+    why = await _ping_once()
+    if why and vertex_routes(routes):
+        print(f"sunny-ship refused; the gate runs on Bedrock ({why[:160]})")
+        use_bedrock()
+        why = await _ping_once()
+    return why
 
 
 def main(argv: list[str]) -> int:

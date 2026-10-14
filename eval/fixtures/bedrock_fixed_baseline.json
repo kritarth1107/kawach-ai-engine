@@ -1,0 +1,26 @@
+{
+  "recorded": "2026-10-14",
+  "commit": "25d576c",
+  "route": "bedrock ap-south-1, brain openai.gpt-oss-120b-1:0, judge kimi-k3",
+  "rule": "These fixed cases failed 2 of 3 on gpt-oss in a recorded Bedrock run. The gate still runs every case on the same checks. A deploy blocks only when a fixed case that is not in this list fails. founder-coding and founder-general passed both runs below; a later failure of either is a code regression.",
+  "runs": [
+    {
+      "where": "deploy 38583952785, engine aa15b2c, 2 of 3",
+      "failing": ["founder-gutka_hi", "founder-cigarette_hinglish", "founder-coding_more", "founder-relay", "founder-zerodol"]
+    },
+    {
+      "where": "local 2 of 3 on 25d576c, 14 Oct, cap not hit",
+      "failing": ["founder-cigarette_en", "founder-beer", "founder-python", "founder-zerodol", "founder-relay"]
+    }
+  ],
+  "failing": [
+    "founder-beer",
+    "founder-cigarette_en",
+    "founder-cigarette_hinglish",
+    "founder-coding_more",
+    "founder-gutka_hi",
+    "founder-python",
+    "founder-relay",
+    "founder-zerodol"
+  ]
+}
