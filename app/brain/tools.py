@@ -176,8 +176,9 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
                                   source="saheli" if ctx.is_system else ctx.channel):
             async with ctx.session.begin_nested():
                 out = await _TOOLS[name][1](ctx, args)
-        ctx.actions.append({"tool": name, "args": args, "ok": True})
-        return json.dumps(out, default=str, ensure_ascii=False), False
+        blob = json.dumps(out, default=str, ensure_ascii=False)
+        ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400]})
+        return blob, False
     except ToolRefused as exc:
         ctx.actions.append({"tool": name, "args": args, "ok": False, "refused": str(exc)})
         return json.dumps({"refused": str(exc)}), True
@@ -873,7 +874,11 @@ async def log_food(ctx: TurnCtx, a: dict) -> dict:
                           "only if they ask (nutrition_settings).")
     if not any(a.get(k) for k in ("items", "answer_to", "from_photo", "label_photo", "skipped", "consumed", "from_order_task", "usual")):
         raise ToolRefused("Give the items they ate (or from_photo / label_photo for a photo, skipped for a skipped meal).")
-    return await agent.handle(ctx.session, _food_who(ctx), a, subject_id=subject)
+    out = await agent.handle(ctx.session, _food_who(ctx), a, subject_id=subject)
+    if isinstance(out, dict) and out.get("result") == "saved":
+        # One saved meal is not a tracker. The reply check reads this; it must not hear "tracking is on".
+        out["tracking"] = "one meal only; this did not start ongoing protein, calorie or diet tracking"
+    return out
 
 
 @tool(

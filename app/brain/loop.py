@@ -1029,20 +1029,28 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                     "If the action is still needed, call the tool through the tool interface now. Then write only the message for the person.)"
                 )}]})
                 continue
-            if guard_rounds >= 2 or is_system or not text_now or last:
+            if is_system or not text_now or last:
                 break
             checked_at = time.monotonic()
+            claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
+                                           tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions))
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
-            problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                                                 tool_results=tool_texts, actions=True,
-                                                                 doctor_note=health_turn(ctx.actions)))
+            problems += grounding.problems(claims)
             trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
                 break
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
+            strippable = [c for c in claims if c.source != "doctor_note"]
+            if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)):
+                # A second draft that still invents, advises, or opens as a note is not sent on for another wording.
+                # A missing "see a doctor" line has nothing to cut, so that one gets one more rewrite.
+                reply.text = guards.without_bookkeeping(grounding.strip(text_now, strippable)) or ""
+                break
+            if guard_rounds >= 3:
+                break
             try:
                 from app.learn import corrections
 
@@ -1081,6 +1089,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             note = gaps.refresh_note(await gaps.block(session, req.family_id, req.speaker["id"], req.speaker.get("name") or "them"))
             if note:
                 msgs.append({"role": "user", "content": [{"type": "text", "text": note}]})
+        if any(c.name == "remember" and (c.args or {}).get("domain") == "naming" for c in reply.tool_calls) and any(
+                r["name"] == "remember" and not r["is_error"] for r in results):
+            msgs.append({"role": "user", "content": [{"type": "text", "text":
+                "They corrected how they are addressed. Say one brief sorry in their language, then the name they asked for. "
+                "Do not use an avoided word."}]})
 
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
@@ -1093,6 +1106,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
             final = grounding.strip(final, still) or ("none" if is_system else "")
+            guarded = True
+        opened = guards.without_bookkeeping(final)
+        if opened != final:
+            final = opened
             guarded = True
     if final and final != "none" and not is_system and guards.code_in_reply(final):
         logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line

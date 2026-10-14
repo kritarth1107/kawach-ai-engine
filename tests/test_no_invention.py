@@ -135,6 +135,15 @@ async def test_memory_and_their_messages_are_the_sources(db, fake):
 
 # ── what she says she did or will do (13 Oct: "I will track your proteins and calories from now on") ──
 
+async def test_a_second_bookkeeping_opener_is_cut(db, fake):
+    fake(["I have noted this. She has not eaten since morning.",
+          "According to health sources, rest is enough. She has not eaten since morning."],
+         ['{"claims": []}', '{"claims": []}'])
+    res = await turn(db, "mummy has not eaten since morning", "g10")
+    assert "noted" not in res.reply.lower() and "health sources" not in res.reply.lower()
+    assert "eaten" in res.reply
+
+
 async def test_a_promise_no_tool_can_keep_is_rewritten(db, fake):
     promise = claims(("action", "I will track your proteins and calories from now on", False, False, "none"))
     f = fake(["Noted the 4 boiled eggs. I will track your proteins and calories from now on.",

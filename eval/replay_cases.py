@@ -243,7 +243,7 @@ def code_check(rule: dict, reply: str, tools: list[str], messages: list[str] | N
     return None
 
 
-async def judge_holds(case: dict, reply: str, tools: list[str]) -> tuple[bool, str]:
+async def judge_holds(case: dict, reply: str, tools: list[str], tool_results: list[str] | None = None) -> tuple[bool, str]:
     from app.llm import router
     from eval.family_sim import parse_json
 
@@ -251,7 +251,8 @@ async def judge_holds(case: dict, reply: str, tools: list[str]) -> tuple[bool, s
     memory = ctx.get("rendered") or json.dumps({"facts": ctx.get("facts"), "notes": ctx.get("notes")}, ensure_ascii=False)[:8000]
     household = [{"name": p.get("name"), "role": p.get("role"), "id": p.get("id")} for p in [ctx.get("elder") or {}, *(ctx.get("members") or [])] if p.get("id")]
     user = json.dumps({"MUST HOLD": case.get("rubric") or "", "household (known to her)": household, "memory": memory[:12000], "they said": message_of(case),
-                       "OLD BAD REPLY": case.get("bad_reply") or "", "NEW REPLY": reply, "tools": tools}, ensure_ascii=False)
+                       "OLD BAD REPLY": case.get("bad_reply") or "", "NEW REPLY": reply, "tools": tools,
+                       "tool results": tool_results or []}, ensure_ascii=False)
     try:
         rep = await router.complete("judge", system_stable=RUBRIC_PROMPT, messages=[{"role": "user", "content": [{"type": "text", "text": user}]}],
                                     max_tokens=4000, effort="low", timeout_s=90)
@@ -316,6 +317,7 @@ async def run_world(sessions: async_sessionmaker, case: dict, n: int) -> dict:
 
 async def verdict(case: dict, res) -> dict:
     tools = [a["tool"] for a in res.actions if a.get("ok", True)]
+    tool_results = [f"{a['tool']}: {a.get('result')}" for a in res.actions if a.get("ok", True) and a.get("result")]
     sent = [str((a.get("args") or {}).get("text") or "") for a in res.actions if a.get("tool") == "send_message"]
     bubbles = [str(m) for m in (getattr(res, "messages", None) or []) if str(m).strip() and str(m).strip().lower() != "none"]
     shown = "\n---\n".join(bubbles) if len(bubbles) > 1 else (bubbles[0] if bubbles else (res.reply or ""))
@@ -323,7 +325,7 @@ async def verdict(case: dict, res) -> dict:
     fails = [w for w in (code_check(r, reply, tools, list(getattr(res, "messages", None) or [])) for r in case.get("assertion") or []) if w]
     why = ""
     if not fails and (case.get("rubric") or any(r.get("type") in ("grounded", "no_medical_advice", "no_false_claim") for r in case.get("assertion") or [])):
-        ok, why = await judge_holds(case, reply, tools)
+        ok, why = await judge_holds(case, reply, tools, tool_results)
         if not ok:
             fails.append(f"judge: {why}")
     return {"passed": not fails, "why": "; ".join(fails)[:300] or why, "reply": reply[:400], "tools": tools}

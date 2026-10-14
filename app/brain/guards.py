@@ -499,6 +499,12 @@ def opener_problems(text: str) -> list[str]:
     return ["do not open with bookkeeping or a guideline citation; start with what they said"] if _BOOKKEEPING.search(first) else []
 
 
+def without_bookkeeping(text: str) -> str:
+    """Drop sentences that open as a note or a guideline citation. The rest of her reply stays."""
+    kept = [s for s in sentences(text) if not _BOOKKEEPING.search(s)]
+    return " ".join(kept).strip()
+
+
 def length_problems(text: str, *, cap: int = 3) -> list[str]:
     """Her own reply, one WhatsApp message at a time: more sentences than the cap (an elder is two, anyone else three;
     a health answer is left to the doctor-note check). Sentence breaks in her text only."""

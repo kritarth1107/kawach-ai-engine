@@ -134,6 +134,8 @@ def test_one_question_per_message_counts_every_script():
     assert guards.opener_problems("I have noted this. She did not eat.")
     assert guards.opener_problems("According to health sources, rest helps.")
     assert guards.opener_problems("She did not eat. I have noted this.") == []
+    assert guards.without_bookkeeping("I have noted this. She did not eat.") == "She did not eat."
+    assert guards.without_bookkeeping("According to health sources, rest helps. How is she now?") == "How is she now?"
 
 
 async def test_a_reply_to_the_elder_with_two_questions_is_rewritten(db, fake):
