@@ -188,17 +188,15 @@ def _with_facts(text: str, flags: dict) -> str:
     return f"{text} ({bit})"
 
 
-def _say(rows: list[NutritionEntry], tracking: str) -> str:
+def _say(rows: list[NutritionEntry], tracking: str, relevant: set[str] | None = None) -> str:
     food = [r for r in rows if r.kind == "food"]
     if not food:
         return "Noted: " + ", ".join(entries.line(r) for r in rows) + "."
     parts = [_saved_line(r) for r in food]
     what = ", ".join(_with_facts(text, r.flags or {}) for (text, _), r in zip(parts, food))
     tot = entries.totals(food)
-    if tracking == "counts" or not tot.get("energy_kcal"):
-        base = f"Saved: {what}."
-    else:
-        base = f"Saved: {what}, {N.fmt(N.kcal(tot))} kcal, {N.fmt(N.grams_of(tot, 'protein_g'))} g protein."
+    nums = "" if tracking == "counts" else N.highlight_phrase(tot, relevant)
+    base = f"Saved: {what}, {nums}." if nums else f"Saved: {what}."
     if any(assumed for _, assumed in parts):
         return base[:-1] + " — tell me if it was more."
     return base
@@ -393,8 +391,10 @@ class NutritionAgent:
                 else:
                     jobs.finish(job, "dropped", {"why": "photo unreadable"})
                     return {"result": "dropped", "job_id": str(job.id), "why": "The photo could not be read and no food was named; nothing saved."}
-            elif not ask.get("confirmed"):
-                return self._question(job, "confirm", f"Looks like {vision.describe(draft['photo'])}. Right?", ["Yes", "Change"])
+            elif not ask.get("confirmed") or not (job.answers or []):
+                # A confirm flag on the same message as the photo does not count: they have not seen the reading yet.
+                about = await self._photo_numbers(job, draft["photo"])
+                return self._question(job, "confirm", f"Looks like {vision.describe(draft['photo'])}{about}. Right?", ["Yes", "Change"])
             elif not items or not any(i.get("quantity") for i in items):
                 items = [{"name": i["name"], **({"quantity": i["quantity"]} if i.get("quantity") else {}), **({"unit": i["unit"]} if i.get("unit") else {}),
                           "_grams": i.get("grams"), "_photo": True} for i in draft["photo"]["items"]]
@@ -586,6 +586,38 @@ class NutritionAgent:
                 out[row["i"]] = f
         return out
 
+    async def _photo_numbers(self, job: NutritionJob, reading: dict) -> str:
+        """', about 215 kcal, 14 g protein' for a photo, once the foods are known. Empty when they are not."""
+        items = []
+        for it in reading.get("items") or []:
+            if not it.get("name"):
+                continue
+            row = {"name": it["name"]}
+            if it.get("quantity"):
+                row["quantity"] = it["quantity"]
+            if it.get("unit"):
+                row["unit"] = it["unit"]
+            if it.get("grams"):
+                row["_grams"] = it["grams"]
+            items.append(row)
+        if not items:
+            return ""
+        try:
+            found = await lookup.resolve(self.session, self.who.family_id,
+                                         [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items],
+                                         deadline=time.monotonic() + 8, essential=False, no_questions=True)
+        except lookup.Slow:
+            return ""
+        sizes = (await settings.get(self.session, self.who.family_id, job.subject_id))["sizes"]
+        tot: dict = {}
+        for i, r in zip(items, found):
+            if r.food is None:
+                continue
+            _g, vals, _e = entries.compute(r.food, i.get("quantity"), i.get("unit"), sizes=sizes, grams=i.get("_grams"))
+            tot = N.add(tot, vals)
+        phrase = N.highlight_phrase(tot, await targets.focus(self.session, self.who.family_id, job.subject_id))
+        return f", about {phrase}" if phrase else ""
+
     async def _result(self, job: NutritionJob, rows: list[NutritionEntry], tracking: str, *, replaced: list[str], medicines: list) -> dict:
         s, who = self.session, self.who
         day = rows[0].day if rows else clock.ist_day()
@@ -596,14 +628,14 @@ class NutritionAgent:
         out: dict = {"result": "saved", "job_id": str(job.id), "meal": rows[0].meal if rows else None, "day": day,
                      "saved": [{"id": str(r.id), "name": r.name, "said": r.name_said, "qty": P.qty_label(r.quantity, r.unit), "kcal": N.kcal(r.nutrients),
                                 "protein_g": N.grams_of(r.nutrients, "protein_g"), "confidence": r.confidence} for r in rows],
-                     "say": _say(rows, tracking),
+                     "say": _say(rows, tracking, await targets.focus(s, who.family_id, job.subject_id)),
                      "totals_today": {k: round(v, 1) for k, v in tot.items() if k in N.MACROS or k == "water_ml"},
                      "undo": "To correct it: change_food with entry_id (or last=true) and set; to remove it: change_food delete=true."}
         line = targets.today_line(prog) if tracking == "full" else None
         if line:
             out["today"] = line
         if tracking == "counts":
-            out["note"] = "They chose counts only: say what was saved without kcal or protein numbers."
+            out["note"] = "They chose counts only: say what was saved without nutrient numbers."
         if any(r.confidence in ("estimate", "unquantified") for r in rows):
             out["estimated"] = [entries.line(r) for r in rows if r.confidence in ("estimate", "unquantified")]
         allergy = [(r, a) for r in rows for a in (r.flags or {}).get("allergy") or []]

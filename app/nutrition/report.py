@@ -304,6 +304,7 @@ async def brief_block(session: AsyncSession, family_id: str, subject_id: str, da
     waiting = await agent.order_waiting(session, family_id, subject_id)
     if not rows and not waiting and not tg:
         return ""
+    focus = await targets.focus(session, family_id, subject_id)
     lines = ["FOOD (from the food log; each item with how sure it is: said, photo, label, estimate, unquantified):"]
     for slot in SLOT_SHOWN:
         es = [r for r in rows if r.meal == slot]
@@ -312,15 +313,16 @@ async def brief_block(session: AsyncSession, family_id: str, subject_id: str, da
         elif es:
             t = entries.totals(es)
             items = "; ".join(f"{entries.line(r)} [{r.confidence}]" for r in es if r.kind == "food")
-            lines.append(f"  {slot} ({clock.ist(es[0].eaten_at).strftime('%H:%M')}): {items}" + (f"; about {N.kcal(t)} kcal" if t.get("energy_kcal") else ""))
+            phrase = N.highlight_phrase(t, focus)
+            lines.append(f"  {slot} ({clock.ist(es[0].eaten_at).strftime('%H:%M')}): {items}" + (f"; about {phrase}" if phrase else ""))
     missing = [m for m in P.MAIN_MEALS if m not in entries.meals_covered(rows)]
     if missing:
         lines.append(f"  not logged: {', '.join(missing)} (say 'not logged', never 'skipped')")
     tot = entries.totals(rows)
     if rows and s["tracking"] == "full":
-        lines.append(f"  totals: {N.kcal(tot):,} kcal, protein {N.grams_of(tot, 'protein_g')} g, carbs {N.grams_of(tot, 'carbs_g')} g, fat "
-                     f"{N.grams_of(tot, 'fat_g')} g, fibre {N.grams_of(tot, 'fibre_g')} g, sugar {N.grams_of(tot, 'sugar_g')} g, sodium "
-                     f"{N.grams_of(tot, 'sodium_mg'):.0f} mg")
+        phrase = N.highlight_phrase(tot, focus)
+        if phrase:
+            lines.append(f"  totals: {phrase}")
     glass = float(s["sizes"].get("glass_ml") or 250)
     if tot.get("water_ml"):
         lines.append(f"  water: {round(tot['water_ml'] / glass, 1)} glasses ({N.grams_of(tot, 'water_ml'):.0f} ml)")
@@ -345,7 +347,7 @@ def recap_prompt(person: dict, day: str, food: str) -> str:
     """What Saheli writes for a self-care user's own food. Numbers only from the block; no advice of her own."""
     name = person.get("name") or "them"
     return (f"[Food recap] {name}'s own food for {day} (they manage their own care). Write it to them with send_message: "
-            f"one short note of what they logged, the kcal and protein, water, meals not logged, and any strict target "
+            f"one short note of what they logged, the kcal and the nutrients named in FOOD, water, meals not logged, and any strict target "
             f"gone past. Only the FOOD block below. No advice, no judgement, no medical opinion. Numbers only as written; "
             f"an estimate stays an estimate. If the block is empty, send nothing. Then reply none.\n\n{food}")
 

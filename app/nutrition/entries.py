@@ -120,7 +120,7 @@ async def record(session: AsyncSession, e: NutritionEntry, op: str, *, reason: s
 # ── the meal's line in the day's ledger ──────────────────────────────────────
 
 
-def meal_summary(rows: list[NutritionEntry]) -> str:
+def meal_summary(rows: list[NutritionEntry], relevant: set[str] | None = None) -> str:
     live = [r for r in rows if r.status == "active"]
     if not live:
         return f"{MEAL_LABEL.get(rows[0].meal, 'Food') if rows else 'Food'}: removed from the food log"
@@ -130,7 +130,8 @@ def meal_summary(rows: list[NutritionEntry]) -> str:
     tot: dict = {}
     for r in food:
         tot = N.add(tot, r.nutrients or {})
-    nums = f"; about {N.fmt(N.kcal(tot))} kcal, {N.fmt(N.grams_of(tot, 'protein_g'))} g protein" if tot.get("energy_kcal") else ""
+    phrase = N.highlight_phrase(tot, relevant)
+    nums = f"; about {phrase}" if phrase else ""
     return f"{MEAL_LABEL.get(food[0].meal, 'Food')}: " + ", ".join(line(r) for r in food)[:300] + nums
 
 
@@ -147,7 +148,9 @@ async def sync_meal_event(session: AsyncSession, family_id: str, meal_id: uuid.U
                "kcal": N.kcal(tot), "protein_g": N.grams_of(tot, "protein_g"), "skipped": all(r.kind == "skipped" for r in rows),
                "removed": not any(r.status == "active" for r in rows), "source": first.source}
     ref = f"nutrition:{meal_id}"
-    summary = meal_summary(rows)
+    from app.nutrition import targets
+
+    summary = meal_summary(rows, await targets.focus(session, family_id, first.subject_id))
     got = await store.record_event(session, family_id=family_id, subject_id=first.subject_id, kind="meal", summary=summary, payload=payload,
                                    actor_id=first.logged_by if first.logged_by != "saheli" else None, ref=ref, at=first.eaten_at)
     if got is None:  # already there: keep it in step

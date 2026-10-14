@@ -154,3 +154,81 @@ def fmt(n: float) -> str:
     if n >= 10 or float(n).is_integer():
         return f"{half_up(float(n)):,}"
     return f"{n:.1f}"
+
+
+# One adult's daily reference, used only to rank a logged portion. Not a target and not advice.
+# Protein 54 g and fibre 30 g: ICMR-NIN. Carbohydrate 130 g: the IOM minimum. Fat 67 g: 30% of 2,000 kcal.
+# Sugar 50 g: WHO free sugars under 10% of 2,000 kcal. Sodium 2,000 mg and potassium 3,500 mg: WHO.
+REFERENCE = {"protein_g": 54.0, "carbs_g": 130.0, "sugar_g": 50.0, "fat_g": 67.0, "fibre_g": 30.0,
+             "sodium_mg": 2000.0, "potassium_mg": 3500.0}
+# The nutrients a one-line total may name. Energy is always the kcal. Saturated fat and added sugar are parts of fat
+# and sugar, so they are not named beside them. Cholesterol, vitamins and minerals stay for when someone asks.
+HIGHLIGHT = ("sugar_g", "sodium_mg", "fibre_g", "protein_g", "fat_g", "carbs_g", "potassium_mg")
+# A condition key the brain already filed (condition:diabetes), not the person's sentence. Exact tokens only.
+CONDITION_FOCUS = {"diabetes": ("sugar_g", "carbs_g"), "diabetic": ("sugar_g", "carbs_g"),
+                   "hypertension": ("sodium_mg",), "bp": ("sodium_mg",),
+                   "kidney": ("protein_g", "potassium_mg"), "ckd": ("protein_g", "potassium_mg"),
+                   "renal": ("protein_g", "potassium_mg")}
+_FLOOR = 0.10  # under a tenth of the daily amount is not worth a line
+_NEAR = 0.30  # under 30% of the leader's share, it is not one of the ones that matter
+_BOOST = 1.12  # the person's record breaks a near tie; it does not overturn a clear leader
+_MAX = 3
+
+
+def relevant_from(condition_keys: list[str], target_nutrients: list[str]) -> set[str]:
+    """Nutrients the person's own record makes relevant: a condition key, or a target they set."""
+    out: set[str] = set()
+    for key in condition_keys:
+        tokens = [p for part in str(key).lower().split(":") for p in part.split("_") if p]
+        for token in tokens:
+            out.update(CONDITION_FOCUS.get(token, ()))
+    for n in target_nutrients:
+        if n in REFERENCE:
+            out.add(n)
+    return out
+
+
+def highlight_phrase(totals: dict | None, relevant: set[str] | None = None) -> str:
+    """'310 kcal, 25 g protein, 21 g fat' for this portion. Empty when energy is missing or zero.
+
+    Ranked by the share of a daily reference. Sugar is taken out of carbs so it is not counted twice.
+    A missing nutrient is skipped. A stored zero is not shown. No advice.
+    """
+    v = totals or {}
+    energy = v.get("energy_kcal")
+    if not isinstance(energy, (int, float)) or energy <= 0:
+        return ""
+    amounts: dict[str, float] = {}
+    for key in HIGHLIGHT:
+        raw = v.get(key)
+        if not isinstance(raw, (int, float)) or raw <= 0:
+            continue
+        amounts[key] = float(raw)
+    if "carbs_g" in amounts and "sugar_g" in amounts:
+        net = amounts["carbs_g"] - amounts["sugar_g"]
+        if net <= 0.5:
+            amounts.pop("carbs_g")
+        else:
+            amounts["carbs_g"] = net
+    focus = relevant or set()
+    ranked = []
+    for key, shown in amounts.items():
+        share = (amounts[key] if key != "carbs_g" else amounts["carbs_g"]) / REFERENCE[key]
+        # carbs was replaced with the net for the share; the line names the full carb grams
+        display = float(v[key])
+        score = share * (_BOOST if key in focus else 1.0)
+        ranked.append((score, share, HIGHLIGHT.index(key), key, display))
+    if not ranked:
+        return f"{fmt(kcal(v))} kcal"
+    ranked.sort(key=lambda r: (-r[0], r[2]))
+    leader = max(r[1] for r in ranked)
+    picked = []
+    for _score, share, _i, key, display in ranked:
+        if share < _FLOOR or (leader and share < _NEAR * leader):
+            continue
+        label, unit = LABELS[key]
+        picked.append(f"{fmt(display)} {unit} {label.lower()}")
+        if len(picked) == _MAX:
+            break
+    bits = [f"{fmt(kcal(v))} kcal", *picked]
+    return ", ".join(bits)

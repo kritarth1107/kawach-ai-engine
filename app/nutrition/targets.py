@@ -131,6 +131,14 @@ def today_line(prog: list[dict]) -> str | None:
     return ("Today: " + ", ".join(bits) + ".") if bits else None
 
 
+async def focus(session: AsyncSession, family_id: str, person_id: str) -> set[str]:
+    """Nutrients this person's own record makes relevant, for breaking a near tie on a food line."""
+    tgts, _ = await current(session, family_id, person_id)
+    facts = await store.facts(session, family_id, person_id, domains=["condition"], statuses=("active",))
+    keys = [f.key for f in facts if not str(f.key).endswith(":none")]
+    return N.relevant_from(keys, [t["nutrient"] for t in tgts])
+
+
 def extreme_note(v: dict) -> str | None:
     """Founder Q6: an extreme calorie target is saved, with one line suggesting a check with the doctor."""
     if v.get("field") != "kcal" or v.get("set_by") in ("doctor", "dietitian"):

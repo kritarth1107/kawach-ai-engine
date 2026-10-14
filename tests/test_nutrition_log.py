@@ -50,7 +50,7 @@ async def test_unclear_count_is_asked_once_then_saved_with_the_plans_numbers(db,
     assert await active(db) == []  # nothing saved before the answer
     r, err = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "boiled egg", "quantity": 4, "unit": "piece", "said": "boiled eggs"}]})
     assert not err and r["result"] == "saved", r
-    assert r["say"] == "Saved: 4 boiled eggs, 310 kcal, 25 g protein."
+    assert r["say"] == "Saved: 4 boiled eggs, 310 kcal, 25 g protein, 21 g fat."
     assert "today" not in r  # no target: no progress line
     assert r["first_time"]
     rows = await active(db)
@@ -138,14 +138,15 @@ async def test_a_pack_or_a_drink_with_no_number_is_one_serving(db, at, nfake):
     nfake.decisions["tea"] = {"kind": "generic", "countable": False, "default_unit": "cup", "tags": ["tea", "dairy"]}
     r, err = await call(db, "log_food", {"items": [{"name": "red bull", "said": "Red Bull"}]})
     assert not err and r["result"] == "saved", r
-    assert r["say"] == "Saved: 1 Red Bull (250 ml), 113 kcal, 0 g protein — tell me if it was more."
+    assert r["say"] == "Saved: 1 Red Bull (250 ml), 113 kcal, 28 g sugar — tell me if it was more."
+    assert "0 g" not in r["say"]
     assert "How many" not in r["say"]
     row = (await active(db))[-1]
     assert row.quantity == 1 and row.unit == "serving" and row.grams == 250 and row.confidence == "estimate"
     assert row.flags.get("assumed_one") and row.flags.get("serving_ml") == 250
     r, err = await call(db, "log_food", {"items": [{"name": "tea", "said": "tea"}]})
     assert not err and r["result"] == "saved", r
-    assert r["say"] == "Saved: 1 tea (150 ml), 60 kcal, 1.8 g protein — tell me if it was more."
+    assert r["say"] == "Saved: 1 tea (150 ml), 60 kcal, 9 g sugar — tell me if it was more."
     said = await call(db, "log_food", {"items": [{"name": "red bull", "quantity": 2, "unit": "pack"}]})
     assert said[0]["result"] == "saved" and "tell me if it was more" not in said[0]["say"]
     assert said[0]["saved"][-1]["confidence"] == "said"
@@ -213,12 +214,23 @@ async def test_a_meal_photo_is_confirmed_before_anything_is_saved(db, at, nfake)
         {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
     r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
-    assert r["needs"][0]["question"] == "Looks like 2 boiled egg, 1 cup tea. Right?"
+    assert r["needs"][0]["question"] == "Looks like 2 boiled egg, 1 cup tea, about 215 kcal, 14 g protein, 12 g fat, 9 g sugar. Right?"
     assert await active(db) == []
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True})  # the yes comes in a later message, no photo
     assert r["result"] == "saved"
     rows = await active(db)
     assert {e.confidence for e in rows} == {"photo"} and {e.source for e in rows} == {"photo"}
+
+
+async def test_a_photo_is_not_saved_when_the_same_message_says_it_is_confirmed(db, at, nfake):
+    """They have not seen the reading yet, so a confirm flag on the photo's own message asks instead of saving."""
+    at("2026-10-14 08:30")
+    nfake.meal = {"food": True, "description": "two boiled eggs and tea", "items": [
+        {"name": "boiled egg", "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8},
+        {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "confirmed": True, "items": []}, images=IMG)
+    assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
+    assert "215 kcal" in r["needs"][0]["question"] and await active(db) == []
 
 
 async def test_a_label_photo_becomes_the_familys_food(db, at, nfake):

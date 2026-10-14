@@ -930,7 +930,7 @@ async def food_log(ctx: TurnCtx, a: dict) -> dict:
     [],
 )
 async def change_food(ctx: TurnCtx, a: dict) -> dict:
-    from app.nutrition import agent, entries, lookup, report, settings
+    from app.nutrition import agent, entries, lookup, report, settings, targets
 
     subject = _food_subject(ctx, a.get("for_whom"))
     e = None
@@ -974,8 +974,8 @@ async def change_food(ctx: TurnCtx, a: dict) -> dict:
     from app.nutrition import nutrients as food_n
 
     n = e.nutrients or {}
-    say = f"Changed: {entries.line(e)}" + (f", {food_n.fmt(food_n.kcal(n))} kcal, {food_n.fmt(food_n.grams_of(n, 'protein_g'))} g protein."
-                                           if n.get("energy_kcal") is not None else ".")
+    phrase = food_n.highlight_phrase(n, await targets.focus(ctx.session, ctx.family_id, e.subject_id))
+    say = f"Changed: {entries.line(e)}" + (f", {phrase}." if phrase else ".")
     return {"result": "changed", "say": say, "entry": entries.entry_json(e), "version_id": vid,
             "today": await report.today_text(ctx.session, ctx.family_id, e.subject_id, e.day), "undo": f"undo_change id {vid} puts it back"}
 

@@ -270,7 +270,7 @@ def prompt_for(caregiver: dict, elder: dict, day: str, text: str, *, send: bool 
             "how they feel, or that they are fine, stable, peaceful, or free of symptoms or complaints, unless the data says "
             "that. If the data has no mood or health, say there is no mood or health update. If they wrote and a later "
             "check-in has no reply, say that plainly. Food and nutrition (from FOOD): the meals with their main items, the "
-            "day's kcal and protein against any targets (who set them), water, meals not logged (never call them skipped "
+            "day's kcal and the nutrients named in FOOD against any targets (who set them), water, meals not logged (never call them skipped "
             "unless FOOD says skipped), delivered food not yet confirmed eaten, and any strict rule or target gone past, "
             f"plainly and without judging the food; say which numbers are only estimates. Warm and plain, readable in a minute. {end}\n\n{text}")
 
