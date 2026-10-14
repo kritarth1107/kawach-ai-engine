@@ -46,7 +46,9 @@ _clients: dict[str, genai.Client] = {}
 def _gemini(location: str | None = None) -> genai.Client:
     loc = location or os.getenv("WEB_SEARCH_LOCATION", "global")
     if loc not in _clients:
-        _clients[loc] = genai.Client(vertexai=True, project=get_settings().gcp_project_id, location=loc)
+        from app.llm import google_wif
+
+        _clients[loc] = genai.Client(vertexai=True, project=get_settings().gcp_project_id, location=loc, credentials=google_wif.credentials())
     return _clients[loc]
 
 

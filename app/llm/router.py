@@ -187,9 +187,11 @@ def _provider(name: str) -> Provider:
 
             _providers[name] = ClaudeProvider()
         elif name == "gemini":
+            from app.llm import google_wif
             from app.llm.providers.gemini import GeminiProvider
 
-            _providers[name] = GeminiProvider()
+            # on AWS: federated credentials (no Google key); on GCP: None, the default chain
+            _providers[name] = GeminiProvider(credentials=google_wif.credentials())
         elif name == "bedrock":
             from app.llm.providers.bedrock import BedrockProvider
 
