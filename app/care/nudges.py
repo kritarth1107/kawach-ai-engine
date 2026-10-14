@@ -1119,8 +1119,9 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
                 "just answer what they wrote.")
     if str(fld).startswith("water:"):
         return (f"YOUR LAST MESSAGE TO THEM asked how much water: \"{(last.text or '')[:160]}\". If they answered, pass it to log_food "
-                "(one item, name water, quantity and unit as they said, unit glass or ml). If the amount is unclear, the tool returns one "
-                "question with options: ask only that. If it does not answer it, just answer what they wrote.")
+                "(one item, name water). Unit glass when they said glasses, ml when they said millilitres. No number is one glass: do not ask. "
+                "eaten_at is when they drank it, ISO in IST; leave it out only for just now. Each time is its own call. If the tool returns "
+                "already=true, say nothing more about it. If they did not answer it, just answer what they wrote.")
     if str(fld).startswith("sleep:"):
         return (f"YOUR LAST MESSAGE TO THEM asked when they slept and woke: \"{(last.text or '')[:160]}\". If they answered, save it with "
                 "log_event (kind sleep, the times as they said). If they did not answer it, just answer what they wrote.")

@@ -1144,7 +1144,7 @@ async def test_a_water_reminder_follow_up_is_saved_as_water(db, at, sessions, wr
     row = (await rows(db))[-1]
     assert row.field == "water:count"
     hint = await nudges.reply_hint(db, FAM, MAA["id"])
-    assert "log_food" in hint and "water" in hint
+    assert "log_food" in hint and "water" in hint and "one glass" in hint and "eaten_at" in hint
 
 
 async def test_a_caregiver_is_asked_about_their_own_meals_and_once_about_an_elder_who_does_not_write(db, at, sessions, writer, food):
