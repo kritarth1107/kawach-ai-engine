@@ -2,11 +2,12 @@
 EMBED_DIM). The AWS copy runs it once after the restore (Bedrock vectors replace the restored Vertex ones):
 
     python -m app.jobs.reembed               # every vector column, every row
-    python -m app.jobs.reembed --missing     # only rows without a vector (after EMBED_DIM_MIGRATE=on, or to resume)
+    python -m app.jobs.reembed --missing     # only rows without a vector (resume, or after the API changed columns)
     python -m app.jobs.reembed --dry-run     # counts only
     python -m app.jobs.reembed --table memory_vectors --batch 64
 
-The schema is brought up to date first (app.db.migrate; a changed EMBED_DIM needs EMBED_DIM_MIGRATE=on). Each batch is
+The schema is brought up to date first (app.db.migrate). This job never changes a vector column: if EMBED_DIM
+disagrees it exits. The API changes columns, once, with EMBED_DIM_MIGRATE set to the target dimension. Each batch is
 committed on its own, so a stopped run resumes with --missing. Counts only in the output, never text.
 """
 

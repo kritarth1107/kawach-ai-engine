@@ -4,8 +4,8 @@ EMBED_PROVIDER picks one: "" (today's order: Vertex when GCP_PROJECT_ID is set, 
 bedrock. Bedrock runs in EMBED_REGION (India only) with EMBED_MODEL:
 - amazon.titan-embed-text-v2:0: EMBED_DIM 256, 512 or 1024 (1024 recalled best in the 14 Oct multilingual check)
 - cohere.embed-multilingual-v3: EMBED_DIM 1024; queries and memories are embedded as such (input_type)
-A different embedder means different vectors: after a switch run `python -m app.jobs.reembed` (and EMBED_DIM_MIGRATE=on
-once when the dimension changes, app.db.migrate).
+A different embedder means different vectors: the API changes the columns once with EMBED_DIM_MIGRATE set to the new
+dimension (app.db.migrate), then `python -m app.jobs.reembed` refills them. A job never changes the columns.
 """
 
 from __future__ import annotations

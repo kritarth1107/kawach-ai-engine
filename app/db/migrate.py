@@ -9,6 +9,8 @@ error, so a missing column only showed later as every query on its table failing
 - On the live database, indexes are built CONCURRENTLY after start (reads and writes go on); a half-built one is rebuilt.
 - A column the code needs that is still missing after the retries stops the start, so the old revision keeps serving.
   An index or constraint that could not be made is logged and tried again at the next start.
+- Changing a vector column empties it. Only the API server does that, and only with EMBED_DIM_MIGRATE set to the
+  target dimension when the stored embedder differs. A job whose EMBED_DIM disagrees exits and leaves the columns.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import asyncio
 import logging
 import os
 import random
+import sys
 from dataclasses import dataclass
 
 from sqlalchemy import text
@@ -47,6 +50,31 @@ def embed_dim() -> int:
     from app.core.config import get_settings
 
     return int(get_settings().embed_dim)
+
+
+def embed_identity() -> str:
+    """provider:model of the configured embedder, without region."""
+    from app.rag.embeddings import embedding_provider_label
+
+    return embedding_provider_label().split("@", 1)[0]
+
+
+def is_api_server(blob: str | None = None) -> bool:
+    """True only for the API process. A job, an eval, or a one-off shares the image and must not change schema
+    destructively, whatever EMBED_DIM_MIGRATE says."""
+    if blob is None:
+        main = sys.modules.get("__main__")
+        file = (getattr(main, "__file__", None) or "").replace("\\", "/")
+        blob = f"{file} {' '.join(sys.argv)}"
+    if any(part in blob for part in ("/app/jobs/", "/app/quality/", "/eval/")):
+        return False
+    return "uvicorn" in blob and "app.main:app" in blob
+
+
+_MARKER = (
+    "CREATE TABLE IF NOT EXISTS schema_markers ("
+    "name VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW())"
+)
 
 # ── v1 memory layer (family_memories and its entity tables) ──
 
@@ -263,21 +291,63 @@ async def vector_dims(conn: AsyncConnection, cat: Catalog) -> dict[tuple[str, st
     return out
 
 
-async def ensure_vector_dims(engine: AsyncEngine, cat: Catalog, dim: int | None = None) -> list[str]:
-    """Vector columns follow EMBED_DIM (a new embedder, e.g. Bedrock on the AWS copy). A column of another dimension holds
-    another embedder's vectors, which mean nothing to the new one: with EMBED_DIM_MIGRATE=on the column is changed and
-    emptied (one short lock each, retried; recall uses words until `python -m app.jobs.reembed` refills it). Without it
-    the start stops, so a wrong EMBED_DIM never clears a live index and the old revision keeps serving."""
+def _migrate_token() -> str:
+    return os.getenv("EMBED_DIM_MIGRATE", "off").strip()
+
+
+async def _read_embed_marker(engine: AsyncEngine) -> str | None:
+    try:
+        async with engine.connect() as conn:
+            return (await conn.execute(text("SELECT value FROM schema_markers WHERE name = 'embeddings'"))).scalar()
+    except Exception:  # noqa: BLE001 — no marker yet: a filled column is treated as a different embedder
+        return None
+
+
+async def _column_filled(engine: AsyncEngine, table: str, column: str) -> bool:
+    async with engine.connect() as conn:
+        return (await conn.execute(text(f"SELECT 1 FROM {table} WHERE {column} IS NOT NULL LIMIT 1"))).first() is not None
+
+
+def _dim_mismatch(cols: str, dim: int, *, job: bool, why: str) -> RuntimeError:
+    if job:
+        return RuntimeError(
+            f"schema: {cols} but EMBED_DIM is {dim}. This process is a job and does not change vector columns. "
+            f"Start the API once with EMBED_DIM_MIGRATE={dim}, then run python -m app.jobs.reembed")
+    return RuntimeError(
+        f"schema: {cols} but EMBED_DIM is {dim}. Refusing to clear them ({why}). "
+        f"Set EMBED_DIM_MIGRATE={dim} on the API server once, then run python -m app.jobs.reembed")
+
+
+async def ensure_vector_dims(engine: AsyncEngine, cat: Catalog, dim: int | None = None, *,
+                              server: bool = False, marker: str | None = None) -> list[str]:
+    """Vector columns follow EMBED_DIM. Changing one empties it (ALTER ... USING NULL): only the API server does that,
+    and only with a one-time token when the stored embedder differs. A job whose EMBED_DIM disagrees exits instead."""
     dim = dim or embed_dim()
     async with engine.connect() as conn:
         have = await vector_dims(conn, cat)
     wrong = [(t, c, d) for (t, c), d in have.items() if d not in (-1, dim)]
     if not wrong:
         return []
-    if os.getenv("EMBED_DIM_MIGRATE", "off").strip().lower() != "on":
-        cols = ", ".join(f"{t}.{c} vector({d})" for t, c, d in wrong)
-        raise RuntimeError(f"schema: {cols} but EMBED_DIM is {dim}. Set EMBED_DIM_MIGRATE=on once to change them (their vectors "
-                           "are cleared), then run python -m app.jobs.reembed")
+    cols = ", ".join(f"{t}.{c} vector({d})" for t, c, d in wrong)
+    if not server:
+        raise _dim_mismatch(cols, dim, job=True, why="")
+    token = _migrate_token()
+    if token != str(dim):
+        filled = False
+        for table, column, _d in wrong:
+            if await _column_filled(engine, table, column):
+                filled = True
+                break
+        stored = await _read_embed_marker(engine) if marker is None else marker
+        label = embed_identity()
+        same = bool(stored) and stored == label
+        allowed = token.lower() == "on" and (not filled or same)
+        if not allowed:
+            if filled:
+                why = f"marker {stored or 'missing'} is not {label}"
+            else:
+                why = "EMBED_DIM_MIGRATE is not the target dimension"
+            raise _dim_mismatch(cols, dim, job=False, why=why)
     changed = []
     for table, column, d in wrong:
         await _alter(engine, f"vector {table}.{column} {d}→{dim}",
@@ -286,6 +356,19 @@ async def ensure_vector_dims(engine: AsyncEngine, cat: Catalog, dim: int | None 
         log.warning("schema: %s.%s is now vector(%d) and empty: run python -m app.jobs.reembed", table, column, dim)
         changed.append(f"{table}.{column}")
     return changed
+
+
+async def remember_embed_marker(engine: AsyncEngine, *, force: bool = False) -> None:
+    """Record which embedder the columns belong to. A normal start does not overwrite a different embedder."""
+    label = embed_identity()
+    if not label or label == "none":
+        return
+    sql = ("INSERT INTO schema_markers (name, value) VALUES ('embeddings', :v) "
+           "ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()")
+    if not force:
+        sql += " WHERE schema_markers.value = EXCLUDED.value"
+    async with engine.begin() as conn:
+        await conn.execute(text(sql), {"v": label})
 
 
 async def ensure_schema(engine: AsyncEngine) -> None:
@@ -304,6 +387,7 @@ async def ensure_schema(engine: AsyncEngine) -> None:
             for name, ddl in INSTINCT_TABLES:
                 if name not in cat.tables:
                     await conn.execute(text(ddl.replace("{dim}", str(embed_dim()))))
+            await conn.execute(text(_MARKER))
 
     err = await _retry("tables", tables)
     if err is not None:
@@ -311,7 +395,13 @@ async def ensure_schema(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         cat = await read_catalog(conn)
     await ensure_columns(engine, INSTINCT_COLUMNS + COLUMNS, cat)
-    await ensure_vector_dims(engine, cat)
+    server = is_api_server()
+    changed = await ensure_vector_dims(engine, cat, server=server)
+    if server:
+        try:
+            await remember_embed_marker(engine, force=bool(changed))
+        except Exception:  # noqa: BLE001 — a missing marker only makes the next change require the one-time token
+            log.exception("schema: embeddings marker was not saved")
     for name, table, ddl in INSTINCT_CONSTRAINTS:
         if table in cat.tables and name not in cat.constraints:
             await _alter(engine, f"constraint {name}", f"ALTER TABLE {table} ADD CONSTRAINT {name} {ddl}",

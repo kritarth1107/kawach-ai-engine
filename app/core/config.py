@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     embed_dim: int = 768
     # Embeddings: "" (today: Vertex when GCP_PROJECT_ID is set, else the fallbacks below) | vertex | bedrock (the AWS copy).
     # bedrock: EMBED_MODEL amazon.titan-embed-text-v2:0 (256/512/1024) or cohere.embed-multilingual-v3 (1024) in
-    # EMBED_REGION; EMBED_DIM must match, and a changed EMBED_DIM needs EMBED_DIM_MIGRATE=on once (app.db.migrate).
+    # EMBED_REGION; EMBED_DIM must match. The API changes a dimension once with EMBED_DIM_MIGRATE=<dim> (app.db.migrate).
     embed_provider: str = ""
     embed_model: str = ""
     embed_region: str = "ap-south-1"

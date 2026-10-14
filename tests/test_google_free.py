@@ -1,7 +1,7 @@
 """The AWS copy runs without Google (founder 14 Oct): every Google path has a switch whose default is today's behaviour.
 
-- embeddings: EMBED_PROVIDER=bedrock (Titan v2 or Cohere multilingual v3 in Mumbai), EMBED_DIM followed by the vector
-  columns only with EMBED_DIM_MIGRATE=on, and `python -m app.jobs.reembed` rebuilds every vector from its text;
+- embeddings: EMBED_PROVIDER=bedrock (Titan v2 or Cohere multilingual v3 in Mumbai). Only the API changes a vector
+  column, with EMBED_DIM_MIGRATE set to the new dimension; `python -m app.jobs.reembed` rebuilds every vector from text;
 - web search: WEB_SEARCH_PROVIDER=tavily, Tavily's results answered by Saheli's own model routes under the same prompt;
 - engine admin auth: ENGINE_CALLER_CHECK=off (the admin secret only), never on Cloud Run;
 - the legacy chat path (the doctor brief): LLM_PROVIDER=router goes through MODEL_ROUTES.
@@ -175,18 +175,82 @@ async def test_a_changed_dimension_stops_the_start_unless_asked(scratch, monkeyp
     monkeypatch.delenv("EMBED_DIM_MIGRATE", raising=False)
     async with eng.connect() as c:
         cat = await migrate.read_catalog(c)
-    assert await migrate.ensure_vector_dims(eng, cat, dim=3) == []  # the same size: nothing to do
+    assert await migrate.ensure_vector_dims(eng, cat, dim=3, server=True) == []  # the same size: nothing to do
     with pytest.raises(RuntimeError, match="EMBED_DIM_MIGRATE"):
-        await migrate.ensure_vector_dims(eng, cat, dim=5)
+        await migrate.ensure_vector_dims(eng, cat, dim=5, server=True)
     assert await _dim(eng, name) == 3  # the live vectors were not touched
+
+
+async def test_a_job_never_changes_vector_columns(scratch, monkeypatch):
+    eng, name = scratch
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "5")  # the one-time token still does not let a job alter
+    async with eng.connect() as c:
+        cat = await migrate.read_catalog(c)
+    with pytest.raises(RuntimeError, match="job"):
+        await migrate.ensure_vector_dims(eng, cat, dim=5, server=False)
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    with pytest.raises(RuntimeError, match="job"):
+        await migrate.ensure_vector_dims(eng, cat, dim=5)
+    assert await _dim(eng, name) == 3
+    async with eng.connect() as c:
+        assert (await c.execute(text(f"SELECT count(*) FROM {name} WHERE emb IS NOT NULL"))).scalar() == 2
+
+
+async def test_a_different_embedder_needs_the_dimension_token(scratch, monkeypatch):
+    eng, name = scratch
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    monkeypatch.setattr(migrate, "embed_identity", lambda: "bedrock:amazon.titan-embed-text-v2:0")
+    async with eng.connect() as c:
+        cat = await migrate.read_catalog(c)
+    with pytest.raises(RuntimeError, match="marker vertex:text-multilingual-embedding-002"):
+        await migrate.ensure_vector_dims(eng, cat, dim=5, server=True, marker="vertex:text-multilingual-embedding-002")
+    assert await _dim(eng, name) == 3
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "5")
+    assert await migrate.ensure_vector_dims(eng, cat, dim=5, server=True, marker="vertex:text-multilingual-embedding-002") == [f"{name}.emb"]
+    assert await _dim(eng, name) == 5
+    async with eng.connect() as c:
+        assert (await c.execute(text(f"SELECT count(*) FROM {name} WHERE emb IS NOT NULL"))).scalar() == 0
+
+
+async def test_the_same_embedder_still_moves_when_asked(scratch, monkeypatch):
+    eng, name = scratch
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    monkeypatch.setattr(migrate, "embed_identity", lambda: "vertex:text-multilingual-embedding-002")
+    async with eng.connect() as c:
+        cat = await migrate.read_catalog(c)
+    changed = await migrate.ensure_vector_dims(
+        eng, cat, dim=5, server=True, marker="vertex:text-multilingual-embedding-002")
+    assert changed == [f"{name}.emb"] and await _dim(eng, name) == 5
+
+
+async def test_a_missing_marker_is_not_enough(scratch, monkeypatch):
+    eng, name = scratch
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    monkeypatch.setattr(migrate, "embed_identity", lambda: "bedrock:amazon.titan-embed-text-v2:0")
+    async with eng.connect() as c:
+        cat = await migrate.read_catalog(c)
+    with pytest.raises(RuntimeError, match="marker missing"):
+        await migrate.ensure_vector_dims(eng, cat, dim=5, server=True, marker="")
+    assert await _dim(eng, name) == 3
+
+
+def test_only_the_api_command_may_migrate():
+    dream = "/app/app/jobs/dream.py python -m app.jobs.dream --all"
+    assert migrate.is_api_server(dream) is False
+    assert migrate.is_api_server("/app/app/quality/run.py python -m app.quality.run --day 2026-10-15") is False
+    assert migrate.is_api_server("/app/eval/replay_cases.py python -m eval.replay_cases") is False
+    api = "/usr/local/bin/uvicorn uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    assert migrate.is_api_server(api) is True
 
 
 async def test_asked_the_column_follows_and_its_old_vectors_go(scratch, monkeypatch):
     eng, name = scratch
-    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "5")
+    monkeypatch.setattr(migrate, "embed_identity", lambda: "vertex:text-multilingual-embedding-002")
     async with eng.connect() as c:
         cat = await migrate.read_catalog(c)
-    assert await migrate.ensure_vector_dims(eng, cat, dim=5) == [f"{name}.emb"]
+    assert await migrate.ensure_vector_dims(
+        eng, cat, dim=5, server=True, marker="vertex:text-multilingual-embedding-002") == [f"{name}.emb"]
     assert await _dim(eng, name) == 5
     async with eng.connect() as c:
         assert (await c.execute(text(f"SELECT count(*) FROM {name} WHERE emb IS NOT NULL"))).scalar() == 0
@@ -194,10 +258,10 @@ async def test_asked_the_column_follows_and_its_old_vectors_go(scratch, monkeypa
 
 async def test_reembed_rebuilds_every_vector_from_its_text(scratch, monkeypatch):
     eng, name = scratch
-    monkeypatch.setenv("EMBED_DIM_MIGRATE", "on")
+    monkeypatch.setenv("EMBED_DIM_MIGRATE", "4")
     async with eng.connect() as c:
         cat = await migrate.read_catalog(c)
-    await migrate.ensure_vector_dims(eng, cat, dim=4)
+    await migrate.ensure_vector_dims(eng, cat, dim=4, server=True)
     sessions = async_sessionmaker(eng, expire_on_commit=False)
     asked: list[list[str]] = []
 
