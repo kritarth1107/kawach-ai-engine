@@ -65,7 +65,15 @@ def search_fee_inr() -> float:
 
 
 def provider() -> str:
-    return os.getenv("WEB_SEARCH_PROVIDER", "gemini").strip().lower() or "gemini"
+    """WEB_SEARCH_PROVIDER when set. Otherwise Tavily when its key is there, Gemini only where a Google project is set, and
+    off elsewhere: on AWS (no Google project) every search used to try Vertex and fail (live 14 Oct)."""
+    chosen = os.getenv("WEB_SEARCH_PROVIDER", "").strip().lower()
+    if chosen:
+        return chosen
+    if os.getenv("TAVILY_API_KEY", "").strip():
+        return "tavily"
+    google = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or get_settings().gcp_project_id
+    return "gemini" if (google or "").strip() else "off"
 
 
 async def grounded(prompt: str, *, location: str | None = None, model: str | None = None, max_tokens: int = OUT_TOKENS,

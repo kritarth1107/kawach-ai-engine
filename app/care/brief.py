@@ -31,6 +31,19 @@ AFTER_BEDTIME = timedelta(minutes=30)
 LATEST_DEFAULT = time(23, 45)
 LATE_OK = timedelta(hours=2)  # a brief whose time passed (the service was down) still goes this long after it
 WINDOW = timedelta(hours=23, minutes=30)  # WhatsApp's 24-hour window, with a margin
+
+
+class BackendDown(Exception):
+    """The backend did not answer (a restart, a deploy): the brief waits for the next run instead of going without its
+    schedule (live 14 Oct 20:30: two briefs were built while the backend restarted and held with no doses in them)."""
+
+
+def backend_down(exc: BaseException) -> bool:
+    import httpx
+
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code in (502, 503, 504)
 SETTING_KEY = "routine:daily_brief"
 CAREGIVER_ROLES = ("caregiver",)
 
@@ -155,7 +168,9 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
     if day == clock.ist_day(now):
         try:
             sched = await host.call("get_today_schedule", {}, family_id=family_id.removeprefix("shadow:"), subject_id=eid, actor_id=eid) or {}
-        except Exception:  # noqa: BLE001 — the rest of the brief still goes
+        except Exception as exc:  # noqa: BLE001 — the rest of the brief still goes, unless the backend itself is down
+            if backend_down(exc):
+                raise BackendDown(str(exc)[:200]) from exc
             logger.warning("brief: schedule unavailable family=%s", family_id)
     items = [i for i in (sched.get("items") or []) if i.get("time")]
     if items:
@@ -426,6 +441,12 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                 stats["due"] += 1
                 out = await send(sessions, host_for(r.family_id), r, cg, day, now=now)
                 stats["sent" if out == "sent" else "waiting"] += 1
+            except BackendDown as exc:
+                # Nothing was recorded, so the next run (minutes later, up to LATE_OK) builds it again with the schedule.
+                logger.warning("daily brief deferred, backend down family=%s: %s", r.family_id, exc)
+                stats["deferred"] = stats.get("deferred", 0) + 1
+                stats["due"] -= 1
+                return stats
             except Exception:  # noqa: BLE001 — one caregiver's brief must not stop the others
                 logger.exception("daily brief failed family=%s", r.family_id)
         eid = (r.elder or {}).get("id")

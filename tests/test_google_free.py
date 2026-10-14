@@ -275,11 +275,22 @@ async def test_tavily_without_its_key_fails_loudly(monkeypatch):
         await websearch.tavily_search("x")
 
 
-def test_gemini_stays_the_default(monkeypatch):
+def test_gemini_is_the_default_only_where_a_google_project_is_set(monkeypatch):
     from app.brain import websearch
 
     monkeypatch.delenv("WEB_SEARCH_PROVIDER", raising=False)
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.setenv("GCP_PROJECT_ID", "some-project")
     assert websearch.provider() == "gemini"
+    # AWS: no Google project, so no call to Vertex (live 14 Oct every search tried it and failed); Tavily once its key is set
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setattr(websearch, "get_settings", lambda: type("S", (), {"gcp_project_id": ""})())
+    assert websearch.provider() == "off"
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
+    assert websearch.provider() == "tavily"
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "gemini")
+    assert websearch.provider() == "gemini", "an explicit choice wins"
 
 
 # ── engine admin auth without Google ─────────────────────────────────────────

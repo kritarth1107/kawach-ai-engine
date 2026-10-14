@@ -80,6 +80,7 @@ async def test_web_search_sends_nothing_while_blocked(monkeypatch):
 
     client = type("C", (), {"aio": type("A", (), {"models": Models()})()})()
     monkeypatch.setattr(websearch, "_gemini", lambda location=None: client)
+    monkeypatch.setenv("WEB_SEARCH_PROVIDER", "gemini")  # the Google path (off by default where no Google project is set)
     with pytest.raises(RuntimeError):
         await websearch.search("a")
     with pytest.raises(RuntimeError) as e:

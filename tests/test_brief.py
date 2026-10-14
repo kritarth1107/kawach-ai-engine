@@ -236,3 +236,40 @@ async def test_a_caregiver_sets_their_own_time_turns_it_off_or_asks_now(db, at):
     assert err, "the care recipient has no brief to set"
     _, err = await tools.run(ctx(SON), "daily_brief", {"action": "set", "time": "nine"})
     assert err
+
+
+class DownHost(Host):
+    """The backend restarting (a deploy): every call is a 503."""
+
+    async def call(self, tool, args, **kw):
+        import httpx
+
+        self.calls.append((tool, args))
+        req = httpx.Request("POST", "http://backend/internal/v1/saheli/tools/execute")
+        raise httpx.HTTPStatusError("503", request=req, response=httpx.Response(503, request=req))
+
+
+async def test_a_backend_restart_at_brief_time_defers_it_and_the_next_run_sends_it_whole(db, at, sessions, monkeypatch):
+    # live 2026-10-14 20:30: two briefs were built during a backend restart, without the doses, and held
+    now = at("2026-10-12 20:01")
+    await _family(db, (MAA, SON))
+    await _sleep(db, {"time": "19:30"})
+    await _wrote(db, SON["id"], now - timedelta(hours=3))
+    sent: list[str] = []
+
+    async def fake_turn(sessions_, host, family_id, prompt, ref, deliver_to=None, still_true=None):
+        sent.append(prompt)
+        async with sessions_() as s:
+            await store.add_turn(s, family_id=family_id, thread_id=deliver_to, role="assistant", text="Aaj Babli ji ka din…",
+                                 meta={"proactive": True, "delivered": True, "ref": ref})
+            await s.commit()
+
+    from app.brain import wake
+
+    monkeypatch.setattr(wake, "system_turn", fake_turn)
+    out = await brief.run(sessions, lambda fid: DownHost(), now=now)
+    assert out.get("deferred") == 1 and out["sent"] == 0 and out["waiting"] == 0, out
+    assert not sent and not await brief.waiting_for(db, FAM, SON["id"]), "nothing held without its schedule"
+    host = Host([{"scheduleId": "s1", "title": "Metformin", "dosage": "500 mg", "time": "08:00", "status": "completed"}])
+    assert await brief.run(sessions, lambda fid: host, now=now + timedelta(minutes=5)) == {"due": 1, "sent": 1, "waiting": 0}
+    assert "08:00 Metformin 500 mg: taken" in sent[0]
