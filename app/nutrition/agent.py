@@ -31,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.care import store
 from app.core import clock
 from app.llm import router
-from app.nutrition import entries, jobs, lookup, pantry, photos, settings, targets, vision
+from app.nutrition import entries, jobs, lookup, nudge_hooks, pantry, photos, settings, targets, vision
 from app.nutrition import nutrients as N
 from app.nutrition import portions as P
 from app.nutrition.models import NutritionEntry, NutritionFood, NutritionJob
@@ -65,7 +65,7 @@ class Who:
 
 
 ASK_FIELDS = ("eaten_at", "meal", "for_whom", "from_photo", "label_photo", "confidence", "confirmed", "unsure", "cancel", "consumed",
-              "portion_eaten", "skipped", "from_order_task")
+              "portion_eaten", "skipped", "from_order_task", "usual")
 ITEM_FIELDS = ("name", "quantity", "unit", "brand", "restaurant", "from_order_task", "barcode", "notes", "said", "food_id")
 
 
@@ -163,6 +163,8 @@ def _assumed_flags(food) -> dict:
 
 def _saved_line(r: NutritionEntry) -> tuple[str, bool]:
     flags = r.flags or {}
+    if flags.get("usual"):
+        return f"{entries.line(r)} (your usual)", True
     if not flags.get("assumed_one"):
         return entries.line(r), False
     name = r.name_said or r.name
@@ -397,6 +399,22 @@ class NutritionAgent:
                 items = [{"name": i["name"], **({"quantity": i["quantity"]} if i.get("quantity") else {}), **({"unit": i["unit"]} if i.get("unit") else {}),
                           "_grams": i.get("grams"), "_photo": True} for i in draft["photo"]["items"]]
 
+        learned = await self._usuals(job.subject_id)
+        at_guess = parse_at(ask.get("eaten_at")) or clock.now()
+        meal_guess = meal_of(ask, at_guess)
+        if ask.get("usual") and not items and not ask.get("from_photo"):
+            rows = nudge_hooks.usual_for_meal(learned, meal_guess)
+            if not rows:
+                jobs.finish(job, "dropped", {"why": "no usual"})
+                return {"result": "dropped", "job_id": str(job.id),
+                        "why": "No usual meal is learned from their own logs yet; nothing saved."}
+            items = [nudge_hooks.as_item(r) for r in rows]
+        elif items and not ask.get("from_photo"):
+            items = nudge_hooks.stamp(learned, items, meal_guess, expand=bool(ask.get("usual")))
+        if items:
+            ask["items"] = items
+            job.ask = ask
+
         if not items:
             jobs.finish(job, "dropped", {"why": "nothing named"})
             return {"result": "dropped", "job_id": str(job.id), "why": "No food was named; nothing saved."}
@@ -434,6 +452,14 @@ class NutritionAgent:
         for it, r in keep:
             if it.get("quantity") or it.get("_grams") or ask.get("unsure") or r.food is None:
                 continue
+            usual = None if it.get("_photo") else nudge_hooks.match_usual(learned, str(it.get("name") or ""), meal_guess)
+            if usual and usual.get("quantity"):
+                it["quantity"] = float(usual["quantity"])
+                if usual.get("unit") in P.UNITS:
+                    it["unit"] = usual["unit"]
+                it["_usual"] = True
+                it["_assumed"] = True
+                continue
             if one_standard_serving(r.food):
                 _fill_one(it, r.food)
                 continue
@@ -460,7 +486,8 @@ class NutritionAgent:
                 conf = "estimate"
             elif not it.get("quantity") and not it.get("_grams"):
                 conf = "estimate" if r.food is not None else "unquantified"
-            assumed = _assumed_flags(r.food) if it.get("_assumed") and r.food is not None else {}
+            assumed = {"usual": True} if it.get("_usual") else (
+                _assumed_flags(r.food) if it.get("_assumed") and r.food is not None else {})
             to_save.append(entries.Item(name=it.get("name") or (r.food.name if r.food else "food"), food=r.food, quantity=it.get("quantity"),
                                         unit=it.get("unit"), name_said=it.get("said") or it.get("name") or "", confidence=conf,
                                         grams=it.get("_grams"), pantry=r.pantry, note=it.get("notes"), flags=assumed))
@@ -486,6 +513,10 @@ class NutritionAgent:
         return out
 
     # ── helpers ──
+
+    async def _usuals(self, subject: str) -> dict:
+        fact = await store.active_fact(self.session, self.who.family_id, subject, nudge_hooks.USUAL_KEY)
+        return fact.value if fact and isinstance(fact.value, dict) else {}
 
     def _you(self, job: NutritionJob) -> str:
         return "you" if job.subject_id == self.who.speaker_id else self.name_of(job.subject_id)

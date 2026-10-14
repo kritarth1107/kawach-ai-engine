@@ -1,6 +1,6 @@
 """What Kavach NUdge reads to ask about meals (N5_MEAL_NUDGES_DRAFT, INTERFACES.md §2.4). SQL only, no model calls: safe to
 call every minute. Kavach NUdge owns app/care/nudges.py and the meal-ask behaviour (learned:nudges_meals_mode); this module
-only answers questions about the food log and writes the two habit learnings that come from it.
+only answers questions about the food log and writes the habit learnings that come from it.
 """
 
 from __future__ import annotations
@@ -22,6 +22,8 @@ from app.nutrition.models import NutritionEntry
 SLOTS = ("breakfast", "lunch", "snack", "dinner")
 STABLE_DAYS = 7
 STABLE_WITHIN = 45  # minutes either side of the median
+USUAL_DAYS = 3  # a portion is theirs once the same amount shows on this many days
+USUAL_KEY = "learned:food_usuals"
 
 
 async def meal_logged(session: AsyncSession, family_id: str, person_id: str, slot: str, day: str | None = None) -> bool:
@@ -159,7 +161,154 @@ async def learn_meal_habits(session: AsyncSession, family_id: str, person_id: st
         text = "Usual portions: " + ", ".join(f"{name} {P.qty_label(v['quantity'], v['unit'])}".strip() for name, v in list(items.items())[:5])
         out["portions"] = await outcomes_learn.save_learned(session, family_id=family_id, subject_id=person_id,
                                                             key="learned:nudges_meals_portions", value={"items": items}, text=text)
+    usuals = await _food_usuals(session, family_id, person_id)
+    if usuals["items"]:
+        text = str(usuals.pop("text"))
+        out["usuals"] = await outcomes_learn.save_learned(
+            session, family_id=family_id, subject_id=person_id, key=USUAL_KEY, value=usuals, text=text)
     return out
+
+
+def norm_food(name: str) -> str:
+    """The structured food name, compared as data (not the person's sentence)."""
+    return " ".join(str(name or "").strip().lower().split())
+
+
+def match_usual(value: dict | None, name: str, meal: str | None) -> dict | None:
+    """Their learned amount for this food at this meal, or None."""
+    key = norm_food(name)
+    if not key or not isinstance(value, dict):
+        return None
+    hits = []
+    for row in value.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        names = {norm_food(row.get("name") or "")} | {norm_food(s) for s in row.get("said") or []}
+        if key in names:
+            hits.append(row)
+    if meal:
+        same = [r for r in hits if r.get("meal") == meal]
+        return same[0] if same else None
+    return hits[0] if len(hits) == 1 else None
+
+
+def usual_for_meal(value: dict | None, meal: str) -> list[dict]:
+    if not isinstance(value, dict) or meal not in SLOTS:
+        return []
+    return [r for r in value.get("items") or [] if isinstance(r, dict) and r.get("meal") == meal]
+
+
+def as_item(row: dict) -> dict:
+    """One learned food, ready for the log, marked as their usual."""
+    said = [s for s in row.get("said") or [] if s]
+    out = {"name": said[0] if said else row.get("name") or "food", "quantity": row.get("quantity"),
+           "unit": row.get("unit"), "_usual": True, "_assumed": True}
+    if row.get("food_id"):
+        out["food_id"] = row["food_id"]
+    return out
+
+
+def stamp(value: dict | None, items: list[dict], meal: str | None, *, expand: bool) -> list[dict]:
+    """Point a known usual at its catalogue food (no new lookup). With expand, add what they take with it."""
+    out = [dict(it) for it in items]
+    have = {norm_food(it.get("name") or "") for it in out} | {norm_food(it.get("said") or "") for it in out}
+    extra: list[dict] = []
+    for it in out:
+        row = match_usual(value, str(it.get("name") or it.get("said") or ""), meal)
+        if row and row.get("food_id") and not it.get("food_id"):
+            it["food_id"] = row["food_id"]
+        if not expand or row is None:
+            continue
+        for w in row.get("with") or []:
+            comp = match_usual(value, str(w), meal)
+            if comp is None or norm_food(comp.get("name") or "") in have:
+                continue
+            extra.append(as_item(comp))
+            have.add(norm_food(comp.get("name") or ""))
+    return out + extra
+
+
+async def _food_usuals(session: AsyncSession, family_id: str, person_id: str) -> dict:
+    """Stable foods from this person's own logs: the amount they repeat at a meal, the time when it clusters, and what
+    they eat with it. Nothing is inferred from a preference or from a meal they did not log."""
+    since = (clock.ist() - timedelta(days=30)).date().isoformat()
+    rows = (await session.execute(select(
+        NutritionEntry.name, NutritionEntry.name_said, NutritionEntry.quantity, NutritionEntry.unit, NutritionEntry.food_id,
+        NutritionEntry.meal, NutritionEntry.eaten_at, NutritionEntry.day, NutritionEntry.meal_id).where(
+            NutritionEntry.family_id == family_id, NutritionEntry.subject_id == person_id, NutritionEntry.day >= since,
+            NutritionEntry.status == "active", NutritionEntry.kind == "food", NutritionEntry.quantity.is_not(None)))).all()
+    buckets: dict[tuple[str, str], dict] = {}
+    for name, said, q, unit, food_id, meal, at, day, meal_id in rows:
+        if meal not in SLOTS or not name:
+            continue
+        key = (meal, norm_food(name))
+        b = buckets.get(key)
+        if b is None:
+            b = {"name": name, "said": Counter(), "qty": Counter(), "days": set(), "foods": Counter(),
+                 "hours": {}, "meals": set()}
+            buckets[key] = b
+        b["qty"][(q, unit)] += 1
+        b["days"].add(day)
+        if said and norm_food(said) != key[1]:
+            b["said"][str(said)[:80]] += 1
+        if food_id:
+            b["foods"][str(food_id)] += 1
+        if meal_id:
+            b["meals"].add(meal_id)
+        if at is not None and day not in b["hours"]:
+            local = clock.ist(at)
+            b["hours"][day] = local.hour * 60 + local.minute
+    stable: list[dict] = []
+    by_meal_id: dict = defaultdict(set)
+    for (meal, _), b in buckets.items():
+        (q, unit), n = b["qty"].most_common(1)[0]
+        total = sum(b["qty"].values())
+        if len(b["days"]) < USUAL_DAYS or n < 2 or n * 2 < total:
+            continue
+        mins = list(b["hours"].values())
+        hour = None
+        if len(mins) >= USUAL_DAYS:
+            med = median(mins)
+            if all(abs(m - med) <= STABLE_WITHIN for m in mins):
+                hour = _hm(med)
+        qty = int(q) if float(q).is_integer() else q
+        row = {"name": b["name"], "said": [s for s, c in b["said"].most_common(4) if c >= 2], "meal": meal,
+               "quantity": qty, "unit": unit, "days": len(b["days"]), "with": []}
+        if hour:
+            row["hour"] = hour
+        if b["foods"]:
+            row["food_id"] = b["foods"].most_common(1)[0][0]
+        stable.append(row)
+        for mid in b["meals"]:
+            by_meal_id[mid].add(norm_food(b["name"]))
+    names = {(r["meal"], norm_food(r["name"])): r for r in stable}
+    for row in stable:
+        key = norm_food(row["name"])
+        own = {mid for mid, foods in by_meal_id.items() if key in foods}
+        if len(own) < USUAL_DAYS:
+            continue
+        companions: Counter = Counter()
+        for mid in own:
+            for other in by_meal_id[mid]:
+                if other != key:
+                    companions[other] += 1
+        row["with"] = [names[(row["meal"], o)]["name"] for o, c in companions.most_common(2)
+                       if (row["meal"], o) in names and c >= USUAL_DAYS and c * 5 >= len(own) * 3]
+    text = _usual_text(stable)
+    return {"items": stable, "text": text}
+
+
+def _usual_text(items: list[dict]) -> str:
+    parts = []
+    for meal in SLOTS:
+        group = [r for r in items if r["meal"] == meal]
+        if not group:
+            continue
+        hours = {str(r["hour"]) for r in group if r.get("hour")}
+        when = f" around {_twelve(next(iter(hours)))}" if len(hours) == 1 else ""
+        bits = [f"{P.qty_label(r['quantity'], r.get('unit'))} {r['name']}".strip() for r in group]
+        parts.append(f"{meal}{when}: " + ", ".join(bits))
+    return "Usual " + "; ".join(parts) if parts else ""
 
 
 def _twelve(hhmm: str) -> str:

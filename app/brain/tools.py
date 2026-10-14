@@ -807,13 +807,16 @@ def _food_day(v: str | None) -> str | None:
     "log_food",
     "Log what someone ate or drank in the food log: the nutrition agent finds each food's nutrition (from the family's own foods, "
     "the shared catalogue, the pack, or reliable sources on the web) and saves it, or returns ONE question for you to ask. Use it "
-    "for every meal, snack, drink and glass of water anyone tells you they had (also an earlier day, also a caregiver telling "
+    "for a meal, snack, drink or glass of water named in the message they just sent (also an earlier day, also a caregiver telling "
     "you what their parent ate), unless food tracking is off for them. Do not call this to agree with a meal already saved, "
-    "or to fill in a meal they did not name: a dish they did not say is not logged. You read their words; give structured fields: one item "
+    "to praise it, or to log food from an earlier turn again, and do not fill in a meal they did not name: a dish they did not say is not logged. You read their words; give structured fields: one item "
     "per food, its name in English as people know it (keep dish names: 'poha', 'thekua', 'masala dosa'; with preparation: "
     "'boiled egg'), quantity and unit only when they said a number (never invent one: 'ate eggs', an unclear 'for/four', or a "
     "single drink or pack with no number has no quantity: leave it out). The agent saves one serving for a packaged item or a "
-    "drink, and asks only when the amount changes the numbers (counted pieces, a plate, a katori). Do not ask how many yourself "
+    "drink, and asks only when the amount changes the numbers (counted pieces, a plate, a katori). When their own logs show the "
+    "same amount of that food at that meal, it saves that amount, says it is their usual, and does not look the food up again. "
+    "usual=true means they want that learned meal, including what they have with it; never set it when they only say a meal is "
+    "done. Do not ask how many yourself "
     "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. Water: one item, unit glass "
@@ -850,6 +853,8 @@ def _food_day(v: str | None) -> str | None:
         "consumed": {"type": "string", "enum": ["yes", "no", "part"], "description": "Food from an order: did they eat it"},
         "portion_eaten": {"type": "string", "enum": ["all", "most", "half", "little"]},
         "skipped": {"type": "boolean", "description": "They said they skipped this meal (give meal); nothing was eaten"},
+        "usual": {"type": "boolean", "description": "They mean the meal or amount their own logs show they usually have. Never set this "
+                  "when they only say a meal is done, or when they did not mean their usual."},
     },
     [],
 )
@@ -864,7 +869,7 @@ async def log_food(ctx: TurnCtx, a: dict) -> dict:
     if not settings.tracked(s) and not a.get("answer_to"):
         raise ToolRefused(f"Food tracking is off for {_name_of(ctx, subject)}. Note the meal with log_event kind meal instead; turn tracking on "
                           "only if they ask (nutrition_settings).")
-    if not any(a.get(k) for k in ("items", "answer_to", "from_photo", "label_photo", "skipped", "consumed", "from_order_task")):
+    if not any(a.get(k) for k in ("items", "answer_to", "from_photo", "label_photo", "skipped", "consumed", "from_order_task", "usual")):
         raise ToolRefused("Give the items they ate (or from_photo / label_photo for a photo, skipped for a skipped meal).")
     return await agent.handle(ctx.session, _food_who(ctx), a, subject_id=subject)
 

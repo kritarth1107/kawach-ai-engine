@@ -10,7 +10,7 @@ import pytest
 from app.brain import tools
 from app.care import store
 from app.core import clock
-from app.nutrition import agent, entries, jobs, lookup, pantry
+from app.nutrition import agent, entries, jobs, lookup, nudge_hooks, pantry
 from app.nutrition.models import NutritionEntry, NutritionFood
 from app.sim.world import SimHost
 from tests import nutrition_fakes
@@ -538,3 +538,77 @@ async def test_removing_the_last_item_of_a_photo_meal_deletes_the_photo(db, at, 
     assert gone == []  # the other item of that meal still shows the photo
     await entries.remove(db, rows[1])
     assert gone == ["gs://bucket/families/fam-food/nutrition/meal.jpg"]
+
+
+SUGAR = {"name": "Sugar", "kind": "generic", "per_100g": {"energy_kcal": 387, "carbs_g": 100, "sugar_g": 100},
+         "units": {"tsp": 4}, "default_unit": "tsp", "typical_qty": 1, "countable": True, "tags": ["sugar"], "source_kind": "ifct"}
+
+
+async def test_fourteen_days_teach_the_usual_amount_and_skip_the_lookup(db, at, nfake, monkeypatch):
+    """A synthetic 14-day log. Before learning, a missing number is a question or one serving. After, it is their amount,
+    and the known food is not looked up again."""
+    nfake.web.foods["sugar"] = SUGAR
+    at("2026-09-16 21:00")
+    nfake.calls.clear()
+    nfake.web.asked.clear()
+    roti_before, _ = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-09-16T21:00:00+05:30",
+                                                 "items": [{"name": "roti"}]})
+    tea_before, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-09-16T07:00:00+05:30",
+                                                "items": [{"name": "tea"}]})
+    before_lookups = nfake.calls.count("normalise") + len(nfake.web.asked)
+    assert roti_before["result"] == "needs_input"  # counted, and not their amount yet
+    assert tea_before["result"] == "saved", tea_before
+    tea_saved = next(e for e in await active(db) if "tea" in e.name.lower())
+    assert tea_saved.quantity == 1  # one serving, not the 2 they actually drink
+    before_error = (1.0 + abs(1 - 2) / 2) / 2
+
+    at("2026-09-15 22:00")
+    for day in range(1, 15):
+        d = f"2026-09-{day:02d}"
+        await call(db, "log_food", {"meal": "dinner", "eaten_at": f"{d}T21:00:00+05:30",
+                                    "items": [{"name": "roti", "quantity": 4, "unit": "piece"}]})
+        await call(db, "log_food", {"meal": "breakfast", "eaten_at": f"{d}T07:00:00+05:30",
+                                    "items": [{"name": "tea", "quantity": 2, "unit": "cup"},
+                                              {"name": "sugar", "quantity": 1, "unit": "tsp"}]})
+    got = await nudge_hooks.learn_meal_habits(db, FAM, MAA["id"])
+    assert got.get("usuals") == "created"
+    fact = await store.active_fact(db, FAM, MAA["id"], "learned:food_usuals")
+    assert fact and "Chapati" in fact.text and "7:00 am" in fact.text and "Sugar" in fact.text
+    assert nudge_hooks.match_usual(fact.value, "roti", "breakfast") is None  # dinner's rotis are not breakfast
+    dinner = nudge_hooks.match_usual(fact.value, "roti", "dinner")
+    assert dinner["quantity"] == 4
+
+    real = lookup.candidates
+
+    async def hide_exact(session, family_id, item, pantry_rows):
+        cards, _exact = await real(session, family_id, item, pantry_rows)
+        return cards, None
+
+    monkeypatch.setattr(lookup, "candidates", hide_exact)
+    nfake.calls.clear()
+    nfake.web.asked.clear()
+    roti_after, err = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-09-15T21:00:00+05:30",
+                                                  "items": [{"name": "roti"}]})
+    assert not err and roti_after["result"] == "saved", roti_after
+    assert "your usual" in roti_after["say"]
+    saved = [e for e in await active(db) if e.day == "2026-09-15" and e.meal == "dinner"]
+    assert [e.quantity for e in saved] == [4]
+    after_lookups = nfake.calls.count("normalise") + len(nfake.web.asked)
+    morning, _ = await call(db, "log_food", {"usual": True, "meal": "breakfast", "eaten_at": "2026-09-15T07:00:00+05:30"})
+    assert morning["result"] == "saved", morning
+    morn = [e for e in await active(db) if e.day == "2026-09-15" and e.meal == "breakfast"]
+    assert any("tea" in e.name.lower() and e.quantity == 2 for e in morn)
+    assert any("sugar" in e.name.lower() and e.quantity == 1 for e in morn)
+    after_error = 0.0
+    assert after_error < before_error and after_lookups == 0 < before_lookups
+
+    breakfast_roti, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-09-15T08:00:00+05:30",
+                                                    "items": [{"name": "roti"}]})
+    assert breakfast_roti["result"] == "needs_input"
+
+    await store.stop_fact(db, family_id=FAM, subject_id=MAA["id"], key="learned:food_usuals", reason="undo",
+                          source_kind="caregiver_said", stated_by=MAA["id"])
+    assert await store.active_fact(db, FAM, MAA["id"], "learned:food_usuals") is None
+    undone, _ = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-09-15T21:30:00+05:30",
+                                            "items": [{"name": "roti"}]})
+    assert undone["result"] == "needs_input"
