@@ -954,20 +954,65 @@ async def test_a_meal_question_waits_for_a_dose_question_an_open_food_question_a
     assert await meal_opts(db, at, "2026-10-14 14:45") == []
 
 
-async def test_at_most_three_meal_questions_a_day_three_hours_apart(db, at, sessions, writer, food):
+async def test_one_habit_ask_per_quiet_hour_and_six_a_day(db, at, sessions, writer, food):
     await meal_day(db, at)
     p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
     at("2026-10-14 12:00")
     await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text="What was breakfast?", fld="meal:breakfast",
                       about="meal:2026-10-14:breakfast", sent=True)
     await db.commit()
-    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # 2.5 h after the last one
-    assert len(await meal_opts(db, at, "2026-10-14 15:05")) == 1
-    for i, when in enumerate(("2026-10-14 15:10", "2026-10-14 18:20")):
+    assert await meal_opts(db, at, "2026-10-14 12:40") == []  # still inside the quiet hour
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 14:30")] == ["meal:lunch"]
+    for i, when in enumerate(("2026-10-14 15:40", "2026-10-14 17:00", "2026-10-14 18:10", "2026-10-14 19:20", "2026-10-14 20:30")):
         at(when)
         await nudges._log(db, p, nudges.clock.now(), kind="meal", status="sent", text=f"meal {i}", fld="meal:lunch", about=f"x{i}", sent=True)
     await db.commit()
-    assert await meal_opts(db, at, "2026-10-14 21:30") == []  # three today
+    assert await meal_opts(db, at, "2026-10-14 21:30") == []  # six habit asks today
+
+
+async def habit_opts(db, at, when, kind, who=MAA, cared=True):
+    at(when)
+    p = nudges.Person(FAM, who["id"], who["name"], who["role"], cared, cared)
+    ck = nudges.Clock(None, None, 0, False, rows=await nudges.ledger_rows(db, FAM, who["id"]), gate={"meals_mode": "on"})
+    return [o for o in await nudges.candidates(db, p, ck, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+            if o.kind == kind]
+
+
+async def test_water_and_sleep_use_default_times_until_they_have_said(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    assert [o.field for o in await habit_opts(db, at, "2026-10-14 09:00", "sleep")] == ["sleep:when"]
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="sleep", summary="slept 11 to 7", payload={"type": "sleep"})
+    await db.commit()
+    assert await habit_opts(db, at, "2026-10-14 09:10", "sleep") == []
+    assert [o.field for o in await habit_opts(db, at, "2026-10-14 12:10", "water")] == ["water:count"]
+    food.progress_body = {"totals": {"water_ml": 250}}
+    assert await habit_opts(db, at, "2026-10-14 12:15", "water") == []
+
+
+async def test_a_learned_meal_time_moves_the_ask(db, at, sessions, writer, food):
+    from app.care import meal_nudges
+
+    await meal_day(db, at)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="learned", key=meal_nudges.TIMES_KEY,
+                           value={"lunch": "15:00"}, text="Usually has lunch around 3:00 pm; Saheli asks after that.",
+                           source_kind="learned")
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []  # the default 1:30 lunch is not theirs
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 15:50")] == ["meal:lunch"]
+
+
+async def test_a_sleep_answer_is_saved_as_sleep(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    at("2026-10-14 08:00")
+    await wrote(db, MAA, "ok")
+    host = SimHost()
+    host.world.meals_mode = "on"
+    writer.pick = "sleep"
+    at("2026-10-14 09:00")
+    await run(sessions, host)
+    assert (await rows(db))[-1].kind == "sleep"
+    hint = await nudges.reply_hint(db, FAM, MAA["id"])
+    assert "log_event" in hint and "kind sleep" in hint
 
 
 async def test_in_shadow_a_meal_question_is_logged_not_sent_and_the_regular_nudge_still_goes(db, at, sessions, writer, food):
@@ -1079,12 +1124,14 @@ async def test_a_water_reminder_follow_up_is_saved_as_water(db, at, sessions, wr
     assert "log_food" in hint and "water" in hint
 
 
-async def test_a_caregiver_is_asked_once_in_the_evening_about_an_elder_who_does_not_write(db, at, sessions, writer, food):
+async def test_a_caregiver_is_asked_about_their_own_meals_and_once_about_an_elder_who_does_not_write(db, at, sessions, writer, food):
     await meal_day(db, at)
-    assert await meal_opts(db, at, "2026-10-14 14:30", who=SON, cared=False) == []  # not in the evening
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 14:30", who=SON, cared=False)] == ["meal:lunch"]
+    food.logged.add((SON["id"], "dinner"))
+    food.progress_body = {"totals": {"water_ml": 200}}  # their own dinner and water are already told
     got = await meal_opts(db, at, "2026-10-14 21:40", who=SON, cared=False)
     assert [o.field for o in got] == ["meal:day"] and got[0].about_ref.endswith(f":for:{MAA['id']}") and "Kamla" in got[0].why
-    food.meals_logged = 1  # the caregiver already told Saheli
+    food.meals_logged = 1  # the caregiver already told Saheli what the elder ate
     assert await meal_opts(db, at, "2026-10-14 21:40", who=SON, cared=False) == []
     food.meals_logged = 0
     await wrote(db, MAA, "Aaj khana accha tha")  # the elder writes herself: she is asked, not her son

@@ -269,8 +269,18 @@ async def check(sessions, timeline: dict[str, list], rows: list, days: int) -> d
                     per_day_meals[local_m.strftime("%Y-%m-%d")] += 1
                     if local_m.hour * 60 + local_m.minute < wake_m:
                         fails.append(f"{key}: a meal ask before wake at {local_m:%a %H:%M}")
-                if any(n > 3 for n in per_day_meals.values()):
-                    fails.append(f"{key}: {dict(per_day_meals)} meal asks in a day (at most 3)")
+                if any(n > 4 for n in per_day_meals.values()):
+                    fails.append(f"{key}: {dict(per_day_meals)} meal asks in a day (at most 4)")
+                habit_rows = [r for r in rows if r.person_id == p.person["id"] and r.kind in ("water", "sleep") and r.status == "sent" and r.sent_at]
+                per_day_sleep: dict[str, int] = defaultdict(int)
+                for r in habit_rows:
+                    local_m = clock.ist(r.sent_at)
+                    if local_m.hour * 60 + local_m.minute < wake_m:
+                        fails.append(f"{key}: a {r.kind} ask before wake at {local_m:%a %H:%M}")
+                    if r.kind == "sleep":
+                        per_day_sleep[local_m.strftime("%Y-%m-%d")] += 1
+                if any(n > 1 for n in per_day_sleep.values()):
+                    fails.append(f"{key}: {dict(per_day_sleep)} sleep asks in a day")
                 doses = [r.sent_at for r in rows if r.person_id == p.person["id"] and r.kind == "doses" and r.status == "sent" and r.sent_at]
                 for r in meal_rows:
                     if any(abs((r.sent_at - d).total_seconds()) < 30 * 60 for d in doses):
