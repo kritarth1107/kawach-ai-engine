@@ -139,6 +139,29 @@ def specs() -> list[ToolSpec]:
     return [spec for spec, _ in _TOOLS.values()]
 
 
+def arg_problems(schema: dict, args: Any) -> list[str]:
+    """What is wrong with a call against its tool's schema: a missing required field or a value outside an enum (a field the
+    tool does not take is left alone). Models other than Gemini do not always hold to the schema (live 2026-10-14: stop with
+    domain "outcome" eight times, each one a crash); when a tool fails on such a call, the model gets these back instead."""
+    if not isinstance(args, dict):
+        return ["arguments must be an object"]
+    props = schema.get("properties") or {}
+    out = [f"{k} is required" for k in schema.get("required") or [] if args.get(k) is None]
+    for k, v in args.items():
+        spec = props.get(k)
+        if spec is None:
+            continue
+        allowed = spec.get("enum")
+        if allowed and v is not None and not isinstance(v, (dict, list)) and v not in allowed:
+            out.append(f"{k} must be one of {', '.join(map(str, allowed))} (got {v!r})")
+        items = spec.get("items") or {}
+        if spec.get("type") == "array" and isinstance(v, list) and items.get("enum"):
+            bad = [x for x in v if x not in items["enum"]]
+            if bad:
+                out.append(f"{k} items must be from {', '.join(map(str, items['enum']))} (got {bad!r})")
+    return out
+
+
 async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
     """Run a tool; returns (json result, is_error). Errors go back to the model, never to the user."""
     if name not in _TOOLS:
@@ -157,6 +180,13 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
         ctx.actions.append({"tool": name, "args": args, "ok": False, "refused": str(exc)})
         return json.dumps({"refused": str(exc)}), True
     except Exception as exc:  # noqa: BLE001 — the model decides what to tell the person
+        # A call outside the tool's schema (a model that ignores enums): the model gets the allowed values, not a crash.
+        # Tools that refuse a bad call themselves keep their own, more specific answer (it is a ToolRefused above).
+        problems = arg_problems(_TOOLS[name][0].schema, args)
+        if problems:
+            logger.warning("tool %s called outside its schema: %s", name, "; ".join(problems))
+            ctx.actions.append({"tool": name, "args": args, "ok": False, "refused": "; ".join(problems)})
+            return json.dumps({"refused": "Nothing was done. Fix the call: " + "; ".join(problems)}, ensure_ascii=False), True
         logger.exception("tool %s failed", name)
         ctx.actions.append({"tool": name, "args": args, "ok": False, "error": str(exc)[:200]})
         return json.dumps({"error": "this did not work right now", "detail": str(exc)[:200]}), True
