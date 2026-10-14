@@ -37,7 +37,8 @@ async def test_values_that_do_not_add_up_are_looked_up_again_then_kept_as_rough(
                                          "units": {"piece": 40}}
     got = await lookup.resolve(db, FAM, [{"name": "mystery laddoo"}])
     f = got[0].food
-    assert nfake.web.asked == ["mystery laddoo", "mystery laddoo"]  # one more look-up
+    # one search, then saved rough; a second search waits until after they are told (refine_saved)
+    assert nfake.web.asked == ["mystery laddoo"]
     assert f is not None and f.checked["rough"] and f.confidence < 0.5 and got[0].estimate
 
 

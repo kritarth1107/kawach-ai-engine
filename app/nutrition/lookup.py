@@ -10,9 +10,9 @@
    restaurant menus are named in the prompt.
 5. A model estimate without sources, marked as an estimate (home dishes nobody has published).
 
-Code then checks the data (app.nutrition.nutrients.check_per_100g, app.nutrition.portions bounds). A failed check gets
-one more look-up; if it still fails the food is kept with confidence below 0.5 and marked rough. Generic foods hold no
-personal data and are shared by every family.
+Code then checks the data (app.nutrition.nutrients.check_per_100g, app.nutrition.portions bounds). A failed check is
+kept rough and refined after the person has been told; the hot path does not search a second time. Generic foods hold
+no personal data and are shared by every family.
 """
 
 from __future__ import annotations
@@ -38,6 +38,10 @@ from app.nutrition import portions as P
 from app.nutrition.models import NutritionFood, NutritionPantry
 
 logger = logging.getLogger(__name__)
+
+# One grounded search, shared by every place it tries. Longer than this, the meal is saved from an estimate and the
+# search result replaces it afterwards (the person is not left waiting minutes).
+WEB_S = 12.0
 
 KINDS = ("generic", "packaged", "restaurant", "recipe")
 TAGS = ("egg", "tea", "coffee", "water", "fruit", "vegetable", "sweet", "sugar", "dairy", "fried", "alcohol", "sugary_drink", "grain",
@@ -141,12 +145,12 @@ Return only JSON, nothing else:
 """ + FOOD_JSON
 
 
-async def normalise(items: list[dict], candidates: list[list[dict]], *, essential: bool = True) -> list[dict]:
+async def normalise(items: list[dict], candidates: list[list[dict]], *, essential: bool = True, timeout_s: float = 8.0) -> list[dict]:
     """One call for all the items of a meal. Returns one decision per item (an empty dict when the model failed)."""
     body = json.dumps({"ITEMS": [{"i": i, **{k: v for k, v in it.items() if v}} for i, it in enumerate(items)],
                        "CANDIDATES": {str(i): c for i, c in enumerate(candidates)}}, ensure_ascii=False)
     try:
-        got = await ask("nutrition", NORMALISE_PROMPT, body, essential=essential, max_tokens=2500)
+        got = await ask("nutrition", NORMALISE_PROMPT, body, essential=essential, max_tokens=2500, timeout_s=timeout_s)
     except router.AllModelsFailed:
         logger.warning("nutrition normaliser unavailable")
         return [{} for _ in items]
@@ -278,10 +282,15 @@ async def web(item: dict, canonical: str | None, *, timeout_s: float, problem: s
     prompt = SEARCH_PROMPT.replace("{food}", _describe(item, canonical))
     if problem:
         prompt += f"\n\nA first look-up gave values that do not add up ({problem}); check the source again."
+    # one budget for every place: a hung Mumbai search must not be followed by another full wait
+    started = time.monotonic()
     for loc in dict.fromkeys((search_location(), "global")):
+        left = timeout_s - (time.monotonic() - started)
+        if left < 1.5:
+            raise Slow()
         try:
             got = await asyncio.wait_for(websearch.grounded(prompt, location=loc, role="nutrition_search", max_tokens=1500, max_sources=4,
-                                                            model=os.getenv("NUTRITION_SEARCH_MODEL") or None), timeout=timeout_s)
+                                                            model=os.getenv("NUTRITION_SEARCH_MODEL") or None), timeout=left)
         except asyncio.TimeoutError:
             raise Slow() from None
         except Exception as exc:  # noqa: BLE001 — a region without grounding falls to the next; then the estimate
@@ -293,9 +302,10 @@ async def web(item: dict, canonical: str | None, *, timeout_s: float, problem: s
     return None
 
 
-async def estimate(item: dict, canonical: str | None, *, essential: bool = True) -> dict | None:
+async def estimate(item: dict, canonical: str | None, *, essential: bool = True, timeout_s: float = 8.0) -> dict | None:
     try:
-        d = await ask("nutrition", ESTIMATE_PROMPT, "FOOD: " + _describe(item, canonical), essential=essential, max_tokens=1500)
+        d = await ask("nutrition", ESTIMATE_PROMPT, "FOOD: " + _describe(item, canonical), essential=essential, max_tokens=1500,
+                      timeout_s=timeout_s)
     except router.AllModelsFailed:
         return None
     return _food_from_json(d, source="model")
@@ -412,7 +422,7 @@ class Resolved:
         return bool(self.food and (self.food.source == "model" or (self.food.checked or {}).get("rough")))
 
 
-async def fetch(item: dict, decision: dict, *, deadline: float | None, essential: bool) -> dict | None:
+async def fetch(item: dict, decision: dict, *, deadline: float | None, essential: bool, estimates_only: bool = False) -> dict | None:
     """Steps 3–5 for one item with no catalogue match: network only (no database), so a meal's new foods are looked up
     together."""
     canonical = str(decision.get("canonical") or "").strip() or None
@@ -422,22 +432,23 @@ async def fetch(item: dict, decision: dict, *, deadline: float | None, essential
         food = await off_barcode(str(item["barcode"]))
     if food is None and kind == "packaged" and item.get("brand"):
         food = await off_search(str(item.get("name") or canonical or ""), str(item["brand"]))
-    if food is None and kind != "recipe":
-        remaining = (deadline - time.monotonic()) if deadline else 25.0
+    if food is None and kind != "recipe" and not estimates_only:
+        remaining = (deadline - time.monotonic()) if deadline else WEB_S
         if remaining < 2.0:
             raise Slow()
-        food = await web(item, canonical, timeout_s=min(remaining, 25.0))
+        try:
+            food = await web(item, canonical, timeout_s=min(remaining, WEB_S))
+        except Slow:
+            food = None
+            # the turn has no time left to estimate: the background run saves an estimate and refines it
+            if deadline is not None and (deadline - time.monotonic()) < 4.0:
+                raise
         if food:
             chk = N.check_per_100g(food["per_100g"])
-            if not chk.ok:  # one more look-up; if it still does not add up, it is kept as rough
-                remaining = (deadline - time.monotonic()) if deadline else 25.0
-                again = await web(item, canonical, timeout_s=min(remaining, 25.0), problem="; ".join(chk.problems)) if remaining > 2 else None
-                if again and N.check_per_100g(again["per_100g"]).ok:
-                    food = again
-                else:
-                    food["rough"] = True
+            if not chk.ok:
+                food["rough"] = True  # refined after they are told; not a second search before the save
     if food is None:
-        food = await estimate(item, canonical, essential=essential)
+        food = await estimate(item, canonical, essential=essential, timeout_s=8.0)
     if food is None:
         return None
     food.setdefault("kind", kind)
@@ -464,7 +475,8 @@ async def keep(session: AsyncSession, family_id: str, item: dict, food: dict) ->
 
 
 async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, pantry_rows: list[NutritionPantry] | None = None,
-                  deadline: float | None = None, essential: bool = True, no_questions: bool = False) -> list[Resolved]:
+                  deadline: float | None = None, essential: bool = True, no_questions: bool = False,
+                  estimates_only: bool = False) -> list[Resolved]:
     """Find every item's food. Raises Slow when a web look-up does not fit before `deadline` (time.monotonic()).
     no_questions: the meal has had its two questions; a vague or unlabelled item is looked up (or estimated) as it is."""
     pantry_rows = list(pantry_rows or [])
@@ -490,7 +502,9 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
             todo.append(i)
     slow: list[int] = []
     if todo:
-        decisions = await normalise([items[i] for i in todo], [cards[i] for i in todo], essential=essential)
+        left = (deadline - time.monotonic()) if deadline else 15.0
+        decisions = await normalise([items[i] for i in todo], [cards[i] for i in todo], essential=essential,
+                                    timeout_s=max(3.0, min(8.0, left)))
         for i, d in zip(todo, decisions):
             r = out[i]
             r.decision = d or {}
@@ -520,7 +534,8 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
             p = out[i].pantry
             return items[i] if p is None else {**items[i], "name": p.name, "brand": p.brand}
 
-        got = await asyncio.gather(*(fetch(asked(i), out[i].decision, deadline=deadline, essential=essential) for i in slow),
+        got = await asyncio.gather(*(fetch(asked(i), out[i].decision, deadline=deadline, essential=essential,
+                                           estimates_only=estimates_only) for i in slow),
                                    return_exceptions=True)
         if any(isinstance(g, Slow) for g in got):
             raise Slow()

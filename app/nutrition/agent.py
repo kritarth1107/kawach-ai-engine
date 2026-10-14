@@ -175,12 +175,23 @@ def _saved_line(r: NutritionEntry) -> tuple[str, bool]:
     return entries.line(r), True
 
 
+def _with_facts(text: str, flags: dict) -> str:
+    """The food's own nutrient facts, in the saved line (never advice)."""
+    facts = [str(f) for f in (flags or {}).get("facts") or []]
+    if not facts:
+        return text
+    bit = ", ".join(facts)
+    if text.endswith(")"):
+        return text[:-1] + f", {bit})"
+    return f"{text} ({bit})"
+
+
 def _say(rows: list[NutritionEntry], tracking: str) -> str:
     food = [r for r in rows if r.kind == "food"]
     if not food:
         return "Noted: " + ", ".join(entries.line(r) for r in rows) + "."
     parts = [_saved_line(r) for r in food]
-    what = ", ".join(text for text, _ in parts)
+    what = ", ".join(_with_facts(text, r.flags or {}) for (text, _), r in zip(parts, food))
     tot = entries.totals(food)
     if tracking == "counts" or not tot.get("energy_kcal"):
         base = f"Saved: {what}."
@@ -279,7 +290,7 @@ class NutritionAgent:
     def name_of(self, pid: str) -> str:
         return self.who.names.get(pid) or "them"
 
-    async def run(self, job: NutritionJob, *, deadline: float | None) -> dict:
+    async def run(self, job: NutritionJob, *, deadline: float | None, background: bool = False, estimates_only: bool = False) -> dict:
         s, who = self.session, self.who
         ask = dict(job.ask or {})
         draft = dict(job.draft or {})
@@ -394,11 +405,16 @@ class NutritionAgent:
         stock = await pantry.in_stock(s, who.family_id, job.subject_id)
         try:
             found = await lookup.resolve(s, who.family_id, [{k: v for k, v in i.items() if not k.startswith("_")} for i in items],
-                                         pantry_rows=stock, deadline=deadline, essential=who.essential, no_questions=not jobs.can_ask(job))
+                                         pantry_rows=stock, deadline=deadline, essential=who.essential, no_questions=not jobs.can_ask(job),
+                                         estimates_only=estimates_only)
         except lookup.Slow:
+            if background and not estimates_only:
+                # the search did not fit: save an estimate now (under ~30 s) and refine the numbers after they are told
+                return await self.run(job, deadline=time.monotonic() + 10, background=True, estimates_only=True)
             job.state, job.updated_at = "resolving", clock.now()
             return {"result": "looking_up", "job_id": str(job.id),
-                    "say": "Tell them in a few words you are checking its nutrition and will tell them when it is saved (no numbers yet)."}
+                    "say": "Tell them once, in a few words, that you are checking its nutrition and will tell them when it is saved "
+                           "(no numbers yet). If you already said that, say nothing."}
         medicines = [r.item.get("name") for r in found if r.medicine]
         keep = [(i, r) for i, r in zip(items, found) if not r.medicine]
         if medicines and not keep:
@@ -463,6 +479,8 @@ class NutritionAgent:
             if x.pantry is not None:
                 await pantry.use(s, x.pantry, float(x.quantity or 1) if x.unit in (None, "piece", x.pantry.unit) else 1.0)
         out = await self._result(job, rows, tracking, replaced=replaced, medicines=medicines)
+        if any((r.flags or {}).get("refine") for r in rows):
+            out["refine"] = True
         jobs.finish(job, "saved", {"entries": [str(r.id) for r in rows], "meal_id": str(rows[0].meal_id) if rows else None,
                                    "say": out.get("say"), "today": out.get("today"), **({"order_task": str(task.id)} if task else {})})
         return out
@@ -650,6 +668,19 @@ class NutritionAgent:
 # ── entry points ─────────────────────────────────────────────────────────────
 
 
+def _attach(job: NutritionJob) -> dict:
+    """A repeat log_food for a meal already pending or saved: no new job and no new entries."""
+    if job.state in ("queued", "resolving"):
+        return {"result": "looking_up", "already": True, "job_id": str(job.id), "say": "",
+                "how": "This meal is already being saved. Say nothing. Do not say you are checking, and do not call log_food again for it."}
+    if job.state == "needs_input":
+        n = job.needs or {}
+        return {"result": "needs_input", "already": True, "job_id": str(job.id), "needs": [n], "say": n.get("question") or "",
+                "how": "This question is already waiting. Ask it only if you have not asked it yet. Pass the answer with answer_to."}
+    return {"result": "saved", "already": True, "job_id": str(job.id), "say": "",
+            "how": "Already in the food log. Say nothing about it."}
+
+
 async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str) -> dict:
     """log_food: a new meal, or an answer to the agent's question (answer_to)."""
     if args.get("answer_to"):
@@ -665,6 +696,10 @@ async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str
             job.ask = ask
     else:
         ask = clean_ask(args)
+        if ask.get("items") and not any(ask.get(k) for k in ("from_photo", "label_photo", "skipped", "from_order_task")):
+            existing = await jobs.same_recent(session, who.family_id, subject_id, who.speaker_id, ask)
+            if existing is not None:
+                return _attach(existing)
         job = await jobs.create(session, family_id=who.family_id, subject_id=subject_id, requested_by=who.speaker_id, ask=ask,
                                 source_ref=who.message_ref, channel=who.channel)
     out = await NutritionAgent(session, who).run(job, deadline=time.monotonic() + jobs.inline_seconds())
@@ -679,7 +714,7 @@ async def run_background(session: AsyncSession, job: NutritionJob) -> dict:
     roster = await store.roster(session, job.family_id)
     names = {m.get("id"): m.get("name") for m in ([roster.elder, *roster.members] if roster else []) if m.get("id")}
     who = Who(family_id=job.family_id, speaker_id=job.requested_by, channel=job.channel or "whatsapp", essential=False, names=names)
-    return await NutritionAgent(session, who).run(job, deadline=None)
+    return await NutritionAgent(session, who).run(job, deadline=time.monotonic() + 20, background=True)
 
 
 async def expire(session: AsyncSession, job: NutritionJob) -> dict:
@@ -714,14 +749,63 @@ async def tell(sessions, host_for, job: NutritionJob, out: dict) -> None:
     if out.get("result") == "saved":
         what = f"{out.get('say')} {out.get('today') or ''}".strip()
         extra = " ".join(str(out[k]) for k in ("allergy", "deviation") if out.get(k))
+        fallback = what
         prompt = (f"[Nutrition update] The food {job.requested_by} told you about is now saved: {what} {extra} Tell them in one short line with "
                   f"send_message (to {job.requested_by}), in their language, numbers exactly as given. Then reply none.")
     else:
         n = (out.get("needs") or [{}])[0]
+        fallback = str(n.get("question") or "")
         prompt = (f"[Nutrition update] To save the food {job.requested_by} told you about, ask them only this, with send_message (to "
                   f"{job.requested_by}), in their language: \"{n.get('question')}\". Do not read out options or ids. When they answer, "
                   f"call log_food with answer_to=\"{job.id}\". Then reply none.")
     try:
-        await system_turn(sessions, host, job.family_id, prompt, f"nutrition:{job.id}:{out.get('result')}", deliver_to=job.requested_by)
+        await system_turn(sessions, host, job.family_id, prompt, f"nutrition:{job.id}:{out.get('result')}", deliver_to=job.requested_by,
+                          fallback=fallback)
     except Exception:  # noqa: BLE001
         logger.exception("nutrition update not told family=%s", job.family_id)
+
+
+async def refine_saved(sessions, job_id) -> None:
+    """After they have been told, replace an estimate with a web look-up when one comes back. No second message."""
+    async with sessions() as session:
+        rows = list((await session.execute(select(NutritionEntry).where(
+            NutritionEntry.job_id == job_id, NutritionEntry.status == "active"))).scalars())
+        changed = False
+        for e in rows:
+            if not (e.flags or {}).get("refine") or e.food_id is None:
+                continue
+            food = await session.get(NutritionFood, e.food_id)
+            if food is None:
+                continue
+            try:
+                got = await lookup.web({"name": e.name_said or e.name}, food.name, timeout_s=lookup.WEB_S)
+            except lookup.Slow:
+                continue
+            if not got or not N.check_per_100g(got.get("per_100g") or {}).ok:
+                continue
+            food.per_100g = N.clean(got["per_100g"])
+            food.source = str(got.get("source") or "web")[:12]
+            food.source_urls = list(got.get("source_urls") or [])[:4]
+            chk = N.check_per_100g(food.per_100g)
+            food.checked = {**chk.to_dict(), "rough": False}
+            food.confidence = 0.8
+            food.updated_at = clock.now()
+            grams, vals, _est = entries.compute(food, e.quantity, e.unit)
+            if not vals:
+                continue
+            e.nutrients, e.grams = vals, grams
+            flags = dict(e.flags or {})
+            flags.pop("refine", None)
+            flags.pop("rough", None)
+            facts = N.fact_tags(food.per_100g)
+            if facts:
+                flags["facts"] = facts
+            else:
+                flags.pop("facts", None)
+            e.flags = flags
+            e.version = (e.version or 1) + 1
+            e.updated_at = clock.now()
+            await entries.record(session, e, "write", reason="web look-up replaced the first estimate")
+            changed = True
+        if changed:
+            await session.commit()

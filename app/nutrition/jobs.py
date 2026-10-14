@@ -1,4 +1,4 @@
-"""The nutrition agent's work queue (plan §N1.3): one job per log_food call.
+"""The nutrition agent's work queue (plan §N1.3): one job per meal being logged.
 
     queued → resolving → needs_input → resolving → saved | dropped
 
@@ -26,6 +26,7 @@ from app.nutrition.models import NutritionJob
 logger = logging.getLogger(__name__)
 
 ANSWER_WAIT = timedelta(hours=2)
+SAME_MEAL = timedelta(hours=4)  # a repeat log_food for the same meal attaches to the job already pending or saved
 LIVE = ("queued", "resolving", "needs_input")
 COUNTED = ("quantity", "which", "label", "photo")  # at most 2 of these per meal; consent and identity never count
 MAX_QUESTIONS = 2
@@ -52,6 +53,54 @@ async def get(session: AsyncSession, family_id: str, job_id: str) -> NutritionJo
     except ValueError:
         return None
     return job if job and job.family_id == family_id else None
+
+
+def _item_key(item: dict) -> tuple | None:
+    """The structured item the brain passed (name, quantity, unit). Never the person's words."""
+    name = " ".join(str(item.get("name") or "").lower().split())
+    if not name:
+        return None
+    qty = item.get("quantity")
+    unit = str(item.get("unit") or "").strip().lower() or None
+    return (name, float(qty) if isinstance(qty, (int, float)) else None, unit)
+
+
+def items_key(ask: dict) -> tuple:
+    return tuple(sorted(k for k in (_item_key(i) for i in ask.get("items") or [] if isinstance(i, dict)) if k))
+
+
+def _minute(ask: dict) -> str:
+    return str(ask.get("eaten_at") or "")[:16]
+
+
+async def same_recent(session: AsyncSession, family_id: str, subject_id: str, requested_by: str, ask: dict) -> NutritionJob | None:
+    """A log_food for the same person, meal, time and items as a job pending or saved in the last few hours.
+
+    The brain sometimes calls log_food again for a meal it already sent (a 'that's good' while the look-up is still
+    running). Attaching to that job saves nothing a second time. A different speaker, or a time they named that is not
+    the same minute, is a different meal.
+    """
+    want = items_key(ask)
+    if not want:
+        return None
+    meal = str(ask.get("meal") or "").strip().lower()
+    since = clock.now() - SAME_MEAL
+    rows = list((await session.execute(select(NutritionJob).where(
+        NutritionJob.family_id == family_id, NutritionJob.subject_id == subject_id,
+        NutritionJob.requested_by == requested_by[:64],
+        NutritionJob.state.in_(("queued", "resolving", "needs_input", "saved")),
+        NutritionJob.created_at >= since).order_by(NutritionJob.created_at.desc()).limit(12))).scalars())
+    for job in rows:
+        got = job.ask or {}
+        other = str(got.get("meal") or "").strip().lower()
+        if meal and other and meal != other:
+            continue
+        a, b = _minute(ask), _minute(got)
+        if a and b and a != b:
+            continue
+        if items_key(got) == want:
+            return job
+    return None
 
 
 async def open_for(session: AsyncSession, family_id: str, subject_ids: list[str]) -> list[NutritionJob]:
@@ -151,6 +200,8 @@ async def sweep(sessions, host_for=None) -> dict:
             stats["resolved"] += 1
             if out and out.get("result") in ("saved", "needs_input"):
                 await agent.tell(sessions, host_for, job, out)
+            if out and out.get("refine"):
+                await agent.refine_saved(sessions, job.id)
         except Exception:  # noqa: BLE001 — one job must not stop the others
             logger.exception("nutrition job failed id=%s", jid)
             stats["failed"] += 1

@@ -785,10 +785,12 @@ def _food_day(v: str | None) -> str | None:
     "drink, and asks only when the amount changes the numbers (counted pieces, a plate, a katori). Do not ask how many yourself "
     "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
-    "with consumed (yes / part / no) as they said; never log an order's food without their answer. If the result has "
-    "needs, say exactly the result's say sentence and pass the answer with answer_to. Never read options, ids, or the words "
-    "Options or Reply aloud. Say only what the result says ('say', 'today'); never a number of your own, and never a health "
-    "warning of your own (caffeine, sugar, blood pressure, heart, see a doctor) unless the result itself has allergy or deviation.",
+    "with consumed (yes / part / no) as they said; never log an order's food without their answer. Water: one item, unit glass "
+    "or ml, quantity when they said one, eaten_at when they said a time; each time they drink is its own call. If the result "
+    "has needs, say exactly the result's say sentence and pass the answer with answer_to. If the result has already=true, say "
+    "nothing about this meal (it is already saved or being saved) and do not say you are checking. Never read options, ids, or "
+    "the words Options or Reply aloud. Say only what the result says ('say', 'today'); never a number of your own, and never a "
+    "health warning of your own (caffeine, sugar, blood pressure, heart, see a doctor) unless the result itself has allergy or deviation.",
     {
         "items": {"type": "array", "description": "One entry per food or drink", "items": {"type": "object", "properties": {
             "name": {"type": "string", "description": "The food in English as commonly known, with preparation; dish names kept"},

@@ -193,7 +193,8 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
     )
 
 
-MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]", "[Approval needed]")  # updates that must reach the person
+MUST_REACH = ("[Task update]", "[Login code needed]", "[Order needs you]", "[Approval needed]",
+              "[Nutrition update]")  # updates that must reach the person
 
 IN_THEIR_WORDS = """Rewrite this WhatsApp message from Saheli (a caring assistant) for the person: in the language and script
 Saheli has been writing to them in (her recent messages are below; else the one they write in; English if there are
@@ -258,7 +259,7 @@ async def saved_language_line(session, family_id: str, person: str | None) -> st
 
 
 async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: str, prompt: str, ref: str, deliver_to: str | None = None,
-                      still_true=None) -> None:
+                      still_true=None, fallback: str | None = None) -> None:
     """Let the brain act on something that happened without a person writing (a due loop, a task update).
 
     deliver_to: the person this update is for (who asked for the order or ride). If the brain wrote its message as the
@@ -360,6 +361,11 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
             words = await in_their_words(sessions, family_id, deliver_to, plain)
             if await _send(sessions, host, roster, family_id, deliver_to, words, f"{ref}:news", buttons=buttons):
                 delivered = "composed"
+    elif must and not delivered and not soft and fallback and fallback.strip():
+        # A saved line with the numbers already in it (a meal confirmation). The brain sent nothing, so this goes directly.
+        logger.error("update sent as the written line (the brain sent nothing) family=%s ref=%s", family_id, ref)
+        if await _send(sessions, host, roster, family_id, deliver_to, fallback.strip(), f"{ref}:plain"):
+            delivered = "plain"
     elif must and not delivered and not soft:
         logger.error("an update for person %s reached nobody (no task to write it from) family=%s ref=%s", deliver_to, family_id, ref)
     if delivered and update is not None:

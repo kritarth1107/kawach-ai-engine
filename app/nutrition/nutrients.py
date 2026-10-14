@@ -32,6 +32,26 @@ MAX_PER_100G = {"energy_kcal": 900.0, "protein_g": 100.0, "carbs_g": 100.0, "fat
                 "fibre_g": 100.0, "sat_fat_g": 100.0, "sodium_mg": 40000.0, "potassium_mg": 20000.0, "calcium_mg": 10000.0,
                 "iron_mg": 500.0, "cholesterol_mg": 5000.0, "vit_d_mcg": 2500.0, "b12_mcg": 5000.0, "caffeine_mg": 5000.0, "water_g": 100.0}
 EXTREME_KCAL = (1200, 3500)  # a daily target outside this gets one line suggesting a check with the doctor (founder Q6)
+# Facts read off the food's own per-100 g numbers (UK front-of-pack "high": fat 17.5 g, sodium 0.6 g).
+# Fat at 20 g or more is also an oily or fried food. These are facts about the numbers, never advice.
+FAT_HIGH_G = 17.5
+FAT_FRIED_G = 20.0
+SODIUM_HIGH_MG = 600.0
+
+
+def fact_tags(per_100g: dict | None) -> list[str]:
+    """fried / high fat / high sodium, only when this food's own per-100 g numbers pass the cut-offs."""
+    v = per_100g or {}
+    fat = float(v.get("fat_g") or 0)
+    sodium = float(v.get("sodium_mg") or 0)
+    tags: list[str] = []
+    if fat >= FAT_FRIED_G:
+        tags.append("fried")
+    if fat >= FAT_HIGH_G:
+        tags.append("high fat")
+    if sodium >= SODIUM_HIGH_MG:
+        tags.append("high sodium")
+    return tags
 
 
 def clean(values: dict | None) -> dict:

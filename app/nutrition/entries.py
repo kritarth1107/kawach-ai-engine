@@ -187,6 +187,11 @@ async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, l
             flags["tags"] = list(it.food.tags)
         if it.food is not None and (it.food.checked or {}).get("rough"):
             flags["rough"] = True
+        if it.food is not None and (it.food.source == "model" or (it.food.checked or {}).get("rough")):
+            flags["refine"] = True  # a web look-up can replace this estimate after the person has been told
+        facts = N.fact_tags(it.food.per_100g if it.food is not None else None)
+        if facts:
+            flags["facts"] = facts
         e = NutritionEntry(
             id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, logged_by=logged_by[:64], meal_id=meal_id, meal=meal, kind="food",
             eaten_at=eaten_at, day=clock.ist_day(eaten_at), food_id=it.food.id if it.food else None,

@@ -10,7 +10,7 @@ import pytest
 from app.brain import tools
 from app.care import store
 from app.core import clock
-from app.nutrition import agent, entries, jobs, pantry
+from app.nutrition import agent, entries, jobs, lookup, pantry
 from app.nutrition.models import NutritionEntry, NutritionFood
 from app.sim.world import SimHost
 from tests import nutrition_fakes
@@ -57,6 +57,67 @@ async def test_unclear_count_is_asked_once_then_saved_with_the_plans_numbers(db,
     assert len(rows) == 1 and rows[0].confidence == "said" and rows[0].meal == "breakfast" and rows[0].grams == 200
     ev = await store.events(db, FAM, MAA["id"], kinds=["meal"])
     assert ev and ev[-1].payload["nutrition"] and "4 boiled eggs" in ev[-1].summary
+
+
+async def test_the_same_meal_again_attaches_and_does_not_save_twice(db, at, nfake):
+    """A second log_food for the same person, meal and items adds nothing, and says nothing."""
+    at("2026-10-14 21:00")
+    args = {"meal": "dinner", "items": [{"name": "chapati", "quantity": 4, "unit": "piece", "said": "paratha"}, {"name": "dal"}]}
+    r, err = await call(db, "log_food", args)
+    assert not err and r["result"] == "saved", r
+    n = len(await active(db))
+    assert n == 2
+    again, err = await call(db, "log_food", args)
+    assert not err and again.get("already") and again["result"] == "saved" and again["say"] == ""
+    assert len(await active(db)) == n
+    # a different meal of the same foods is its own log
+    snack, _ = await call(db, "log_food", {**args, "meal": "snack"})
+    assert snack["result"] == "saved" and not snack.get("already")
+    assert len(await active(db)) == n + 2
+
+
+async def test_a_repeat_while_it_is_still_saving_does_not_start_another(db, at, nfake, monkeypatch):
+    at("2026-10-14 21:00")
+    monkeypatch.setenv("NUTRITION_INLINE_S", "0.01")
+    monkeypatch.setattr(lookup, "WEB_S", 30.0)
+    nfake.web.slow = True
+    nfake.estimates["hara bhara kebab"] = {"name": "Hara bhara kebab", "per_100g": {"energy_kcal": 250, "protein_g": 6, "carbs_g": 8, "fat_g": 22,
+                                                                                    "sodium_mg": 800},
+                                           "units": {"plate": 150}, "default_unit": "plate", "typical_qty": 1}
+    args = {"meal": "snack", "items": [{"name": "hara bhara kebab", "quantity": 1, "unit": "plate"}]}
+    r, err = await call(db, "log_food", args)
+    assert not err and r["result"] == "looking_up", r
+    assert await active(db) == []
+    again, _ = await call(db, "log_food", args)
+    assert again.get("already") and again["say"] == "" and again["result"] == "looking_up"
+    assert await active(db) == []
+    nfake.web.slow = False
+    nfake.web.foods["hara bhara kebab"] = nfake.estimates["hara bhara kebab"] | {"source_kind": "web", "tags": ["snack"]}
+    job = await jobs.get(db, FAM, r["job_id"])
+    out = await agent.run_background(db, job)
+    assert out["result"] == "saved", out
+    assert "fried" in out["say"] and "high fat" in out["say"] and "high sodium" in out["say"]
+    rows = await active(db)
+    assert len(rows) == 1 and rows[0].flags.get("facts") == ["fried", "high fat", "high sodium"]
+    if jobs._kicked is not None and not jobs._kicked.done():
+        jobs._kicked.cancel()
+
+
+async def test_water_is_glasses_or_ml_at_the_time_they_said(db, at, nfake):
+    at("2026-10-14 16:00")
+    r, err = await call(db, "log_food", {"items": [{"name": "water", "quantity": 2, "unit": "glass"}], "eaten_at": "2026-10-14T11:00"})
+    assert not err and r["result"] == "saved", r
+    row = (await active(db))[-1]
+    assert row.quantity == 2 and row.unit == "glass" and row.nutrients.get("water_ml") == 500
+    assert row.eaten_at.hour == 11 or row.day == "2026-10-14"
+    one, _ = await call(db, "log_food", {"items": [{"name": "water"}], "eaten_at": "2026-10-14T15:30"})
+    assert one["result"] == "saved" and "1" in one["say"]
+    ml, _ = await call(db, "log_food", {"items": [{"name": "water", "quantity": 250, "unit": "ml"}], "eaten_at": "2026-10-14T18:00"})
+    assert ml["result"] == "saved"
+    last = (await active(db))[-1]
+    assert last.unit == "ml" and last.quantity == 250 and last.nutrients.get("water_ml") == 250
+    counted = entries.counters(await active(db))
+    assert counted["water"] == 4  # 2 glasses + 1 glass + 250 ml
 
 
 async def test_a_pack_or_a_drink_with_no_number_is_one_serving(db, at, nfake):
@@ -158,6 +219,7 @@ async def test_a_label_photo_becomes_the_familys_food(db, at, nfake):
     f = (await db.execute(NutritionFood.__table__.select().where(NutritionFood.source == "label"))).first()
     assert f.family_id == FAM and f.brand == "Fitbar" and f.serving_g == 60
     nfake.calls.clear()
+    at("2026-10-14 22:00")  # another bar, later: the one just saved is not logged again
     r, _ = await call(db, "log_food", {"items": [{"name": "protein bar", "quantity": 1, "unit": "piece"}]})
     assert r["result"] == "saved" and "label_photo" not in nfake.calls and r["saved"][0]["kcal"] == 240
 
