@@ -468,12 +468,15 @@ async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out
 
 
 SEEDS = Path(__file__).parent / "fixtures" / "replay_seeds.jsonl"  # invented families: the hard-turn test's failures of 13 Oct (open)
+MISREAD = Path(__file__).parent / "fixtures" / "misread_2026-10-14.jsonl"  # invented families: brain misreads of 14 Oct (open)
 
 
 def load_cases(argv: list[str]) -> list[dict]:
     cases: list[dict] = [] if "--no-founder" in argv else founder_cases()
     if "--no-founder" not in argv and SEEDS.exists():
         cases += [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and MISREAD.exists():
+        cases += [json.loads(line) for line in MISREAD.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]

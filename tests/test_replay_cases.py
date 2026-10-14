@@ -198,3 +198,14 @@ async def test_run_for_playbook_reports_regressions_and_fixes(monkeypatch, sessi
     got = await learn_replay.run_for_playbook(sessions, cand, budget_inr=50)
     assert got["regressions"] == ["a"] and got["fixed"] == ["b"] and got["skipped"] == ["d"] and got["n"] == 4 and got["playbook"] == 9
     assert seen[1] is cand  # the candidate replaced the live playbook in the second run
+
+
+def test_misread_cases_cover_each_failure_in_the_main_languages():
+    cases = [json.loads(line) for line in runner.MISREAD.read_text().splitlines() if line.strip()]
+    kinds = {c["kind"] for c in cases}
+    assert {"asking_vs_did", "one_option_who", "ongoing", "joke_vs_fact", "voice_note"} <= kinds
+    for kind in kinds:
+        langs = {c["lang"] for c in cases if c["kind"] == kind}
+        assert {"en", "hi", "hinglish", "bn"} <= langs, kind
+    assert all(c["status"] == "open" and "91337bfa" not in json.dumps(c) for c in cases)
+    assert all(c["id"].startswith("misread-") for c in cases)
