@@ -1,8 +1,9 @@
 """What the care record still lacks for the person speaking, so Saheli can ask one thing in the conversation.
 
 The list is data: today's food log, saved facts, today's activities, and what was already asked (a check-in event or a
-sent nudge). She picks one. gap_asked writes the same check-in record the scheduled asks read, so the two never ask it
-twice. Nothing here reads the person's words.
+sent nudge). She picks one. A sent nudge today already covers a meal (field meal:<slot>), water (water:count) or sleep
+(sleep:when). A meal or any water already in today's food log, or a sleep or routine event saved today, is not asked
+again. gap_asked writes the same check-in record the scheduled asks read. Nothing here reads the person's words.
 """
 
 from __future__ import annotations
@@ -38,10 +39,27 @@ def ledger_topics(key: str) -> list[str]:
     """The check-in topics a scheduled ask already reads as its field name, so the two never ask the same thing."""
     if key == "meal":
         return [key, "meal:day", "meal:breakfast", "meal:lunch", "meal:dinner", "meal:snack"]
+    if key == "water":
+        return [key, "water:count"]
+    if key == "sleep":
+        return [key, "sleep:when"]
     if key.startswith("habit:") and key.split(":", 1)[1]:
         name = key.split(":", 1)[1]
         return [key, f"activity:{name}:done", f"activity:{name}:plan"]
     return [key]
+
+
+def nudge_covers(kind: str, field: str | None, sent_day: str, today: str) -> str | None:
+    """The gap a sent nudge already covered today. meal:<slot>, water:count, or sleep:when. Any other row covers nothing."""
+    if sent_day != today or not field:
+        return None
+    if kind == "meal" and field.startswith("meal:"):
+        return "meal"
+    if kind == "water" and field == "water:count":
+        return "water"
+    if kind == "sleep" and field == "sleep:when":
+        return "sleep"
+    return None
 
 
 def food_gaps(had_meal: bool, had_water: bool, hour: int) -> list[tuple[str, str]]:
@@ -111,21 +129,26 @@ async def _items(session: AsyncSession, family_id: str, person: str) -> list[tup
         select(NutritionEntry).where(NutritionEntry.family_id == family_id, NutritionEntry.subject_id == person,
                                       NutritionEntry.day == day, NutritionEntry.status == "active")
     )).scalars())
-    had_water = any(_water(e.payload, None) for e in events) or any(_water(None, r.nutrients) for r in entries)
+    had_water = any(_water(e.payload, None) for e in events) or any(_water(None, r.nutrients) for r in entries) or any(
+        r.meal == "water" for r in entries)
     had_meal = any(not _water(e.payload, None) for e in events) or any(
-        r.kind == "food" and not _water(None, r.nutrients) for r in entries)
+        r.kind == "food" and r.meal != "water" and not _water(None, r.nutrients) for r in entries)
+    rest = await store.events(session, family_id, person, day=day, kinds=["sleep", "routine"])
     facts = [f for f in await store.facts(session, family_id, person) if f.status == "active"]
-    sleep = any(f.key in ("activity:sleep", "routine:sleep") or (f.value or {}).get("type") == "sleep" for f in facts)
+    sleep = bool(rest) or any(f.key in ("activity:sleep", "routine:sleep") or (f.value or {}).get("type") == "sleep" for f in facts)
     preference = any(f.domain == "preference" for f in facts)
     habits = [("habit:" + r["key"].split(":")[-1], f"today's {r['label']} has no result yet")
               for r in await activities.status(session, family_id, person)
               if r.get("today") == "not_heard" and r.get("kind") == "habit"]
     since = clock.now() - timedelta(days=1)
+    today_start = clock.ist().replace(hour=0, minute=0, second=0, microsecond=0)
     topics = [t for t, at, sent in await checkins._asked_rows(session, family_id, person) if sent and at >= since]
-    fields = [r.field or r.kind for r in (await session.execute(
+    sent_rows = list((await session.execute(
         select(NudgeLedger).where(NudgeLedger.family_id == family_id, NudgeLedger.person_id == person,
-                                   NudgeLedger.status == "sent", NudgeLedger.sent_at >= since)
-    )).scalars() if r.kind in ("meal", "water") or (r.field or "").split(":")[0] in ("water", "meal", "meals", "sleep", "preference", "habit", "activity")]
+                                   NudgeLedger.status == "sent", NudgeLedger.sent_at >= today_start)
+    )).scalars())
+    fields = [covered for r in sent_rows if (covered := nudge_covers(r.kind, r.field, clock.ist_day(r.sent_at), day))]
+    fields += [r.field for r in sent_rows if (r.field or "").split(":")[0] in ("preference", "habit", "activity")]
     candidates = [*food_gaps(had_meal, had_water, hour)]
     if not sleep:
         candidates.append(("sleep", "when they sleep is not on record"))
