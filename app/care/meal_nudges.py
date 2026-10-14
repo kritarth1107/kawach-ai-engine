@@ -12,7 +12,7 @@ habit ask is offered. The admin flag nudge.meals decides off | shadow | on.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from statistics import median
 
 from sqlalchemy import func, select
@@ -29,17 +29,21 @@ ASK_AFTER, ASK_UNTIL = 45, 180  # minutes after the meal's time
 PER_DAY, GAP = 6, timedelta(hours=1)  # meals, water and sleep share one ask per quiet hour
 HABIT_KINDS = ("meal", "water", "sleep")
 WATER_AT = (11 * 60, 16 * 60, 21 * 60)
-WATER_FOR = 90  # minutes the water ask stays open
+WATER_AFTER, WATER_FOR = 20, 90  # ask a little after the usual glass, and keep the ask open until 90 minutes past it
 SLEEP_AFTER, SLEEP_FOR = 30, 60  # from half an hour after waking, for an hour (before breakfast is asked)
 WATER_KEY = "learned:nudges_water_times"
 SLEEP_KEY = "learned:nudges_sleep_ask"
+SKIP_KEY = "learned:nudges_skip"  # {"fields": ["water", ...]} — they asked not to be asked
+ASK_HOURS_KEY = "learned:nudges_ask_hours"  # {"avoid_hours": [14], "prefer_hour": 19}
 STABLE_DAYS, STABLE_WITHIN = 7, 45
+WEEKDAY_NEED, WEEKEND_NEED, OUTLIER = 4, 2, 90  # four agreeing weekdays; two agreeing weekend days; one far day is ignored
 DOSE_GAP = timedelta(minutes=30)
 RECAP_BEFORE_BED, RECAP_WINDOW = 90, 120  # minutes
 TO_RECAP, BACK_TO_MEALS, TO_PAUSE = 3, 3, 5  # unanswered per-meal asks → recap; answered recaps → per meal; unanswered recaps → pause
 QUIET_ELDER = timedelta(days=30)  # an elder with no message of their own this long does not write to Saheli
 MODE_KEY = "learned:nudges_meals_mode"
-TIMES_KEY = "learned:nudges_meals_times"
+TIMES_KEY = "learned:nudges_meals_times"  # a time they stated, or the nutrition agent's flat usual time
+CLOCKS_KEY = "learned:nudges_meals_clocks"  # weekday and weekend, from their logs; does not overwrite TIMES_KEY
 
 
 def hooks():
@@ -67,6 +71,59 @@ def _clock(mins: int) -> str:
     return f"{h % 12 or 12}{f':{m:02d}' if m else ''} {'pm' if h >= 12 else 'am'}"
 
 
+def _side(now=None) -> str:
+    return "weekend" if clock.ist(now).weekday() >= 5 else "weekday"
+
+
+def cluster_minutes(points: list[int], *, need: int) -> int | None:
+    """The median once `need` points sit within 45 minutes of it. A day more than 90 minutes off is left out,
+    so one odd day or a weekend shift does not stop the rest from settling."""
+    if len(points) < need:
+        return None
+    med = int(median(points))
+    core = [p for p in points if abs(p - med) <= OUTLIER]
+    if len(core) < need:
+        return None
+    med = int(median(core))
+    close = [p for p in core if abs(p - med) <= STABLE_WITHIN]
+    if len(close) < need:
+        return None
+    return int(median(close))
+
+
+def split_clocks(samples: list[tuple[str, int]]) -> dict[str, int]:
+    """(YYYY-MM-DD, minute) → minutes for the whole week, weekdays, and weekends, each only once it agrees."""
+    wd, we = [], []
+    for day, minute in samples:
+        (we if date.fromisoformat(day).weekday() >= 5 else wd).append(minute)
+    out: dict[str, int] = {}
+    for key, pts, need in (("at", [m for _, m in samples], WEEKDAY_NEED), ("weekday", wd, WEEKDAY_NEED), ("weekend", we, WEEKEND_NEED)):
+        got = cluster_minutes(pts, need=need)
+        if got is not None:
+            out[key] = got
+    return out
+
+
+def _learned_hhmm(value: dict | None, slot: str, now=None) -> str | None:
+    value = value or {}
+    if slot in set(value.get("stated") or []) and isinstance(value.get(slot), str):
+        return str(value[slot])  # they said this; it applies every day until they undo it
+    side = value.get(_side(now))
+    if isinstance(side, dict) and side.get(slot):
+        return str(side[slot])
+    got = value.get(slot)
+    return str(got) if isinstance(got, str) else None
+
+
+def _apply_hours(minute: int, avoid: set[int], prefer: int | None) -> int | None:
+    """Move an ask out of an hour they never answer. None drops it when there is nowhere better yet."""
+    if minute // 60 not in avoid:
+        return minute
+    if prefer is not None and prefer not in avoid and 0 <= prefer <= 23:
+        return prefer * 60 + (minute % 60)
+    return None
+
+
 async def _wake(session: AsyncSession, family_id: str, person: str) -> int:
     from app.brain.wake import own_night
 
@@ -74,16 +131,39 @@ async def _wake(session: AsyncSession, family_id: str, person: str) -> int:
     return night[1] if night else 8 * 60
 
 
+async def _ask_hours(session: AsyncSession, family_id: str, person: str) -> tuple[set[int], int | None]:
+    f = await store.active_fact(session, family_id, person, ASK_HOURS_KEY)
+    if not f:
+        return set(), None
+    value = f.value or {}
+    prefer = value.get("prefer_hour")
+    return {int(h) for h in (value.get("avoid_hours") or [])}, prefer if isinstance(prefer, int) else None
+
+
+async def _fields_skipped(session: AsyncSession, family_id: str, person: str) -> set[str]:
+    f = await store.active_fact(session, family_id, person, SKIP_KEY)
+    return {str(x) for x in (((f.value or {}) if f else {}).get("fields") or [])}
+
+
 async def times(session: AsyncSession, family_id: str, person: str, acts: list[dict]) -> dict[str, int]:
-    """Each meal's usual time (minutes of the day): their routine, then the learned time (about seven days of logs),
-    then a default moved to their own day. A meal before they are half an hour up is not theirs."""
+    """Each meal's usual time (minutes of the day): their routine, then a time they stated or that their logs settled
+    on (weekdays and weekends apart), then a default moved to their own day. A meal before they are half an hour up
+    is not theirs. An hour they never answer is dropped, or moved to an hour they answer quickly."""
     out: dict[str, int] = {}
     for a in acts:
         if a.get("type") in SLOTS and _hm(a.get("start")) is not None:
             out[a["type"]] = _hm(a["start"])  # type: ignore[assignment]
-    learned = await store.active_fact(session, family_id, person, TIMES_KEY)
+    clocks = await store.active_fact(session, family_id, person, CLOCKS_KEY)
+    said = await store.active_fact(session, family_id, person, TIMES_KEY)
+    said_v = (said.value or {}) if said else {}
+    value = dict((clocks.value or {}) if clocks else said_v)
+    stated = [s for s in (said_v.get("stated") or []) if isinstance(said_v.get(s), str)]
+    if stated:
+        value["stated"] = stated
+        for slot in stated:
+            value[slot] = said_v[slot]
     for slot in SLOTS:
-        t = _hm(((learned.value or {}) if learned else {}).get(slot))
+        t = _hm(_learned_hhmm(value, slot))
         if slot not in out and t is not None:
             out[slot] = t
     hk = hooks()
@@ -100,24 +180,51 @@ async def times(session: AsyncSession, family_id: str, person: str, acts: list[d
     out.setdefault("breakfast", wake + 60)
     for slot, t in DEFAULT_AT.items():
         out.setdefault(slot, t)
-    return {s: t for s, t in out.items() if t >= wake + 30}
+    avoid, prefer = await _ask_hours(session, family_id, person)
+    moved: dict[str, int] = {}
+    for slot, t in out.items():
+        if t < wake + 30:
+            continue
+        at = _apply_hours(t, avoid, prefer)
+        if at is not None and at >= wake + 30:
+            moved[slot] = at
+    return moved
+
+
+def _listed_times(value: dict | None, now=None) -> list:
+    value = value or {}
+    side = value.get(_side(now))
+    if isinstance(side, list) and side:
+        return side
+    return value.get("times") or []
 
 
 async def water_times(session: AsyncSession, family_id: str, person: str) -> list[int]:
-    """When to ask about water: times learned from their own logs, else the defaults that fall after they are up."""
+    """When to ask about water: times learned from their own logs (weekday or weekend), else the defaults after they are up."""
     learned = await store.active_fact(session, family_id, person, WATER_KEY)
     wake = await _wake(session, family_id, person)
-    got = [t for t in (_hm(v) for v in (((learned.value or {}) if learned else {}).get("times") or [])) if t is not None]
-    times_ = got or list(WATER_AT)
-    return [t for t in times_ if t >= wake + 30]
+    got = [t for t in (_hm(v) for v in _listed_times((learned.value or {}) if learned else {})) if t is not None]
+    avoid, prefer = await _ask_hours(session, family_id, person)
+    out = []
+    for t in got or list(WATER_AT):
+        if t < wake + 30:
+            continue
+        at = _apply_hours(t, avoid, prefer)
+        if at is not None and at >= wake + 30:
+            out.append(at)
+    return out
 
 
-async def sleep_at(session: AsyncSession, family_id: str, person: str) -> int:
-    """When to ask about last night: the learned time, else half an hour after they usually wake."""
+async def sleep_at(session: AsyncSession, family_id: str, person: str) -> int | None:
+    """When to ask about last night: the learned time, else half an hour after they usually wake. None: that hour is dropped."""
     learned = await store.active_fact(session, family_id, person, SLEEP_KEY)
     wake = await _wake(session, family_id, person)
-    t = _hm(((learned.value or {}) if learned else {}).get("at"))
-    return t if t is not None and t >= wake else wake + SLEEP_AFTER
+    value = (learned.value or {}) if learned else {}
+    side = value.get(_side())
+    t = _hm(side if isinstance(side, str) else None) or _hm(value.get("at"))
+    base = t if t is not None and t >= wake else wake + SLEEP_AFTER
+    avoid, prefer = await _ask_hours(session, family_id, person)
+    return _apply_hours(base, avoid, prefer)
 
 
 async def mode(session: AsyncSession, family_id: str, person: str, setting: dict) -> str:
@@ -182,6 +289,7 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
                      today: str, m_now: int, local: datetime, topics: set[str]) -> dict | None:
     """The one habit question this person is due: a meal (including their own, for a caregiver), else water, else sleep."""
     fid, pid = p.family_id, p.id
+    skip = await _fields_skipped(session, fid, pid)
     s = await settings.get(session, fid, pid)
     meals_off = s.get("tracking") == "off" or s.get("ask") == "off"
     how = "paused" if meals_off else await mode(session, fid, pid, s)
@@ -201,6 +309,8 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
         ordered = [t for t in ((c.get("since") and _since(c["since"])) for c in pending if c.get("kind") == "order_meal") if t]
         due = []
         for slot in SLOTS:
+            if slot in skip:
+                continue
             t = meal_at.get(slot)
             if t is None or not t + ASK_AFTER <= m_now <= t + ASK_UNTIL:
                 continue
@@ -218,9 +328,9 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
                                "and roughly how much; nothing about medicines"})
         if due:
             return due[-1]  # the latest meal only
-    if not await _water_today(nh, session, fid, pid, today) and not _chat_covers(topics, "water"):
+    if "water" not in skip and not await _water_today(nh, session, fid, pid, today) and not _chat_covers(topics, "water"):
         for t in reversed(await water_times(session, fid, pid)):
-            if not t <= m_now <= t + WATER_FOR:
+            if not t + WATER_AFTER <= m_now <= t + WATER_FOR:
                 continue
             about = f"water:{today}:{t // 60:02d}{t % 60:02d}"
             if any(r.about_ref == about for r in sent):
@@ -228,10 +338,10 @@ async def _own_habit(session: AsyncSession, p, sent: list[NudgeLedger], now: dat
             return {"kind": "water", "about": about, "fld": "water:count",
                     "why": f"how much water they have had today (usually around {_clock(t)}), nothing logged yet: one easy question, "
                            "glasses or ml; nothing about medicines"}
-    if not await _sleep_today(session, fid, pid, today) and not _chat_covers(topics, "sleep"):
+    if "sleep" not in skip and not await _sleep_today(session, fid, pid, today) and not _chat_covers(topics, "sleep"):
         at = await sleep_at(session, fid, pid)
         about = f"sleep:{today}"
-        if at <= m_now <= at + SLEEP_FOR and not any(r.about_ref == about for r in sent):
+        if at is not None and at <= m_now <= at + SLEEP_FOR and not any(r.about_ref == about for r in sent):
             return {"kind": "sleep", "about": about, "fld": "sleep:when",
                     "why": "when they slept and when they woke: one easy question; the answer is their sleep, nothing about medicines"}
     return None
@@ -357,21 +467,47 @@ def _hhmm(mins: int) -> str:
     return f"{mins // 60:02d}:{mins % 60:02d}"
 
 
-def _stable_medians(samples_by_band: list[tuple[str, list[int]]]) -> list[str]:
-    """HH:MM for each band whose samples cover 7 days, all within 45 minutes of the median."""
-    out = []
-    for _name, samples in samples_by_band:
-        if len(samples) < STABLE_DAYS:
-            continue
-        med = int(median(samples))
-        if all(abs(s - med) <= STABLE_WITHIN for s in samples):
-            out.append(_hhmm(med))
-    return out
+def _put_split(value: dict, slot: str | None, clocks: dict[str, int]) -> bool:
+    """Write one slot (or the sleep clock when slot is None) from a weekday/weekend split. A stated slot is left as they said it."""
+    if slot and slot in set(value.get("stated") or []):
+        return False
+    if slot is None and value.get("stated"):
+        return False
+    changed = False
+    if slot:
+        if "weekday" in clocks:
+            value[slot] = _hhmm(clocks["weekday"])
+            changed = True
+        elif "at" in clocks:
+            value[slot] = _hhmm(clocks["at"])
+            changed = True
+        for side in ("weekday", "weekend"):
+            if side not in clocks:
+                continue
+            got = value.get(side)
+            if not isinstance(got, dict):
+                got = {}
+            got[slot] = _hhmm(clocks[side])
+            value[side] = got
+            changed = True
+        return changed
+    if "weekday" in clocks:
+        value["at"] = _hhmm(clocks["weekday"])
+        value["weekday"] = value["at"]
+        changed = True
+    elif "at" in clocks:
+        value["at"] = _hhmm(clocks["at"])
+        changed = True
+    if "weekend" in clocks:
+        value["weekend"] = _hhmm(clocks["weekend"])
+        changed = True
+    return changed
 
 
 async def learn_rhythms(session: AsyncSession, family_id: str, person: str) -> dict:
-    """Water and sleep times from their own logs, once about seven days agree. Visible learned facts, undoable.
-    Meal times stay with the nutrition agent's learn_meal_habits."""
+    """Meal, water and sleep times from their own logs. Four agreeing weekdays settle a weekday time; two agreeing
+    weekend days settle the weekend. One day more than 90 minutes off is ignored. A time they stated is kept.
+    Visible learned facts, undoable."""
     from app.care import outcomes_learn
 
     out: dict = {}
@@ -380,27 +516,60 @@ async def learn_rhythms(session: AsyncSession, family_id: str, person: str) -> d
     except ImportError:
         NutritionEntry = None  # type: ignore[assignment]
     if NutritionEntry is not None:
-        since = (clock.ist() - timedelta(days=14)).date().isoformat()
-        rows = (await session.execute(select(NutritionEntry.day, NutritionEntry.eaten_at, NutritionEntry.flags, NutritionEntry.kind).where(
+        since = (clock.ist() - timedelta(days=21)).date().isoformat()
+        rows = (await session.execute(select(
+            NutritionEntry.day, NutritionEntry.eaten_at, NutritionEntry.flags, NutritionEntry.kind, NutritionEntry.meal).where(
             NutritionEntry.family_id == family_id, NutritionEntry.subject_id == person, NutritionEntry.day >= since,
             NutritionEntry.status == "active"))).all()
+        by_slot: dict[str, dict[str, int]] = {s: {} for s in SLOTS}
         by_band: dict[str, dict[str, int]] = {"morning": {}, "afternoon": {}, "evening": {}}
         bands = (("morning", 5 * 60, 12 * 60), ("afternoon", 12 * 60, 17 * 60), ("evening", 17 * 60, 24 * 60))
-        for day, at, flags, kind in rows:
-            tags = (flags or {}).get("tags") or []
-            if kind != "water" and "water" not in tags:
-                continue
+        for day, at, flags, kind, meal in rows:
             minute = clock.ist(at).hour * 60 + clock.ist(at).minute
-            for name, lo, hi in bands:
-                if lo <= minute < hi and (day not in by_band[name] or minute < by_band[name][day]):
-                    by_band[name][day] = minute
-        stable = _stable_medians([(name, list(days.values())) for name, days in by_band.items()])
-        if stable:
-            words = ", ".join(_clock(_hm(t) or 0) for t in stable)
-            out["water"] = await outcomes_learn.save_learned(
-                session, family_id=family_id, subject_id=person, key=WATER_KEY,
-                value={"times": stable}, text=f"Usually drinks water around {words}; Saheli asks then.")
-    since_at = clock.now() - timedelta(days=14)
+            tags = (flags or {}).get("tags") or []
+            if kind == "water" or "water" in tags:
+                for name, lo, hi in bands:
+                    if lo <= minute < hi and (day not in by_band[name] or minute < by_band[name][day]):
+                        by_band[name][day] = minute
+            elif kind == "food" and meal in SLOTS and (day not in by_slot[meal] or minute < by_slot[meal][day]):
+                by_slot[meal][day] = minute
+        said = await store.active_fact(session, family_id, person, TIMES_KEY)
+        prev = await store.active_fact(session, family_id, person, CLOCKS_KEY)
+        meal_value = dict((prev.value or {}) if prev else {})
+        meal_value["stated"] = [s for s in (((said.value or {}) if said else {}).get("stated") or [])]
+        wrote = False
+        for slot, days in by_slot.items():
+            wrote = _put_split(meal_value, slot, split_clocks(list(days.items()))) or wrote
+        if wrote and meal_value != ((prev.value or {}) if prev else {}):
+            bits = [f"{slot} around {_clock(_hm(meal_value[slot]) or 0)}" for slot in SLOTS if isinstance(meal_value.get(slot), str)]
+            weekend = meal_value.get("weekend") if isinstance(meal_value.get("weekend"), dict) else {}
+            if weekend:
+                bits.append("weekends " + ", ".join(f"{slot} {_clock(_hm(t) or 0)}" for slot, t in weekend.items()))
+            out["meals"] = await outcomes_learn.save_learned(
+                session, family_id=family_id, subject_id=person, key=CLOCKS_KEY, value=meal_value,
+                text=("Usually has " + "; ".join(bits) + "; Saheli asks after that.") if bits else "Usual meal times, from their own logs.")
+        water_prev = await store.active_fact(session, family_id, person, WATER_KEY)
+        if not (water_prev and (water_prev.value or {}).get("stated")):
+            weekday_times, weekend_times = [], []
+            for days in by_band.values():
+                clocks = split_clocks(list(days.items()))
+                if "weekday" in clocks:
+                    weekday_times.append(clocks["weekday"])
+                elif "at" in clocks:
+                    weekday_times.append(clocks["at"])
+                if "weekend" in clocks:
+                    weekend_times.append(clocks["weekend"])
+            if weekday_times:
+                water_value: dict = {"times": [_hhmm(t) for t in sorted(set(weekday_times))],
+                                     "weekday": [_hhmm(t) for t in sorted(set(weekday_times))]}
+                if weekend_times:
+                    water_value["weekend"] = [_hhmm(t) for t in sorted(set(weekend_times))]
+                if not water_prev or (water_prev.value or {}) != water_value:
+                    words = ", ".join(_clock(t) for t in sorted(set(weekday_times)))
+                    out["water"] = await outcomes_learn.save_learned(
+                        session, family_id=family_id, subject_id=person, key=WATER_KEY, value=water_value,
+                        text=f"Usually drinks water around {words}; Saheli asks then.")
+    since_at = clock.now() - timedelta(days=21)
     days: dict[str, int] = {}
     for e in await store.events(session, family_id, person, since=since_at, kinds=["sleep", "activity_done"]):
         payload = e.payload or {}
@@ -409,10 +578,89 @@ async def learn_rhythms(session: AsyncSession, family_id: str, person: str) -> d
             continue
         local = clock.ist(e.at)
         days[getattr(e, "day", None) or clock.ist_day(e.at)] = local.hour * 60 + local.minute
-    if len(days) >= STABLE_DAYS:
-        med = int(median(days.values()))
-        if all(abs(v - med) <= STABLE_WITHIN for v in days.values()):
-            out["sleep"] = await outcomes_learn.save_learned(
-                session, family_id=family_id, subject_id=person, key=SLEEP_KEY,
-                value={"at": _hhmm(med)}, text=f"Usually up around {_clock(med)}; Saheli asks about sleep then.")
+    sleep_prev = await store.active_fact(session, family_id, person, SLEEP_KEY)
+    sleep_value = dict((sleep_prev.value or {}) if sleep_prev else {})
+    if _put_split(sleep_value, None, split_clocks(list(days.items()))) and sleep_value != ((sleep_prev.value or {}) if sleep_prev else {}):
+        med = _hm(sleep_value.get("at")) or 0
+        out["sleep"] = await outcomes_learn.save_learned(
+            session, family_id=family_id, subject_id=person, key=SLEEP_KEY, value=sleep_value,
+            text=f"Usually up around {_clock(med)}; Saheli asks about sleep then.")
     return out
+
+
+async def learn_reply_hours(session: AsyncSession, family_id: str, person: str) -> str | None:
+    """An hour with five habit asks and no answer is dropped. An hour they answer within half an hour, at least three
+    times, is where those asks move. The fact is visible and undoable."""
+    from app.care import outcomes_learn
+
+    since = clock.now() - timedelta(days=14)
+    rows = (await session.execute(select(NudgeLedger).where(
+        NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.kind.in_(HABIT_KINDS),
+        NudgeLedger.status == "sent", NudgeLedger.sent_at.is_not(None), NudgeLedger.sent_at >= since))).scalars()
+    by: dict[int, list[float | None]] = {}
+    for r in rows:
+        sent_at = r.sent_at
+        if sent_at is None:
+            continue
+        hour = clock.ist(sent_at).hour
+        delay = ((r.replied_at - sent_at).total_seconds() / 60) if r.replied_at else None
+        by.setdefault(hour, []).append(delay)
+    avoid = sorted(h for h, delays in by.items() if len(delays) >= 5 and all(d is None for d in delays))
+    fast: list[tuple[float, int]] = []
+    for hour, delays in by.items():
+        got = [d for d in delays if d is not None and d <= 30]
+        if len(got) >= 3:
+            fast.append((float(median(got)), hour))
+    prefer = sorted(fast)[0][1] if fast else None
+    if not avoid:
+        return None
+    value = {"avoid_hours": avoid, "prefer_hour": prefer}
+    if prefer is None:
+        text = f"Doesn't answer around {avoid[0]}:00; Saheli stops starting a conversation then."
+    else:
+        text = f"Doesn't answer around {avoid[0]}:00; Saheli asks around {prefer}:00 instead, where replies come quickly."
+    prev = await store.active_fact(session, family_id, person, ASK_HOURS_KEY)
+    if prev and (prev.value or {}) == value:
+        return None
+    res = await outcomes_learn.save_learned(session, family_id=family_id, subject_id=person, key=ASK_HOURS_KEY, value=value, text=text)
+    return res if res in ("created", "superseded") else None
+
+
+async def state_habit(session: AsyncSession, family_id: str, person: str, *, what: str, at: str | None = None,
+                       skip: bool = False) -> str:
+    """They said a usual time, or asked not to be asked. Applied at once, as a fact they can see and undo.
+    `what` is a meal slot, water, or sleep. No reading of their words: the caller passes the structured fields."""
+    from app.care import outcomes_learn
+
+    if what not in (*SLOTS, "water", "sleep"):
+        raise ValueError("what must be a meal, water, or sleep")
+    if skip:
+        current = await store.active_fact(session, family_id, person, SKIP_KEY)
+        fields = set(((current.value or {}) if current else {}).get("fields") or [])
+        fields.add(what)
+        text = f"Asked not to be asked about {what}."
+        return await outcomes_learn.save_learned(
+            session, family_id=family_id, subject_id=person, key=SKIP_KEY, value={"fields": sorted(fields)}, text=text)
+    if _hm(at) is None:
+        raise ValueError("at is a time HH:MM")
+    if what == "water":
+        key, text = WATER_KEY, f"Usually drinks water around {_clock(_hm(at) or 0)}; they said so."
+        current = await store.active_fact(session, family_id, person, key)
+        value = dict((current.value or {}) if current else {})
+        times = [t for t in (value.get("times") or []) if isinstance(t, str) and t != at]
+        value["times"] = sorted([*times, at], key=lambda s: _hm(s) or 0)
+        value.pop("weekday", None)
+        value.pop("weekend", None)
+        value["stated"] = True
+    elif what == "sleep":
+        key, text = SLEEP_KEY, f"Usually up around {_clock(_hm(at) or 0)}; they said so."
+        value = {"at": at, "stated": True}
+    else:
+        key = TIMES_KEY
+        text = f"Usually has {what} around {_clock(_hm(at) or 0)}; they said so."
+        current = await store.active_fact(session, family_id, person, key)
+        value = dict((current.value or {}) if current else {})
+        value[what] = at
+        stated = [s for s in (value.get("stated") or []) if s != what]
+        value["stated"] = [*stated, what]
+    return await outcomes_learn.save_learned(session, family_id=family_id, subject_id=person, key=key, value=value, text=text)

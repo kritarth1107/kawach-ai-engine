@@ -1210,3 +1210,78 @@ async def test_while_the_caregiver_is_being_told_the_ladder_adds_nothing(db, at,
     at("2026-10-14 14:05")
     await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3
+
+
+def test_one_odd_day_and_a_weekend_shift_still_settle():
+    from app.care.meal_nudges import split_clocks
+
+    samples = [
+        ("2026-10-05", 13 * 60), ("2026-10-06", 13 * 60 + 10), ("2026-10-07", 16 * 60 + 30),
+        ("2026-10-08", 12 * 60 + 50), ("2026-10-09", 13 * 60 + 5),
+        ("2026-10-10", 14 * 60 + 30), ("2026-10-11", 14 * 60 + 40),
+    ]
+    got = split_clocks(samples)
+    assert abs(got["weekday"] - 13 * 60) <= 30
+    assert abs(got["weekend"] - (14 * 60 + 30)) <= 30
+
+
+async def test_a_weekend_meal_time_is_used_only_on_a_weekend(db, at, sessions, writer, food):
+    from app.care import meal_nudges
+
+    await meal_day(db, at)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="learned", key=meal_nudges.TIMES_KEY,
+                           value={"lunch": "13:00", "weekday": {"lunch": "13:00"}, "weekend": {"lunch": "15:00"}},
+                           text="Weekday lunch at 1, weekend lunch at 3.", source_kind="learned")
+    await db.commit()
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 13:50")] == ["meal:lunch"]  # Wednesday
+    assert await meal_opts(db, at, "2026-10-17 13:50") == []  # Saturday: not the 1 pm lunch
+    assert [o.field for o in await meal_opts(db, at, "2026-10-17 15:50")] == ["meal:lunch"]
+
+
+async def test_saying_a_time_or_not_to_ask_applies_at_once_and_undoes(db, at, sessions, writer, food):
+    from app.care import meal_nudges
+
+    await meal_day(db, at)
+    await meal_nudges.state_habit(db, FAM, MAA["id"], what="lunch", at="15:00")
+    await meal_nudges.state_habit(db, FAM, MAA["id"], what="water", skip=True)
+    await db.commit()
+    assert await meal_opts(db, at, "2026-10-14 14:30") == []
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 15:50")] == ["meal:lunch"]
+    assert await habit_opts(db, at, "2026-10-14 12:10", "water") == []
+    fact = await store.active_fact(db, FAM, MAA["id"], meal_nudges.TIMES_KEY)
+    assert fact and fact.text and "lunch" in fact.text
+    await store.stop_fact(db, family_id=FAM, subject_id=MAA["id"], key=meal_nudges.TIMES_KEY, reason="they undid it",
+                          source_kind="caregiver_said")
+    await store.stop_fact(db, family_id=FAM, subject_id=MAA["id"], key=meal_nudges.SKIP_KEY, reason="they undid it",
+                          source_kind="caregiver_said")
+    await db.commit()
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 14:30")] == ["meal:lunch"]
+    assert [o.field for o in await habit_opts(db, at, "2026-10-14 12:10", "water")] == ["water:count"]
+
+
+async def test_five_silent_hours_are_dropped_and_asks_move_to_a_fast_hour(db, at, sessions, writer, food):
+    from datetime import datetime, timedelta
+
+    from app.care import meal_nudges
+    from app.core import clock
+
+    await meal_day(db, at)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="learned", key=meal_nudges.TIMES_KEY,
+                           value={"lunch": "14:00"}, text="Lunch at 2 pm.", source_kind="learned")
+    for i in range(5):
+        sent = datetime(2026, 10, 8, 14, 0, tzinfo=clock.IST) + timedelta(days=i)
+        db.add(NudgeLedger(family_id=FAM, person_id=MAA["id"], kind="meal", status="sent", field="meal:lunch",
+                           slot_key=f"silent-{i}", ref=f"nudge:silent-{i}", text="lunch?", planned_at=sent, sent_at=sent))
+    for i in range(3):
+        sent = datetime(2026, 10, 9, 19, 0, tzinfo=clock.IST) + timedelta(days=i)
+        db.add(NudgeLedger(family_id=FAM, person_id=MAA["id"], kind="meal", status="sent", field="meal:dinner",
+                           slot_key=f"fast-{i}", ref=f"nudge:fast-{i}", text="dinner?", planned_at=sent, sent_at=sent,
+                           replied_at=sent + timedelta(minutes=2)))
+    await db.commit()
+    at("2026-10-14 12:00")
+    assert await meal_nudges.learn_reply_hours(db, FAM, MAA["id"]) in ("created", "superseded")
+    await db.commit()
+    fact = await store.active_fact(db, FAM, MAA["id"], meal_nudges.ASK_HOURS_KEY)
+    assert fact and 14 in (fact.value or {}).get("avoid_hours", []) and (fact.value or {}).get("prefer_hour") == 19
+    assert await meal_opts(db, at, "2026-10-14 14:50") == []
+    assert [o.field for o in await meal_opts(db, at, "2026-10-14 19:50")] == ["meal:lunch"]

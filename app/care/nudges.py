@@ -1426,6 +1426,7 @@ async def learn_meals(sessions: async_sessionmaker, *, now: datetime | None = No
                         logger.exception("meal habits failed family=%s", r.family_id)
                 try:
                     await meal_nudges.learn_rhythms(session, r.family_id, p.id)
+                    await meal_nudges.learn_reply_hours(session, r.family_id, p.id)
                 except Exception:  # noqa: BLE001
                     logger.exception("habit rhythms failed family=%s", r.family_id)
                 if await meal_nudges.learn_mode(session, r.family_id, p.id, await ledger_rows(session, r.family_id, p.id, limit=60), now):

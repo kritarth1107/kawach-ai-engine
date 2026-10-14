@@ -561,6 +561,30 @@ async def fact_still_true(ctx: TurnCtx, a: dict) -> dict:
 
 
 @tool(
+    "note_habit",
+    "The person stated when they usually eat, drink water, or wake, or asked not to be asked about one of these. "
+    "Save it at once. This is not a meal they just had (that is log_food) and not a medicine.",
+    {
+        "what": {"type": "string", "enum": ["breakfast", "lunch", "snack", "dinner", "water", "sleep"]},
+        "at": {"type": "string", "description": "Usual time HH:MM, 24-hour. Leave out when they asked not to be asked."},
+        "skip": {"type": "boolean", "description": "True when they asked not to be asked about this."},
+        "about": ABOUT,
+    },
+    ["what"],
+)
+async def note_habit(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import meal_nudges
+
+    subject = ctx.subject(a.get("about"))
+    try:
+        result = await meal_nudges.state_habit(ctx.session, ctx.family_id, subject, what=str(a.get("what") or ""),
+                                                at=a.get("at"), skip=bool(a.get("skip")))
+    except ValueError as e:
+        raise ToolRefused(str(e)) from e
+    return {"saved": result, "what": a.get("what"), "at": a.get("at"), "skip": bool(a.get("skip"))}
+
+
+@tool(
     "log_dose",
     "Record what happened with a medicine dose: taken, skipped, refused, missed, or the strip is empty. Works for today or "
     "an earlier day (day), and for one dose of a medicine taken more than once a day (time). Logging the same dose again "

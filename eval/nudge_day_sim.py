@@ -9,6 +9,7 @@ test project (never kavach-care), with a spend guard.
 
     DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_nudgesim \
     PYTHONPATH=. python -m eval.nudge_day_sim [--days 2] [--tick 1] [--real --max-inr 50]
+    PYTHONPATH=. python -m eval.nudge_day_sim --learn   # 14-day routine: learned times within 30 min by day 7
 """
 
 from __future__ import annotations
@@ -302,6 +303,10 @@ async def check(sessions, timeline: dict[str, list], rows: list, days: int) -> d
 
 
 def main(argv: list[str]) -> int:
+    if "--learn" in argv:
+        from eval.nudge_learn_sim import main as learn_main
+
+        return learn_main(argv)
     days = int(argv[argv.index("--days") + 1]) if "--days" in argv else 2
     tick = int(argv[argv.index("--tick") + 1]) if "--tick" in argv else 1
     real = "--real" in argv
