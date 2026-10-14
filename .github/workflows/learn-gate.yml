@@ -1,7 +1,7 @@
 name: Learn gate (a waiting playbook draft through the replay cases)
 
 # Trust plan §10.2 step 2: the 02:00 night makes a playbook draft but cannot run the replay cases, so the draft waits.
-# This job must call Bedrock in ap-south-1, never Vertex. GitHub cannot reach the engine (engine.kavach.local), so it
+# When it runs, it calls Gemini in kavach-eval-1015, never kavach-care. GitHub cannot reach the engine (engine.kavach.local), so it
 # does not run cases and does not post: the draft keeps waiting. Leave this workflow disabled until that path exists.
 
 on:
@@ -27,6 +27,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: The engine is private, so this job does not call a model
         run: |
-          echo "::warning::Learn gate stays idle. It would call Bedrock in ap-south-1, never Vertex, but GitHub cannot reach engine.kavach.local, so no case runs and nothing is posted. The draft keeps waiting."
+          echo "::warning::Learn gate stays idle. It would call Gemini in kavach-eval-1015, never kavach-care, but GitHub cannot reach engine.kavach.local, so no case runs and nothing is posted. The draft keeps waiting."
           echo "# Learn gate idle" >> "$GITHUB_STEP_SUMMARY"
           echo "GitHub cannot reach the engine. No Vertex call, no Bedrock call." >> "$GITHUB_STEP_SUMMARY"

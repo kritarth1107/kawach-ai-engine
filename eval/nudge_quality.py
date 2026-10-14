@@ -153,7 +153,7 @@ def main(argv: list[str]) -> int:
         return 2
     per = int(argv[argv.index("--per-language") + 1]) if "--per-language" in argv else 10
     out = Path(argv[argv.index("--out") + 1]) if "--out" in argv else Path("runs/nudge_quality")
-    rows = asyncio.run(run(per, os.getenv("DATABASE_URL") or "", cap, parallel=8))
+    rows = asyncio.run(run(per, os.getenv("DATABASE_URL") or "", cap, parallel=2))
     out.mkdir(parents=True, exist_ok=True)
     (out / "nudges.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
     (out / "report.md").write_text(report(rows))

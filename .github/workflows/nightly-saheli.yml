@@ -63,6 +63,7 @@ env:
   CRISIS_SAMPLE: "30"
   GCP_PROJECT_ID: kavach-eval-1015
   GOOGLE_CLOUD_PROJECT: kavach-eval-1015
+  GOOGLE_CLOUD_LOCATION: asia-south1
 
 jobs:
   probes:
@@ -74,6 +75,7 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         shard: [0, 1, 2, 3]
     services:
@@ -97,6 +99,11 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
           aws-region: ap-south-1
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/834177061652/locations/global/workloadIdentityPools/github/providers/github
+          service_account: gh-gemini@kavach-eval-1015.iam.gserviceaccount.com
+          project_id: kavach-eval-1015
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make && PYTHONPATH=. python -m eval.world.make --check
       - name: One Gemini call before any probe
@@ -119,7 +126,7 @@ jobs:
           # each shard's own cap is its share of the night's (13 Oct: ₹600 over 4 shards = ₹150 each stopped 59 % of the probes;
           # the probes now print their cap and estimate, and a budget skip fails the night)
           export PROBES_MAX_INR=$(( MAX_INR / SHARDS ))
-          PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6 --every $EVERY
+          PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 2 --every $EVERY
       - name: Judge every reply (shard ${{ matrix.shard }}); no result is a failing night
         if: always() && steps.pre.outputs.down != 'true'
         env:
@@ -141,7 +148,8 @@ jobs:
 
   recall:
     # the story families' memory quiz, scored (C2) and their memory score (A2), on a rotation of 25 families a night
-    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
+    needs: [probes]
+    if: always() && github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -168,6 +176,11 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
           aws-region: ap-south-1
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/834177061652/locations/global/workloadIdentityPools/github/providers/github
+          service_account: gh-gemini@kavach-eval-1015.iam.gserviceaccount.com
+          project_id: kavach-eval-1015
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
       - name: One Gemini call before recall
@@ -187,7 +200,7 @@ jobs:
           LLM_PROVIDER: router
           NIGHTLY_OUT: runs/nightly
           RECALL_MAX_INR: ${{ env.RECALL_INR }}
-        run: PYTHONPATH=. python -u -m eval.world.recall $SLICE --families 25 --parallel 5
+        run: PYTHONPATH=. python -u -m eval.world.recall $SLICE --families 25 --parallel 2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -238,7 +251,8 @@ jobs:
           retention-days: 90
 
   nudge-quality:
-    if: github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
+    needs: [recall]
+    if: always() && github.event.inputs.fixture != 'true' && !github.event.inputs.repost_run
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -265,6 +279,11 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
           aws-region: ap-south-1
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/834177061652/locations/global/workloadIdentityPools/github/providers/github
+          service_account: gh-gemini@kavach-eval-1015.iam.gserviceaccount.com
+          project_id: kavach-eval-1015
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
       - name: One Gemini call before the nudge eval

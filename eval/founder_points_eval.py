@@ -171,6 +171,8 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
             for c in CASES:
                 if not sensitive.founder_case_allowed(c.key, where="nightly"):
                     continue  # illegal-substance cases paused (eval/sensitive.py)
+                if sensitive.mode() == "pause" and any(c.key == k or c.key.startswith(f"{k}_") for k in ("cigarette", "beer", "gutka")):
+                    continue  # tobacco and alcohol stay off kavach-eval-1015 while sensitive evals are paused
                 if spend.process_spent() >= cap:
                     rows.append({"case": c.key, "skipped": "budget"})
                     continue

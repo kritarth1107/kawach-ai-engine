@@ -164,7 +164,7 @@ def main(argv: list[str]) -> int:
         return 2
     from app.llm import spend
 
-    graded = asyncio.run(judge_rows(chosen, {f["id"]: f for f in world}, cap=cap))
+    graded = asyncio.run(judge_rows(chosen, {f["id"]: f for f in world}, parallel=2, cap=cap))
     (d / "judged.jsonl").write_text("".join(json.dumps(g, ensure_ascii=False) + "\n" for g in graded))
     ok = sum(1 for g in graded if (g["judge"] or {}).get("pass"))
     skipped = sum(1 for g in graded if g.get("skipped"))
