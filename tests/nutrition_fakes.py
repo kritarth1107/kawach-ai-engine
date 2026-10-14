@@ -32,8 +32,11 @@ BIRYANI = {"name": "Chicken dum biryani", "kind": "restaurant", "per_100g": {"en
 CHUTNEY = {"name": "Peanut chutney", "kind": "generic", "per_100g": {"energy_kcal": 300, "protein_g": 12.0, "carbs_g": 12.0, "fat_g": 24.0},
            "units": {"tbsp": 15, "katori": 100}, "default_unit": "tbsp", "typical_qty": 2, "countable": False, "allergens": ["peanut"],
            "tags": [], "source_kind": "web"}
+REDBULL = {"name": "Red Bull", "kind": "packaged", "per_100g": {"energy_kcal": 45, "protein_g": 0, "carbs_g": 11, "sugar_g": 11},
+           "serving_g": 250, "units": {"serving": 250, "pack": 250}, "default_unit": "serving", "typical_qty": 1, "countable": True,
+           "tags": ["sugary_drink"], "source_kind": "brand"}
 WEB = {"boiled egg": EGG, "egg": EGG, "eggs": EGG, "chapati": ROTI, "roti": ROTI, "dal": DAL, "tea": TEA, "water": WATER,
-       "chicken dum biryani": BIRYANI, "chicken biryani": BIRYANI, "peanut chutney": CHUTNEY}
+       "chicken dum biryani": BIRYANI, "chicken biryani": BIRYANI, "peanut chutney": CHUTNEY, "red bull": REDBULL}
 
 
 class FakeNutritionModels:

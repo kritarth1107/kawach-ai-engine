@@ -59,6 +59,26 @@ async def test_unclear_count_is_asked_once_then_saved_with_the_plans_numbers(db,
     assert ev and ev[-1].payload["nutrition"] and "4 boiled eggs" in ev[-1].summary
 
 
+async def test_a_pack_or_a_drink_with_no_number_is_one_serving(db, at, nfake):
+    """No number on a pack or a drink is one serving. Eggs still ask. The decision is the food's kind and tags."""
+    at("2026-10-14 16:00")
+    nfake.decisions["red bull"] = {"kind": "packaged", "countable": True, "default_unit": "serving", "tags": ["sugary_drink"]}
+    nfake.decisions["tea"] = {"kind": "generic", "countable": False, "default_unit": "cup", "tags": ["tea", "dairy"]}
+    r, err = await call(db, "log_food", {"items": [{"name": "red bull", "said": "Red Bull"}]})
+    assert not err and r["result"] == "saved", r
+    assert r["say"] == "Saved: 1 Red Bull (250 ml), 113 kcal, 0 g protein — tell me if it was more."
+    assert "How many" not in r["say"]
+    row = (await active(db))[-1]
+    assert row.quantity == 1 and row.unit == "serving" and row.grams == 250 and row.confidence == "estimate"
+    assert row.flags.get("assumed_one") and row.flags.get("serving_ml") == 250
+    r, err = await call(db, "log_food", {"items": [{"name": "tea", "said": "tea"}]})
+    assert not err and r["result"] == "saved", r
+    assert r["say"] == "Saved: 1 tea (150 ml), 60 kcal, 1.8 g protein — tell me if it was more."
+    said = await call(db, "log_food", {"items": [{"name": "red bull", "quantity": 2, "unit": "pack"}]})
+    assert said[0]["result"] == "saved" and "tell me if it was more" not in said[0]["say"]
+    assert said[0]["saved"][-1]["confidence"] == "said"
+
+
 async def test_clear_meal_saves_at_once_with_a_usual_katori_and_one_check(db, at, nfake):
     at("2026-10-14 13:30")
     nfake.decisions["chapati"] = {"countable": True, "default_unit": "piece"}

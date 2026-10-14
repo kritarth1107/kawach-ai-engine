@@ -780,8 +780,10 @@ def _food_day(v: str | None) -> str | None:
     "for every meal, snack, drink and glass of water anyone tells you they had (also an earlier day, also a caregiver telling "
     "you what their parent ate), unless food tracking is off for them. You read their words; give structured fields: one item "
     "per food, its name in English as people know it (keep dish names: 'poha', 'thekua', 'masala dosa'; with preparation: "
-    "'boiled egg'), quantity and unit exactly as they said (never assume a number they did not say: 'ate eggs' or an unclear "
-    "'for/four' has no quantity: leave it out and the agent asks). A photo of their plate: from_photo=true (it is confirmed "
+    "'boiled egg'), quantity and unit only when they said a number (never invent one: 'ate eggs', an unclear 'for/four', or a "
+    "single drink or pack with no number has no quantity: leave it out). The agent saves one serving for a packaged item or a "
+    "drink, and asks only when the amount changes the numbers (counted pieces, a plate, a katori). Do not ask how many yourself "
+    "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. If the result has "
     "needs, say exactly the result's say sentence and pass the answer with answer_to. Never read options, ids, or the words "
@@ -790,7 +792,7 @@ def _food_day(v: str | None) -> str | None:
     {
         "items": {"type": "array", "description": "One entry per food or drink", "items": {"type": "object", "properties": {
             "name": {"type": "string", "description": "The food in English as commonly known, with preparation; dish names kept"},
-            "quantity": {"type": "number", "description": "Only the number they said (2 rotis → 2; 'half a katori' → 0.5)"},
+            "quantity": {"type": "number", "description": "Only a number they said (2 rotis → 2; 'half a katori' → 0.5). Leave it out when they said none."},
             "unit": {"type": "string", "enum": FOOD_UNITS, "description": "piece for things counted (eggs, rotis, idlis, bananas)"},
             "brand": {"type": "string", "description": "A packaged product's brand, if they said it"},
             "restaurant": {"type": "string", "description": "The restaurant it came from, if they said"},

@@ -5,6 +5,9 @@ you eat the order, is this photo right), and she asks the person.
 Its rules:
 - Structured fields only. The brain reads people's words; the agent never does. AI calls judge food data (the lookup's
   normaliser, vision, the allergy and rule check); code only checks data.
+- A packaged item or a drink with no quantity is one serving, saved as an estimate, and the reply names the size and
+  asks them to say if it was more. A counted food with no number is asked once. A plate or a katori with no amount
+  stays a usual-portion estimate.
 - At most 2 follow-up questions per meal (quantity, which, label, photo); then the best estimate is saved, marked
   `estimate`. A photo is always confirmed first (founder Q4); an order's food only after a yes or part (founder Q5);
   who ate it is never guessed.
@@ -126,15 +129,66 @@ def parse_at(v) -> datetime | None:
     return at.replace(tzinfo=clock.IST) if at.tzinfo is None else at
 
 
+# A missing number is one of these. Decided from the food record (kind and tags), never from what they typed.
+_DRINK_TAGS = frozenset({"tea", "coffee", "water", "sugary_drink", "alcohol"})
+
+
+def one_standard_serving(food) -> bool:
+    """One pack, or one drink, when they gave no number."""
+    if food is None:
+        return False
+    if getattr(food, "kind", None) == "packaged":
+        return True
+    return bool(set(getattr(food, "tags", None) or []) & _DRINK_TAGS)
+
+
+def _fill_one(it: dict, food) -> None:
+    unit = food.default_unit if getattr(food, "default_unit", None) in P.UNITS else "serving"
+    qty = float(getattr(food, "typical_qty", None) or 1) if unit in ("g", "ml") else 1.0
+    it["quantity"] = qty
+    it["unit"] = unit
+    it["_assumed"] = True
+
+
+def _assumed_flags(food) -> dict:
+    unit = food.default_unit if getattr(food, "default_unit", None) in P.UNITS else None
+    size = getattr(food, "serving_g", None) or ((food.units or {}).get(unit) if unit else None)
+    out: dict = {"assumed_one": True}
+    if not size:
+        return out
+    drink = bool(set(food.tags or []) & _DRINK_TAGS) or unit in {"glass", "cup", "ml"}
+    out["serving_ml" if drink else "serving_g"] = float(size)
+    return out
+
+
+def _saved_line(r: NutritionEntry) -> tuple[str, bool]:
+    flags = r.flags or {}
+    if not flags.get("assumed_one"):
+        return entries.line(r), False
+    name = r.name_said or r.name
+    q = r.quantity
+    qn = int(q) if q is not None and float(q).is_integer() else q
+    if r.unit not in ("g", "ml") and flags.get("serving_ml"):
+        return f"{qn} {name} ({N.fmt(flags['serving_ml'])} ml)", True
+    if r.unit not in ("g", "ml") and flags.get("serving_g"):
+        return f"{qn} {name} ({N.fmt(flags['serving_g'])} g)", True
+    return entries.line(r), True
+
+
 def _say(rows: list[NutritionEntry], tracking: str) -> str:
     food = [r for r in rows if r.kind == "food"]
     if not food:
         return "Noted: " + ", ".join(entries.line(r) for r in rows) + "."
+    parts = [_saved_line(r) for r in food]
+    what = ", ".join(text for text, _ in parts)
     tot = entries.totals(food)
-    what = ", ".join(entries.line(r) for r in food)
     if tracking == "counts" or not tot.get("energy_kcal"):
-        return f"Saved: {what}."
-    return f"Saved: {what}, {N.fmt(N.kcal(tot))} kcal, {N.fmt(N.grams_of(tot, 'protein_g'))} g protein."
+        base = f"Saved: {what}."
+    else:
+        base = f"Saved: {what}, {N.fmt(N.kcal(tot))} kcal, {N.fmt(N.grams_of(tot, 'protein_g'))} g protein."
+    if any(assumed for _, assumed in parts):
+        return base[:-1] + " — tell me if it was more."
+    return base
 
 
 # ── order meals (plan §N6.1): eaten only after a yes ─────────────────────────
@@ -359,9 +413,13 @@ class NutritionAgent:
                                       item=it["name"])
             if r.needs == "photo" and r.food is None and jobs.can_ask(job):
                 return self._question(job, "photo", f"What's in the {it['name']}, roughly? Or send a photo.", item=it["name"])
-        # how much: a counted food with no number is asked once (unless they don't know, or a photo showed it)
+        # how much: one pack or one drink is saved; a counted food with no number is asked once
+        # (unless they don't know, or a photo showed it). A plate or a katori stays a usual-portion estimate.
         for it, r in keep:
             if it.get("quantity") or it.get("_grams") or ask.get("unsure") or r.food is None:
+                continue
+            if one_standard_serving(r.food):
+                _fill_one(it, r.food)
                 continue
             if r.food.countable and jobs.can_ask(job) and ask.get("confidence") != "photo":
                 opts = await self._quantity_options(job.subject_id, r.food)
@@ -382,11 +440,14 @@ class NutritionAgent:
             conf = conf_base
             if r.food is not None and r.food.source == "label" and conf == "said":
                 conf = "label"
-            if not it.get("quantity") and not it.get("_grams"):
+            if it.get("_assumed") and conf != "photo":
+                conf = "estimate"
+            elif not it.get("quantity") and not it.get("_grams"):
                 conf = "estimate" if r.food is not None else "unquantified"
+            assumed = _assumed_flags(r.food) if it.get("_assumed") and r.food is not None else {}
             to_save.append(entries.Item(name=it.get("name") or (r.food.name if r.food else "food"), food=r.food, quantity=it.get("quantity"),
                                         unit=it.get("unit"), name_said=it.get("said") or it.get("name") or "", confidence=conf,
-                                        grams=it.get("_grams"), pantry=r.pantry, note=it.get("notes")))
+                                        grams=it.get("_grams"), pantry=r.pantry, note=it.get("notes"), flags=assumed))
         flags = await self._checks(job.subject_id, to_save)
         for x, f in zip(to_save, flags):
             x.flags.update(f)
