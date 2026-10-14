@@ -305,7 +305,9 @@ async def admin_export(family_id: str, subject: str, session: DB) -> dict:
 @router.get("/latency")
 async def admin_latency(session: DB, hours: int = 1) -> dict:
     """How long Saheli took to answer (the why-trail's turn time, message turns only) over the last hours: count, p50,
-    p90 and the slowest, in ms. Read by the hourly live check (quality plan F8); sims and shadow families are left out."""
+    p90 and the slowest, in ms. Read by the hourly live check (quality plan F8); sims and shadow families are left out.
+    steps: where the time went, p50/p90 of each step over the turns that recorded it (waiting for the family's previous
+    turn, building the context, the brain's model calls, tools, the reply checks, after the reply)."""
     import math
     from datetime import timedelta
 
@@ -313,15 +315,30 @@ async def admin_latency(session: DB, hours: int = 1) -> dict:
     from app.core import clock
 
     since = clock.now() - timedelta(hours=max(1, min(hours, 168)))
-    rows = (await session.execute(select(TraceTurn.ms).where(TraceTurn.at >= since, TraceTurn.kind == "message",
-                                                             ~TraceTurn.family_id.startswith("shadow:"), ~TraceTurn.family_id.startswith("sim-"))
-                                  .order_by(TraceTurn.ms))).scalars().all()
-    ms = [int(m or 0) for m in rows]
+    rows = (await session.execute(select(TraceTurn.ms, TraceTurn.timing).where(
+        TraceTurn.at >= since, TraceTurn.kind == "message", ~TraceTurn.family_id.startswith("shadow:"),
+        ~TraceTurn.family_id.startswith("sim-")).order_by(TraceTurn.ms))).all()
+    ms = [int(r.ms or 0) for r in rows]
 
-    def pct(q: float) -> int | None:
-        return ms[min(len(ms) - 1, max(0, math.ceil(q * len(ms)) - 1))] if ms else None  # nearest rank
+    def pct(values: list[int], q: float) -> int | None:
+        values = sorted(values)
+        return values[min(len(values) - 1, max(0, math.ceil(q * len(values)) - 1))] if values else None  # nearest rank
 
-    return {"hours": max(1, min(hours, 168)), "turns": len(ms), "p50Ms": pct(0.5), "p90Ms": pct(0.9), "maxMs": ms[-1] if ms else None}
+    timed = [(int(r.ms or 0), r.timing) for r in rows if isinstance(r.timing, dict)]
+    parts: dict[str, list[int]] = {k: [] for k in ("lock", "context", "brain", "otherModels", "tools", "check", "after", "own")}
+    for total, t in timed:
+        model = t.get("model") or []
+        parts["lock"].append(int(t.get("lockMs", 0)))
+        parts["context"].append(int(t.get("contextMs", 0)))
+        parts["brain"].append(sum(int(m) for r, m in model if r in ("brain", "brain_hard")))
+        parts["otherModels"].append(sum(int(m) for r, m in model if r not in ("brain", "brain_hard")))
+        parts["tools"].append(sum(int(m) for _, m in t.get("tool") or []))
+        parts["check"].append(int(t.get("checkMs", 0)))
+        parts["after"].append(int(t.get("afterMs", 0)))
+        parts["own"].append(max(0, total - int(t.get("lockMs", 0))))  # the turn's own time, without waiting its turn
+    steps = {k: {"p50Ms": pct(v, 0.5), "p90Ms": pct(v, 0.9)} for k, v in parts.items()} if timed else {}
+    return {"hours": max(1, min(hours, 168)), "turns": len(ms), "p50Ms": pct(ms, 0.5), "p90Ms": pct(ms, 0.9), "maxMs": ms[-1] if ms else None,
+            "timedTurns": len(timed), "steps": steps}
 
 
 @router.get("/live")

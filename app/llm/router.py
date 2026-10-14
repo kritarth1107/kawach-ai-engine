@@ -232,6 +232,7 @@ async def complete(
     if not candidates:
         raise AllModelsFailed("; ".join(errors))
     live = [r for r in candidates if healthy(r)] or candidates  # all tripped: try anyway (never past a policy refusal)
+    started = time.monotonic()
 
     async def call(route: Route) -> LLMReply:
         return await asyncio.wait_for(
@@ -247,6 +248,35 @@ async def complete(
             timeout=timeout_s,
         )
 
+    async def first_of(route: Route) -> LLMReply:
+        """The call, and when it is slow the same request once more on the same model: the first answer wins and the other
+        is cancelled. Google's shared capacity has a long tail (live 13 Oct: one brain call is ~4 s at p50 but 12-40 s now
+        and then); the same request is no different an answer, only sooner."""
+        after = hedge_after(role)
+        if not after or after >= timeout_s:
+            return await call(route)
+        tasks = [asyncio.ensure_future(call(route))]
+        try:
+            done, _ = await asyncio.wait(tasks, timeout=after)
+            if done:
+                return tasks[0].result()
+            logger.warning("llm_hedge role=%s model=%s after=%.1fs", role, route.key, after)
+            tasks.append(asyncio.ensure_future(call(route)))
+            pending: set = set(tasks)
+            error: BaseException | None = None
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    if t.exception() is None:
+                        return t.result()
+                    error = t.exception()
+            assert error is not None
+            raise error
+        finally:
+            for t in tasks:
+                if not t.done():
+                    t.cancel()
+
     queue = list(live)
     while queue:
         route = queue.pop(0)
@@ -256,7 +286,7 @@ async def complete(
                 if wait:
                     await asyncio.sleep(wait)
                 try:
-                    reply = await call(route)
+                    reply = await first_of(route)
                     break
                 except ModelUnavailable as exc:
                     if exc.status != 429:
@@ -270,6 +300,9 @@ async def complete(
             assert reply is not None
             inr = await spend.record(role, route.model, reply.usage or {})
             logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, route.key, reply.usage, inr)
+            from app.core import trace
+
+            trace.note_timed("model", role, (time.monotonic() - started) * 1000)  # with any 429 wait and fallback
             return reply
         except ModelUnavailable as exc:
             trip(route, exc.status)
@@ -290,6 +323,18 @@ async def complete(
 
 
 RETRY_429_S: tuple[float, ...] = (1.5, 3.0, 6.0)  # about 10 s in all before the next route or AllModelsFailed
+
+
+def hedge_after(role: str) -> float:
+    """Seconds after which a slow call is sent once more (0: never). Only Saheli's own replies (the brain and brain_hard),
+    where a person is waiting; BRAIN_HEDGE_AFTER_S sets it (10 s: past the p85 of a brain call, so about one call in seven
+    or fewer)."""
+    if role not in ("brain", "brain_hard"):
+        return 0.0
+    try:
+        return max(0.0, float(os.getenv("BRAIN_HEDGE_AFTER_S", "10")))
+    except ValueError:
+        return 10.0
 
 
 def new_call_id() -> str:

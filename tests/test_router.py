@@ -106,3 +106,88 @@ def test_gemini_rebuilds_tool_call_and_response():
     assert contents[1].parts[0].function_call.name == "get_schedule"
     resp = contents[2].parts[0].function_response
     assert resp.name == "get_schedule" and resp.response == {"items": []}
+
+
+class Timed:
+    """A provider whose calls take the given seconds (a value, or an exception raised after the wait)."""
+
+    def __init__(self, plan):
+        self.plan = list(plan)
+        self.calls = 0
+        self.cancelled = 0
+
+    async def complete(self, route, **kw):
+        import asyncio
+
+        delay, out = self.plan.pop(0)
+        self.calls += 1
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        if isinstance(out, Exception):
+            raise out
+        return LLMReply(text=out, tool_calls=[], model=route.model)
+
+
+async def test_a_slow_brain_call_is_sent_once_more_and_the_first_answer_wins(monkeypatch):
+    """Reply speed: Google's shared capacity has a long tail (a brain call ~4 s at p50, 12-40 s now and then). Past
+    BRAIN_HEDGE_AFTER_S the same request goes once more on the same model; the first answer wins, the other is cancelled."""
+    import asyncio
+
+    from app.core import trace
+
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0.05")
+    a = Timed([(0.5, "slow"), (0.01, "fast")])
+    router.register_provider("a", a)
+    with trace.collect_timing() as timing:
+        r = await router.complete("brain", system_stable="s", messages=MSG, routes=[Route("a", "m1")])
+    await asyncio.sleep(0.01)  # the losing copy's cancellation lands
+    assert r.text == "fast" and a.calls == 2 and a.cancelled == 1
+    assert timing["model"][0][0] == "brain" and timing["model"][0][1] < 400
+
+
+async def test_a_quick_call_is_never_sent_twice_and_other_roles_never_hedge(monkeypatch):
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0.2")
+    a = Timed([(0.01, "quick")])
+    router.register_provider("a", a)
+    assert (await router.complete("brain", system_stable="s", messages=MSG, routes=[Route("a", "m1")])).text == "quick"
+    assert a.calls == 1
+    b = Timed([(0.4, "judge slow")])
+    router.register_provider("b", b)
+    assert (await router.complete("judge_fast", system_stable="s", messages=MSG, routes=[Route("b", "m2")])).text == "judge slow"
+    assert b.calls == 1
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0")  # off
+    c = Timed([(0.3, "only one")])
+    router.register_provider("c", c)
+    assert (await router.complete("brain", system_stable="s", messages=MSG, routes=[Route("c", "m3")])).text == "only one"
+    assert c.calls == 1
+
+
+async def test_when_the_slow_call_fails_the_second_one_still_answers(monkeypatch):
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0.05")
+    a = Timed([(0.1, ModelUnavailable(500, "boom")), (0.2, "second")])
+    router.register_provider("a", a)
+    r = await router.complete("brain", system_stable="s", messages=MSG, routes=[Route("a", "m1")])
+    assert r.text == "second" and a.calls == 2
+
+
+async def test_both_copies_rate_limited_is_one_rate_limit_backed_off_as_before(monkeypatch):
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0.05")
+    a = Timed([(0.1, ModelUnavailable(429, "q")), (0.1, ModelUnavailable(429, "q")), (0.01, "after backoff")])
+    router.register_provider("a", a)
+    r = await router.complete("brain", system_stable="s", messages=MSG, routes=[Route("a", "m1")])
+    assert r.text == "after backoff" and a.calls == 3
+
+
+async def test_a_cancelled_turn_cancels_both_copies(monkeypatch):
+    import asyncio
+
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0.05")
+    a = Timed([(5, "never"), (5, "never")])
+    router.register_provider("a", a)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(router.complete("brain", system_stable="s", messages=MSG, routes=[Route("a", "m1")]), timeout=0.2)
+    await asyncio.sleep(0.01)
+    assert a.calls == 2 and a.cancelled == 2

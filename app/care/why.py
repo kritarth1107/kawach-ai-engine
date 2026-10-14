@@ -52,6 +52,8 @@ class TraceTurn(Base):
     cost_inr: Mapped[float] = mapped_column(Float, default=0.0)
     tools: Mapped[list] = mapped_column(JSONB, default=list)  # [{name, args, status, detail}]
     tasks: Mapped[list] = mapped_column(JSONB, default=list)  # task ids its tool calls touched
+    # where the time went (app.core.trace.collect_timing): {lockMs, contextMs, checkMs, afterMs, model: [[role, ms]], tool: [[name, ms]]}
+    timing: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     __table_args__ = (
         Index("ix_trace_turns_trace", "trace_id", "id"),
@@ -86,7 +88,7 @@ def tool_rows(actions: list[dict]) -> tuple[list[dict], set[str]]:
 
 async def record_turn(session, *, trace_id: str, family_id: str, thread_id: str, kind: str, channel: str = "", message_ref: str | None = None,
                       task_id: str | None = None, turn_id: int | None = None, at: datetime | None = None, ms: int = 0, text: str = "",
-                      reply: str = "", actions: list[dict] | None = None, calls: list | None = None) -> TraceTurn:
+                      reply: str = "", actions: list[dict] | None = None, calls: list | None = None, timing: dict | None = None) -> TraceTurn:
     tools, secrets = tool_rows(actions or [])
     models, cost = _models(calls or [])
     touched = sorted({str((a.get("args") or {}).get("task_id")) for a in actions or [] if (a.get("args") or {}).get("task_id")})
@@ -94,7 +96,7 @@ async def record_turn(session, *, trace_id: str, family_id: str, thread_id: str,
         trace_id=trace.clip(trace_id), family_id=family_id[:80], thread_id=(thread_id or "")[:64], kind=kind[:16], channel=(channel or "")[:16],
         message_ref=trace.clip(message_ref), task_id=(str(task_id)[:64] if task_id else None), turn_id=turn_id, at=at or clock.now(), ms=ms,
         text=trace.scrub(text, secrets)[:TEXT_CHARS], reply=trace.scrub(reply, secrets)[:TEXT_CHARS], models=models, cost_inr=cost,
-        tools=tools, tasks=touched,
+        tools=tools, tasks=touched, timing=dict(timing) if timing else None,
     )
     session.add(row)
     await session.flush()
@@ -128,7 +130,7 @@ def _iso(d) -> str | None:
 
 def _turn_json(t: TraceTurn) -> dict:
     return {"trace": t.trace_id, "at": _iso(t.at), "kind": t.kind, "by": t.thread_id, "channel": t.channel, "taskId": t.task_id,
-            "text": t.text, "reply": t.reply, "models": t.models, "costInr": t.cost_inr, "tools": t.tools, "ms": t.ms,
+            "text": t.text, "reply": t.reply, "models": t.models, "costInr": t.cost_inr, "tools": t.tools, "ms": t.ms, "timing": t.timing,
             "messageRef": t.message_ref if t.kind == "message" else None}
 
 

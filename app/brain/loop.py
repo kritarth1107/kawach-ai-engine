@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -12,6 +13,7 @@ from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brain import grounding, guards, policy, tools
@@ -33,6 +35,12 @@ BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
 BRAIN_EFFORT_HARD = os.getenv("BRAIN_EFFORT_HARD", BRAIN_EFFORT)
 HISTORY_TURNS = 40
 COMPACT_AFTER = 80
+# How long a turn may take (seconds). A person's message: the backend stops waiting at 120 s (aiPostBrainTurn), so past
+# that a reply is wasted while the family stays locked. A scheduled turn: under Cloud Run's 300 s request limit.
+TURN_BUDGET_S = {"message": float(os.getenv("BRAIN_TURN_BUDGET_S", "110")), "system": 240.0}
+# Of that, how long it may wait for the family's previous turn to finish.
+LOCK_WAIT_S = {"message": 90.0, "system": 150.0}
+MIN_CALL_S = 8.0  # less left than this: no new model call is started
 
 
 @dataclass
@@ -89,9 +97,30 @@ class TurnResult:
     location_request: bool = False  # the reply goes with WhatsApp's "Send location" button
 
 
-async def _lock_family(session: AsyncSession, family_id: str) -> None:
-    """One turn at a time per family, across instances; released at commit."""
-    await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+class FamilyBusy(router.AllModelsFailed):
+    """The family's turn did not come in time: another turn held it. Answered like a model outage (503: the backend's
+    holding line and retry), never queued for minutes behind a stuck turn (live 12 Oct 20:33: one turn hung, held the
+    family for 10 minutes and five messages waited behind it)."""
+
+
+async def _lock_family(session: AsyncSession, family_id: str, wait_s: float | None = None) -> None:
+    """One turn at a time per family, across instances; released at commit. wait_s bounds the wait (the queue keeps
+    its order: Postgres hands the lock to waiters first come, first served)."""
+    if not wait_s:
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+        return
+    before = (await session.execute(text("SELECT current_setting('lock_timeout')"))).scalar_one()
+    await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": f"{int(wait_s * 1000)}ms"})
+    try:
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+    except DBAPIError as exc:
+        orig = getattr(exc, "orig", None)
+        if getattr(orig, "sqlstate", None) == "55P03" or getattr(orig, "pgcode", None) == "55P03" or "lock timeout" in str(exc):
+            await session.rollback()
+            logger.error("family busy for %.0fs: turn not taken family=%s", wait_s, family_id)
+            raise FamilyBusy(f"family busy for {wait_s:.0f}s") from exc
+        raise
+    await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": before})
 
 
 class TurnData:
@@ -688,14 +717,15 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     at = clock.now()
     from app.care import why
 
-    with trace.use(tid, task_id=trace.task_id(), via=via or trace.via(), family_id=req.family_id), trace.collect_spend() as calls:
+    with (trace.use(tid, task_id=trace.task_id(), via=via or trace.via(), family_id=req.family_id), trace.collect_spend() as calls,
+          trace.collect_timing() as timing):
         result = await _run_turn(session, host, req)
         result.trace_id = tid
         if not result.duplicate and not req.family_id.startswith("shadow:"):
             await why.record_turn_safely(
                 session, trace_id=tid, family_id=req.family_id, thread_id=req.speaker.get("id") or "",
                 kind="system" if req.speaker.get("role") == "system" else "message", channel=req.channel, message_ref=req.message_ref,
-                task_id=trace.task_id(), turn_id=result.turn_id, at=at, ms=result.ms, text=req.text, reply=result.reply,
+                task_id=trace.task_id(), turn_id=result.turn_id, at=at, ms=result.ms, text=req.text, reply=result.reply, timing=timing,
                 actions=result.actions, calls=calls)
             await session.commit()
     return result
@@ -703,7 +733,10 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
 async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
     started = time.monotonic()
-    await _lock_family(session, req.family_id)
+    kind = "system" if req.speaker.get("role") == "system" else "message"
+    await _lock_family(session, req.family_id, wait_s=LOCK_WAIT_S[kind])
+    trace.note_step("lock", (time.monotonic() - started) * 1000)
+    context_at = time.monotonic()
     if req.still_true is not None and not await req.still_true(session):
         # The task this update is about moved on while it waited for the family's turn (the person answered, changed or
         # cancelled it meanwhile): said now, it would contradict what they were just told.
@@ -873,20 +906,30 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     degraded = ""
     tool_text_retried = False
     reply: router.LLMReply | None = None
+    trace.note_step("context", (time.monotonic() - context_at) * 1000)
     for step in range(MAX_STEPS):
         last = step == MAX_STEPS - 1
+        # The turn's time budget: a model call never runs past it (the person has stopped waiting, and the family stays
+        # locked meanwhile). Spent: the same as no model answering (nothing done yet → 503; something done → said so).
+        left = TURN_BUDGET_S[kind] - (time.monotonic() - started)
         try:
-            reply = await router.complete(
-                brain_role,
-                system_stable=stable,
-                system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
-                messages=msgs,
-                # On the last step there are no tools, so the person always gets a reply.
-                tools=None if last else tools.specs(),
-                max_tokens=6000,
-                effort=effort,
-                essential=not is_system,  # past the hard cap only people's messages get answers
-            )
+            if left < MIN_CALL_S:
+                raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent")
+            try:
+                reply = await asyncio.wait_for(router.complete(
+                    brain_role,
+                    system_stable=stable,
+                    system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
+                    messages=msgs,
+                    # On the last step there are no tools, so the person always gets a reply.
+                    tools=None if last else tools.specs(),
+                    max_tokens=6000,
+                    effort=effort,
+                    essential=not is_system,  # past the hard cap only people's messages get answers
+                ), timeout=left)
+            except TimeoutError as exc:
+                logger.error("turn budget spent family=%s step=%d", req.family_id, step)
+                raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent") from exc
         except router.AllModelsFailed:
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
                 raise  # nothing happened yet: the caller may safely try another path
@@ -909,11 +952,13 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 continue
             if guard_rounds >= 2 or is_system or not text_now or last:
                 break
+            checked_at = time.monotonic()
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
             problems += grounding.problems(await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
                                                                  tool_results=tool_texts, actions=True,
                                                                  doctor_note=health_turn(ctx.actions)))
+            trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
                 break
             guarded = True
@@ -942,7 +987,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 results.append({"id": call.id, "name": call.name, "is_error": True,
                                 "content": json.dumps({"refused": "You have searched enough. If it is not there, say plainly you do not have it and ask."})})
                 continue
+            ran_at = time.monotonic()
             out, is_error = await tools.run(ctx, call.name, call.args)
+            trace.note_timed("tool", call.name, (time.monotonic() - ran_at) * 1000)
             tool_texts.append(f"{call.name}{' (failed)' if is_error else ''}: {out}")
             ctx.known.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
@@ -952,8 +999,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
+        checked_at = time.monotonic()
         still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
                                       doctor_note=health_turn(ctx.actions))
+        trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
             final = grounding.strip(final, still) or ("none" if is_system else "")
@@ -976,6 +1025,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(
             final, greeted_today=greeted, mid_conversation=mid, names=[name, *name.split()[:1]])), ctx.profiles.get(req.speaker["id"]))
 
+    after_at = time.monotonic()
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
@@ -985,6 +1035,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if data.history_full:  # fewer turns than a full history cannot need folding yet
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
+    trace.note_step("after", (time.monotonic() - after_at) * 1000)
     order_tap = bool(parsed_button and parsed_button[0] == "od")  # a Cancel tap on a placed order: its caregiver is told now
     if not getattr(host, "shadow", False) and (order_tap or any(a["tool"] in ("start_task", "task_input", "cancel_task") and a.get("ok")
                                                                 for a in ctx.actions)):

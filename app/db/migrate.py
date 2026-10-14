@@ -134,6 +134,8 @@ COLUMNS = [  # every one is required: the models select it
     # trust plan A3: a correction from a person stays until a person changes it
     ("care_facts", "pinned_at", "TIMESTAMPTZ"),
     ("care_facts", "pinned_by", "VARCHAR(64)"),
+    # reply speed: where a turn's time went (lock wait, context, each model and tool call, checks, after the reply)
+    ("trace_turns", "timing", "JSONB"),
 ]
 
 INDEXES = [

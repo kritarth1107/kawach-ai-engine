@@ -31,6 +31,7 @@ class Trace:
 
 _current: contextvars.ContextVar[Trace] = contextvars.ContextVar("why_trace", default=Trace())
 _spent: contextvars.ContextVar[list | None] = contextvars.ContextVar("why_spent", default=None)
+_timing: contextvars.ContextVar[dict | None] = contextvars.ContextVar("why_timing", default=None)
 
 
 def current() -> str | None:
@@ -133,6 +134,35 @@ def note_spend(role: str, model: str, cost: float, tokens_in: int, tokens_out: i
     calls = _spent.get()
     if calls is not None:
         calls.append((role, model, cost, tokens_in, tokens_out))
+
+
+# ── where one turn's time went (the why-trail's `timing`; /v2/admin/latency sums it) ──
+
+
+@contextlib.contextmanager
+def collect_timing():
+    """Collect the timed steps of one turn: {"lockMs", "contextMs", "checkMs", "afterMs"} plus lists "model" ([role, ms])
+    and "tool" ([name, ms]). Nothing in it is personal: step names and milliseconds only."""
+    steps: dict = {}
+    token = _timing.set(steps)
+    try:
+        yield steps
+    finally:
+        _timing.reset(token)
+
+
+def note_step(step: str, ms: float) -> None:
+    """Add ms to one of the turn's steps (lock, context, check, after)."""
+    steps = _timing.get()
+    if steps is not None:
+        steps[f"{step}Ms"] = int(steps.get(f"{step}Ms", 0) + ms)
+
+
+def note_timed(kind: str, name: str, ms: float) -> None:
+    """One model call (kind "model", name its role) or tool call (kind "tool", name the tool) and how long it took."""
+    steps = _timing.get()
+    if steps is not None:
+        steps.setdefault(kind, []).append([name, int(ms)])
 
 
 # ── nothing secret is ever stored in a trace ─────────────────────────────────
