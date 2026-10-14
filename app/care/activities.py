@@ -333,8 +333,9 @@ def context_block(name: str, rows: list[dict]) -> str:
     lines = [f"  - {r['text']}: today {r['today'].replace('_', ' ')}"
              + (f", streak {r['streak']}" if r["streak"] > 1 else "")
              + (f"; last: {r['last']['summary'][:90]}" if r.get("last") else "") + f" [{r['key']}]" for r in rows]
-    return (f"ACTIVITIES OF {name.upper()} (habits are not reminders: check in on them and log what they tell you with "
-            "log_activity; routine ones just shape when to message):\n" + "\n".join(lines))
+    return (f"ACTIVITIES OF {name.upper()} (habits are not reminders: when they say one of these happened, including how "
+            "long, call log_activity with its key in this turn, before you praise them; routine ones just shape when to "
+            "message):\n" + "\n".join(lines))
 
 
 # ── adopting what is already known ─────────────────────────────────────────────

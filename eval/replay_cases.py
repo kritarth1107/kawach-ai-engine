@@ -317,7 +317,9 @@ async def run_world(sessions: async_sessionmaker, case: dict, n: int) -> dict:
 async def verdict(case: dict, res) -> dict:
     tools = [a["tool"] for a in res.actions if a.get("ok", True)]
     sent = [str((a.get("args") or {}).get("text") or "") for a in res.actions if a.get("tool") == "send_message"]
-    reply = "\n".join(x for x in [res.reply or "", *sent] if x and x.strip().lower() != "none")
+    bubbles = [str(m) for m in (getattr(res, "messages", None) or []) if str(m).strip() and str(m).strip().lower() != "none"]
+    shown = "\n---\n".join(bubbles) if len(bubbles) > 1 else (bubbles[0] if bubbles else (res.reply or ""))
+    reply = "\n".join(x for x in [shown, *sent] if x and x.strip().lower() != "none")
     fails = [w for w in (code_check(r, reply, tools, list(getattr(res, "messages", None) or [])) for r in case.get("assertion") or []) if w]
     why = ""
     if not fails and (case.get("rubric") or any(r.get("type") in ("grounded", "no_medical_advice", "no_false_claim") for r in case.get("assertion") or [])):

@@ -1309,7 +1309,8 @@ def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
     "set_reminder",
     "A reminder for anything except a medicine's regular dose times (those come from the medicine in the CARE RECORD, "
     "through remember). When they give a time and ask you to set a reminder but not what it is for, set it: text is their "
-    "own words, repeat once unless they asked for every day, and do not ask what it is for. Confirm in the way they speak, "
+    "own words, repeat once unless they asked for every day, and do not ask what it is for. Call this tool in this turn. "
+    "Do not call open_loop to ask what it is for. Confirm in the way they speak, "
     "and keep the word reminder in English. Say whether it repeats (repeat): once for a one-off, daily or weekly only when they asked for it to "
     "repeat. 'in 20 minutes' / 'in an hour': give in_minutes and repeat once (the time and date are worked out for you, also "
     "past midnight). Otherwise times are 'HH:MM' in IST: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times "
@@ -1522,12 +1523,55 @@ async def reminders_tool(ctx: TurnCtx, a: dict) -> dict:
                               family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
     rows = (out or {}).get("reminders") or []
     return {"reminders": [_reminder_line(r) for r in rows], "count": len(rows),
-            "note": "Medicine reminders follow the medicines in the CARE RECORD (change them with remember or stop)."}
+            "note": "A medicine's dose time changes with change_reminder: id is its care-record key (medicine:metformin), "
+                    "action change, times the new HH:MM. Do not create a second reminder."}
+
+
+def _clock_times(raw) -> list[str]:
+    out = []
+    for item in raw or []:
+        parts = str(item).strip().split(":")
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            raise ToolRefused("times are HH:MM, 24-hour.")
+        hour, minute = int(parts[0]), int(parts[1])
+        if hour > 23 or minute > 59:
+            raise ToolRefused("times are HH:MM, 24-hour.")
+        out.append(f"{hour:02d}:{minute:02d}")
+    if not out:
+        raise ToolRefused("Give the new times (HH:MM).")
+    return out
+
+
+async def _change_medicine_time(ctx: TurnCtx, subject: str, key: str, times: list[str]) -> dict:
+    """A dose reminder is the medicine in the care record. Changing it updates that fact, not a second reminder."""
+    fact = await store.active_fact(ctx.session, ctx.family_id, subject, key)
+    if fact is None or fact.domain != "medicine":
+        raise ToolRefused(f"No medicine {key} for this person. Do not create another reminder.")
+    value = dict(fact.value or {})
+    value["times"] = times
+    name = str(value.get("name") or key.split(":", 1)[-1]).strip()
+    dose = str(value.get("dose") or "").strip()
+    sentence = f"{name} {dose} at {', '.join(times)}".replace("  ", " ").strip()
+    written = await store.write_fact(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, domain="medicine", key=key, value=value, text=sentence,
+        source_kind=ctx.source_kind, source_ref=ctx.message_ref, stated_by=ctx.speaker.get("id"), replace=True)
+    synced = None
+    if written.result in ("created", "superseded"):
+        try:
+            synced = await _sync_medicine(ctx, subject, written.fact.key, written.fact.value, active=True)
+        except Exception:
+            logger.exception("medicine schedule sync failed key=%s", written.fact.key)
+            synced = {"ok": False}
+    return {"result": "changed" if written.result == "superseded" else written.result, "key": written.fact.key,
+            "times": times, "sentence": sentence, "schedule": synced,
+            "reminder": {"id": written.fact.key, "text": sentence, "schedule": ", ".join(times)}}
 
 
 @tool(
     "change_reminder",
-    "Skip, stop or change one reminder (by its id, from the reminders tool or REMINDERS DUE SOON). skip: one time ('not "
+    "Skip, stop or change one reminder (by its id, from the reminders tool, REMINDERS DUE SOON, or a medicine key). "
+    "A medicine dose you just reminded: id is the care-record key (medicine:metformin), action change, times the new "
+    "HH:MM. That changes the dose time. Do not create another reminder, and do not ask which thing they mean. skip: one time ('not "
     "tomorrow', 'skip today's', or they already did what it is for): give date (and time for one of several times that day), "
     "or leave both out for the next time; unskip undoes a skip. stop: it never goes out again. change: new words (text: how "
     "it reads, emoji included; a reminder goes out with its saved words, so a note or skill never changes them) and/or times / "
@@ -1548,6 +1592,8 @@ async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
     _may_manage_reminders(ctx, subject)
     rid = str(a["id"]).strip()
     action = a["action"]
+    if action == "change" and rid.startswith("medicine:"):
+        return await _change_medicine_time(ctx, subject, rid, _clock_times(a.get("times")))
     kw = {"family_id": ctx.family_id, "subject_id": subject, "actor_id": ctx.actor_id}
     if action == "stop":
         out = await ctx.host.call("cancel_reminder", {"reminderId": rid}, **kw)

@@ -94,8 +94,8 @@ async def test_a_reminders_words_can_be_changed(db):
 
 
 async def test_a_dose_just_sent_is_named_for_the_reply(db):
-    """A reply to "Time for Metformin" is that dose: a new time is remember, and finishing it is log_dose.
-    change_reminder is for other reminders. The person's words are not matched."""
+    """A reply to "Time for Metformin" is that dose: a new time is change_reminder on that medicine key, and finishing
+    it is log_dose. The person's words are not matched."""
     from app.care import store
 
     await store.write_fact(db, family_id=FAM, subject_id=SON["id"], domain="medicine", key="medicine:metformin",
@@ -106,9 +106,27 @@ async def test_a_dose_just_sent_is_named_for_the_reply(db):
     req = loop.TurnRequest(family_id=FAM, elder=ELDER, speaker=SON, members=[ELDER, SON], text="later")
     dynamic, _ = await loop.turn_context(db, req)
     assert "THE LAST MESSAGE YOU SENT was a dose reminder for Metformin 500 mg at 08:00" in dynamic
-    assert "remember" in dynamic and "log_dose" in dynamic and "Do not use change_reminder" in dynamic
+    assert "change_reminder id medicine:metformin" in dynamic and "log_dose" in dynamic
+    assert "a line that is only ---" in dynamic
     other = loop.dose_answer_line("The maid comes at 11.", [("Metformin", "500 mg", ["08:00"])])
     assert other == ""
+
+
+async def test_changing_a_medicine_dose_time_updates_the_record(db):
+    from app.care import store
+
+    await store.write_fact(db, family_id=FAM, subject_id=SON["id"], domain="medicine", key="medicine:metformin",
+                           value={"name": "Metformin", "dose": "500 mg", "times": ["08:00"]},
+                           text="Metformin 500 mg at 08:00", source_kind="caregiver_said")
+    await db.commit()
+    h = Host()
+    out, err = await run(db, SON, h, "change_reminder",
+                         {"id": "medicine:metformin", "action": "change", "times": ["2:00"], "about": SON["id"]})
+    assert not err and out["result"] == "changed" and out["times"] == ["02:00"]
+    assert all(c[0] != "update_reminder" for c in h.calls)
+    assert any(c[0] == "sync_medicine_schedule" and c[1]["times"] == ["02:00"] for c in h.calls)
+    fact = await store.active_fact(db, FAM, SON["id"], "medicine:metformin")
+    assert fact is not None and fact.value["times"] == ["02:00"]
 
 
 async def test_saheli_sees_the_reminders_due_soon(db, at):

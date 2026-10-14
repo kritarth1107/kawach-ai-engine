@@ -323,6 +323,12 @@ def test_markdown_becomes_whatsapp_formatting():
     assert g.whatsapp_format("*already* fine") == "*already* fine"
 
 
+def test_two_bubbles_are_sent_back_once_three_are_left_alone():
+    assert g.split_problems("Only one.") == []
+    assert g.split_problems("One.\n---\nTwo.\n---\nThree.") == []
+    assert g.split_problems("One.\n---\nTwo facts in this one.")
+
+
 def test_marwari_sa_stays_in_marwari_and_only_once():
     """Live 2026-10-09: 'सा' ran into Gujarati ('સા?') and Chhattisgarhi replies, and closed every Marwari sentence."""
     mwr = {"script": "devanagari", "saved": {"language": "hi", "dialect": "mwr"}, "now": "devanagari"}

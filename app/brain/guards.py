@@ -461,6 +461,15 @@ def whatsapp_messages(text: str) -> list[str]:
     return [p.strip() for p in re.split(r"(?m)^---\s*$", text or "") if p.strip() and p.strip().lower() != "none"]
 
 
+def split_problems(text: str) -> list[str]:
+    """Two bubbles is the miss when they gave three facts. One bubble is left alone (most replies). Three is enough."""
+    if len(whatsapp_messages(text)) != 2:
+        return []
+    return ["only one line that is only ---. If they told you three separate things, rewrite as three messages with two "
+            "such lines, and do not put two facts in the question about adding a person. If there were only two things, "
+            "send these two again unchanged."]
+
+
 # ── one question at a time ─────────────────────────────────────────────────────
 
 QUESTION_MARKS = re.compile(r"[?？؟]")

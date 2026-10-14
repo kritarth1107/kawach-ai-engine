@@ -360,6 +360,13 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
                 f"RECENT WITH {req.elder.get('name', 'the elder').upper()}:\n"
                 + "\n".join(f"  {clock.ist(t.at).strftime('%d %b %H:%M')} {'them' if t.role == 'user' else 'Saheli'}: {t.text[:300]}" for t in elder_turns)
             )
+    parts.append(
+        "WHATSAPP SHAPE: count the separate things they just told you. One short WhatsApp message for each, with a line that is "
+        "only --- between them. A meal, a reading, and something at home are three messages, and two facts in one of them fails. "
+        "A blank line does not split a message. Never write one sentence that names two facts and then asks to add a person: "
+        "that sentence is the failure. Each fact is its own message, and the question about adding someone comes after, as its "
+        "own message, only if you still need it. Do not call it stressful or a hassle, and do not say whether a number is good or bad."
+    )
     known = "\n".join(h.text for h in hits) + "\n" + "\n".join(e.summary for e in day_events)
     return "\n\n".join(parts), known
 
@@ -434,19 +441,24 @@ def _waiting_at(w: dict) -> str:
         return "earlier"
 
 
-def dose_answer_line(last_text: str, meds: list[tuple[str, str, list[str]]]) -> str:
-    """Saheli's own last message named a saved medicine. The person's words are not read here."""
+def dose_answer_line(last_text: str, meds: list[tuple[str, str, str, list[str]]]) -> str:
+    """Saheli's own last message named a saved medicine. The person's words are not read here.
+
+    meds are (name, care-record key, dose, times)."""
     low = (last_text or "").lower()
-    hit = [(name, dose, times) for name, dose, times in meds if len(name) >= 4 and name.lower() in low]
+    hit = [m for m in meds if len(m[0]) >= 4 and m[0].lower() in low]
     if not hit:
         return ""
-    listed = "; ".join(f"{name}{(' ' + dose) if dose else ''} at {', '.join(times) or 'its saved time'}" for name, dose, times in hit[:3])
+    lines = []
+    for name, key, dose, times in hit[:3]:
+        when = ", ".join(times) or "its saved time"
+        lines.append(f"{name}{(' ' + dose) if dose else ''} at {when} (change_reminder id {key})")
     return (
-        "THE LAST MESSAGE YOU SENT was a dose reminder for " + listed + ". If they are answering that reminder, act in "
-        "this turn and do not ask which thing they mean. A new time: remember, domain medicine, the same name and dose, "
-        "times set to the new one, before you reply. Do not use change_reminder for a medicine's dose time, and do not "
-        "say it changed until remember returns. They finished it: log_dose outcome taken for that medicine now. Do not "
-        "ask whether they mean this medicine. If they are talking about something else, answer that and leave this dose.")
+        "THE LAST MESSAGE YOU SENT was a dose reminder for " + "; ".join(lines) + ". If they are answering that reminder, "
+        "call the tool in this turn. Do not ask which thing they mean, and do not call set_reminder. A new time: "
+        "change_reminder, action change, that id, times the new HH:MM. Do not say it changed until change_reminder returns. "
+        "They finished it: log_dose outcome taken for that medicine now, at its saved time. Do not ask whether they mean "
+        "this medicine. If they are talking about something else, answer that and leave this dose.")
 
 
 async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
@@ -456,7 +468,7 @@ async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
     last = next((t for t in reversed(turns) if t.role == "assistant" and (t.text or "").strip()), None)
     if last is None:
         return ""
-    meds: list[tuple[str, str, list[str]]] = []
+    meds: list[tuple[str, str, str, list[str]]] = []
     seen: set[str] = set()
     for pid in (req.speaker["id"], req.elder["id"]):
         for fact in await data.facts(pid):
@@ -467,7 +479,7 @@ async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
                 continue
             seen.add(name.lower())
             value = fact.value or {}
-            meds.append((name, str(value.get("dose") or "").strip(), [str(t) for t in (value.get("times") or [])]))
+            meds.append((name, fact.key, str(value.get("dose") or "").strip(), [str(t) for t in (value.get("times") or [])]))
     return dose_answer_line(last.text, meds)
 
 
@@ -690,6 +702,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         final, known=known, fresh=fresh, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute,
         allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
     )
+    problems += guards.split_problems(final)
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
     problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
     if not ctx.is_system and not ctx.buttons:
