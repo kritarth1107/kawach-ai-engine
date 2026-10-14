@@ -1,4 +1,4 @@
-"""Before every engine deploy: every replay case on real Gemini (trust plan C3.4-C3.6). Paid; sunny-ship test project only.
+"""Before every engine deploy: every replay case on the live Bedrock routes (trust plan C3.4-C3.6). Paid; ap-south-1 only.
 
 Cases come from the private test bucket (the production table's nightly export, anonymised; app.quality.cases) and from
 the repo (founder-reported bugs on invented families, built here from eval/founder_points_eval.py, and the hard-turn
@@ -13,8 +13,8 @@ FIXED cases block the deploy when they fail (an old bug came back); OPEN cases a
 Time and cost: about 20 cases at a time, under 10 minutes, a cap of REPLAY_MAX_INR (₹200); when the cases outgrow that,
 one per failure kind is kept (the newest real ones first, then the rest round-robin).
 
-    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay GCP_PROJECT_ID=sunny-ship-508214-q1 \
-    GOOGLE_CLOUD_PROJECT=sunny-ship-508214-q1 REPLAY_MAX_INR=200 PYTHONPATH=. python -m eval.replay_cases [cases.jsonl] \
+    DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay \
+    WEB_SEARCH_PROVIDER=off REPLAY_MAX_INR=200 PYTHONPATH=. python -m eval.replay_cases [cases.jsonl] \
     [--parallel 20] [--max-cases 60] [--out runs/replay] [--only-founder]
 """
 
@@ -486,13 +486,9 @@ def load_cases(argv: list[str]) -> list[dict]:
 
 
 def main(argv: list[str]) -> int:
-    from eval.world.probes import production_routes, test_routes
+    from eval.live_routes import apply
 
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid replay runs go to the sunny-ship test project, never kavach-care.")
-        return 2
+    apply()
     cap = float(os.getenv("REPLAY_MAX_INR", "0") or 0)
     if cap <= 0:
         print("Refusing to start: set REPLAY_MAX_INR (₹ this run may spend).")

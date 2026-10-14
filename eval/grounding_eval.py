@@ -1,4 +1,4 @@
-"""The no-invention check on the real model (trust plan C4). Paid, sunny-ship test project only; invented families.
+"""The no-invention check on the real model (trust plan C4). Paid, live Bedrock routes, never Vertex; invented families.
 
 Each case is a draft reply with its memory and the person's messages: Round 2's real failures (made-up life details,
 invented numbers, her own food and medicine advice) and clean replies that only repeat memory, the chat or a search. The

@@ -22,7 +22,13 @@ import urllib.request
 
 
 def post(url: str, token: str, body: bytes) -> tuple[int, str]:
-    req = urllib.request.Request(url, data=body, method="POST", headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    secret = os.environ.get("ENGINE_ADMIN_SECRET", "")
+    if secret:
+        headers["x-admin-secret"] = secret
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=60) as r:  # noqa: S310 (the engine's own URL)
             return r.status, r.read().decode()[:600]
@@ -67,8 +73,14 @@ def main(argv: list[str]) -> int:
     token = os.environ.get("ID_TOKEN", "")
     tries, wait = int(os.environ.get("POST_TRIES", "12")), float(os.environ.get("POST_WAIT_S", "150"))
     status, text = 0, "no token"
+    secret = os.environ.get("ENGINE_ADMIN_SECRET", "")
+    if not token and not secret:
+        if sc.get("passed") and not sc.get("unavailable"):
+            print("the night passed; the engine is not reachable from GitHub, so the score stays in the artifact")
+            return 0
+        status, text = 0, "the engine is on a private network; GitHub cannot post the score"
     for attempt in range(1, tries + 1):
-        if not token:
+        if not token and not secret:
             break
         status, text = post(url, token, body)
         print(f"post {attempt}/{tries}: {status} {text[:200]}")
@@ -79,16 +91,22 @@ def main(argv: list[str]) -> int:
         if attempt < tries:
             time.sleep(wait)
     print(f"::warning::the night's score could not be stored on the engine ({status}): emailing the team")
+    if sc.get("unavailable"):
+        verdict = "UNAVAILABLE (not a quality failure; deploys go on if the tests passed)"
+    elif sc.get("passed"):
+        verdict = "PASSED"
+    else:
+        verdict = "FAILED"
     lines = [f"The nightly world score of run {run_id} ({kind}, {branch}, commit {commit[:12]}) could not be stored on the engine.",
              f"Last answer: {status} {text[:300]}", "",
-             f"The night itself: {'PASSED' if sc.get('passed') else 'FAILED'}."]
+             f"The night itself: {verdict}."]
     if sc.get("failures"):
         lines += ["Broken bars:", *[f"  - {f}" for f in sc["failures"][:30]]]
     j = (sc.get("judge") or {}).get("overall") or {}
     lines += ["", f"Judge pass {j.get('pct')}% of {j.get('n')}; probes run {(sc.get('probes') or {}).get('executed')} of {(sc.get('probes') or {}).get('selected')}.",
               "", f"Post it again once the engine answers: gh workflow run nightly-saheli.yml -f repost_run={run_id}",
               f"Run: https://github.com/kritarth1107/kawach-ai-engine/actions/runs/{run_id}"]
-    email(f"Nightly score NOT STORED (run {run_id}): the night {'passed' if sc.get('passed') else 'FAILED'}", "\n".join(lines))
+    email(f"Nightly score NOT STORED (run {run_id}): the night {verdict.split(' (')[0]}", "\n".join(lines))
     return 0
 
 

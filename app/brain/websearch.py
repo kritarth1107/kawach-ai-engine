@@ -82,6 +82,8 @@ async def grounded(prompt: str, *, location: str | None = None, model: str | Non
     if provider() == "tavily":
         return await asyncio.wait_for(_tavily_grounded(prompt, query=query, role=role, max_tokens=max_tokens, max_sources=max_sources),
                                       timeout=timeout_s or TIMEOUT_S)
+    if provider() in ("off", "none", "unavailable"):
+        raise RuntimeError("web search is off for this run")
 
     why = policy_block.blocked("gemini")
     if why:  # a policy refusal of the project is never retried (app.llm.policy_block): nothing is sent while it lasts

@@ -166,7 +166,8 @@ async def test_run_for_playbook_refuses_outside_the_test_project(monkeypatch, se
     monkeypatch.setenv("GCP_PROJECT_ID", "kavach-care")
     with pytest.raises(learn_replay.ReplayUnavailable):
         await learn_replay.run_for_playbook(sessions, None)
-    monkeypatch.setenv("GCP_PROJECT_ID", "sunny-ship-508214-q1")
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     monkeypatch.delenv("REPLAY_DATABASE_URL", raising=False)
     with pytest.raises(learn_replay.ReplayUnavailable):
         await learn_replay.run_for_playbook(sessions, None)
@@ -175,8 +176,8 @@ async def test_run_for_playbook_refuses_outside_the_test_project(monkeypatch, se
 async def test_run_for_playbook_reports_regressions_and_fixes(monkeypatch, sessions):
     from app.learn import replay as learn_replay
 
-    monkeypatch.setenv("GCP_PROJECT_ID", "sunny-ship-508214-q1")
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "sunny-ship-508214-q1")
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     monkeypatch.setenv("REPLAY_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_replay")
     cand = type("PB", (), {"version": 9, "lessons": {"general": ["be brief"]}, "examples": {}})()
     seen = []

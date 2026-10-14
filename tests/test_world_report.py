@@ -129,10 +129,17 @@ def test_tonight_rotates_every_probe_and_samples_crisis_probes(monkeypatch):
     assert not any(q["topic"] == "crisis" for v in probes.tonight(fams, 1).values() for q in v)
 
 
-def test_test_routes_keep_production_brain_and_use_a_stronger_judge():
-    prod = {"brain": ["gemini:gemini-3.5-flash@asia-south1"], "judge": ["gemini:gemini-3.5-flash@asia-south1"]}
+def test_test_routes_keep_the_live_brain_and_judge():
+    from eval.live_routes import for_eval, vertex_routes
+
+    prod = {"brain": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1"], "judge": ["bedrock:in.moonshotai.kimi-k3@ap-south-1"]}
     got = probes.test_routes(prod)
-    assert got["brain"] == prod["brain"] and got["judge"] == ["gemini:gemini-3.1-pro-preview"] and "sim" in got
+    assert got["brain"] == prod["brain"] and got["judge"] == prod["judge"]
+    assert got["sim"] == ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1"]
+    live = for_eval()
+    assert live["brain"][0].startswith("bedrock:openai.gpt-oss-120b")
+    assert live["vision"][0].startswith("bedrock:in.moonshotai.kimi-k3")
+    assert vertex_routes(live) == []
 
 
 def _write(tmp: Path, rs, js) -> None:
@@ -170,3 +177,26 @@ def test_a_lost_post_is_retried_then_emailed(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "post", lambda url, token, body: calls.append(1) or (403, "caller not allowed"))
     mod.main([str(p), "--kind", "nightly", "--run-id", "43"])
     assert len(calls) == 1 and sent  # a setup problem is not retried, and the team hears
+
+
+def test_a_provider_wide_refusal_is_unavailable_not_a_red_night(tmp_path):
+    d = tmp_path / "tonight"
+    shard = d / "probes-0" / "runs" / "nightly" / "2026-10-14"
+    shard.mkdir(parents=True)
+    (shard / "provider_down.json").write_text(json.dumps({"why": "403 AccessDeniedException"}))
+    (shard / "probes.jsonl").write_text(json.dumps({
+        "probe": "p1", "pass": False, "error": "AllModelsFailed: 403 AccessDeniedException", "fails": ["the turn crashed"],
+    }) + "\n")
+    scores = tmp_path / "scores.json"
+    out = tmp_path / "report.md"
+    assert report.main([str(d), "--out", str(out), "--scores", str(scores)]) == 0
+    sc = json.loads(scores.read_text())
+    assert sc["unavailable"] is True and sc["passed"] is False and "403" in sc["why"]
+    assert "UNAVAILABLE" in out.read_text()
+    # a real reply beside the refusal is a mix: the quality bars still apply
+    (shard / "probes.jsonl").write_text((shard / "probes.jsonl").read_text() + json.dumps({
+        "probe": "p2", "family": "w1", "language": "hi", "household": "two_elders", "topic": "reading",
+        "pass": True, "fails": [], "language_ok": True, "text": "x", "reply": "y",
+    }) + "\n")
+    (shard / "judged.jsonl").write_text(json.dumps({"probe": "p2", "judge": {"pass": True, "issues": []}}) + "\n")
+    assert report.outage(d, report.load(d), report.load(d, "judged.jsonl")) is None

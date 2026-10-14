@@ -166,7 +166,8 @@ def world_lines(w: dict) -> list[str]:
     judge = sc.get("judge") or {}
     code = sc.get("code") or {}
     probes = sc.get("probes") or {}
-    lines = [f"Nightly world score ({last['day']}, run {last['runId']}): {'PASSED' if last['passed'] else 'FAILED'}",
+    verdict = "UNAVAILABLE" if sc.get("unavailable") else ("PASSED" if last["passed"] else "FAILED")
+    lines = [f"Nightly world score ({last['day']}, run {last['runId']}): {verdict}",
              f"  judge {_num((judge.get('overall') or {}).get('pct'))} of {(judge.get('overall') or {}).get('n', 0)} judged; "
              f"code checks {_num((code.get('overall') or {}).get('pct'))}; language correct {_num((sc.get('language_correct') or {}).get('pct'))}; "
              f"recall {_num((sc.get('recall') or {}).get('pct'))}; probes run {probes.get('executed', 0)} of {probes.get('selected', 0)}"]
@@ -224,7 +225,7 @@ async def email(session: AsyncSession, day: str | None = None) -> tuple[str, str
         lines.append(f"Replay cases: {rc.get('open', 0)} open, {rc.get('fixed', 0)} fixed (fixed ones guard every engine deploy)")
         gate = rc.get("gate") or {}
         if gate.get("unavailable"):
-            lines.append(f"REPLAY GATE UNAVAILABLE since {gate.get('since')}: {gate.get('why')} (deploys go on untested by real Gemini)")
+            lines.append(f"REPLAY GATE UNAVAILABLE since {gate.get('since')}: {gate.get('why')} (deploys go on if the tests passed; the model was not reached)")
     cal = data.get("calibration") or {}
     if cal.get("batch"):
         lines.append(f"Judge calibration {cal['batch']}: {cal.get('labelled', 0)} of {cal.get('size', 0)} labelled"
@@ -293,9 +294,23 @@ async def replay_unavailable(host, row: EvalScore, since: str) -> dict:
     why = str((row.scores or {}).get("why") or "")
     text = "\n".join([f"The pre-deploy replay gate is UNAVAILABLE since {since} (run {row.run_id}, commit {row.commit[:12]}).", "",
                       f"Why: {why}", "",
-                      "No replay case got a real verdict, so engine deploys now go on untested by real Gemini (the test job still has to pass).",
+                      "No replay case got a real verdict, so engine deploys now go on if the tests passed (the model was not reached).",
                       "The gate restores itself on the next run that reaches the model.", f"Open: {admin_url()}/daily-score"])
     return await host.call("team_report", {"subject": f"Replay gate UNAVAILABLE since {since}"[:160], "text": text,
+                                           "html": "".join(f"<div>{html.escape(ln) or '&nbsp;'}</div>" for ln in text.splitlines())},
+                           family_id=OPS, subject_id=OPS, actor_id=OPS)
+
+
+async def nightly_unavailable(host, row: EvalScore) -> dict:
+    """The model refused the whole night: the team hears once. Deploys go on if the tests passed. Not a quality failure."""
+    from app.tasks.credits import OPS
+
+    why = str((row.scores or {}).get("why") or "")
+    text = "\n".join([f"The nightly world gate is UNAVAILABLE (run {row.run_id}, commit {(row.commit or '')[:12]}).", "",
+                      f"Why: {why}", "",
+                      "No reply was graded, so this is not a quality failure. Engine deploys go on if the tests passed.",
+                      "The gate is back on the next night that reaches the model.", f"Open: {admin_url()}/daily-score"])
+    return await host.call("team_report", {"subject": "Nightly gate UNAVAILABLE"[:160], "text": text,
                                            "html": "".join(f"<div>{html.escape(ln) or '&nbsp;'}</div>" for ln in text.splitlines())},
                            family_id=OPS, subject_id=OPS, actor_id=OPS)
 

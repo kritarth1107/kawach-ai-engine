@@ -1,15 +1,15 @@
 """The self-learning replay gate, run where the replay cases can run (trust plan §10.2 step 2; .github/workflows/learn-gate.yml).
 
 Production's nightly learning makes a playbook draft (lessons, approved rules) but cannot run the replay cases itself (no
-eval/, no test project there), so the draft waits. This job, in the sunny-ship test project after the 02:00 night:
+eval/, no test project there), so the draft waits. This job, on the live Bedrock routes after the 02:00 night:
 1. asks the engine for the waiting draft and the live playbook (GET /v2/admin/learn/waiting-draft);
-2. runs every replay case twice on real Gemini, with the live playbook and with the draft in its place
-   (app.learn.replay.run_for_playbook, on a local test database; the exported production cases plus the repo's);
+2. runs every replay case twice on Bedrock in ap-south-1, with the live playbook and with the draft in its place
+   (app.learn.replay.run_for_playbook, on a local test database; the repo's cases);
 3. posts the result (POST /v2/admin/learn/playbooks/{version}/replay): no regression starts its canary on 20% of families,
    a regression rejects it, an error leaves it waiting (never a silent pass).
 
     ENGINE_URL=https://… ID_TOKEN=… REPLAY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay \
-    GCP_PROJECT_ID=sunny-ship-508214-q1 GOOGLE_CLOUD_PROJECT=sunny-ship-508214-q1 LEARN_REPLAY_MAX_INR=150 \
+    LEARN_REPLAY_MAX_INR=150 WEB_SEARCH_PROVIDER=off \
     PYTHONPATH=. python -m eval.learn_gate [cases.jsonl] [--dry-run]
 """
 
@@ -61,13 +61,9 @@ async def gate(draft: dict, live: dict | None, case_files: list[str], budget: fl
 
 
 def main(argv: list[str]) -> int:
-    from eval.world.probes import production_routes, test_routes
+    from eval.live_routes import apply
 
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid replay runs go to the sunny-ship test project, never kavach-care.")
-        return 2
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
+    apply()
     waiting = call("GET", "/v2/admin/learn/waiting-draft")
     draft = waiting.get("draft")
     if not draft:

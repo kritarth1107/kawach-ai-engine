@@ -3,13 +3,13 @@ run-name: "Nightly ${{ github.event.inputs.repost_run && format('repost {0}', gi
 
 # Plan B3: every night at 01:00 IST the real brain answers the probes of the synthetic families (30 languages, every
 # household type), and a simulated week of every proactive job is checked against the message rules. Paid model calls
-# go to the sunny-ship TEST project only (never kavach-care). The world is synthetic, so logs and artifacts are safe.
+# go to Bedrock in ap-south-1 on the live routes (gpt-oss-120b, Kimi for photos). Never Vertex. The world is synthetic.
 #
 # Trust plan C2: the scheduled night runs the FULL world (1,000 families): about one probe per family each night, rotating
-# so all ~12,000 run within 11 nights, plus every crisis probe; every reply judged (a stronger judge, 3.1 Pro, in the test
-# project); the story families' memory quiz scored (recall). The report publishes scores.json to the engine
-# (/v2/admin/eval-scores, shown on the admin Daily score page and in the 08:00 email) and FAILS the night (exit 1) when a
-# release bar breaks (eval/world/report.py). Engine deploys wait while the latest full night failed (scripts/nightly_gate.py).
+# so all ~12,000 run within 11 nights, plus every crisis probe; every reply judged by the live judge; the story families'
+# memory quiz scored (recall). The report writes scores.json and FAILS the night (exit 1) when a release bar breaks
+# (eval/world/report.py). A provider-wide refusal is UNAVAILABLE (exit 0): deploys go on if the tests passed, and the team
+# is emailed. Engine deploys on AWS wait while the latest full night failed (scripts/nightly_gate.py, deploy-aws.yml).
 # Budget (the founder: not a concern): about ₹1,500-2,500 a night; the caps below are runaway guards above that.
 # Scheduled workflows run only from the default branch (master).
 
@@ -61,7 +61,6 @@ env:
   # probes a night, the founder's drug cases only here (never before a deploy).
   SENSITIVE_EVALS: pause
   CRISIS_SAMPLE: "30"
-  ENGINE_URL: https://kawach-ai-engine-bcvowb5kfq-el.a.run.app
 
 jobs:
   probes:
@@ -92,19 +91,27 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt pillow
-      - uses: google-github-actions/auth@v2
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
+          aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make && PYTHONPATH=. python -m eval.world.make --check
+      - name: One Bedrock call before any probe
+        id: pre
+        env:
+          WEB_SEARCH_PROVIDER: "off"
+          MEMORY_EMBEDDINGS: "off"
+          NIGHTLY_OUT: runs/nightly
+        run: PYTHONPATH=. python -m eval.live_routes --preflight
       - name: Probes (shard ${{ matrix.shard }} of 4)
+        if: steps.pre.outputs.down != 'true'
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_probes
           DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
           NIGHTLY_OUT: runs/nightly
         run: |
           # each shard's own cap is its share of the night's (13 Oct: ₹600 over 4 shards = ₹150 each stopped 59 % of the probes;
@@ -112,13 +119,14 @@ jobs:
           export PROBES_MAX_INR=$(( MAX_INR / SHARDS ))
           PYTHONPATH=. python -u -m eval.world.probes $SLICE --shard ${{ matrix.shard }}/$SHARDS --parallel 6 --every $EVERY
       - name: Judge every reply (shard ${{ matrix.shard }}); no result is a failing night
-        if: always()
+        if: always() && steps.pre.outputs.down != 'true'
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_probes
           DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
+          NIGHTLY_OUT: runs/nightly
         run: |
           export JUDGE_MAX_INR=$(( JUDGE_INR / SHARDS ))
           PYTHONPATH=. python -u -m eval.world.judge runs/nightly --sample 1
@@ -154,19 +162,27 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - uses: google-github-actions/auth@v2
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
+          aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
+      - name: One Bedrock call before recall
+        id: pre
+        env:
+          WEB_SEARCH_PROVIDER: "off"
+          MEMORY_EMBEDDINGS: "off"
+          NIGHTLY_OUT: runs/nightly
+        run: PYTHONPATH=. python -m eval.live_routes --preflight
       - name: Recall (story families' quiz) and their memory score
+        if: steps.pre.outputs.down != 'true'
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_recall
           DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
           NIGHTLY_OUT: runs/nightly
           RECALL_MAX_INR: ${{ env.RECALL_INR }}
         run: PYTHONPATH=. python -u -m eval.world.recall $SLICE --families 25 --parallel 5
@@ -243,29 +259,37 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - uses: google-github-actions/auth@v2
+      - uses: aws-actions/configure-aws-credentials@v4
         with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
+          aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
-      - name: 300 regular nudges written by the production models and graded (10 per language; bar 90 %, no made-up facts, no advice)
+      - name: One Bedrock call before the nudge eval
+        id: pre
+        env:
+          WEB_SEARCH_PROVIDER: "off"
+          MEMORY_EMBEDDINGS: "off"
+          NIGHTLY_OUT: runs/nudge_quality
+        run: PYTHONPATH=. python -m eval.live_routes --preflight
+      - name: 300 regular nudges written by the live models and graded (10 per language; bar 90 %, no made-up facts, no advice)
+        if: steps.pre.outputs.down != 'true'
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_nudgeq
           DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
           NUDGE_EVAL_MAX_INR: ${{ env.NUDGE_INR }}
         run: PYTHONPATH=. python -u -m eval.nudge_quality --per-language 10 --out runs/nudge_quality
-      - name: The founder's points of 13 Oct with the production brain (restricted items, scope, health answers, relay, mood)
-        if: always()
+      - name: The founder's points of 13 Oct with the live brain (restricted items, scope, health answers, relay, mood)
+        if: steps.pre.outputs.down != 'true'
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_nudgeq
           DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
+          WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
           POINTS_MAX_INR: "60"
           POINTS_OUT: runs/nudge_quality/founder_points.json
         run: PYTHONPATH=. python -u -m eval.founder_points_eval --repeat 2 | tee runs/nudge_quality/founder_points.txt
@@ -320,19 +344,9 @@ jobs:
           done
           cat report.md >> "$GITHUB_STEP_SUMMARY"
           exit 0
-      - id: auth
-        if: always()
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ env.ENGINE_URL }}
-          id_token_include_email: true
-      - name: Publish the number to the engine (eval_scores; a failing night on master emails the team; a lost post emails it too)
+      - name: Email the night (the engine is on a private network, so the score cannot be posted from here)
         if: always()
         env:
-          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           KIND: ${{ (github.event_name == 'schedule' || inputs.slice == 'full') && 'nightly' || 'fixture' }}
         run: |
@@ -374,20 +388,6 @@ jobs:
           PYTHONPATH=. python -m eval.world.report --gate-only scores.json | tee -a "$GITHUB_STEP_SUMMARY"
           echo "code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ env.ENGINE_URL }}
-          id_token_include_email: true
-      - name: Store it as a fixture run
-        env:
-          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          POST_TRIES: "3"
-        run: python3 scripts/post_eval_scores.py scores.json --kind fixture
       - name: Fail on the broken bar
         run: |
           [ "${{ steps.gate.outputs.code }}" = "0" ] || { echo "::error::fixture night: a release bar is broken, as intended"; exit 1; }
@@ -414,20 +414,5 @@ jobs:
           kind=fixture; case "$title" in "Nightly full"*) case "$title" in *fixture*) ;; *) kind=nightly;; esac;; esac
           day=$(TZ=Asia/Kolkata date -d "$at" +%F)
           { echo "sha=$sha"; echo "branch=$branch"; echo "kind=$kind"; echo "day=$day"; } >> "$GITHUB_OUTPUT"
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ env.ENGINE_URL }}
-          id_token_include_email: true
-      - name: Post it again
-        env:
-          ID_TOKEN: ${{ steps.auth.outputs.id_token }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          POST_TRIES: "4"
-          POST_WAIT_S: "60"
-        run: |
-          python3 scripts/post_eval_scores.py night/scores.json --kind ${{ steps.run.outputs.kind }} --run-id ${{ github.event.inputs.repost_run }} \
-            --commit ${{ steps.run.outputs.sha }} --branch ${{ steps.run.outputs.branch }} --day ${{ steps.run.outputs.day }}
+      - name: The engine is on a private network
+        run: echo "::warning::GitHub cannot post scores to the engine (engine.kavach.local). The score stays in the report artifact; the night's email already went out."

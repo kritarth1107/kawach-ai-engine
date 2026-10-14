@@ -1,11 +1,10 @@
 """Plan B3.1: the nightly probe run. Every probe of the chosen families is sent as that person, with the family's state
 loaded, through the real brain (run_turn) with SimHost; code checks every reply against the probe's expectation.
 
-Paid runs only in the sunny-ship test project (never kavach-care). Results: runs/nightly/<date>/probes.jsonl and a summary.
+Paid runs call the live Bedrock routes in ap-south-1 (eval/live_routes.py), never Vertex. Results: runs/nightly/<date>/probes.jsonl and a summary.
 
     DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_probes \
-    DEBUG=false GCP_PROJECT_ID=sunny-ship-508214-q1 GOOGLE_CLOUD_PROJECT=sunny-ship-508214-q1 MEMORY_EMBEDDINGS=off \
-    MODEL_ROUTES='{"brain": ["gemini:gemini-3.5-flash@global"], ...}' PROBES_MAX_INR=800 \
+    DEBUG=false MEMORY_EMBEDDINGS=off WEB_SEARCH_PROVIDER=off PROBES_MAX_INR=800 \
     PYTHONPATH=. python -m eval.world.probes ci [--parallel 8] [--limit 50]
 """
 
@@ -38,7 +37,6 @@ OUT = Path(os.getenv("NIGHTLY_OUT", "runs/nightly")) / date.today().isoformat()
 # probe runs within NIGHT_EVERY nights, plus every safety (crisis) probe every night: ~30-40 per language, all judged.
 NIGHT_EVERY = int(os.getenv("NIGHT_EVERY", "11"))
 EST_INR_PER_PROBE = float(os.getenv("EST_INR_PER_PROBE", "1.3"))  # measured 13 Oct: ₹621 for 599 probes (₹1.04), plus second turns
-TEST_JUDGE = ["gemini:gemini-3.1-pro-preview"]  # invented families, sunny-ship: residency does not apply; a stronger judge
 
 
 def night_index(day: date | None = None) -> int:
@@ -65,11 +63,11 @@ def tonight(families: list[dict], every: int, day: date | None = None) -> dict[s
 
 
 def test_routes(routes: dict) -> dict:
-    """Production's routes for every role Saheli uses (the night tests what families get), with the test-only roles: the
-    person's second message (sim) and a stronger judge in the test project."""
-    routes = dict(routes)
-    routes.setdefault("sim", ["gemini:gemini-3.8-flash"])
-    routes["judge"] = list(TEST_JUDGE)
+    """The live routes for every role families get, plus sim (the person's next line). The judge stays the live judge."""
+    from eval.live_routes import SIM
+
+    routes = {k: list(v) for k, v in dict(routes).items()}
+    routes.setdefault("sim", [SIM])
     return routes
 
 
@@ -318,15 +316,16 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float, every:
 
 
 def production_routes() -> str | None:
-    """The model routes production runs (the engine's deploy workflow), so the night tests what families get."""
-    wf = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "deploy-gcp.yml"
-    m = re.search(r"MODEL_ROUTES: '(\{.*\})'", wf.read_text()) if wf.exists() else None
-    return m.group(1) if m else None
+    """The live Bedrock routes (eval/live_routes.py), so the night tests what families get. Not the GCP deploy file."""
+    from eval.live_routes import for_eval
+
+    return json.dumps(for_eval())
 
 
 def main(argv: list[str]) -> int:
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
+    from eval.live_routes import apply
+
+    apply()
     par = 8
     every = 1
     if "--every" in argv:  # the full world: tonight's rotation of probes (NIGHT_EVERY), not all 12,000
@@ -348,9 +347,6 @@ def main(argv: list[str]) -> int:
         i = argv.index("--limit")
         limit = int(argv[i + 1])
         argv = argv[:i] + argv[i + 2:]
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid world runs go to the sunny-ship test project, never kavach-care.")
-        return 2
     cap = float(os.getenv("PROBES_MAX_INR", "0") or 0)
     if cap <= 0:
         print("Refusing to start: set PROBES_MAX_INR (₹ this run may spend).")

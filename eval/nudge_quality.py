@@ -144,17 +144,13 @@ def report(rows: list[dict]) -> str:
 
 
 def main(argv: list[str]) -> int:
-    from eval.world.probes import production_routes
+    from eval.live_routes import apply, is_provider_down
 
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid runs go to the sunny-ship test project, never kavach-care.")
-        return 2
+    apply()
     cap = float(os.getenv("NUDGE_EVAL_MAX_INR", "0") or 0)
     if cap <= 0:
         print("Refusing to start: set NUDGE_EVAL_MAX_INR (₹ this run may spend).")
         return 2
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = production_routes() or ""
     per = int(argv[argv.index("--per-language") + 1]) if "--per-language" in argv else 10
     out = Path(argv[argv.index("--out") + 1]) if "--out" in argv else Path("runs/nudge_quality")
     rows = asyncio.run(run(per, os.getenv("DATABASE_URL") or "", cap, parallel=8))
@@ -163,6 +159,9 @@ def main(argv: list[str]) -> int:
     (out / "report.md").write_text(report(rows))
     print(report(rows).split("\n\n")[1])
     done = [r for r in rows if "pass" in r]
+    if rows and all(is_provider_down(str(r.get("error") or "")) for r in rows) and not any(r.get("pass") for r in rows):
+        print("::warning::nudge eval unavailable: the provider refused every call")
+        return 0
     issues = Counter(i for r in done for i in r.get("issues") or [])
     good = done and sum(r["pass"] for r in done) / len(done) >= 0.9 and not issues.get("made_up") and not issues.get("medical_advice")
     return 0 if good else 1

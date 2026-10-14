@@ -80,8 +80,9 @@ def test_the_runner_posts_what_the_replay_run_found(monkeypatch):
 
     monkeypatch.setattr(learn_gate, "call", fake_call)
     monkeypatch.setattr(learn_gate, "gate", fake_gate)
-    monkeypatch.setenv("GCP_PROJECT_ID", "sunny-ship-508214-q1")
-    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash@asia-south1"]}))
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1"]}))
     assert learn_gate.main(["runs/cases.jsonl"]) == 0
     assert calls[-1][0:2] == ("POST", "/v2/admin/learn/playbooks/7/replay") and calls[-1][2]["n"] == 12 and calls[-1][2]["fixed"] == ["a"]
 
@@ -90,7 +91,8 @@ def test_the_runner_reports_an_error_and_stops_when_nothing_waits(monkeypatch):
     from eval import learn_gate
 
     posted = []
-    monkeypatch.setenv("GCP_PROJECT_ID", "sunny-ship-508214-q1")
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
     monkeypatch.setenv("MODEL_ROUTES", "{}")
     monkeypatch.setattr(learn_gate, "call", lambda m, p, b=None: posted.append(b) or ({"draft": None} if m == "GET" else {}))
     assert learn_gate.main([]) == 0 and posted == [None]

@@ -11,9 +11,9 @@ families (a rotation of RECALL_FAMILIES a night, all 100 every few nights):
 5. get the production memory score (app.quality.memory_score: stored, recalled, used) on the same seeded memory.
 Results: recall.jsonl (one row per question) and recall_meta_0.json beside the probes, read by eval/world/report.py.
 
-Paid runs only in the sunny-ship test project (never kavach-care).
+Paid runs call the live Bedrock routes in ap-south-1, never Vertex.
 
-    DATABASE_URL=... GCP_PROJECT_ID=sunny-ship-508214-q1 RECALL_MAX_INR=600 PYTHONPATH=. python -m eval.world.recall full [--families 25]
+    DATABASE_URL=... WEB_SEARCH_PROVIDER=off RECALL_MAX_INR=600 PYTHONPATH=. python -m eval.world.recall full [--families 25]
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core import clock
 from eval.world import make
-from eval.world.probes import OUT, host_for_family, night_index, production_routes, test_routes
+from eval.world.probes import OUT, host_for_family, night_index
 from eval.world.seed_engine import BRAIN_ROLE, TODAY, Seeded, assert_local, ist, prepare, roster_of, seed_family
 from eval.world.slice import slice_ids
 
@@ -237,11 +237,9 @@ async def main_async(ids: list[str], n: int, parallel: int, url: str, cap: float
 
 
 def main(argv: list[str]) -> int:
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid world runs go to the sunny-ship test project, never kavach-care.")
-        return 2
+    from eval.live_routes import apply
+
+    apply()
     cap = float(os.getenv("RECALL_MAX_INR", "0") or 0)
     if cap <= 0:
         print("Refusing to start: set RECALL_MAX_INR (₹ this run may spend).")

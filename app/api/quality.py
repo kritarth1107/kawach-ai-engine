@@ -97,18 +97,27 @@ async def post_eval_scores(body: EvalIn, session: DB, caller: Annotated[str, Dep
     await session.commit()
     emailed = None
     cases_made = 0
-    if body.kind == "nightly" and body.branch in ("master", "main"):
+    unavailable = bool(body.scores.get("unavailable"))
+    if body.kind == "nightly" and body.branch in ("master", "main") and not unavailable:
         from app.quality import cases
 
         cases_made = await cases.from_probes(session, body.scores, body.day)  # every probe failure becomes a replay case (C3)
         await session.commit()
-    if not body.passed and body.kind == "nightly" and body.branch in ("master", "main"):
+    if body.kind == "nightly" and body.branch in ("master", "main"):
         from app.brain.host import LiveHost
         from app.quality import report
 
         try:
-            emailed = await report.nightly_failed(LiveHost(), row)
-        except Exception as exc:  # noqa: BLE001 — stored either way; the workflow still fails the night
+            if unavailable:
+                from sqlalchemy import select
+
+                earlier = (await session.execute(select(EvalScore).where(EvalScore.kind == "nightly", EvalScore.run_id != row.run_id)
+                                                  .order_by(EvalScore.created_at.desc()).limit(1))).scalar_one_or_none()
+                if earlier is None or not (earlier.scores or {}).get("unavailable"):
+                    emailed = await report.nightly_unavailable(LiveHost(), row)
+            elif not body.passed:
+                emailed = await report.nightly_failed(LiveHost(), row)
+        except Exception as exc:  # noqa: BLE001 — stored either way; the workflow still decides the night
             emailed = {"error": str(exc)[:200]}
     return {"stored": True, "id": row.id, "by": caller, "emailed": emailed, "cases": cases_made}
 

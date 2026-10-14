@@ -1,4 +1,4 @@
-"""The founder's points of 2026-10-13, checked with the production models (paid; sunny-ship test project only).
+"""The founder's points of 2026-10-13, checked with the live Bedrock routes (paid; never Vertex).
 
 Each case plays one message to the real brain on a fresh invented family and checks what it did:
 restricted items refused before any search with a harmless alternative, nothing said about illegal substances, a coding
@@ -185,17 +185,13 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
 
 
 def main(argv: list[str]) -> int:
-    from eval.world.probes import production_routes
+    from eval.live_routes import apply, is_provider_down
 
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid runs go to the sunny-ship test project, never kavach-care.")
-        return 2
+    apply()
     cap = float(os.getenv("POINTS_MAX_INR", "0") or 0)
     if cap <= 0:
         print("Refusing to start: set POINTS_MAX_INR.")
         return 2
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = production_routes() or ""
     repeat = int(argv[argv.index("--repeat") + 1]) if "--repeat" in argv else 1
     rows = asyncio.run(main_async(os.getenv("DATABASE_URL") or "", repeat, cap))
     ok = sum(1 for r in rows if r.get("pass"))
@@ -207,6 +203,9 @@ def main(argv: list[str]) -> int:
     if out:
         with open(out, "w") as f:
             json.dump(rows, f, ensure_ascii=False, indent=1)
+    if rows and all(is_provider_down(str(r.get("error") or "")) for r in rows) and not any(r.get("pass") for r in rows):
+        print("::warning::founder points unavailable: the provider refused every call")
+        return 0
     return 0 if ok == len(rows) else 1
 
 

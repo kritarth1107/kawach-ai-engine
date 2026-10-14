@@ -1,12 +1,12 @@
 """The self-learning gate's replay run (trust plan section 10.2 step 2, on the cases of C3).
 
-run_for_playbook(sessions, pb, budget_inr=...) runs every replay case twice on real Gemini, once with the live playbook and
+run_for_playbook(sessions, pb, budget_inr=...) runs every replay case twice on the live Bedrock routes, once with the live playbook and
 once with the candidate `pb` in its place, and reports:
     {"regressions": [cases that pass with the live playbook and fail with pb], "fixed": [fail live, pass with pb],
      "n": cases run, "cost_inr": ₹ spent, "skipped": [cases that could not run]}
 An empty regressions list means the candidate passed (lessons.replay_gate decides).
 
-Paid runs go to the sunny-ship test project only, on a local test database (REPLAY_DATABASE_URL), with the runner in
+Paid runs call Bedrock in ap-south-1, never Vertex, on a local test database (REPLAY_DATABASE_URL), with the runner in
 eval/ (eval/replay_cases.py), so it runs where the tests run (GitHub Actions, a laptop), never inside the production
 engine: anywhere else it raises ReplayUnavailable and drafts wait. Cases: the repo's invented families plus every open and
 fixed case in `sessions`' replay_cases (anonymised).
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 
-TEST_PROJECT = "sunny-ship-508214-q1"
+VERTEX_PROJECTS = {"kavach-care", "sunny-ship-508214-q1"}
 
 
 class ReplayUnavailable(RuntimeError):
@@ -29,8 +29,9 @@ _FROM_DB = object()
 async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases: int = 40, live=_FROM_DB, case_files: tuple[str, ...] = ()) -> dict:
     """live: the playbook the candidate is compared with (default: the live one in `sessions`; the learn-gate workflow passes
     production's). case_files: exported cases (jsonl) to add to the repo's."""
-    if os.getenv("GCP_PROJECT_ID") != TEST_PROJECT or os.getenv("GOOGLE_CLOUD_PROJECT", TEST_PROJECT) != TEST_PROJECT:
-        raise ReplayUnavailable("paid replay runs go to the sunny-ship test project only")
+    project = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
+    if project in VERTEX_PROJECTS:
+        raise ReplayUnavailable("paid replay runs call Bedrock in ap-south-1, never Vertex")
     url = os.getenv("REPLAY_DATABASE_URL", "").strip()
     if not url:
         raise ReplayUnavailable("set REPLAY_DATABASE_URL to a local test database")

@@ -4,6 +4,10 @@ on:
   push:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      override_nightly:
+        description: "The founder only: deploy even though the latest nightly failed (trust plan D8)"
+        default: "false"
 
 concurrency:
   group: deploy-engine-aws
@@ -51,8 +55,33 @@ jobs:
       - run: ruff check app eval tests
       - run: python scripts/pyright_gate.py
 
-  deploy:
+  nightly-gate:
+    # A red Bedrock night blocks the deploy. A night that never reached the model exits 0 (unavailable), so it does not.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Latest nightly
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          OVERRIDE_NIGHTLY: ${{ github.event.inputs.override_nightly }}
+        run: python3 scripts/nightly_gate.py
+
+  replay:
     needs: [test, lint]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/replay.yml
+    secrets: inherit
+
+  deploy:
+    needs: [test, lint, nightly-gate, replay]
     runs-on: ubuntu-latest
     permissions:
       contents: read

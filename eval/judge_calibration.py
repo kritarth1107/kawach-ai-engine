@@ -1,4 +1,4 @@
-"""Is the full-memory judge good enough to go live? (trust plan C1.4) Paid; the sunny-ship test project only.
+"""Is the full-memory judge good enough to go live? (trust plan C1.4) Paid; live Bedrock routes, never Vertex.
 
 30 hand-labelled replies on an invented family (eval/fixtures/judge_calibration.jsonl): 15 good (including hard goods: a
 fact from the notes, tool-sourced information with a check-with-your-doctor, "I don't know", red-flag safety steps, a

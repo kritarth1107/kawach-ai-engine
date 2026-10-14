@@ -224,6 +224,33 @@ def extras_from(d: Path | None) -> dict:
     return out
 
 
+def outage(root: Path, rows: list[dict], judged: list[dict]) -> str | None:
+    """Why this night never reached the model, or None when some reply got a real verdict.
+
+    A provider-wide refusal (preflight marker, or every probe and every grade crashed on auth, policy or a 5xx) is not a
+    broken quality bar. A mix, some real replies and a bar broken, still fails."""
+    from eval.live_routes import is_provider_down
+
+    def crashed(row: dict) -> bool:
+        err = str(row.get("error") or "")
+        return bool(err) and is_provider_down(err)
+
+    markers = list(root.rglob("provider_down.json"))
+    real = [r for r in rows if r.get("pass") is not None and not crashed(r)]
+    down_rows = [r for r in rows if crashed(r)]
+    graded = [j for j in judged if isinstance(j.get("judge"), dict) and "pass" in (j.get("judge") or {})]
+    judge_down = [j for j in judged if crashed(j)]
+    why = ""
+    if markers:
+        try:
+            why = str(json.loads(markers[0].read_text()).get("why") or "")
+        except (OSError, json.JSONDecodeError):
+            why = ""
+    if (markers or down_rows or judge_down) and not real and not graded:
+        return (why or str((down_rows or judge_down)[0].get("error") or ""))[:240] or "the model provider refused the night"
+    return None
+
+
 def gate_only(path: Path) -> int:
     """A stored scores.json through the gate again (the workflow's fixture run: one deliberate failing night)."""
     sc = json.loads(path.read_text())
@@ -244,6 +271,17 @@ def main(argv: list[str]) -> int:
     ex = Path(argv[argv.index("--extras") + 1]) if "--extras" in argv else None
     rows = load(d)
     judged = load(d, "judged.jsonl")
+    why = outage(d, rows, judged)
+    if why:
+        sc = {"unavailable": True, "why": why, "passed": False, "failures": [f"nightly gate unavailable: {why}"]}
+        sp.write_text(json.dumps(sc, ensure_ascii=False, indent=1))
+        text = ("# The night's score\n\n**UNAVAILABLE**\n\n"
+                f"{why}\n\nNo reply was graded, so this is not a quality failure. Engine deploys go on if the tests passed. "
+                "The team is emailed. The gate is back on the next night that reaches the model.\n")
+        out.write_text(text)
+        print(text)
+        print(f"::warning::nightly gate UNAVAILABLE: {why}")
+        return 0
     recall_rows = load(d, "recall.jsonl")
     recall_meta = next(iter(metas(d, "recall_meta")), None)
     expected = int(os.getenv("SHARDS", "0") or 0) or None

@@ -1,5 +1,5 @@
 """Hard turns at low vs medium thinking effort (trust plan C6, founder decision D3: switch medium on only if it is at least
-5 points better on hard turns with p90 latency <= 15 s). Paid; the sunny-ship test project only; invented families.
+5 points better on hard turns with p90 latency <= 15 s). Paid; live Bedrock routes, never Vertex; invented families.
 
 Each case is one message on a fresh invented family (health questions, red flags, corrections, an upset person), played
 through the real brain twice: effort low, then medium. A judge model grades each reply against the case's rubric; a

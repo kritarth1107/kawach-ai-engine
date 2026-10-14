@@ -19,6 +19,20 @@ from app.core import clock
 
 TEST_DB = os.getenv("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5433/kawach_test")
 
+# Eval entry points (nightly, replay, learn gate) write these on the process. A test must not leave them for the next one.
+_EVAL_ENV = ("WEB_SEARCH_PROVIDER", "LLM_PROVIDER", "MODEL_ROUTES", "GCP_PROJECT_ID", "GOOGLE_CLOUD_PROJECT")
+
+
+@pytest.fixture(autouse=True)
+def _keep_eval_env_inside_the_test():
+    saved = {key: os.environ.get(key) for key in _EVAL_ENV}
+    yield
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
 
 @pytest.fixture
 async def db():

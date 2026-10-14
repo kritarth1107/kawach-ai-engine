@@ -1,9 +1,8 @@
 name: Learn gate (a waiting playbook draft through the replay cases)
 
-# Trust plan §10.2 step 2: the 02:00 night makes a playbook draft (lessons, approved rules) but production cannot run the
-# replay cases, so the draft waits. At 03:30 IST this job runs every replay case on real Gemini in the sunny-ship TEST
-# project, once with the live playbook and once with the draft, and posts the result to the engine: no regression starts
-# the draft's canary (20% of families), a regression rejects it, an error leaves it waiting. Nothing waiting: it stops.
+# Trust plan §10.2 step 2: the 02:00 night makes a playbook draft but cannot run the replay cases, so the draft waits.
+# This job must call Bedrock in ap-south-1, never Vertex. GitHub cannot reach the engine (engine.kavach.local), so it
+# does not run cases and does not post: the draft keeps waiting. Leave this workflow disabled until that path exists.
 
 on:
   schedule:
@@ -21,61 +20,13 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     permissions:
       contents: read
-      id-token: write
-    services:
-      db:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: kawach_learn_gate
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
-    env:
-      ENGINE_URL: https://kawach-ai-engine-bcvowb5kfq-el.a.run.app
-      REPLAY_BUCKET: kavach-replay-cases-sunny
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-      - run: pip install -r requirements.txt pillow
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@v2
-      - name: The cases (the production export, anonymised) - the repo's invented families are added by the runner
+      - name: The engine is private, so this job does not call a model
         run: |
-          mkdir -p runs
-          gcloud storage cp "gs://$REPLAY_BUCKET/cases/latest.jsonl" runs/cases.jsonl --project sunny-ship-508214-q1 \
-            || { echo "::warning::no exported cases yet; the repo's cases only"; : > runs/cases.jsonl; }
-      - id: token
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-          token_format: id_token
-          id_token_audience: ${{ env.ENGINE_URL }}
-          id_token_include_email: true
-          create_credentials_file: false
-      - name: The waiting draft through the replay cases, result to the engine
-        env:
-          ID_TOKEN: ${{ steps.token.outputs.id_token }}
-          REPLAY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_learn_gate
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_learn_gate
-          DEBUG: "false"
-          GCP_PROJECT_ID: sunny-ship-508214-q1
-          GOOGLE_CLOUD_PROJECT: sunny-ship-508214-q1
-          LEARN_REPLAY_MAX_INR: "150"
-          REPLAY_DEADLINE_S: "540"
-        run: |
-          args="runs/cases.jsonl"
-          [ "${{ inputs.dry_run }}" = "true" ] && args="$args --dry-run"
-          PYTHONPATH=. python -u -m eval.learn_gate $args | tee runs/learn_gate.txt
-          { echo '```'; cat runs/learn_gate.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::Learn gate stays idle. It would call Bedrock in ap-south-1, never Vertex, but GitHub cannot reach engine.kavach.local, so no case runs and nothing is posted. The draft keeps waiting."
+          echo "# Learn gate idle" >> "$GITHUB_STEP_SUMMARY"
+          echo "GitHub cannot reach the engine. No Vertex call, no Bedrock call." >> "$GITHUB_STEP_SUMMARY"

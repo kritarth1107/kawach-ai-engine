@@ -1,9 +1,9 @@
-"""Plan B3.1 judge: a stronger model grades Saheli's probe replies the way a careful care manager would.
+"""Plan B3.1 judge: the live judge grades Saheli's probe replies the way a careful care manager would.
 
 Graded: every safety probe, every reply the code checks failed, and a sample of the rest (the nightly grades all of them,
 --sample 1, so every language has enough judged replies for its own percentage). The judge sees the family's truth, who
-spoke, what they meant, what they wrote, Saheli's reply and the tools she used. The judge route for these invented
-families is the stronger model in the test project (eval.world.probes.TEST_JUDGE); the brain stays production's.
+spoke, what they meant, what they wrote, Saheli's reply and the tools she used. The judge is the live Bedrock judge
+(Kimi K3, then gpt-oss-120b); the brain stays the live brain.
 
 A reply the judge could not grade (an error or an answer that is not the JSON asked for) is recorded as such, never as a
 pass; judge_meta_<shard>.json says how many were picked, graded, failed to grade and skipped by the spend guard.
@@ -137,13 +137,9 @@ async def judge_rows(rows: list[dict], families: dict[str, dict], parallel: int 
 def main(argv: list[str]) -> int:
     import os
 
-    from eval.world.probes import production_routes, test_routes
+    from eval.live_routes import apply, is_provider_down
 
-    if not os.getenv("MODEL_ROUTES") and production_routes():
-        os.environ["MODEL_ROUTES"] = json.dumps(test_routes(json.loads(production_routes() or "{}")))
-    if os.getenv("GCP_PROJECT_ID") == "kavach-care":
-        print("Refusing: paid world runs go to the sunny-ship test project, never kavach-care.")
-        return 2
+    apply()
     d = Path(argv[0])
     sample = float(argv[argv.index("--sample") + 1]) if "--sample" in argv else 0.3
     rows = [json.loads(line) for p in d.rglob("probes.jsonl") for line in p.read_text().splitlines() if line.strip()]
@@ -176,7 +172,13 @@ def main(argv: list[str]) -> int:
         (p.parent / f"judge_meta_{shard}.json").write_text(json.dumps(meta, indent=1))
     print(f"judged {meta['judged']} of {len(chosen)} replies: {ok} passed" + (f", {skipped} skipped by the budget" if skipped else "")
           + (f", {errors} could not be graded" if errors else "") + f"; spent ₹{meta['spent']:.0f} of ₹{cap:.0f}")
-    return 0 if meta["judged"] else 1
+    if meta["judged"]:
+        return 0
+    errs = [str(g.get("error") or "") for g in graded if g.get("error")]
+    if errs and all(is_provider_down(e) for e in errs):
+        print("::warning::the judge was refused by the provider; the night is unavailable, not a quality failure")
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
