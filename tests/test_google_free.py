@@ -67,6 +67,23 @@ def test_today_is_unchanged_without_the_switch(settings_env):
     assert embeddings.embeddings_available()
 
 
+def test_vertex_embeddings_use_the_workload_identity(settings_env, monkeypatch):
+    settings_env(EMBED_PROVIDER="vertex", GCP_PROJECT_ID="sunny-ship-508214-q1", GCP_REGION="asia-south1")
+    sentinel = object()
+    got = {}
+
+    class Fake:
+        def __init__(self, **kw):
+            got.update(kw)
+
+    monkeypatch.setattr("langchain_google_vertexai.VertexAIEmbeddings", Fake)
+    monkeypatch.setattr("app.llm.google_wif.credentials", lambda: sentinel)
+    embeddings.get_embeddings()
+    assert got["credentials"] is sentinel
+    assert got["project"] == "sunny-ship-508214-q1" and got["location"] == "asia-south1"
+    assert got["model_name"] == "text-multilingual-embedding-002"
+
+
 def test_bedrock_needs_no_google(settings_env):
     settings_env(EMBED_PROVIDER="bedrock", GCP_PROJECT_ID=None, EMBED_DIM=1024, EMBED_MODEL=None)
     assert embeddings.embeddings_available()

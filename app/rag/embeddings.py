@@ -135,10 +135,15 @@ def get_embeddings() -> Any:
     if _vertex_configured():
         from langchain_google_vertexai import VertexAIEmbeddings
 
+        from app.llm import google_wif
+
+        # On AWS the same workload-identity credentials as Gemini (kavach-brain). On GCP, None uses the default chain.
+        creds = google_wif.credentials()
         return VertexAIEmbeddings(
             model_name=settings.vertex_embedding_model,
             project=settings.gcp_project_id,
             location=settings.gcp_region,
+            **({"credentials": creds} if creds is not None else {}),
         )
     if provider == "vertex":
         raise RuntimeError("EMBED_PROVIDER=vertex needs GCP_PROJECT_ID.")

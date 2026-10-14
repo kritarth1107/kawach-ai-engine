@@ -1194,6 +1194,69 @@ def _reminder_schedule(a: dict, *, partial: bool = False) -> dict:
     return sched
 
 
+_WHOSE_REMINDER = ("Ask whose reminder this is: about = their id from HOUSEHOLD. Do not assume the care recipient.")
+
+
+async def _delivered_subject(ctx: TurnCtx) -> str | None:
+    """Who the last reminder or nudge on this thread was about. A reminder is filed on the recipient's own thread;
+    a nudge about another person in the household names them."""
+    from sqlalchemy import select
+
+    from app.care.models import Turn
+
+    me = ctx.speaker.get("id") or ""
+    if not me:
+        return None
+    row = (await ctx.session.execute(
+        select(Turn).where(Turn.family_id == ctx.family_id, Turn.thread_id == me, Turn.role == "assistant").order_by(Turn.id.desc()).limit(1)
+    )).scalar_one_or_none()
+    if row is None:
+        return None
+    meta = row.meta or {}
+    ids = {m.get("id") for m in ctx.members if m.get("id")} | {ctx.elder_id}
+    if meta.get("via") == "reminder":
+        return me
+    nudge = meta.get("nudge") if isinstance(meta.get("nudge"), dict) else None
+    if meta.get("proactive") and nudge is not None:
+        ref = str(nudge.get("about_ref") or "")
+        return ref if ref in ids else me
+    return None
+
+
+async def _reminder_subject(ctx: TurnCtx, a: dict) -> str:
+    """Whose reminder: the id they named, else the owner of the care-record item, else the person the message just
+    delivered was about. A caregiver's own item must not land on the care recipient (live 2026-10-14)."""
+    ids = {m.get("id") for m in ctx.members if m.get("id")} | {ctx.elder_id}
+    about = str(a.get("about") or "").strip()
+    if about:
+        if about not in ids:
+            raise ToolRefused("about must be a person id from HOUSEHOLD. " + _WHOSE_REMINDER)
+        return about
+    me = ctx.speaker.get("id") or ""
+    if ctx.speaker_is_elder or ctx.self_care:
+        return me or ctx.elder_id
+    item = str(a.get("item") or "").strip()
+    if item:
+        owners: list[str] = []
+        for pid in ids:
+            if not isinstance(pid, str) or not pid:
+                continue
+            if await store.active_fact(ctx.session, ctx.family_id, pid, item):
+                owners.append(pid)
+        if len(owners) == 1:
+            return owners[0]
+        raise ToolRefused(_WHOSE_REMINDER)
+    delivered = await _delivered_subject(ctx)
+    if delivered:
+        return delivered
+    raise ToolRefused(_WHOSE_REMINDER)
+
+
+REMINDER_ABOUT = {"type": "string", "description": "Whose reminder: a person id from HOUSEHOLD. Leave out only when it is the "
+                  "speaker's own item (the reminder or nudge just sent to them, or item is a care-record key only they have). "
+                  "Otherwise give the id. Never leave it out to mean the care recipient; if it is not clear, ask whose."}
+
+
 def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
     """Your own reminders, or the care recipient's if you are a caregiver; never another caregiver's own (their self care)."""
     if ctx.is_system:
@@ -1212,13 +1275,15 @@ def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
     "past midnight). Otherwise times are 'HH:MM' in IST: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times "
     "['17:00']; 'every Monday and Thursday at 7' is weekly days [0, 3]; 'every hour from 2 pm to 3 am' is every_hour "
     "{from 14:00, to 03:00}. When it is about something on the CARE RECORD (an extra 'remind me again to take it' for a "
-    "medicine), give item, its key: a medicine reminder is then not sent once that dose is marked taken. Tell them the "
+    "medicine), give item, its key: a medicine reminder is then not sent once that dose is marked taken. about is whose: "
+    "leave it out only for the speaker's own item (the one just sent to them, or a key only they have); otherwise give "
+    "their id, and ask whose when it is not clear. Never leave it out to mean the care recipient. Tell them the "
     "schedule the tool returns.",
     {"text": {"type": "string", "description": "What to remind, in the person's own words"},
      "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM times (leave out for every_hour or in_minutes)"},
      "in_minutes": {"type": "integer", "description": "A one-off in this many minutes from now ('in an hour' = 60)"},
      "item": {"type": "string", "description": "The CARE RECORD key it is about, e.g. medicine:metformin (leave out if none)"},
-     **REMINDER_SCHEDULE, "about": ABOUT},
+     **REMINDER_SCHEDULE, "about": REMINDER_ABOUT},
     ["text"],
 )
 async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
@@ -1243,7 +1308,7 @@ async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
     if any(act.get("tool") == "change_reminder" and not act.get("ok") for act in ctx.actions):
         raise ToolRefused("The change to the existing reminder did not happen. Tell them you could not change it. "
                           "Do not create another reminder.")
-    subject = ctx.subject(a.get("about"))
+    subject = await _reminder_subject(ctx, a)
     args: dict = {"text": a["text"], "schedule": _reminder_schedule(a)}
     if a.get("item"):
         args["item"] = str(a["item"]).strip()
@@ -1403,12 +1468,12 @@ async def log_activity(ctx: TurnCtx, a: dict) -> dict:
     "reminders",
     "The person's reminders that are not medicines (what Saheli will remind them about, when, and the next time), each with "
     "its id. Use it for 'what reminders do I have?', and before skipping, stopping or changing one (change_reminder needs "
-    "the id).",
-    {"about": ABOUT, "include_stopped": {"type": "boolean", "description": "Also the ones stopped or finished in the last 30 days"}},
+    "the id). about is whose: leave it out only for the speaker's own (a reminder just sent to them); otherwise give the id.",
+    {"about": REMINDER_ABOUT, "include_stopped": {"type": "boolean", "description": "Also the ones stopped or finished in the last 30 days"}},
     [],
 )
 async def reminders_tool(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.elder_id if ctx.is_system else await _reminder_subject(ctx, a)
     if not ctx.is_system:
         _may_manage_reminders(ctx, subject)
     out = await ctx.host.call("list_reminders", {"status": "all" if a.get("include_stopped") else "active"},
@@ -1425,18 +1490,19 @@ async def reminders_tool(ctx: TurnCtx, a: dict) -> dict:
     "or leave both out for the next time; unskip undoes a skip. stop: it never goes out again. change: new words (text: how "
     "it reads, emoji included; a reminder goes out with its saved words, so a note or skill never changes them) and/or times / "
     "repeat / days / date / until / every_hour / item (what you leave out stays). Say exactly what changed, from the tool's "
-    "result.",
+    "result. about is whose: leave it out only for the speaker's own item (the reminder just sent to them). "
+    "Otherwise give their id, and ask whose when it is not clear. Never leave it out to mean the care recipient.",
     {"id": {"type": "string", "description": "The reminder id"},
      "action": {"type": "string", "enum": ["skip", "unskip", "stop", "change"]},
      "time": {"type": "string", "description": "skip / unskip: the HH:MM time on that date"},
      "times": {"type": "array", "items": {"type": "string"}, "description": "change: new HH:MM times"},
      "text": {"type": "string", "description": "change: the reminder's new words, exactly as it should read"},
      "item": {"type": "string", "description": "change: the CARE RECORD key it is about (empty to remove the link)"},
-     **REMINDER_SCHEDULE, "about": ABOUT},
+     **REMINDER_SCHEDULE, "about": REMINDER_ABOUT},
     ["id", "action"],
 )
 async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = await _reminder_subject(ctx, a)
     _may_manage_reminders(ctx, subject)
     rid = str(a["id"]).strip()
     action = a["action"]

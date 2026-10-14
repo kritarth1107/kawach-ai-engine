@@ -40,9 +40,11 @@ async def test_set_reminder_sends_the_schedule_as_data(db):
     assert tool == "create_reminder" and args == {"text": "Call the bank", "schedule": {"repeat": "once", "times": ["17:00"], "date": "2026-10-15"}}
     assert kw["subject_id"] == SON["id"] and kw["actor_id"] == SON["id"]
     # weekly days: the care record counts from Monday (0), the reminder service from Sunday (0)
-    await run(db, SON, h, "set_reminder", {"text": "Yoga", "times": ["07:00"], "repeat": "weekly", "days": [0, 2, 4], "until": "2026-11-30"})
+    out, err = await run(db, SON, h, "set_reminder", {"text": "Yoga", "times": ["07:00"], "repeat": "weekly", "days": [0, 2, 4], "until": "2026-11-30"})
+    assert err and "whose" in out["refused"], "no about, and nothing just delivered: ask whose, do not use the care recipient"
+    await run(db, SON, h, "set_reminder", {"text": "Yoga", "times": ["07:00"], "repeat": "weekly", "days": [0, 2, 4], "until": "2026-11-30", "about": ELDER["id"]})
     assert h.calls[-1][1]["schedule"] == {"repeat": "weekly", "times": ["07:00"], "days": [1, 3, 5], "endDate": "2026-11-30"}
-    assert h.calls[-1][2]["subject_id"] == ELDER["id"], "no about: the care recipient"
+    assert h.calls[-1][2]["subject_id"] == ELDER["id"]
     await run(db, ELDER, h, "set_reminder", {"text": "Drink water", "repeat": "daily", "every_hour": {"from": "09:00", "to": "21:00"}})
     assert h.calls[-1][1]["schedule"] == {"repeat": "daily", "windowStart": "09:00", "windowEnd": "21:00"}
 
@@ -114,7 +116,7 @@ def test_the_backend_can_send_the_reminders_due_soon():
 
 async def test_set_reminder_asks_instead_of_guessing(db):
     h = Host({"create_reminder": {"status": "not_set", "error": "a once reminder needs its date (YYYY-MM-DD)"}})
-    out, err = await run(db, SON, h, "set_reminder", {"text": "Pay rent", "times": ["10:00"], "repeat": "once"})
+    out, err = await run(db, SON, h, "set_reminder", {"text": "Pay rent", "times": ["10:00"], "repeat": "once", "about": SON["id"]})
     assert err and "date" in out["refused"]
     out, err = await run(db, SON, Host(), "set_reminder", {"text": "Pay rent"})
     assert err and "times" in out["refused"]
@@ -164,6 +166,40 @@ async def test_change_reminder_skips_stops_and_changes_by_id(db):
     bad = Host({"skip_reminder": {"ok": False, "error": "It does not go out on that day."}})
     out, err = await run(db, SON, bad, "change_reminder", {"id": "r1", "action": "skip", "date": "2026-10-14", "about": SON["id"]})
     assert err and "does not go out" in out["refused"]
+
+
+async def test_a_caregivers_own_reminder_is_not_saved_on_the_care_recipient(db):
+    """Live 2026-10-14: a caregiver answered the reminder just sent to him; about was left out and a new reminder was
+    created for the care recipient. The item just delivered, or a care-record key only they have, decides the subject."""
+    from app.care import store
+
+    h = Host()
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="assistant", text="Time for your tablet",
+                         meta={"proactive": True, "via": "reminder", "reminder_id": "r-own"})
+    await db.commit()
+    _, err = await run(db, SON, h, "set_reminder", {"text": "Take it", "times": ["02:00"], "repeat": "daily"})
+    assert not err and h.calls[-1][2]["subject_id"] == SON["id"]
+    _, err = await run(db, SON, h, "change_reminder", {"id": "r-own", "action": "change", "times": ["02:00"], "repeat": "daily"})
+    assert not err and h.calls[-1][2]["subject_id"] == SON["id"]
+    # a nudge on his thread about the care recipient stays theirs
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="assistant", text="Her walk",
+                         meta={"proactive": True, "nudge": {"kind": "upcoming", "about_ref": ELDER["id"]}})
+    await db.commit()
+    _, err = await run(db, SON, h, "set_reminder", {"text": "Walk", "times": ["07:00"], "repeat": "daily"})
+    assert not err and h.calls[-1][2]["subject_id"] == ELDER["id"]
+    # his own medicine key, with no message to go on
+    await store.write_fact(db, family_id=FAM, subject_id=SON["id"], domain="medicine", key="medicine:tablet",
+                           value={"name": "Tablet"}, text="Tablet", source_kind="caregiver_said", replace=True)
+    await db.commit()
+    fresh = Host()
+    # the last assistant turn is still the nudge about the elder, so the key must win when it is given
+    _, err = await run(db, SON, fresh, "set_reminder", {"text": "Take it", "times": ["02:00"], "repeat": "daily", "item": "medicine:tablet"})
+    assert not err and fresh.calls[-1][2]["subject_id"] == SON["id"]
+    await store.write_fact(db, family_id=FAM, subject_id=ELDER["id"], domain="medicine", key="medicine:tablet",
+                           value={"name": "Tablet"}, text="Tablet", source_kind="caregiver_said", replace=True)
+    await db.commit()
+    out, err = await run(db, SON, Host(), "set_reminder", {"text": "Take it", "times": ["02:00"], "repeat": "daily", "item": "medicine:tablet"})
+    assert err and "whose" in out["refused"], "both have that key: ask whose"
 
 
 async def test_a_failed_change_does_not_create_a_second_reminder(db):
