@@ -3,7 +3,7 @@ run-name: "Nightly ${{ github.event.inputs.repost_run && format('repost {0}', gi
 
 # Plan B3: every night at 01:00 IST the real brain answers the probes of the synthetic families (30 languages, every
 # household type), and a simulated week of every proactive job is checked against the message rules. Paid model calls
-# go to Bedrock in ap-south-1 on the live routes (gpt-oss-120b, Kimi for photos). Never Vertex. The world is synthetic.
+# go to Gemini 3.5 Flash in kavach-eval-1015. Never kavach-care. Sensitive probes stay paused. The world is synthetic.
 #
 # Trust plan C2: the scheduled night runs the FULL world (1,000 families): about one probe per family each night, rotating
 # so all ~12,000 run within 11 nights, plus every crisis probe; every reply judged by the live judge; the story families'
@@ -61,6 +61,8 @@ env:
   # probes a night, the founder's drug cases only here (never before a deploy).
   SENSITIVE_EVALS: pause
   CRISIS_SAMPLE: "30"
+  GCP_PROJECT_ID: kavach-eval-1015
+  GOOGLE_CLOUD_PROJECT: kavach-eval-1015
 
 jobs:
   probes:
@@ -97,7 +99,7 @@ jobs:
           aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make && PYTHONPATH=. python -m eval.world.make --check
-      - name: One Bedrock call before any probe
+      - name: One Gemini call before any probe
         id: pre
         env:
           WEB_SEARCH_PROVIDER: "off"
@@ -168,7 +170,7 @@ jobs:
           aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
-      - name: One Bedrock call before recall
+      - name: One Gemini call before recall
         id: pre
         env:
           WEB_SEARCH_PROVIDER: "off"
@@ -265,7 +267,7 @@ jobs:
           aws-region: ap-south-1
       - name: Build the world
         run: PYTHONPATH=. python -m eval.world.make
-      - name: One Bedrock call before the nudge eval
+      - name: One Gemini call before the nudge eval
         id: pre
         env:
           WEB_SEARCH_PROVIDER: "off"

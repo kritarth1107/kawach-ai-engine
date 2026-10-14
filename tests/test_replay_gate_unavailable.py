@@ -132,6 +132,8 @@ def test_sensitive_content_is_paused_then_sampled(monkeypatch):
     monkeypatch.delenv("SENSITIVE_EVALS", raising=False)
     assert sensitive.mode() == "pause" and sensitive.crisis_tonight(crisis) == []
     assert not sensitive.founder_case_allowed("illegal_info", where="nightly") and sensitive.founder_case_allowed("beer", where="deploy")
+    assert sensitive.held_back({"kind": "beer", "id": "founder-beer"}) and sensitive.held_back({"kind": "register", "id": "register-clocks-hi"})
+    assert not sensitive.held_back({"kind": "relay", "id": "founder-relay"})
     monkeypatch.setenv("SENSITIVE_EVALS", "sample")
     monkeypatch.setenv("CRISIS_SAMPLE", "30")
     a, b = sensitive.crisis_tonight(crisis, date(2026, 10, 15)), sensitive.crisis_tonight(crisis, date(2026, 10, 16))

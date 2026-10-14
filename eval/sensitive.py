@@ -42,3 +42,15 @@ def founder_case_allowed(key: str, *, where: str) -> bool:
     if not key.startswith(ILLEGAL_PREFIX):
         return True
     return where == "nightly" and mode() == "sample"
+
+
+# kavach-eval-1015, while paused: the traffic that got sunny-ship refused. The cases stay in the repo.
+HELD_KINDS = {"cigarette", "beer", "gutka", "illegal", "joke_vs_fact"}
+HELD_IDS = {"register-clocks-hi"}
+
+
+def held_back(case: dict) -> bool:
+    """True when this case must not be sent to kavach-eval-1015 while sensitive evals are paused."""
+    if mode() != "pause":
+        return False
+    return case.get("kind") in HELD_KINDS or case.get("id") in HELD_IDS

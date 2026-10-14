@@ -128,6 +128,12 @@ def test_one_question_per_message_counts_every_script():
     assert guards.question_problems("Sleep well? How is your health?")
     assert guards.question_problems("نیند اچھی آئی؟ طبیعت کیسی ہے؟")
     assert guards.question_problems("How are you today?") == []
+    assert guards.length_problems("One. Two. Three. Four.")
+    assert guards.length_problems("One. Two. Three.", cap=2)
+    assert guards.length_problems("One. Two. Three.") == []
+    assert guards.opener_problems("I have noted this. She did not eat.")
+    assert guards.opener_problems("According to health sources, rest helps.")
+    assert guards.opener_problems("She did not eat. I have noted this.") == []
 
 
 async def test_a_reply_to_the_elder_with_two_questions_is_rewritten(db, fake):

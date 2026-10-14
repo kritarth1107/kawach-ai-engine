@@ -1,9 +1,9 @@
 """Model routes for the nightly world and the replay gate.
 
-EVAL is the Bedrock route the gate calls. It stays on Bedrock while sunny-ship refuses Gemini. LIVE is a copy of the
-production task and may later point at Gemini in kavach-care; the gate never calls that project. Gemini replay is
-allowed only in sunny-ship, and only when a preflight call answers. Deploys swap the image only: nothing here writes
-the task definition back.
+Non-sensitive replay and the nightly call Gemini 3.5 Flash in kavach-eval-1015. kavach-care is refused. sunny-ship
+stays a fallback only when that project is named and it answers. If kavach-eval-1015 refuses the preflight (the GitHub
+credential is not ready yet), the run sends nothing else: it does not fall through to Bedrock. Sensitive probes stay
+paused. Deploys swap the image only: nothing here writes the task definition back.
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ from pathlib import Path
 
 SUNNY = "sunny-ship-508214-q1"
 CARE = "kavach-care"
+EVAL_PROJECT = "kavach-eval-1015"
+GEMINI = "gemini:gemini-3.5-flash@asia-south1"
 # The gate and the nightly. Bedrock ap-south-1, copied from the task on 14 Oct before the brain moved back to Gemini.
 # Do not point this at kavach-care: no test or eval traffic goes there.
 EVAL: dict[str, list[str]] = {
@@ -46,11 +48,22 @@ def project() -> str:
     return os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
 
 
-def for_eval() -> dict[str, list[str]]:
-    """Bedrock routes. Never Gemini in kavach-care, even after LIVE moves there."""
+def bedrock_routes() -> dict[str, list[str]]:
     routes = {k: list(v) for k, v in EVAL.items()}
     routes["sim"] = [SIM]
     return routes
+
+
+def gemini_routes() -> dict[str, list[str]]:
+    roles = ("brain", "worker", "extract", "classify", "judge", "judge_fast", "learn", "vision", "speech", "nutrition", "sim")
+    return {role: [GEMINI] for role in roles}
+
+
+def for_eval() -> dict[str, list[str]]:
+    """Gemini in kavach-eval-1015. Bedrock when that project is not the one set. Never Gemini in kavach-care."""
+    if project() == EVAL_PROJECT:
+        return gemini_routes()
+    return bedrock_routes()
 
 
 def _calls_care(routes: dict) -> bool:
@@ -73,7 +86,7 @@ def vertex_routes(routes: dict) -> list[str]:
 
 
 def apply() -> dict[str, list[str]]:
-    """Point this process at Bedrock. Gemini is kept only for sunny-ship; kavach-care is refused."""
+    """Gemini when this process is kavach-eval-1015. kavach-care is refused. Any other Gemini route stays on Bedrock."""
     raw = os.getenv("MODEL_ROUTES", "").strip()
     if raw:
         try:
@@ -86,11 +99,9 @@ def apply() -> dict[str, list[str]]:
     if _calls_care(routes):
         print("Refusing: replay and nightly never call Gemini in kavach-care.")
         raise SystemExit(2)
-    if vertex_routes(routes):
-        if project() != SUNNY:
-            print("Gemini replay runs only in sunny-ship, and only when that project answers. This run stays on Bedrock.")
-            routes = for_eval()
-        # sunny-ship Gemini stays. preflight drops it if the project refuses.
+    if vertex_routes(routes) and project() not in {SUNNY, EVAL_PROJECT}:
+        print("Gemini replay runs in kavach-eval-1015. This process is not that project, so it stays on Bedrock.")
+        routes = bedrock_routes()
     os.environ["MODEL_ROUTES"] = json.dumps(routes)
     os.environ.setdefault("WEB_SEARCH_PROVIDER", "off")
     os.environ.setdefault("MEMORY_EMBEDDINGS", "off")
@@ -99,8 +110,8 @@ def apply() -> dict[str, list[str]]:
 
 
 def use_bedrock() -> dict[str, list[str]]:
-    """Drop a refused sunny-ship route and continue on Bedrock."""
-    os.environ["MODEL_ROUTES"] = json.dumps(for_eval())
+    """Drop a refused sunny-ship route and continue on Bedrock. kavach-eval-1015 does not use this."""
+    os.environ["MODEL_ROUTES"] = json.dumps(bedrock_routes())
     return apply()
 
 
@@ -126,13 +137,15 @@ async def _ping_once() -> str | None:
 
 
 async def ping() -> str | None:
-    """One short brain call. A refused sunny-ship Gemini route falls back to Bedrock and is tried once more."""
+    """One short brain call. A refused kavach-eval-1015 call stops the run. A refused sunny-ship call falls back to Bedrock."""
     routes = apply()
     why = await _ping_once()
-    if why and vertex_routes(routes):
+    if why and vertex_routes(routes) and project() != EVAL_PROJECT:
         print(f"sunny-ship refused; the gate runs on Bedrock ({why[:160]})")
         use_bedrock()
         why = await _ping_once()
+    elif why and project() == EVAL_PROJECT:
+        print(f"kavach-eval-1015 refused; this run sends nothing else ({why[:160]})")
     return why
 
 
@@ -150,7 +163,7 @@ def main(argv: list[str]) -> int:
         dest = Path(os.environ.get("NIGHTLY_OUT", "runs/nightly"))
         dest.mkdir(parents=True, exist_ok=True)
         (dest / "provider_down.json").write_text(json.dumps({"why": why}))
-        print(f"::warning::Bedrock refused the preflight call; this run sends nothing else: {why}")
+        print(f"::warning::the preflight call was refused; this run sends nothing else: {why}")
     else:
         print("preflight ok")
     return 0

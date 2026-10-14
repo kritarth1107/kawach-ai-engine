@@ -228,6 +228,10 @@ def test_gemini_replay_is_only_kept_for_sunny_ship(monkeypatch):
     monkeypatch.setenv("GCP_PROJECT_ID", live_routes.SUNNY)
     monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["gemini:gemini-3.5-flash"]}))
     assert live_routes.apply()["brain"] == ["gemini:gemini-3.5-flash"]
+    monkeypatch.setenv("GCP_PROJECT_ID", live_routes.EVAL_PROJECT)
+    monkeypatch.delenv("MODEL_ROUTES", raising=False)
+    kept = live_routes.apply()
+    assert kept["brain"] == [live_routes.GEMINI] and live_routes.vertex_routes(kept)
 
 
 async def test_a_bedrock_model_miss_does_not_block_and_a_new_fixed_failure_does(monkeypatch, tmp_path):
@@ -273,7 +277,8 @@ def test_curiosity_cases_cover_an_event_and_a_missing_fact():
 
     cases = [json.loads(line) for line in runner.CURIOUS.read_text().splitlines() if line.strip()]
     assert {"en", "hi", "hinglish", "bn"} <= {c["lang"] for c in cases}
-    assert all(c["status"] == "open" and c["source"] == "curiosity" for c in cases)
+    assert all(c["status"] in ("open", "fixed") and c["source"] == "curiosity" for c in cases)
+    assert next(c["status"] for c in cases if c["id"] == "curious-end-en") == "open"
     assert any(c["id"].startswith("curious-which-") for c in cases)
     assert any("gap_asked" in json.dumps(c["assertion"]) for c in cases)
     assert any("open_loop" in json.dumps(c["assertion"]) for c in cases)
@@ -286,7 +291,9 @@ def test_register_cases_cover_the_bookish_lines_and_wait_for_sunny_ship():
 
     cases = [json.loads(line) for line in runner.REGISTER.read_text().splitlines() if line.strip()]
     assert {"hi", "hinglish", "bn", "ta"} <= {c["lang"] for c in cases}
-    assert all(c["status"] == "open" and c["when"] == "gemini" for c in cases)
+    assert all(c["when"] == "gemini" for c in cases)
+    assert next(c["status"] for c in cases if c["id"] == "register-clocks-hi") == "open"
+    assert all(c["status"] == "fixed" for c in cases if c["id"] != "register-clocks-hi")
     bookish = [c for c in cases if c["id"] != "register-voice-en"]
     assert all("sounds like a real person texting today" in c["rubric"] for c in bookish)
     assert any(c["id"] == "register-voice-en" and "voice-note transcript" in c["rubric"] for c in cases)
@@ -299,7 +306,7 @@ async def test_register_cases_skip_until_sunny_ship_answers(monkeypatch):
     monkeypatch.setenv("MODEL_ROUTES", json.dumps({"brain": ["bedrock:openai.gpt-oss-120b-1:0@ap-south-1"]}))
     case = next(c for c in runner.load_cases([]) if c["id"] == "register-reminder-hi")
     got = await runner.run_case(None, case, deadline=0, cap=0)
-    assert got["passed"] is None and "sunny-ship" in got["skipped"] and got["runs"] == []
+    assert got["passed"] is None and "kavach-eval-1015" in got["skipped"] and got["runs"] == []
 
     async def fake_once(sessions, c, n):
         return {"passed": True, "why": "natural"}
@@ -317,5 +324,6 @@ def test_misread_cases_cover_each_failure_in_the_main_languages():
     for kind in kinds:
         langs = {c["lang"] for c in cases if c["kind"] == kind}
         assert {"en", "hi", "hinglish", "bn"} <= langs, kind
-    assert all(c["status"] == "open" and "91337bfa" not in json.dumps(c) for c in cases)
+    assert all(c["status"] in ("open", "fixed") and "91337bfa" not in json.dumps(c) for c in cases)
+    assert all(c["status"] == "open" for c in cases if c["kind"] == "joke_vs_fact")
     assert all(c["id"].startswith("misread-") for c in cases)

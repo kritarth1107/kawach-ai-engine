@@ -1,0 +1,7 @@
+{
+  "model": "gemini:gemini-3.5-flash@asia-south1",
+  "project": "kavach-eval-1015",
+  "recorded": "2026-10-15",
+  "note": "15 Oct gate rerun in kavach-eval-1015, ₹315, 63 non-sensitive cases. The six already-fixed cases (python, coding, coding_more, general, zerodol, relay) passed. Sensitive cases were not sent. A later fixed failure is a code regression.",
+  "failing": []
+}

@@ -1,11 +1,9 @@
 name: Replay cases (before every engine deploy)
 
-# Trust plan C3: every replay case runs on Bedrock in ap-south-1 (never Gemini in kavach-care). A fixed case fails
-# only if 2 of 3 runs fail. It blocks the deploy only when it is not already on the Bedrock model baseline: a miss
-# the model has at today's master is listed, and a case that passed there and fails after a change is a code regression.
-# Gemini replay is sunny-ship only, and the gate stays on Bedrock when that project refuses. Register cases
-# (bookish vs spoken) run on that Gemini call and skip, with no model call, until sunny-ship answers. A provider-wide Bedrock
-# refusal is UNAVAILABLE (exit 0). OPEN cases run too and are reported. Called by deploy-aws.yml.
+# Trust plan C3: non-sensitive replay cases run on Gemini 3.5 Flash in kavach-eval-1015 (never kavach-care).
+# A fixed case fails only if 2 of 3 runs fail. It blocks the deploy only when it is not on the Gemini model baseline.
+# Sensitive cases stay paused. If kavach-eval-1015 refuses the preflight, the gate is UNAVAILABLE (exit 0) and does not
+# fall through to Bedrock. OPEN cases run too and are reported. Called by deploy-aws.yml.
 
 on:
   workflow_call:
@@ -34,6 +32,9 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       REPLAY_BUCKET: kavach-replay-cases-sunny
+      GCP_PROJECT_ID: kavach-eval-1015
+      GOOGLE_CLOUD_PROJECT: kavach-eval-1015
+      SENSITIVE_EVALS: pause
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,7 +50,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
           aws-region: ap-south-1
-      - name: One Bedrock call before any case
+      - name: One Gemini call before any case
         id: pre
         env:
           WEB_SEARCH_PROVIDER: "off"
@@ -76,7 +77,7 @@ jobs:
       - name: Provider refused the preflight, so nothing was tested
         if: steps.pre.outputs.down == 'true'
         run: |
-          echo "::warning::replay gate UNAVAILABLE: Bedrock refused the preflight call. The deploy goes on if the tests passed."
+          echo "::warning::replay gate UNAVAILABLE: kavach-eval-1015 refused the preflight call. The deploy goes on if the tests passed."
           mkdir -p runs/replay
           python3 -c "import json,os; why=json.load(open('runs/replay/provider_down.json')).get('why','refused'); json.dump({'summary':{'unavailable':True,'why':why,'passed':False,'failures':['replay gate unavailable: '+why],'run_id':'replay-'+os.environ.get('GITHUB_RUN_ID','')}}, open('runs/replay/results.json','w'))"
           echo "# Replay cases before deploy: GATE UNAVAILABLE" >> "$GITHUB_STEP_SUMMARY"
@@ -120,4 +121,4 @@ jobs:
             echo "replay gate unavailable: deploy continues if the tests passed"
             exit 0
           fi
-          [ "${{ steps.run.outputs.code }}" = "0" ] || { echo "::error::a fixed case that passes on the Bedrock model baseline failed (2 of 3): the deploy is blocked (see the summary)"; exit 1; }
+          [ "${{ steps.run.outputs.code }}" = "0" ] || { echo "::error::a fixed case that passes on the Gemini model baseline failed (2 of 3): the deploy is blocked (see the summary)"; exit 1; }

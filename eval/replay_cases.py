@@ -1,4 +1,4 @@
-"""Before every engine deploy: every replay case on the live Bedrock routes (trust plan C3.4-C3.6). Paid; ap-south-1 only.
+"""Before every engine deploy: every replay case on Gemini 3.5 Flash in kavach-eval-1015 (trust plan C3.4-C3.6). Paid.
 
 Cases come from the private test bucket (the production table's nightly export, anonymised; app.quality.cases) and from
 the repo (founder-reported bugs on invented families, built here from eval/founder_points_eval.py, and the hard-turn
@@ -12,8 +12,8 @@ test's failures in eval/fixtures/replay_seeds.jsonl; the test world's probe fail
 FIXED cases still all run, on the same checks. While the gate is on Bedrock, a fixed case that already fails on that
 model (eval/fixtures/bedrock_fixed_baseline.json) is listed and does not block. A fixed case that passes on the
 baseline and fails after a change does: that is a code regression. OPEN cases are reported only. Gemini in
-kavach-care is never called. Gemini replay is sunny-ship only, and only when that project answers. Register cases
-(eval/fixtures/register_2026-10-14.jsonl) run on that Gemini call and are skipped, without a model call, until then.
+kavach-care is never called. Non-sensitive Gemini replay runs in kavach-eval-1015. Register cases
+(eval/fixtures/register_2026-10-14.jsonl) run on that Gemini call. Sensitive cases stay paused.
 Time and cost: about 20 cases at a time, under 10 minutes, a cap of REPLAY_MAX_INR (₹200); when the cases outgrow that,
 one per failure kind is kept (the newest real ones first, then the rest round-robin).
 
@@ -344,7 +344,7 @@ def on_gemini() -> bool:
 async def run_case(sessions: async_sessionmaker, case: dict, deadline: float, cap: float) -> dict:
     if case.get("when") == "gemini" and not on_gemini():
         return {"id": case["id"], "status": case["status"], "kind": case.get("kind"), "source": case.get("source"),
-                "passed": None, "skipped": "waits for sunny-ship; Gemini replay never calls kavach-care", "runs": []}
+                "passed": None, "skipped": "waits for Gemini in kavach-eval-1015; never calls kavach-care", "runs": []}
     from app.llm import spend
 
     runs: list[dict] = []
@@ -417,13 +417,15 @@ async def run_cases(cases: list[dict], url: str, cap: float, *, parallel: int = 
 
 
 BASELINE = Path(__file__).parent / "fixtures" / "bedrock_fixed_baseline.json"
+GEMINI_BASELINE = Path(__file__).parent / "fixtures" / "gemini_fixed_baseline.json"
 
 
 def model_baseline() -> set[str]:
-    """Fixed case ids that fail on the Bedrock eval route at the recorded master. A model miss, not a code regression."""
-    if not BASELINE.exists():
+    """Fixed case ids that fail on today's eval model. A model miss, not a code regression."""
+    path = GEMINI_BASELINE if on_gemini() else BASELINE
+    if not path.exists():
         return set()
-    data = json.loads(BASELINE.read_text())
+    data = json.loads(path.read_text())
     return {str(i) for i in data.get("failing") or []}
 
 
@@ -432,7 +434,7 @@ async def preflight() -> str | None:
     5xx), no case traffic is sent at all and the run is "unavailable". A refused sunny-ship Gemini route is not that:
     the run continues on Bedrock. Returns why, or None when the model answered."""
     from app.llm import router
-    from eval.live_routes import use_bedrock, vertex_routes
+    from eval.live_routes import project, use_bedrock, vertex_routes
 
     async def once() -> str | None:
         try:
@@ -451,10 +453,12 @@ async def preflight() -> str | None:
         routes = json.loads(raw) if raw else {}
     except json.JSONDecodeError:
         routes = {}
-    if why and vertex_routes(routes):
+    if why and vertex_routes(routes) and project() != "kavach-eval-1015":
         print(f"sunny-ship refused; replaying on Bedrock ({why[:160]})", flush=True)
         use_bedrock()
         why = await once()
+    elif why and project() == "kavach-eval-1015":
+        print(f"kavach-eval-1015 refused; this run sends nothing else ({why[:160]})", flush=True)
     return why
 
 
@@ -522,9 +526,9 @@ async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out
     (out / "results.json").write_text(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=1, default=str))
     lines = [f"# Replay cases before deploy: {'PASSED' if summary['passed'] else 'BLOCKED'}", "",
              f"{summary['cases']} cases ({summary['fixed']} fixed, {summary['open']} open); fixed failing: {summary['fixed_failed']} "
-             f"({len(known)} on the Bedrock model baseline, {len(regressions)} code regressions); "
+             f"({len(known)} on the model baseline, {len(regressions)} code regressions); "
              f"open now passing: {summary['open_passed']}; skipped: {summary['skipped']}; ₹{summary['spent_inr']:.0f} of ₹{cap:.0f}; {summary['seconds']} s",
-             "", "Bedrock model baseline (fails on today's model, still checked, not a code regression):",
+             "", "Model baseline (fails on today's model, still checked, not a code regression):",
              *(f"- {i}" for i in summary["model_baseline"]), ""]
     for r in sorted(results, key=lambda r: (r["status"] != "fixed", r["passed"] is True)):
         last = r["runs"][-1] if r["runs"] else {}
@@ -583,11 +587,17 @@ def main(argv: list[str]) -> int:
     mx = int(argv[argv.index("--max-cases") + 1]) if "--max-cases" in argv else MAX_CASES
     out = Path(argv[argv.index("--out") + 1]) if "--out" in argv else Path("runs/replay")
     loaded = load_cases(argv)
+    from eval.live_routes import project
+
+    if project() == "kavach-eval-1015":
+        from eval import sensitive
+
+        loaded = [c for c in loaded if not sensitive.held_back(c)]
     gemini_cases = [c for c in loaded if c.get("when") == "gemini"]
     curious = [c for c in loaded if c.get("source") == "curiosity"]
     rest = [c for c in loaded if c.get("when") != "gemini" and c.get("source") != "curiosity"]
     picked = choose(rest, mx)
-    # Fixed cases keep the budget. Curiosity cases run next. Register cases skip, with no model call, until sunny-ship answers.
+    # Fixed cases keep the budget. Curiosity cases run next. Register cases run when this process is on Gemini.
     body = [c for c in picked if c["status"] == "fixed"] + curious + [c for c in picked if c["status"] != "fixed"]
     cases = (gemini_cases + body) if on_gemini() else (body + gemini_cases)
     print(f"{len(cases)} replay cases ({sum(1 for c in cases if c['status'] == 'fixed')} fixed, {sum(1 for c in cases if c['status'] == 'open')} open), "

@@ -5,7 +5,7 @@
    picks the best example replies. It never sees a family's identity (the corpus is anonymised).
 2. The draft passes a safety gate: no lesson may touch medical content, alerts, privacy or the fixed rules, and
    examples must be clean. A failed draft is rejected.
-3. A passing draft becomes the canary (LEARN_CANARY_PERCENT of families, default 10%).
+3. A passing draft becomes the canary (LEARN_CANARY_PERCENT of families, default 20%).
 4. Nightly, the canary's scores are compared with live. Worse: rolled back automatically. Better: promoted when
    approved (or automatically with LEARN_AUTO_PROMOTE=on). No decision in 21 days: retired.
 """

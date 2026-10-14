@@ -1,22 +1,24 @@
 """The self-learning gate's replay run (trust plan section 10.2 step 2, on the cases of C3).
 
-run_for_playbook(sessions, pb, budget_inr=...) runs every replay case twice on the live Bedrock routes, once with the live playbook and
+run_for_playbook(sessions, pb, budget_inr=...) runs every replay case twice on Gemini in kavach-eval-1015, once with the live playbook and
 once with the candidate `pb` in its place, and reports:
     {"regressions": [cases that pass with the live playbook and fail with pb], "fixed": [fail live, pass with pb],
      "n": cases run, "cost_inr": ₹ spent, "skipped": [cases that could not run]}
 An empty regressions list means the candidate passed (lessons.replay_gate decides).
 
-Paid runs call Bedrock in ap-south-1, never Vertex, on a local test database (REPLAY_DATABASE_URL), with the runner in
-eval/ (eval/replay_cases.py), so it runs where the tests run (GitHub Actions, a laptop), never inside the production
-engine: anywhere else it raises ReplayUnavailable and drafts wait. Cases: the repo's invented families plus every open and
-fixed case in `sessions`' replay_cases (anonymised).
+Paid runs call Gemini 3.5 Flash in kavach-eval-1015, never kavach-care, on a local test database (REPLAY_DATABASE_URL),
+with the runner in eval/ (eval/replay_cases.py), so it runs where the tests run (GitHub Actions, a laptop), never inside
+the production engine: anywhere else it raises ReplayUnavailable and drafts wait. Cases: the repo's invented families plus
+every open and fixed case in `sessions`' replay_cases (anonymised).
 """
 
 from __future__ import annotations
 
+import json
 import os
 
-VERTEX_PROJECTS = {"kavach-care", "sunny-ship-508214-q1"}
+REFUSED_PROJECTS = {"kavach-care", "sunny-ship-508214-q1"}
+EVAL_PROJECT = "kavach-eval-1015"
 
 
 class ReplayUnavailable(RuntimeError):
@@ -30,8 +32,12 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
     """live: the playbook the candidate is compared with (default: the live one in `sessions`; the learn-gate workflow passes
     production's). case_files: exported cases (jsonl) to add to the repo's."""
     project = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
-    if project in VERTEX_PROJECTS:
-        raise ReplayUnavailable("paid replay runs call Bedrock in ap-south-1, never Vertex")
+    if project in REFUSED_PROJECTS:
+        raise ReplayUnavailable("paid replay runs in kavach-eval-1015 on Gemini, never kavach-care or sunny-ship")
+    if project == EVAL_PROJECT:
+        from eval.live_routes import gemini_routes
+
+        os.environ["MODEL_ROUTES"] = json.dumps(gemini_routes())
     url = os.getenv("REPLAY_DATABASE_URL", "").strip()
     if not url:
         raise ReplayUnavailable("set REPLAY_DATABASE_URL to a local test database")
@@ -47,6 +53,10 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
     from app.quality.models import ReplayCase
 
     cases = runner.load_cases(list(case_files))
+    if project == EVAL_PROJECT:
+        from eval import sensitive
+
+        cases = [c for c in cases if not sensitive.held_back(c)]
     async with sessions() as s:
         try:
             rows = list((await s.execute(select(ReplayCase).where(ReplayCase.status.in_(("open", "fixed"))))).scalars())
@@ -62,8 +72,8 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
         raise ReplayUnavailable(down)
     start = spend.process_spent()
     half = budget_inr / 2
-    with_live = {r["id"]: r for r in await runner.run_cases(cases, url, half, playbook=live)}
-    with_pb = {r["id"]: r for r in await runner.run_cases(cases, url, half, playbook=pb)}
+    with_live = {r["id"]: r for r in await runner.run_cases(cases, url, half, parallel=2, playbook=live)}
+    with_pb = {r["id"]: r for r in await runner.run_cases(cases, url, half, parallel=2, playbook=pb)}
     if not any(r["passed"] is not None for r in with_pb.values()):
         raise ReplayUnavailable("no replay case could run (time, budget or the cases)")  # never a silent pass
     regressions = [cid for cid, r in with_live.items() if r["passed"] is True and with_pb.get(cid, {}).get("passed") is False]

@@ -467,11 +467,38 @@ QUESTION_MARKS = re.compile(r"[?？؟]")
 
 
 def question_problems(text: str) -> list[str]:
-    """To the person cared for: at most one question in a message (persona; 13 Oct live: "आज नींद तो चोखी आई? कैसी है आज
-    तबियत?" and "रसोई हो गई कांई? भोजन कर लिया आपने?" were graded as two questions at once). Counts the question marks in
-    her own text only."""
-    n = len(QUESTION_MARKS.findall(text or ""))
-    return [f"you ask {n} questions at once; ask only the one that matters most now (one question per message)"] if n > 1 else []
+    """At most one question in a message, whoever she is talking to (persona; 13 Oct live: "आज नींद तो चोखी आई? कैसी है आज
+    तबियत?" and "रसोई हो गई कांई? भोजन कर लिया आपने?" were graded as two questions at once). A short list is not a
+    question. Counts the question marks in her own text only, one WhatsApp message at a time."""
+    out = []
+    for part in whatsapp_messages(text) or [text or ""]:
+        n = len(QUESTION_MARKS.findall(part))
+        if n > 1:
+            out.append(f"you ask {n} questions at once; ask only the one that matters most now (one question per message)")
+    return out
+
+
+_BOOKKEEPING = re.compile(
+    r"^\s*(i have (logged|noted|recorded)\b|according to (general )?(health sources|medical guidelines)\b)",
+    re.I,
+)
+
+
+def opener_problems(text: str) -> list[str]:
+    """Her own first line: not bookkeeping and not a guideline citation (persona). The person's words are not read."""
+    first = (whatsapp_messages(text) or [""])[0]
+    return ["do not open with bookkeeping or a guideline citation; start with what they said"] if _BOOKKEEPING.search(first) else []
+
+
+def length_problems(text: str, *, cap: int = 3) -> list[str]:
+    """Her own reply, one WhatsApp message at a time: more sentences than the cap (an elder is two, anyone else three;
+    a health answer is left to the doctor-note check). Sentence breaks in her text only."""
+    out = []
+    for part in whatsapp_messages(text) or [text or ""]:
+        n = len(sentences(part))
+        if n > cap:
+            out.append(f"this message is {n} sentences; keep it to {cap}")
+    return out
 
 
 # ── repetition ─────────────────────────────────────────────────────────────────

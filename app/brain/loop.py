@@ -692,8 +692,11 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     )
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
     problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
-    if ctx.speaker_is_elder and not ctx.self_care and not ctx.buttons:
+    if not ctx.is_system and not ctx.buttons:
         problems += guards.question_problems(final)
+        problems += guards.opener_problems(final)
+        if not health_turn(ctx.actions):
+            problems += guards.length_problems(final, cap=2 if ctx.speaker_is_elder else 3)
     if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
         problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
