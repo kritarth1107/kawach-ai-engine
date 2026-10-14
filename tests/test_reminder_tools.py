@@ -84,6 +84,31 @@ async def test_a_reminders_words_can_be_changed(db):
     spec = next(x for x in tools.specs() if x.name == "change_reminder")
     assert "words" in spec.description and "note or skill never changes them" in spec.description
     assert "saved words" in persona.PERSONA and "REMINDERS DUE SOON" in persona.PERSONA
+    assert "do not ask what it is for" in persona.PERSONA
+    assert "log_activity it in that same turn" in persona.PERSONA
+    assert "one short message per fact" in persona.REPLY_FORMAT
+    spec = next(x for x in tools.specs() if x.name == "set_reminder")
+    assert "do not ask what it is for" in spec.description
+    walk = next(x for x in tools.specs() if x.name == "log_activity")
+    assert "before you praise them" in walk.description
+
+
+async def test_a_dose_just_sent_is_named_for_the_reply(db):
+    """A reply to "Time for Metformin" is that dose: a new time is remember, and finishing it is log_dose.
+    change_reminder is for other reminders. The person's words are not matched."""
+    from app.care import store
+
+    await store.write_fact(db, family_id=FAM, subject_id=SON["id"], domain="medicine", key="medicine:metformin",
+                           value={"name": "Metformin", "dose": "500 mg", "times": ["08:00"]},
+                           text="Metformin 500 mg at 08:00", source_kind="caregiver_said")
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="assistant", text="Time for Metformin 500 mg.")
+    await db.commit()
+    req = loop.TurnRequest(family_id=FAM, elder=ELDER, speaker=SON, members=[ELDER, SON], text="later")
+    dynamic, _ = await loop.turn_context(db, req)
+    assert "THE LAST MESSAGE YOU SENT was a dose reminder for Metformin 500 mg at 08:00" in dynamic
+    assert "remember" in dynamic and "log_dose" in dynamic and "Do not use change_reminder" in dynamic
+    other = loop.dose_answer_line("The maid comes at 11.", [("Metformin", "500 mg", ["08:00"])])
+    assert other == ""
 
 
 async def test_saheli_sees_the_reminders_due_soon(db, at):

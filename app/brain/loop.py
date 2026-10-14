@@ -254,6 +254,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     from app.tasks import runtime as task_runtime
 
     tasks = await data.tasks()
+    dose = await dose_answer_block(data, req)
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
         f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
@@ -263,6 +264,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
         reminders_block(req),
+        *([dose] if dose else []),
         onboarding_block(req),
         waiting_block(req),
     ]
@@ -430,6 +432,43 @@ def _waiting_at(w: dict) -> str:
         return clock.ist(datetime.fromisoformat(str(w.get("at")).replace("Z", "+00:00"))).strftime("%d %b %H:%M")
     except ValueError:
         return "earlier"
+
+
+def dose_answer_line(last_text: str, meds: list[tuple[str, str, list[str]]]) -> str:
+    """Saheli's own last message named a saved medicine. The person's words are not read here."""
+    low = (last_text or "").lower()
+    hit = [(name, dose, times) for name, dose, times in meds if len(name) >= 4 and name.lower() in low]
+    if not hit:
+        return ""
+    listed = "; ".join(f"{name}{(' ' + dose) if dose else ''} at {', '.join(times) or 'its saved time'}" for name, dose, times in hit[:3])
+    return (
+        "THE LAST MESSAGE YOU SENT was a dose reminder for " + listed + ". If they are answering that reminder, act in "
+        "this turn and do not ask which thing they mean. A new time: remember, domain medicine, the same name and dose, "
+        "times set to the new one, before you reply. Do not use change_reminder for a medicine's dose time, and do not "
+        "say it changed until remember returns. They finished it: log_dose outcome taken for that medicine now. Do not "
+        "ask whether they mean this medicine. If they are talking about something else, answer that and leave this dose.")
+
+
+async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
+    if req.speaker.get("role") == "system":
+        return ""
+    turns = await data.turns(req.speaker["id"])
+    last = next((t for t in reversed(turns) if t.role == "assistant" and (t.text or "").strip()), None)
+    if last is None:
+        return ""
+    meds: list[tuple[str, str, list[str]]] = []
+    seen: set[str] = set()
+    for pid in (req.speaker["id"], req.elder["id"]):
+        for fact in await data.facts(pid):
+            if fact.domain != "medicine" or fact.status != "active":
+                continue
+            name = str((fact.value or {}).get("name") or "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            value = fact.value or {}
+            meds.append((name, str(value.get("dose") or "").strip(), [str(t) for t in (value.get("times") or [])]))
+    return dose_answer_line(last.text, meds)
 
 
 def reminders_block(req: TurnRequest) -> str:

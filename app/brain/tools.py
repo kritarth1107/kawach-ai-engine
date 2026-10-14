@@ -1279,7 +1279,9 @@ def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:
 @tool(
     "set_reminder",
     "A reminder for anything except a medicine's regular dose times (those come from the medicine in the CARE RECORD, "
-    "through remember). Say whether it repeats (repeat): once for a one-off, daily or weekly only when they asked for it to "
+    "through remember). When they give a time and ask you to set a reminder but not what it is for, set it: text is their "
+    "own words, repeat once unless they asked for every day, and do not ask what it is for. Confirm in the way they speak, "
+    "and keep the word reminder in English. Say whether it repeats (repeat): once for a one-off, daily or weekly only when they asked for it to "
     "repeat. 'in 20 minutes' / 'in an hour': give in_minutes and repeat once (the time and date are worked out for you, also "
     "past midnight). Otherwise times are 'HH:MM' in IST: 'on 15 Oct at 5 pm' is repeat once, date 2026-10-15, times "
     "['17:00']; 'every Monday and Thursday at 7' is weekly days [0, 3]; 'every hour from 2 pm to 3 am' is every_hour "
@@ -1420,6 +1422,8 @@ async def activity(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "log_activity",
     "Log what they told you about an activity: done (with what they did, how long, details) or skipped (and why, kindly). "
+    "Call this in the same turn they say a habit happened, before you praise them. key may be a catalogue type "
+    "(morning_walk, evening_walk, gym, yoga) when ACTIVITIES has no row. "
     "Readings they mention (weight, steps, BP) go in readings and reach their health records. Then ask at most one natural "
     "follow-up about what they said; keep the chat warm, never a quiz.",
     {

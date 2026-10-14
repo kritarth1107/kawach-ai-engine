@@ -287,7 +287,9 @@ def test_register_cases_cover_the_bookish_lines_and_wait_for_sunny_ship():
     cases = [json.loads(line) for line in runner.REGISTER.read_text().splitlines() if line.strip()]
     assert {"hi", "hinglish", "bn", "ta"} <= {c["lang"] for c in cases}
     assert all(c["status"] == "open" and c["when"] == "gemini" for c in cases)
-    assert all("sounds like a real person texting today" in c["rubric"] for c in cases)
+    bookish = [c for c in cases if c["id"] != "register-voice-en"]
+    assert all("sounds like a real person texting today" in c["rubric"] for c in bookish)
+    assert any(c["id"] == "register-voice-en" and "voice-note transcript" in c["rubric"] for c in cases)
     assert any("स्मृति" in c["bad_reply"] for c in cases) and any("सहेली सहेली" in c["bad_reply"] for c in cases)
     assert all("91337bfa" not in json.dumps(c) for c in cases)
     assert "stay English" in PERSONA and "real person texting today" in REPLY_FORMAT
