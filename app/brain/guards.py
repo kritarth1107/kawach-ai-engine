@@ -500,9 +500,24 @@ def opener_problems(text: str) -> list[str]:
 
 
 def without_bookkeeping(text: str) -> str:
-    """Drop sentences that open as a note or a guideline citation. The rest of her reply stays."""
-    kept = [s for s in sentences(text) if not _BOOKKEEPING.search(s)]
-    return " ".join(kept).strip()
+    """Drop sentences that open as a note or a guideline citation. A reply with none of those is returned unchanged,
+    so a line that is only --- still splits into separate messages and a leaked "thought" line still starts a line."""
+    chunks = whatsapp_messages(text)
+    if not chunks:
+        return text or ""
+    changed = False
+    out = []
+    for chunk in chunks:
+        bits = sentences(chunk)
+        kept = [s for s in bits if not _BOOKKEEPING.search(s)]
+        if len(kept) != len(bits):
+            changed = True
+            chunk = " ".join(kept).strip()
+        if chunk:
+            out.append(chunk)
+    if not changed:
+        return text
+    return "\n---\n".join(out)
 
 
 def length_problems(text: str, *, cap: int = 3) -> list[str]:
