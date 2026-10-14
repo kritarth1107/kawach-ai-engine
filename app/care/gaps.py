@@ -155,8 +155,8 @@ async def _items(session: AsyncSession, family_id: str, person: str) -> list[tup
         select(NudgeLedger).where(NudgeLedger.family_id == family_id, NudgeLedger.person_id == person,
                                    NudgeLedger.status == "sent", NudgeLedger.sent_at >= today_start)
     )).scalars())
-    fields = [covered for r in sent_rows if (covered := nudge_covers(r.kind, r.field, clock.ist_day(r.sent_at), day))]
-    fields += [r.field for r in sent_rows if (r.field or "").split(":")[0] in ("preference", "habit", "activity")]
+    fields = [c for r in sent_rows if (c := nudge_covers(r.kind, r.field, clock.ist_day(r.sent_at), day)) is not None]
+    fields += [f for r in sent_rows if (f := r.field) and f.split(":")[0] in ("preference", "habit", "activity")]
     candidates = [*food_gaps(had_meal, had_water, hour)]
     if not sleep:
         candidates.append(("sleep", "when they sleep is not on record"))
