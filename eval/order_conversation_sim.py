@@ -330,6 +330,24 @@ class StoreHost(SimHost):
         return await super().call(tool, args, family_id=family_id, subject_id=subject_id, actor_id=actor_id)
 
 
+class SimFood:
+    """The nutrition agent's order functions (INTERFACES.md §1), recorded."""
+
+    def __init__(self):
+        self.meals, self.pantry = [], []
+
+    async def log_order_meal(self, session, task, *, consumed, portion_eaten=None, eaten_by=None, by, channel="whatsapp"):
+        self.meals.append({"task": str(task.id), "consumed": consumed, "portion": portion_eaten, "eaten_by": eaten_by, "by": by})
+        return {"result": "saved" if consumed in ("yes", "part") else "nothing", "say": f"logged: {portion_eaten or 'nothing'}"}
+
+    async def add_from_order(self, session, task, *, items=None):
+        self.pantry.append(str(task.id))
+        return {"added": [], "kept": [], "skipped": None}
+
+    def entries(self) -> list[dict]:
+        return [m for m in self.meals if m["consumed"] in ("yes", "part")]
+
+
 class Conversation:
     def __init__(self, name: str, family: Family = RAIPUR, *, agent_ok: tuple[str, ...] = ()):
         self.name, self.fam = name, f"ordersim-{uuid.uuid4().hex[:6]}"
@@ -337,6 +355,7 @@ class Conversation:
         self.shop = Store(address=f"{family.place['nickname']}: {family.place['full']}")
         self.host, self.browser = StoreHost(family), Browser(self.shop)
         self.agent_ok = agent_ok  # "service:phase" runs of the browser agent this conversation expects
+        self.food = SimFood()  # the food log and pantry, recorded (nutrition plan §N6)
         self.log: list[str] = []
         self.location_asked = False  # Saheli's last reply asked for a WhatsApp location
         self.last_buttons: list[dict] = []  # the one-tap answers on Saheli's last reply
@@ -1002,6 +1021,33 @@ async def bangalore_beer_refused_in_english(c: Conversation):
     c.check("checking" not in reply and "looking" not in reply, f"it said it was looking: {reply}")
 
 
+async def delhi_food_came_she_ate_half(c: Conversation):
+    """Founder 2026-10-14: something ordered is not something eaten. A Swiggy meal comes; nothing goes in her food log until
+    she says how much she ate; asked once, inside the order's own follow-up; half → one entry for half."""
+    await c.setup()
+    await c.say("स्विगी से पंजाबी तड़का का पनीर बटर मसाला मंगा दो")
+    await c.say("हाँ, घर पर")
+    t = await _options_then_confirm(c, "पहला वाला")
+    ids = confirm_buttons(c)
+    c.check(bool(ids), "no confirm")
+    if not ids:
+        return
+    await c.say(ids[0])
+    t = await c.ticks(lambda t: t.status == "done", most=8)
+    c.check(t is not None and t.status == "done", "not placed")
+    clock.set_now(clock.now() + timedelta(minutes=40))
+    await c.say("खाना आ गया")
+    c.check(not c.food.meals, f"logged before she said she ate it: {c.food.meals}")
+    clock.set_now(clock.now() + timedelta(minutes=45))
+    seen = len(c.maa_messages())
+    await c.wake()
+    asked = " ".join(m.get("text") or "" for m in c.maa_messages()[seen:])
+    c.check(bool(asked), "nothing asked after it came")
+    c.check(not c.food.meals, f"logged from a scheduled turn: {c.food.meals}")
+    await c.say("आधा खाया, बाकी रात को खाऊँगी")
+    c.check([(m["consumed"], m["portion"]) for m in c.food.meals] == [("part", "half")], f"not one entry for half: {c.food.meals}")
+
+
 async def kolkata_cab_for_6_tomorrow(c: Conversation):
     """Founder 2026-10-12: "book a cab at xyz time ... just book it that time ... send the booked details". A Bengali elder
     asks at night for an Uber at 6 tomorrow from home to Howrah station: the pickup as a location, the fares now, her pick,
@@ -1337,6 +1383,8 @@ SCENARIOS = [("several items, Yes tap, tracked to the door, how was it", several
              ("Raipur: approval at once, cancel while placing, her son's cancel with a fee", raipur_approval_at_once_then_cancel_while_placing,
               RAIPUR, ("zepto:prepare", "zepto:place", "zepto:cancel")),
              ("Mumbai: Marathi, cancel while the cart is built", mumbai_marathi_cancel_while_the_cart_is_built, MUMBAI, ()),
+             ("Delhi: a Swiggy meal came, she ate half: one food entry, only after her answer", delhi_food_came_she_ate_half, DELHI,
+              ("swiggy:prepare", "swiggy:place")),
              ("Raipur: cigarettes refused at once, mints offered and ordered, the cigarette listing never shown",
               raipur_cigarettes_refused_mints_offered, RAIPUR, ()),
              ("Bangalore: beer refused, nothing looked up", bangalore_beer_refused_in_english, BANGALORE, ()),
@@ -1366,10 +1414,14 @@ async def main() -> int:
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
     failed = 0
     only = [a for a in sys.argv[1:] if not a.startswith("-")]
+    from app.tasks import aftercare
+
+    real_nutrition = aftercare._nutrition
     for name, play, family, agent_ok in SCENARIOS:
         if only and not any(o.lower() in name.lower() for o in only):
             continue
         c = Conversation(name, family, agent_ok=agent_ok)
+        aftercare._nutrition = lambda c=c: (c.food, c.food)  # the food log, recorded: nothing goes in it without their answer
         print(f"\n--- {family.label}", flush=True)
         fastpath_patch = {"search": c.shop.search, "cart": c.shop.cart, "place": c.shop.place, "blinkit_order_status": c.shop.order_status}
         saved = {k: getattr(fastpath, k) for k in fastpath_patch}
@@ -1383,6 +1435,12 @@ async def main() -> int:
         finally:
             for k, v in saved.items():
                 setattr(fastpath, k, v)
+            aftercare._nutrition = real_nutrition
+            people = {p["id"] for p in c.family.members}
+            for m in c.food.entries():
+                # founder 2026-10-14: an order is not food eaten; only a person's own answer makes an entry
+                if m["by"] not in people or m["consumed"] not in ("yes", "part"):
+                    c.problems.append(f"food entry without their answer: {m}")
             async with SessionLocal() as s:  # nothing of this conversation carries into the next one
                 for t in (await s.execute(select(Task).where(Task.family_id == c.fam, Task.status.in_(runtime.LIVE)))).scalars():
                     t.status = "cancelled"

@@ -370,6 +370,9 @@ async def test_food_asks_sooner_and_about_the_restaurant(db, at):
     loop = await _loop(db, t)
     assert loop.wake_at == clock.now() + timedelta(minutes=40), "food: how was it, 40 minutes after their own 'it came'"
     r = await _say(db, {"task_id": str(t.id), "items": [{"item": 1, "liked": "yes", "usual": "usual"}]})
+    # a restaurant meal: whether it was eaten comes first (founder 2026-10-14: nothing is logged as eaten without it)
+    assert "whether it was eaten" in r["next"]
+    r = await _say(db, {"task_id": str(t.id), "eaten": "all"})
     assert "whether they would like food from Haldiram's again" in r["next"]
     r = await _say(db, {"task_id": str(t.id), "order_again": "yes"})
     assert "Likes food from Haldiram's (Swiggy)" in r["saved"]

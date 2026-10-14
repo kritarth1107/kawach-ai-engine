@@ -3093,6 +3093,8 @@ FEEDBACK_ITEM = {
         "problem": {"type": "string", "description": "What was wrong, missing or damaged, in a few words"},
         "items": {"type": "array", "items": FEEDBACK_ITEM},
         "order_again": {"type": "string", "enum": ["yes", "no"], "description": "Order from this restaurant or shop again?"},
+        "eaten": {"type": "string", "enum": ["all", "most", "half", "little", "none", "someone_else"],
+                  "description": "A restaurant meal: how much of it the person it was for ate, from their answer (never assumed)"},
         "note": {"type": "string", "description": "Anything else they said about the order as a whole, in a few words"},
         "done": {"type": "boolean", "description": "true when they seem done talking about it (short answers, busy, tired)"},
     },
@@ -3130,7 +3132,7 @@ async def order_feedback(ctx: TurnCtx, a: dict) -> dict:
     return await aftercare.record(
         ctx.session, task, by=ctx.speaker.get("id") or ctx.elder_id, source_kind=ctx.source_kind,
         confidence=0.9 if ctx.speaker_is_elder and not ctx.self_care else 1.0, arrived=a.get("arrived"), problem=a.get("problem"), items=a.get("items"),
-        order_again=a.get("order_again"), note=a.get("note"), done=bool(a.get("done")), ref=ctx.message_ref,
+        order_again=a.get("order_again"), note=a.get("note"), done=bool(a.get("done")), ref=ctx.message_ref, eaten=a.get("eaten"),
     )
 
 

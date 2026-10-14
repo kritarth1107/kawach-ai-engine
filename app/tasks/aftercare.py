@@ -184,10 +184,61 @@ def _to_feedback(loop: OpenLoop, task: Task, at: datetime, *, chatting: bool = F
     loop.updated_at = clock.now()
 
 
+# How much of a restaurant meal was eaten → what the food log is told (founder 2026-10-14: an order is not food eaten;
+# only a yes or part makes an entry). someone_else and none: nothing for the person it was for.
+EATEN = {"all": "yes", "most": "yes", "half": "part", "little": "part", "none": "no", "someone_else": "no"}
+
+
+def _nutrition():
+    """The nutrition agent's package, when this engine has it (built alongside; until then nothing is logged)."""
+    try:
+        from app.nutrition import agent, pantry
+
+        return agent, pantry
+    except ImportError:
+        return None, None
+
+
+async def _log_meal(session: AsyncSession, task: Task, eaten: str, *, by: str) -> str | None:
+    agent, _ = _nutrition()
+    consumed = EATEN[eaten]
+    if agent is None:
+        return None
+    try:
+        res = await agent.log_order_meal(session, task, consumed=consumed, portion_eaten=eaten if consumed != "no" else None,
+                                         eaten_by=task.subject_id, by=by, channel="whatsapp")
+    except Exception as exc:  # noqa: BLE001 — the order's own feedback is saved either way
+        logger.warning("food log from order failed task=%s: %s", task.id, exc)
+        return None
+    return str((res or {}).get("say") or "")[:200] or None
+
+
+async def on_delivered(session: AsyncSession, task: Task) -> None:
+    """Delivered (the store says so, or they said it came): once per order, a food_delivered event with what came, and
+    groceries go to the pantry at home (counts and pack nutrition; nothing is logged as eaten)."""
+    r = task.result or {}
+    kind = kind_of(task)
+    if r.get("food_noted") or kind not in ("food", "grocery"):
+        return
+    task.result = {**r, "food_noted": clock.now().isoformat()}
+    keep = ("name", "qty", "pack", "price", "restaurant", "nutrition", "image_url", "brand", "barcode")
+    came = [{k: i.get(k) for k in keep if i.get(k) not in (None, "", [])} for i in (r.get("items") or (task.details or {}).get("chosen") or [])]
+    await store.record_event(session, family_id=task.family_id, subject_id=task.subject_id, kind="food_delivered",
+                             summary=f"Delivered: {', '.join(str(i.get('name')) for i in came if i.get('name'))[:200]}",
+                             payload={"task_id": str(task.id), "service": task.service, "kind": kind, "items": came})
+    _, pantry = _nutrition()
+    if kind == "grocery" and pantry is not None:
+        try:
+            await pantry.add_from_order(session, task)
+        except Exception as exc:  # noqa: BLE001 — the order is delivered either way
+            logger.warning("pantry from order failed task=%s: %s", task.id, exc)
+
+
 async def store_delivered(session: AsyncSession, task: Task, at: datetime) -> bool:
     """The store says it was delivered. True when the update to the person who asked should ask whether they got it all
     right (they are the one asked); otherwise the one asked hears "has it come?" soon. Asked once either way; "how was it?"
     only after they say it came (founder 2026-10-12: only a person's own answer counts, one question per message)."""
+    await on_delivered(session, task)
     loop = await loop_for(session, task)
     if not loop:
         return False
@@ -223,6 +274,9 @@ def next_question(task: Task, fb: dict, bought: dict[str, int]) -> str | None:
     if int(fb.get("answers") or 0) >= MAX_QUESTIONS:
         return None
     rows, state = items_of(task), fb.get("items") or {}
+    if kind_of(task) == "food" and not fb.get("eaten"):
+        # founder 2026-10-14: something ordered is not something eaten; nothing goes in the food log without their answer
+        return "whether it was eaten: all of it, most, half, a little, or someone else ate it."
     s = lambda i: state.get(str(i["n"])) or {}  # noqa: E731
     unknown = [i for i in rows if not s(i).get("liked") and s(i).get("usual") != "usual"]  # a usual buy they keep getting
     if unknown:
@@ -288,7 +342,8 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop) -> str | None:
         return (f"[Order feedback] The {label} order{for_whom} ({_numbered(task)}) came at {_hm(came)}. "
                 f"Learn what they think of it, for next time: send person {owner} one short, warm question with send_message: {first} "
                 f"It starts a short chat: whenever they answer, save it with order_feedback (task_id {task.id}; items by their "
-                "number) and ask only what its result suggests, one question per message, while they are happy to talk."
+                "number; how much was eaten as eaten: all / most / half / little / none / someone_else, never log_food for this "
+                "order) and ask only what its result suggests, one question per message, while they are happy to talk."
                 + (f" Known already, do not ask: {known}." if known else "") + " Reply none.")
     if fb.get("arrived") in ("yes", "partly"):
         return None
@@ -344,7 +399,7 @@ async def _remember(session: AsyncSession, task: Task, item: dict, s: dict, *, b
 
 async def record(session: AsyncSession, task: Task, *, by: str, source_kind: str, confidence: float, arrived: str | None = None,
                  problem: str | None = None, items: list[dict] | None = None, order_again: str | None = None,
-                 note: str | None = None, done: bool = False, ref: str | None = None) -> dict:
+                 note: str | None = None, done: bool = False, ref: str | None = None, eaten: str | None = None) -> dict:
     """What the person said about a placed order (the order_feedback tool): saved on the order and in the care memory.
     Returns what to tell them and what, if anything, to ask next."""
     from app.tasks.runtime import _carers
@@ -362,6 +417,8 @@ async def record(session: AsyncSession, task: Task, *, by: str, source_kind: str
         fb["arrived"] = arrived
         if arrived != "no":
             fb.setdefault("arrived_at", now.isoformat())
+            await on_delivered(session, task)
+            r = dict(task.result or {})
             if not problem:
                 out["saved"].append("it came" if arrived == "yes" else "it came, partly")
     if problem:
@@ -434,6 +491,11 @@ async def record(session: AsyncSession, task: Task, *, by: str, source_kind: str
             out["saved"].append(text)
         elif note:
             out["saved"].append(f"about the order: {note}")
+    if eaten in EATEN and kind == "food" and not fb.get("eaten"):
+        fb["eaten"] = eaten
+        answered = True
+        logged = await _log_meal(session, task, eaten, by=by)
+        out["saved"].append(logged or ("not eaten: nothing goes in the food log" if EATEN[eaten] == "no" else f"eaten: {eaten}"))
     if answered:
         fb["answers"] = int(fb.get("answers") or 0) + 1
         fb.setdefault("arrived", "yes")  # they are talking about how it was: it came
