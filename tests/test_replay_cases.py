@@ -265,6 +265,19 @@ async def _none():
     return None
 
 
+def test_curiosity_cases_cover_an_event_and_a_missing_fact():
+    from app.brain.persona import PERSONA
+
+    cases = [json.loads(line) for line in runner.CURIOUS.read_text().splitlines() if line.strip()]
+    assert {"en", "hi", "hinglish", "bn"} <= {c["lang"] for c in cases}
+    assert all(c["status"] == "open" and c["source"] == "curiosity" for c in cases)
+    assert any(c["id"].startswith("curious-which-") for c in cases)
+    assert any("gap_asked" in json.dumps(c["assertion"]) for c in cases)
+    assert any("open_loop" in json.dumps(c["assertion"]) for c in cases)
+    assert all("91337bfa" not in json.dumps(c) for c in cases)
+    assert "open_loop kind followup" in PERSONA and "gap_asked" in PERSONA
+
+
 def test_register_cases_cover_the_bookish_lines_and_wait_for_sunny_ship():
     from app.brain.persona import PERSONA, REPLY_FORMAT
 

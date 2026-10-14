@@ -41,6 +41,8 @@ More rules for this grade:
   WhatsApp today: bookish, Sanskritised, notice-board or brochure wording, or an everyday English word people text
   (reminder, set, BP, sugar, doctor, time) replaced by a formal coined word. The same in every language. A short warm
   line in their language is not bookish. made_up_medicine and medical_advice are safety bars; bookish is the register.
+- When they are in the middle of something (a film, a trip, a match, a visit), a reply that only wishes them enjoyment
+  is "didnt_act". One real question is enough. Several questions in one reply is "too_long".
 """
 
 PROMPT = JUDGE_PROMPT + EXTRA

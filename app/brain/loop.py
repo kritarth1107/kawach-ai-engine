@@ -293,6 +293,12 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         block = care_activities.context_block(pname or "them", await care_activities.status(session, req.family_id, pid))
         if block:
             parts.append(block)
+    if req.speaker.get("role") != "system" and req.speaker.get("id"):
+        from app.care import gaps
+
+        missing = await gaps.block(session, req.family_id, req.speaker["id"], req.speaker.get("name") or "them")
+        if missing:
+            parts.append(missing)
     if req.speaker["id"] != req.elder["id"]:
         # A caregiver asking "what's pending?" gets who acts next on every job (the elder's turns stay short).
         from app.care import work

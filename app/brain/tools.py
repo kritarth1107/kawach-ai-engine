@@ -1549,15 +1549,31 @@ async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
 # ── loops ──────────────────────────────────────────────────────────────────────
 
 
+def wake_from_clock(hhmm: str, now: datetime | None = None) -> datetime | None:
+    """Their HH:MM as a wake time: later today, or tomorrow if that minute has passed. None when it is not a clock time."""
+    parts = str(hhmm or "").strip().split(":")
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        return None
+    hour, minute = int(parts[0]), int(parts[1])
+    if hour > 23 or minute > 59:
+        return None
+    local = clock.ist(now).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if local <= clock.ist(now):
+        local += timedelta(days=1)
+    return local
+
+
 @tool(
     "open_loop",
     "Track something unfinished: a question you asked and need an answer to, a follow-up to do later, "
-    "a task in progress. Set check_back_in_minutes to be woken up. if_no_answer decides what happens then: "
+    "a task in progress. Set at (HH:MM, their clock) to be woken when something they are doing ends, or "
+    "check_back_in_minutes. if_no_answer decides what happens then: "
     "ask_again, alert_caregiver (only when the elder not answering is itself a concern, e.g. after a fall or a "
-    "missed critical dose), or dashboard.",
+    "missed critical dose), or dashboard. A follow-up that falls in their night waits until morning.",
     {
         "kind": {"type": "string", "enum": ["question", "followup", "task", "watch"]},
         "title": {"type": "string"},
+        "at": {"type": "string", "description": "When to look again, their clock HH:MM. Today, or tomorrow if that time has passed."},
         "check_back_in_minutes": {"type": "integer", "minimum": 5, "maximum": 10080},
         "if_no_answer": {"type": "string", "enum": ["ask_again", "alert_caregiver", "dashboard"]},
         "owner": {"type": "string", "description": "Member id of who must act next (default: the person it is about on a "
@@ -1568,7 +1584,9 @@ async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
     ["kind", "title"],
 )
 async def open_loop_tool(ctx: TurnCtx, a: dict) -> dict:
-    wake = clock.now() + timedelta(minutes=a["check_back_in_minutes"]) if a.get("check_back_in_minutes") else None
+    wake = wake_from_clock(a["at"]) if a.get("at") else None
+    if wake is None and a.get("check_back_in_minutes"):
+        wake = clock.now() + timedelta(minutes=a["check_back_in_minutes"])
     subject = ctx.subject(a.get("about"))
     ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
     # Every open job has an owner who acts next (live: check-in questions were owned by the scheduler, so nobody was)
@@ -1579,6 +1597,29 @@ async def open_loop_tool(ctx: TurnCtx, a: dict) -> dict:
         dedupe_key=f"{a['kind']}:{slug(a['title'])[:80]}", detail={"next_action": a["next_action"][:160]} if a.get("next_action") else None,
     )
     return {"loop_id": str(loop.id), "wake_at": clock.ist(wake).strftime("%H:%M") if wake else None}
+
+
+@tool(
+    "gap_asked",
+    "Call in the same turn you ask one item from NOT KNOWN YET. A scheduled check-in reads this and will not ask it again today.",
+    {"key": {"type": "string", "description": "The key from NOT KNOWN YET, such as water, meal, sleep, preference, or habit:gym"}},
+    ["key"],
+)
+async def gap_asked(ctx: TurnCtx, a: dict) -> dict:
+    key = str(a.get("key") or "").strip()[:80]
+    if not key:
+        raise ToolRefused("key is the item from NOT KNOWN YET")
+    from app.care.gaps import ledger_topics
+
+    who = ctx.speaker.get("id") or ctx.elder_id
+    topics = ledger_topics(key)
+    for topic in topics:
+        await store.record_event(
+            ctx.session, family_id=ctx.family_id, subject_id=who, kind="checkin",
+            summary=f"Asked in conversation: {topic}", payload={"topic": topic, "sent": True, "via": "conversation"},
+            actor_id=ctx.speaker.get("id"),
+        )
+    return {"noted": key, "topics": topics}
 
 
 @tool(

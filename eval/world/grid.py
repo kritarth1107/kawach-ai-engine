@@ -236,7 +236,8 @@ SHAPE_SHARE = {"plus99_caregiver": 0.10, "same_first_name": 0.03, "no_surname": 
 
 # ── A2.1 Probe topics (rotated so every topic appears in every language) ───────────────────────────────────────────
 PROBE_TOPICS = ["dose_taken", "medicine_change", "reading", "symptom", "habit_report", "new_routine", "whats_due", "order", "ride",
-                "maps_link", "photo", "remind_me", "stop_calling_me", "about_cared_person", "crisis", "joke_idiom", "small_talk"]
+                "maps_link", "photo", "remind_me", "stop_calling_me", "about_cared_person", "crisis", "joke_idiom", "small_talk",
+                "at_event", "missing_context"]
 PROBES_PER_FAMILY = (10, 14)
 
 # ── Names (invented pools by region; never the founder's family) ──────────────────────────────────────────────────

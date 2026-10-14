@@ -528,6 +528,7 @@ async def main_async(cases: list[dict], parallel: int, url: str, cap: float, out
 SEEDS = Path(__file__).parent / "fixtures" / "replay_seeds.jsonl"  # invented families: the hard-turn test's failures of 13 Oct (open)
 MISREAD = Path(__file__).parent / "fixtures" / "misread_2026-10-14.jsonl"  # invented families: brain misreads of 14 Oct (open)
 REGISTER = Path(__file__).parent / "fixtures" / "register_2026-10-14.jsonl"  # bookish vs spoken; runs when sunny-ship answers
+CURIOUS = Path(__file__).parent / "fixtures" / "curiosity_2026-10-15.jsonl"  # an event, and one missing fact (open)
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -538,6 +539,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in MISREAD.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and REGISTER.exists():
         cases += [json.loads(line) for line in REGISTER.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and CURIOUS.exists():
+        cases += [json.loads(line) for line in CURIOUS.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]
@@ -562,9 +565,12 @@ def main(argv: list[str]) -> int:
     out = Path(argv[argv.index("--out") + 1]) if "--out" in argv else Path("runs/replay")
     loaded = load_cases(argv)
     gemini_cases = [c for c in loaded if c.get("when") == "gemini"]
-    rest = [c for c in loaded if c.get("when") != "gemini"]
-    # Register cases always stay in the list. On Bedrock they skip before any model call; on sunny-ship they run first.
-    cases = (gemini_cases + choose(rest, mx)) if on_gemini() else (choose(rest, mx) + gemini_cases)
+    curious = [c for c in loaded if c.get("source") == "curiosity"]
+    rest = [c for c in loaded if c.get("when") != "gemini" and c.get("source") != "curiosity"]
+    picked = choose(rest, mx)
+    # Fixed cases keep the budget. Curiosity cases run next. Register cases skip, with no model call, until sunny-ship answers.
+    body = [c for c in picked if c["status"] == "fixed"] + curious + [c for c in picked if c["status"] != "fixed"]
+    cases = (gemini_cases + body) if on_gemini() else (body + gemini_cases)
     print(f"{len(cases)} replay cases ({sum(1 for c in cases if c['status'] == 'fixed')} fixed, {sum(1 for c in cases if c['status'] == 'open')} open), "
           f"cap ₹{cap:.0f}, {par} at a time", flush=True)
     return asyncio.run(main_async(cases, par, os.getenv("DATABASE_URL") or "", cap, out))
