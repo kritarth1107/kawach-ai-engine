@@ -8,7 +8,9 @@ from datetime import timedelta
 from app.brain import tools
 from app.care import brief, patterns, store
 from app.core import clock
-from app.nutrition import backfill, entries, nudge_hooks, pantry, report
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.nutrition import backfill, entries, nudge_hooks, pantry, report, settings as food_settings
 from app.nutrition.models import NutritionEntry, NutritionFood, NutritionJob, NutritionPantry
 from app.sim.world import SimHost, World
 from tests import nutrition_fakes
@@ -275,3 +277,88 @@ async def test_each_day_says_what_each_meal_had_and_unknown_nutrients_stay_unkno
     r = await report.doctor(db, FAM, NANI["id"], 7)
     assert r["averages"]["sat_fat_g"] is None and r["averages"]["water_ml"] > 0
     assert "Water" not in [f["name"] for f in r["topFoods"]]
+
+
+def test_an_empty_summary_list_means_the_usual_people():
+    empty = {"daily_summary_to": []}
+    assert food_settings.wants_summary(empty, "c1", defaults=["c1", "c2"])
+    assert not food_settings.wants_summary(empty, "stranger", defaults=["c1"])
+    named = {"daily_summary_to": ["c2"]}
+    assert food_settings.wants_summary(named, "c2", defaults=["c1", "c2"])
+    assert not food_settings.wants_summary(named, "c1", defaults=["c1", "c2"])
+
+
+async def test_the_food_block_goes_only_to_the_people_named(db, at, nfake):
+    await log(db, at, "2026-10-14 08:30", EGGS)
+    await call(db, "nutrition_settings", {"for_whom": NANI["id"], "daily_summary_to": [SON["id"]]}, speaker=SON)
+    defaults = [SON["id"], OTHER["id"]]
+    son = await brief.digest(db, SimHost(World()), FAM, NANI, "2026-10-14", to=SON["id"], summary_defaults=defaults)
+    other = await brief.digest(db, SimHost(World()), FAM, NANI, "2026-10-14", to=OTHER["id"], summary_defaults=defaults)
+    assert "FOOD (from the food log" in son and "2 boiled egg" in son
+    assert "FOOD (from the food log" not in other and "DAY: 2026-10-14" in other
+
+
+class _Host:
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def call(self, tool, args, **kw):
+        self.calls.append((tool, args))
+        return {"ok": True}
+
+
+async def _self_care(db, at, when_logged="2026-10-14 08:30"):
+    me = {"id": "s-rep", "name": "Meera", "role": "primary caregiver"}
+    fam = "fam-recap"
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=fam, elder=me, speaker=me, members=[me], message_ref="m-recap")
+    at(when_logged)
+    out, err = await tools.run(c, "log_food", {"items": EGGS})
+    assert not err, out
+    await store.save_roster(db, fam, me, [me])
+    await store.add_turn(db, family_id=fam, thread_id=me["id"], role="user", text="eggs", speaker_id=me["id"])
+    await db.commit()
+    sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+    return me, fam, sessions, await store.roster(db, fam)
+
+
+async def test_a_self_care_user_gets_their_own_food_recap_not_the_caregiver_brief(db, at, nfake, monkeypatch):
+    """N9: someone who manages their own care gets a food note. The caregiver brief still never goes to the person it is about."""
+    me, fam, sessions, roster = await _self_care(db, at)
+    assert brief.self_care(roster)
+    from app.brain import wake
+
+    tries: list[str] = []
+
+    async def silent(sessions_, host_, family_id, prompt, ref, deliver_to=None, still_true=None):
+        tries.append(prompt)
+
+    monkeypatch.setattr(wake, "system_turn", silent)
+    host = _Host()
+    now = at("2026-10-14 18:00")
+    assert await brief.send(sessions, host, roster, me, "2026-10-14", now=now) == "empty"
+    assert await brief.send_own_food(sessions, host, roster, "2026-10-14", now=now) == "waiting"
+    assert len(tries) == 2 and "No advice" in tries[0] and "FOOD (from the food log" in tries[0]
+    assert "SCHEDULE" not in tries[0] and "LEDGER" not in tries[0]
+    assert not [t for t, _a in host.calls if t == "send_template"]
+    waiting = await brief.waiting_for(db, fam, me["id"])
+    assert len(waiting) == 1 and "OWN FOOD RECAP" in waiting[0].detail["text"] and "No advice" in waiting[0].detail["text"]
+    assert await brief.sent_already(db, fam, me["id"], "2026-10-14")
+
+
+async def test_the_food_recap_waits_through_their_night_without_a_message(db, at, nfake, monkeypatch):
+    me, fam, sessions, roster = await _self_care(db, at)
+    from app.brain import wake
+
+    tries: list[str] = []
+
+    async def refused(sessions_, host_, family_id, prompt, ref, deliver_to=None, still_true=None):
+        tries.append(prompt)
+
+    monkeypatch.setattr(wake, "system_turn", refused)
+    host = _Host()
+    now = at("2026-10-14 22:30")
+    assert await brief.send_own_food(sessions, host, roster, "2026-10-14", now=now) == "waiting"
+    assert tries == []
+    assert not [t for t, _a in host.calls if t in ("send_template", "send_whatsapp")]
+    waiting = await brief.waiting_for(db, fam, me["id"])
+    assert len(waiting) == 1 and "OWN FOOD RECAP" in waiting[0].detail["text"]

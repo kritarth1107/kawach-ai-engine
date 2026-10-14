@@ -140,7 +140,8 @@ async def language_setting(session: AsyncSession, family_id: str, person: str) -
     return language.normalise(row.value) if row and isinstance(row.value, dict) else None
 
 
-async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: str, *, now: datetime | None = None) -> str:
+async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: str, *, now: datetime | None = None,
+                 to: str | None = None, summary_defaults: list[str] | None = None) -> str:
     """The day as data, for Saheli to write the brief from (and the fallback if she sends nothing)."""
     from app.tasks.models import Task
 
@@ -198,7 +199,7 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
         from app.nutrition import report as food_report
 
         async with session.begin_nested():
-            food = await food_report.brief_block(session, family_id, eid, day, now=now)
+            food = await food_report.brief_block(session, family_id, eid, day, now=now, to=to, summary_defaults=summary_defaults)
         if food:
             parts.append(food)
     except Exception:  # noqa: BLE001 — the rest of the brief still goes
@@ -267,7 +268,8 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
                                  payload={"to": cg, "day": day, "waiting": True, "why": why})
 
     async with sessions() as session:
-        text = await digest(session, host, fid, roster.elder, day, now=now)
+        text = await digest(session, host, fid, roster.elder, day, now=now, to=cg,
+                            summary_defaults=[m["id"] for m in caregivers(roster)])
         open_now = on_request or await chat_open(host, session, fid, cg, now)
         if not open_now:
             await wait_for_them(session, text, "chat closed")
@@ -316,6 +318,95 @@ def caregivers(roster) -> list[dict]:
             and any(r in str(m.get("role") or "").lower() for r in CAREGIVER_ROLES)]
 
 
+def self_care(roster) -> bool:
+    """The person cared for manages their own care (their role is a caregiver's). They never get the caregiver brief."""
+    elder = roster.elder or {}
+    if any(r in str(elder.get("role") or "").lower() for r in CAREGIVER_ROLES):
+        return True
+    eid = elder.get("id")
+    return any(m.get("id") == eid and any(r in str(m.get("role") or "").lower() for r in CAREGIVER_ROLES)
+               for m in (roster.members or []))
+
+
+async def send_own_food(sessions: async_sessionmaker, host, roster, day: str, *, now: datetime | None = None) -> str:
+    """A self-care user's own food recap at brief time. Not the caregiver brief, which never goes to the person it is about.
+    Nothing goes out during their night. Returns 'sent', 'waiting' or 'empty'."""
+    from app.brain.wake import quiet_for, system_turn
+    from app.care import checkins
+    from app.nutrition import report as food_report
+
+    now = now or clock.now()
+    elder = roster.elder or {}
+    eid = elder.get("id")
+    food = ""
+    night = False
+    if not eid or not self_care(roster):
+        return "empty"
+    fid = roster.family_id
+    name = elder.get("name") or "them"
+
+    async def hold(session: AsyncSession, food: str, why: str) -> None:
+        await store.open_loop(session, family_id=fid, subject_id=eid, kind="brief", owner_id=eid,
+                              title=f"Food recap for {day}: goes to {name} when they next write on WhatsApp",
+                              detail={"day": day, "text": food_report.recap_waiting_text(elder, day, food)[:6000], "max_wakes": 0},
+                              alert_rule="dashboard", dedupe_key=f"foodrecap:{eid}:{day}")
+        await store.record_event(session, family_id=fid, subject_id=eid, kind="daily_brief",
+                                 summary=f"Food recap for {day} waiting for {name} ({why})",
+                                 payload={"to": eid, "day": day, "waiting": True, "why": why, "food": True})
+
+    async with sessions() as session:
+        async with session.begin_nested():
+            food = await food_report.brief_block(session, fid, eid, day, now=now, to=eid, summary_defaults=[eid])
+        if not food:
+            return "empty"
+        night, _ = await quiet_for(session, fid, eid, now)
+        open_now = (not night) and await chat_open(host, session, fid, eid, now)
+        if night or not open_now:
+            await hold(session, food, "their night" if night else "chat closed")
+            await session.commit()
+            if not night:
+                saved = (await language_setting(session, fid, eid)) or {}
+                try:
+                    await host.call("send_template", {"to": eid, "template": {
+                        "purpose": "summary", "params": [(str(name).split() or ["-"])[0]],
+                        **({"lang": saved["language"]} if saved.get("language") else {})}},
+                        family_id=fid.removeprefix("shadow:"), subject_id=eid, actor_id=eid)
+                except Exception:  # noqa: BLE001 — the recap still waits for their next message
+                    logger.warning("food recap template failed family=%s", fid)
+            return "waiting"
+    ref = f"foodrecap:{eid}:{day}"
+    prompt = food_report.recap_prompt(elder, day, food)
+    started = clock.now()
+
+    async def went(session: AsyncSession) -> bool:
+        return await checkins.went_out(session, fid, eid, ref, started - timedelta(seconds=5))
+
+    async def mark_sent(session: AsyncSession) -> None:
+        await store.record_event(session, family_id=fid, subject_id=eid, kind="daily_brief",
+                                 summary=f"Food recap for {day} to {name}",
+                                 payload={"to": eid, "day": day, "food": True})
+        await session.commit()
+
+    await system_turn(sessions, host, fid, prompt, ref, deliver_to=eid)
+    async with sessions() as session:
+        if await went(session):
+            await mark_sent(session)
+            return "sent"
+        night, _ = await quiet_for(session, fid, eid, now)
+    if not night:
+        prompt = "(Your last try sent nothing: write the food recap now with send_message, in plain words, no advice.)\n" + prompt
+        await system_turn(sessions, host, fid, prompt, ref, deliver_to=eid)
+        async with sessions() as session:
+            if await went(session):
+                await mark_sent(session)
+                return "sent"
+            night, _ = await quiet_for(session, fid, eid)
+    async with sessions() as session:
+        await hold(session, food, "their night" if night else "not written")
+        await session.commit()
+    return "waiting"
+
+
 async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = None) -> dict:
     """Every few minutes: send each caregiver's brief when its time comes (once a day each)."""
     now = now or clock.now()
@@ -337,6 +428,22 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                 stats["sent" if out == "sent" else "waiting"] += 1
             except Exception:  # noqa: BLE001 — one caregiver's brief must not stop the others
                 logger.exception("daily brief failed family=%s", r.family_id)
+        eid = (r.elder or {}).get("id")
+        if not eid or not self_care(r):
+            continue
+        try:
+            async with sessions() as session:
+                at = await brief_time(session, r.family_id, eid, eid)
+                day = due_day(at, now) if at else None
+                if not day or await sent_already(session, r.family_id, eid, day):
+                    continue
+            out = await send_own_food(sessions, host_for(r.family_id), r, day, now=now)
+            if out == "empty":
+                continue
+            stats["due"] += 1
+            stats["sent" if out == "sent" else "waiting"] += 1
+        except Exception:  # noqa: BLE001 — one person's recap must not stop the others
+            logger.exception("food recap failed family=%s", r.family_id)
     return stats
 
 

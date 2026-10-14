@@ -283,14 +283,21 @@ async def view(session: AsyncSession, family_id: str, subject_id: str, *, day: s
 # ── the nightly brief (plan §N9, founder Q7) ─────────────────────────────────
 
 
-async def brief_block(session: AsyncSession, family_id: str, subject_id: str, day: str, *, now: datetime | None = None) -> str:
-    """The FOOD block of a caregiver's nightly brief: meals with items, totals against targets, water, meals not logged,
-    delivered food not yet confirmed, strict rules gone past, and what was only estimated. Empty when tracking is off or
-    there is nothing at all."""
+async def brief_block(session: AsyncSession, family_id: str, subject_id: str, day: str, *, now: datetime | None = None,
+                      to: str | None = None, summary_defaults: list[str] | None = None) -> str:
+    """The FOOD block of a nightly note: meals with items, totals against targets, water, meals not logged,
+    delivered food not yet confirmed, strict rules gone past, and what was only estimated. Empty when tracking is off,
+    when this recipient is not meant to hear it, or when there is nothing at all.
+
+    ``to`` left out keeps the block (callers that have not chosen a recipient yet). With ``to`` set, an empty
+    ``daily_summary_to`` includes the usual people in ``summary_defaults``; a list includes only those ids.
+    """
     from app.nutrition import agent
 
     s = await settings.get(session, family_id, subject_id)
     if not settings.tracked(s):
+        return ""
+    if to is not None and not settings.wants_summary(s, to, defaults=summary_defaults or []):
         return ""
     rows = await entries.on_day(session, family_id, subject_id, day)
     tg, _ = await targets.current(session, family_id, subject_id)
@@ -332,6 +339,22 @@ async def brief_block(session: AsyncSession, family_id: str, subject_id: str, da
         lines.append(f"  delivered, not yet confirmed eaten: {w['what']}" + (f" from {w['restaurant']}" if w.get("restaurant") else "")
                      + " (nothing logged until someone says)")
     return "\n".join(lines)
+
+
+def recap_prompt(person: dict, day: str, food: str) -> str:
+    """What Saheli writes for a self-care user's own food. Numbers only from the block; no advice of her own."""
+    name = person.get("name") or "them"
+    return (f"[Food recap] {name}'s own food for {day} (they manage their own care). Write it to them with send_message: "
+            f"one short note of what they logged, the kcal and protein, water, meals not logged, and any strict target "
+            f"gone past. Only the FOOD block below. No advice, no judgement, no medical opinion. Numbers only as written; "
+            f"an estimate stays an estimate. If the block is empty, send nothing. Then reply none.\n\n{food}")
+
+
+def recap_waiting_text(person: dict, day: str, food: str) -> str:
+    """Held until they next write. Food only, so the waiting brief never carries the caregiver digest."""
+    name = person.get("name") or "them"
+    return (f"OWN FOOD RECAP for {name} on {day}. This is their own food, not a caregiver brief about someone else. "
+            f"Write only a short food note from the FOOD block. No advice, no medicines, nothing that is not in the block.\n\n{food}")
 
 
 # ── the doctor report (plan §N10, founder Q8: only when the caregiver shares it) ──

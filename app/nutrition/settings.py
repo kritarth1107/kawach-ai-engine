@@ -50,13 +50,26 @@ def tracked(s: dict) -> bool:
     return s.get("tracking") != "off"
 
 
+def wants_summary(s: dict, recipient_id: str, *, defaults: list[str]) -> bool:
+    """Who hears this person's food in a nightly note.
+
+    An empty ``daily_summary_to`` means the usual people (the caregivers who already get the brief, and a self-care
+    user about themselves). A list means only those person ids.
+    """
+    chosen = [str(x) for x in (s.get("daily_summary_to") or []) if x]
+    if chosen:
+        return str(recipient_id) in chosen
+    return str(recipient_id) in {str(x) for x in defaults if x}
+
+
 def sentence(s: dict) -> str:
     level = {"off": "Food tracking is off", "counts": "Saheli keeps count of food (counts only)",
              "full": "Saheli keeps track of food and nutrition"}[s["tracking"]]
     ask = {"adaptive": "asks after meals and learns when", "per_meal": "asks after each main meal not logged",
            "recap": "asks once in the evening", "off": "does not ask about meals"}[s["ask"]]
     sizes = "; own sizes: " + ", ".join(f"{k.split('_')[0]} {v:g} {k.split('_')[1]}" for k, v in s["sizes"].items()) if s["sizes"] else ""
-    return f"{level}; {ask}{sizes}"
+    who = "; daily summary to " + ", ".join(s["daily_summary_to"]) if s.get("daily_summary_to") else ""
+    return f"{level}; {ask}{sizes}{who}"
 
 
 async def save(session: AsyncSession, *, family_id: str, person_id: str, changes: dict, source_kind: str, stated_by: str | None,

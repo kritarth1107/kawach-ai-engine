@@ -3942,7 +3942,8 @@ async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
         roster = await store.roster(ctx.session, ctx.family_id)
         if not roster or not roster.elder:
             raise ToolRefused("There is no one in the family's care yet to brief about.")
-        text = await brief.digest(ctx.session, ctx.host, ctx.family_id, roster.elder, clock.ist_day())
+        text = await brief.digest(ctx.session, ctx.host, ctx.family_id, roster.elder, clock.ist_day(), to=me,
+                                  summary_defaults=[m["id"] for m in brief.caregivers(roster)])
         return {"result": "write it now", "brief_data": text,
                 "how": "Write the brief for them now as your reply (short sections with bold titles; only this data; a dose not "
                        "marked is 'not marked'); no send_message needed."}
