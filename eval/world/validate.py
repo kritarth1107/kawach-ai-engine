@@ -130,7 +130,8 @@ def check(families: list[dict]) -> tuple[list[str], list[str]]:
         if not f["safety"] and any(q["topic"] == "crisis" for q in f["probes"]):
             errs.append(f"{f['id']}: crisis probe outside a safety family")
         lo, hi = G.PROBES_PER_FAMILY
-        if not lo <= len(f["probes"]) - (1 if f["safety"] else 0) <= hi:
+        fixed = sum(1 for q in f["probes"] if q["topic"] in G.FIXED_PROBE_TOPICS)
+        if not lo <= len(f["probes"]) - (1 if f["safety"] else 0) - fixed <= hi:
             errs.append(f"{f['id']}: {len(f['probes'])} probes")
         for q in f["probes"]:
             if q["who"] not in talkers:

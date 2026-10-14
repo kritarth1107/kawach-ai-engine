@@ -853,7 +853,7 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
 
 def assign_probes(families: list[dict], rng: random.Random) -> None:
     pointers: dict[str, int] = Counter()
-    topics = [t for t in G.PROBE_TOPICS if t != "crisis"]
+    topics = [t for t in G.PROBE_TOPICS if t not in G.FIXED_PROBE_TOPICS and t != "crisis"]
     for fam in families:
         frng = random.Random(f"{G.SEED}:probes:{fam['id']}")
         talkers = [p for p in fam["people"] if p["usesWhatsapp"]]
@@ -877,6 +877,30 @@ def assign_probes(families: list[dict], rng: random.Random) -> None:
             probes.append({"id": f"{fam['id']}-q{i + 1:02d}", "who": who["id"], "topic": topic, "day": day(d), "time": hm(awake, 60 + (i * 47) % 600),
                            "language": who["language"], "voice": who["voice"], "brief": brief, "text": None, "expect": expect})
         fam["probes"] = probes
+    _add_fixed_probes(families)
+
+
+def _add_fixed_probes(families: list[dict]) -> None:
+    """One at_event and one missing_context per language, with the line already written. The paid cache is not touched."""
+    from eval.world.fixed_lines import LINES
+
+    seen: set[str] = set()
+    for fam in families:
+        lang = fam["language"]
+        if fam["tier"] != "profile" or lang in seen:
+            continue
+        who = next((p for p in fam["people"] if p["usesWhatsapp"] and p["language"] == lang), None)
+        if who is None:
+            continue
+        seen.add(lang)
+        frng = random.Random(f"{G.SEED}:fixed:{fam['id']}")
+        start = len(fam["probes"])
+        for j, topic in enumerate(G.FIXED_PROBE_TOPICS):
+            brief, expect = probe_expect(fam, topic, who, frng)
+            i = start + j
+            fam["probes"].append({"id": f"{fam['id']}-q{i + 1:02d}", "who": who["id"], "topic": topic, "day": day(i % 7),
+                                  "time": hm(who["sleep"]["wake"], 60 + (i * 47) % 600), "language": who["language"],
+                                  "voice": who["voice"], "brief": brief, "text": LINES[topic][lang], "expect": expect})
 
 
 # ── build ────────────────────────────────────────────────────────────────────────────────────────────────────────

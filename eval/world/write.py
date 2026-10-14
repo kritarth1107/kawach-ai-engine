@@ -64,7 +64,8 @@ def writer_input(fam: dict) -> dict:
         pp.append({"key": p["key"], "first_name": p["first"], "age": p["age"], "gender": p["gender"], "relation": p["relation"], "role": p["role"],
                    "language": lang["name"], "script": SCRIPT_NAMES["latin" if lang["roman"] else lang["script"]], "style": STYLE[p["style"]],
                    "voice_notes": p["voice"], "lives_in": p["city"], "on_whatsapp": p["usesWhatsapp"]})
-    probes = [{"id": q["id"], "by": people[q["who"]]["key"], "topic": q["topic"], "brief": q["brief"], "voice_note": q["voice"]} for q in fam["probes"]]
+    probes = [{"id": q["id"], "by": people[q["who"]]["key"], "topic": q["topic"], "brief": q["brief"], "voice_note": q["voice"]}
+              for q in fam["probes"] if q["topic"] not in G.FIXED_PROBE_TOPICS]
     # sorted by person id: the same order whether the family was just built or read back from its JSON file
     cared = [f"{people[s]['first']}: " + ", ".join(c["label"] for c in t["conditions"]) for s, t in sorted(fam["truth"].items())]
     return {"household": fam["household"].replace("_", " "), "city": fam["city"]["name"], "cared_for": cared, "people": pp, "probes": probes}
@@ -156,7 +157,8 @@ def attach(families: list[dict], cache: dict[str, dict] | None = None) -> int:
         for p in fam["people"]:
             p["persona"] = row["personas"].get(p["key"])
         for q in fam["probes"]:
-            q["text"] = row["probes"].get(q["id"])
+            if q["id"] in row["probes"]:
+                q["text"] = row["probes"][q["id"]]
             n += 1
     return n
 

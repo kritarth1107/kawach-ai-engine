@@ -235,9 +235,12 @@ SHAPE_SHARE = {"plus99_caregiver": 0.10, "same_first_name": 0.03, "no_surname": 
                "events_300": 0.01, "paused": 0.02, "window_closed": 0.15, "template_language_missing": 0.0, "unknown_enum": 0.02}
 
 # ── A2.1 Probe topics (rotated so every topic appears in every language) ───────────────────────────────────────────
+# at_event and missing_context are fixed lines, not part of the paid writer. Putting them in the rotation would
+# change every family's probes and throw away the cached texts.
+FIXED_PROBE_TOPICS = ("at_event", "missing_context")
 PROBE_TOPICS = ["dose_taken", "medicine_change", "reading", "symptom", "habit_report", "new_routine", "whats_due", "order", "ride",
                 "maps_link", "photo", "remind_me", "stop_calling_me", "about_cared_person", "crisis", "joke_idiom", "small_talk",
-                "at_event", "missing_context"]
+                *FIXED_PROBE_TOPICS]
 PROBES_PER_FAMILY = (10, 14)
 
 # ── Names (invented pools by region; never the founder's family) ──────────────────────────────────────────────────
