@@ -710,6 +710,14 @@ def code_in_reply(text: str) -> bool:
     return bool(CODE.search(text or ""))
 
 
+TOOL_CHROME = re.compile(r"\s*\((?:Options|Reply)\s*:[^)]*\)", re.I)
+
+
+def strip_tool_chrome(text: str) -> str:
+    """Drop labels the model copies from a tool result ("(Options: …)", "(Reply: …)"). The person's words are not touched."""
+    return TOOL_CHROME.sub("", text or "").strip()
+
+
 def leaked_tool_call(text: str, tool_names: Iterable[str] = ()) -> bool:
     """A tool call written into the reply as text ("default_api:remember{...}", "remember{"domain": ...}"): nothing was done,
     and the person would see code (world probe run 2026-10-13, a Marwari naming request)."""

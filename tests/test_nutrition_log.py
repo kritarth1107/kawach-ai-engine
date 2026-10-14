@@ -177,6 +177,18 @@ async def test_order_food_is_logged_only_after_a_yes_or_part(db, at, nfake):
     assert await agent.order_waiting(db, FAM, MAA["id"]) == []  # both answered
 
 
+async def test_one_person_is_not_asked_who_ate_it(db, at, nfake):
+    at("2026-10-14 13:00")
+    nfake.decisions["chapati"] = {"countable": True, "default_unit": "piece"}
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=MAA, speaker=MAA, members=[],
+                      message_ref=f"m-{uuid.uuid4().hex[:6]}")
+    out, err = await tools.run(c, "log_food", {"for_whom": "", "items": [{"name": "chapati", "quantity": 1, "unit": "piece"}]})
+    r = json.loads(out)
+    assert not err and r["result"] == "saved", r
+    rows = await active(db)
+    assert rows and rows[0].subject_id == MAA["id"]
+
+
 async def test_who_ate_it_is_asked_when_unclear_and_the_caregiver_logs_for_her(db, at, nfake):
     at("2026-10-14 13:00")
     nfake.decisions["chapati"] = {"countable": True, "default_unit": "piece"}

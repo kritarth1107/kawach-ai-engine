@@ -747,8 +747,9 @@ def _food_day(v: str | None) -> str | None:
     "'for/four' has no quantity: leave it out and the agent asks). A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. If the result has "
-    "needs, ask exactly that one question and pass the answer with answer_to. Say only what the result says ('say', "
-    "'today'); never a number of your own.",
+    "needs, say exactly the result's say sentence and pass the answer with answer_to. Never read options, ids, or the words "
+    "Options or Reply aloud. Say only what the result says ('say', 'today'); never a number of your own, and never a health "
+    "warning of your own (caffeine, sugar, blood pressure, heart, see a doctor) unless the result itself has allergy or deviation.",
     {
         "items": {"type": "array", "description": "One entry per food or drink", "items": {"type": "object", "properties": {
             "name": {"type": "string", "description": "The food in English as commonly known, with preparation; dish names kept"},

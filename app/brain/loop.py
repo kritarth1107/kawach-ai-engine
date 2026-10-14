@@ -853,6 +853,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
     brain_role = role_for(situation)
+    # A photo or video stills: the vision model looks. The text brain cannot open them and used to say so.
+    if req.images and "vision" in router.configured_roles():
+        brain_role = "vision"
     effort = BRAIN_EFFORT
     if BRAIN_EFFORT_HARD != BRAIN_EFFORT and not is_system:
         try:
@@ -945,7 +948,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
 
-    final = (reply.text if reply else degraded).strip()
+    final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).

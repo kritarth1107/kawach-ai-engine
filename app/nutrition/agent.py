@@ -265,8 +265,15 @@ class NutritionAgent:
                 job.ask = ask
 
         if ask.get("for_whom") == "":
-            names = [self.name_of(p) for p in who.names][:5]
-            return self._question(job, "who_ate", "Who ate it?", names)
+            # One person in the household is not a guess. Asking them "who ate it" only repeats.
+            people = [(i, n) for i, n in who.names.items() if n]
+            if len(people) > 1:
+                return self._question(job, "who_ate", "Who ate it?", [n for _, n in people][:5])
+            if len(people) == 1:
+                job.subject_id = people[0][0]
+            ask = dict(ask)
+            ask.pop("for_whom", None)
+            job.ask = ask
 
         tracking = (await settings.get(s, who.family_id, job.subject_id))["tracking"]
         sizes = (await settings.get(s, who.family_id, job.subject_id))["sizes"]
@@ -419,10 +426,11 @@ class NutritionAgent:
 
     def _question(self, job: NutritionJob, reason: str, question: str, options: list[str] | None = None, item: str | None = None) -> dict:
         n = jobs.ask_needs(job, reason, question, options, item)
-        return {"result": "needs_input", "job_id": str(job.id), "needs": [{**n, "job_id": str(job.id)}],
-                "how": ("Ask only this one question, in their language and script, with the options as choices; nothing is saved yet. "
-                        f"When they answer, call log_food with answer_to=\"{job.id}\" and the answer as fields (the full items if they "
-                        "changed; unsure=true if they don't know the amount; cancel=true if they say never mind).")}
+        return {"result": "needs_input", "job_id": str(job.id), "say": question, "needs": [{**n, "job_id": str(job.id)}],
+                "how": ("Say only the say sentence, in their language and script. Do not mention options, ids, or the words Options or Reply, "
+                        "and do not add a health warning of your own. Nothing is saved yet. When they answer, call log_food with "
+                        f"answer_to=\"{job.id}\" and the answer as fields (the full items if they changed; unsure=true if they don't know "
+                        "the amount; cancel=true if they say never mind). If this message already answers it, call log_food now and do not ask.")}
 
     async def _quantity_options(self, subject: str, food: NutritionFood) -> list[str]:
         opts: list[str] = []
@@ -649,8 +657,8 @@ async def tell(sessions, host_for, job: NutritionJob, out: dict) -> None:
                   f"send_message (to {job.requested_by}), in their language, numbers exactly as given. Then reply none.")
     else:
         n = (out.get("needs") or [{}])[0]
-        prompt = (f"[Nutrition update] To save the food {job.requested_by} told you about, ask them this one question with send_message (to "
-                  f"{job.requested_by}), in their language: \"{n.get('question')}\" (options: {', '.join(n.get('options') or [])}). When they answer, "
+        prompt = (f"[Nutrition update] To save the food {job.requested_by} told you about, ask them only this, with send_message (to "
+                  f"{job.requested_by}), in their language: \"{n.get('question')}\". Do not read out options or ids. When they answer, "
                   f"call log_food with answer_to=\"{job.id}\". Then reply none.")
     try:
         await system_turn(sessions, host, job.family_id, prompt, f"nutrition:{job.id}:{out.get('result')}", deliver_to=job.requested_by)
