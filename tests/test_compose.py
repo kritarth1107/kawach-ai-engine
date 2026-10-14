@@ -63,6 +63,16 @@ async def test_a_repeat_is_rejected_and_written_again_and_twice_means_the_stored
     assert out == {"text": None, "fresh": False}, "nothing new: the backend sends its stored text"
 
 
+async def test_the_stored_slogan_is_not_sent_again_word_for_word(db, at, writer):
+    at("2026-10-14 20:00")
+    await store.save_roster(db, FAM, ME, [ME])
+    stored = "Every hour is a new victory. Skip this cigarette and keep your streak going!"
+    writer([f"Reminder: {stored}", stored])
+    out = await compose.reminder_text(db, family_id=FAM, subject_id=ME["id"], purpose=stored, at="20:00", recent=[stored])
+    assert out == {"text": None, "fresh": False}
+    assert "everyday" in compose.PROMPT.lower() and "English stays English" in compose.PROMPT
+
+
 def test_fresh_means_not_a_recent_line_and_not_the_same_opening_as_the_last():
     assert compose.fresh("Time for Metformin 500 mg", ["Metformin time!", "Your Metformin 500 mg now"])
     assert not compose.fresh("metformin time", ["Metformin time!"])

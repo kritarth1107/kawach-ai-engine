@@ -374,6 +374,9 @@ def test_the_check_rejects_repeats_long_texts_two_questions_wrong_script_and_inv
     ok = {"option_id": "o1", "text": "What made you smile this evening?"}
     assert nudges.check(ok, ctx()) == []
     assert any("too close" in p for p in nudges.check({**ok, "text": "How was the walk in the park this morning?!"}, ctx()))
+    assert any("last few days" in p for p in nudges.check(ok, ctx(sent_texts=["What made you smile this evening?"])))
+    assert nudges.check(ok, ctx(sent_texts=["A different line about the garden and nothing else"])) == []
+    assert any("Reminder:" in p for p in nudges.check({**ok, "text": "Reminder: skip this hour and keep going"}, ctx()))
     assert any("too long" in p for p in nudges.check({**ok, "text": "x" * 300}, ctx()))
     assert any("more than one question" in p for p in nudges.check({**ok, "text": "Did you eat? Did you walk?"}, ctx()))
     assert any("reading" in p for p in nudges.check({**ok, "text": "Your BP was 150/95 yesterday, well done."}, ctx()))

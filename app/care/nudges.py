@@ -195,6 +195,16 @@ async def ledger_rows(session: AsyncSession, family_id: str, person: str, limit:
     )).scalars())
 
 
+async def sent_lines(session: AsyncSession, family_id: str, person: str, since: datetime) -> list[str]:
+    """Texts actually sent to this person since `since` (a repeat of one of these does not go out again)."""
+    rows = (await session.execute(
+        select(NudgeLedger.text).where(NudgeLedger.family_id == family_id, NudgeLedger.person_id == person,
+                                       NudgeLedger.status == "sent", NudgeLedger.sent_at >= since, NudgeLedger.text.isnot(None))
+        .order_by(NudgeLedger.sent_at.desc()).limit(80)
+    )).scalars()
+    return [t for t in rows if t]
+
+
 async def read_clock(session: AsyncSession, family_id: str, person: str, gate: dict, now: datetime, mode: str) -> Clock:
     last_user, last_bot = await engine_times(session, family_id, person)
     last_in = max([t for t in (last_user, _iso(gate.get("last_inbound_at"))) if t], default=None)
@@ -353,6 +363,7 @@ class Context:
     never: list[str] = field(default_factory=list)  # what the family said is wrong (rejected facts), never used or asked
     memory: str = ""  # what the no-invention check counts as known (not Saheli's own earlier lines)
     theirs: list[str] = field(default_factory=list)  # what they wrote lately
+    sent_texts: list[str] = field(default_factory=list)  # lines sent to them in the last few days: do not send one again
 
 
 def _hm(v) -> int | None:
@@ -365,6 +376,26 @@ def _hm(v) -> int | None:
 
 def _norm(t: str) -> str:
     return re.sub(r"\W+", " ", (t or "").lower()).strip()
+
+
+def _said(t: str) -> str:
+    return _norm(re.sub(r"(?i)^reminder:\s*", "", t or ""))
+
+
+def _repeated(text: str, earlier: list[str]) -> str | None:
+    """The earlier line this repeats, word for word or nearly, whatever they answered."""
+    from app.brain import guards
+
+    n = _said(text)
+    if len(n) < 8:
+        return None
+    for old in earlier:
+        o = _said(old)
+        if not o:
+            continue
+        if n == o or guards.similar(text, old) >= 0.85:
+            return old
+    return None
 
 
 async def last_messages(session: AsyncSession, family_id: str, person: str, gate: dict, n: int = 5) -> list[tuple[datetime, str, str]]:
@@ -465,6 +496,7 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     if extra:
         lines.append(extra)
     profiles = await writing_profiles(session, fid, [{"id": p.id}])
+    earlier = await sent_lines(session, fid, p.id, now - timedelta(days=3))
     saheli = [t for _, who, t in recent if who == "Saheli"] + [r.text for r in reversed(nudges) if r.text]
     known = "\n".join([*known_facts, *notes, *coming, *(t for _, _, t in recent), *(o.why for o in options), local.strftime("%A %d %B %H:%M")])
     memory = "\n".join([*known_facts, *notes, *coming, *(o.why for o in options), *([mood.summary] if mood else []),
@@ -472,7 +504,7 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     return Context(person=p, text="\n".join(lines), known=known, recent=[t for _, _, t in recent], saheli_recent=saheli[-15:],
                    profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run,
                    avoid=names["avoid"], never=rejected_facts.terms(wrong), memory=memory,
-                   theirs=[t for _, who, t in recent if who == "them"])
+                   theirs=[t for _, who, t in recent if who == "them"], sent_texts=earlier)
 
 
 async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime, *, facts: list, acts: list[dict], schedule: dict,
@@ -629,9 +661,11 @@ Rules:
   word for them.
 - Medicines: never remind them of a dose, a time or how to take it, and never advise; their reminders do that. Only a
   "doses" option may ask whether today's past items were done.
-- Fresh: a different opening and angle from the last messages and your last nudges. Never repeat or contradict the last
-  messages; if the last chat ended on an open thread, pick it up.
-- Their language, script and dialect exactly as WRITE IN says; the name they like; emoji only if their messages use them.
+- Fresh: a different opening and angle from the last messages and your last nudges. Never repeat a line they already got
+  in the last few days, and never contradict the last messages; if the last chat ended on an open thread, pick it up.
+- Their language, script and dialect exactly as WRITE IN says. English stays English. Never switch language. The name
+  they like; emoji only if their messages use them. Everyday words, the way a person texts now: no "Reminder:" label,
+  no poster line, no slogan.
 - Safe: only what you were given (never invent a number, name, time, event or reading, and never put a day or time on
   something unless the context gives it: not "yesterday's gym" when it does not say yesterday); no medical advice; nothing
   alarming; nothing about another person that they would not want shared. Warm, never abrupt.
@@ -686,6 +720,11 @@ def check(draft: dict, ctx: Context) -> list[str]:
         problems.append(f"too long: {len(text)} characters, the limit is {ctx.max_len}")
     if text.count("?") + text.count("？") > 1:
         problems.append("more than one question")
+    if _said(text) == "reminder" or text.lower().lstrip().startswith("reminder:"):
+        problems.append('no "Reminder:" label; write it the way a person would text')
+    again = _repeated(text, ctx.sent_texts)
+    if again:
+        problems.append(f"this line already went to them in the last few days: \"{again[:80]}\"")
     dup = guards.duplicate_message(text, [(t, False) for t in ctx.saheli_recent], near=0.6)
     if dup:
         problems.append(f"too close to an earlier message: \"{dup[:80]}\"")

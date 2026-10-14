@@ -4,7 +4,7 @@ creative, should not pre-generate the message; generate it at the time of sendin
 The backend's reminder scheduler asks here just before it sends. The line is written for this person and this moment:
 their language and script, how they like messages (their saved style, emoji if they asked), the time of day, what the
 reminder is for, and the last lines sent for it, which it must not repeat. A medicine's name and dose stay exact.
-If nothing usable comes back, the backend sends the stored text, so a reminder is never lost.
+If nothing usable comes back, a medicine reminder still uses its stored text. A habit does not: the canned line is skipped.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ Rules:
 - Say clearly what the reminder is for. Keep a medicine's name and dose exactly as given.
 - Write it fresh: a different opening, wording and angle from every earlier line listed (not a rephrase of one). Vary the
   approach: a light question, encouragement, a small fact, a callback to their goal, humour when it suits them.
-- Short: one or two lines, the way a caring friend texts. No greeting by name every time, no "Reminder:" label.
-- Their language and script exactly as told. Emoji only if their style says they like them.
-- Never shame, nag or sound like a bot.
+- Short: one or two lines, the way a person texts a friend now. Everyday words. No greeting by name every time, no "Reminder:" label, no poster line and no slogan ("every hour is a new victory", "keep your streak going").
+- Their saved language and script exactly as LANGUAGE says. English stays English. Never switch language or script.
+- Never shame, nag, or sound like a notice, a book, or a bot.
 - Use the context when it fits (Kavach NUdge's plan §1.7): a streak, something from the last messages ("3 hours clean since
   lunch — that walk idea worked?"), but never contradict the last messages and never invent anything not given here.
 Return only JSON: {"text": "..."}"""
@@ -50,16 +50,20 @@ def _norm(t: str) -> str:
     return re.sub(r"\W+", " ", (t or "").lower()).strip()
 
 
+def _said(t: str) -> str:
+    return _norm(re.sub(r"(?i)^reminder:\s*", "", t or ""))
+
+
 def fresh(text: str, recent: list[str]) -> bool:
-    """Not one of the recent lines, and not opening the same way as the last one."""
-    n = _norm(text)
-    if not n:
+    """Not one of the recent lines (the stored line included), and not opening the same way as any of them."""
+    n = _said(text)
+    if not n or n == "reminder":
         return False
-    seen = [_norm(r) for r in recent if r]
+    seen = [_said(r) for r in recent if r]
     if n in seen:
         return False
-    first = " ".join(n.split()[:3])
-    return not (seen and first and " ".join(seen[0].split()[:3]) == first)
+    first = " ".join(n.split()[:4])
+    return not any(first and first == " ".join(s.split()[:4]) for s in seen)
 
 
 async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: str, purpose: str, at: str | None = None,
@@ -129,7 +133,7 @@ async def reminder_text(session: AsyncSession, *, family_id: str, subject_id: st
                          + "); say only what the context says.")
             text = ""
             continue
-        if fresh(text, recent):
+        if fresh(text, [*recent, purpose]):
             break
         text = ""
     return {"text": text[:600] if text else None, "fresh": bool(text)}
