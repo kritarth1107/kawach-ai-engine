@@ -179,6 +179,47 @@ async def options(session: AsyncSession, p, rows: list[NudgeLedger], now: dateti
     return due[-1:]  # the latest meal only
 
 
+GOAL_FROM, GOAL_UNTIL = 15 * 60, 19 * 60 + 30  # afternoon into early evening
+
+
+async def goal_option(session: AsyncSession, p, rows: list[NudgeLedger], now: datetime, *, meals_mode: str | None) -> dict | None:
+    """One line toward a target they already have, only after two meals are logged, and only naming foods they already eat.
+    A maximum ('no more than') is never turned into 'you had too much'."""
+    if meals_mode not in ("shadow", "on") or not p.cared:
+        return None
+    hk = hooks()
+    if hk is None:
+        return None
+    nh, settings = hk
+    s = await settings.get(session, p.family_id, p.id)
+    if s.get("tracking") == "off" or s.get("ask") == "off":
+        return None
+    today = clock.ist_day(now)
+    sent = [r for r in rows if r.status in ("sent", "shadow")]
+    if any(r.kind == "goal" and clock.ist_day(r.sent_at or r.planned_at) == today for r in sent):
+        return None
+    if any(r.kind == "doses" and now - (r.sent_at or r.planned_at) < DOSE_GAP for r in sent):
+        return None
+    local = clock.ist(now)
+    m_now = local.hour * 60 + local.minute
+    if not GOAL_FROM <= m_now <= GOAL_UNTIL:
+        return None
+    prog = await nh.progress(session, p.family_id, p.id, day=today)
+    if int(prog.get("meals_logged") or 0) < 2:
+        return None
+    open_ = [t for t in (prog.get("targets") or []) if not t.get("met") and (t.get("left") or 0) > 0 and t.get("sense") in ("min", "target")]
+    if not open_:
+        return None
+    order = {"protein_g": 0, "energy_kcal": 1}
+    t = sorted(open_, key=lambda x: order.get(str(x.get("nutrient")), 5))[0]
+    foods = [str(n).strip() for n in (prog.get("own_foods") or []) if str(n).strip()][:6]
+    food_line = (" Name only foods they already eat: " + ", ".join(foods) + ". Name no other food.") if foods else " Do not name any food."
+    label = str(t.get("label") or t.get("nutrient") or "target")
+    return {"kind": "goal", "about": f"goal:{today}:{t.get('nutrient')}", "fld": f"goal:{t.get('nutrient')}",
+            "why": (f"their {label} so far is {t.get('so_far')} of {t.get('target')} {t.get('unit')} (a target already on their record). "
+                    "One short line, no diet advice, no 'too much', nothing about medicines." + food_line)}
+
+
 def _since(v) -> datetime | None:
     try:
         d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))

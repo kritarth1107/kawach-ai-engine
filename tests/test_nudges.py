@@ -872,7 +872,7 @@ class Nutrition:
         return self.pending
 
     async def progress(self, session, fid, pid, day=None):
-        return {"meals_logged": self.meals_logged}
+        return {"meals_logged": self.meals_logged, "targets": [], "own_foods": [], **getattr(self, "progress_body", {})}
 
     async def learn_meal_habits(self, session, fid, pid):
         self.habits += 1
@@ -1021,6 +1021,59 @@ async def test_unanswered_meal_questions_move_to_an_evening_recap_then_pause_eac
     at("2026-10-20 09:00")
     assert await meal_nudges.learn_mode(db, FAM, MAA["id"], await nudges.ledger_rows(db, FAM, MAA["id"]), nudges.clock.now()) == "paused"
     assert await meal_opts(db, at, "2026-10-20 21:40") == []
+
+
+async def goal_opts(db, at, when, meals_mode="on"):
+    at(when)
+    p = nudges.Person(FAM, MAA["id"], MAA["name"], MAA["role"], True, True)
+    ck = nudges.Clock(None, None, 0, False, rows=await nudges.ledger_rows(db, FAM, MAA["id"]), gate={"meals_mode": meals_mode})
+    return [o for o in await nudges.candidates(db, p, ck, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+            if o.kind == "goal"]
+
+
+async def test_a_goal_line_only_after_two_logged_meals_and_only_their_own_foods(db, at, sessions, writer, food):
+    await meal_day(db, at)
+    food.progress_body = {"meals_logged": 1, "targets": [
+        {"nutrient": "protein_g", "label": "Protein", "so_far": 40, "target": 90, "unit": "g", "left": 50, "met": False, "sense": "min"}],
+        "own_foods": ["dal", "paneer"]}
+    assert await goal_opts(db, at, "2026-10-14 16:40") == []  # one meal logged is not enough
+    food.progress_body["meals_logged"] = 2
+    assert await goal_opts(db, at, "2026-10-14 14:30") == []  # before the afternoon
+    got = await goal_opts(db, at, "2026-10-14 16:40")
+    assert [o.field for o in got] == ["goal:protein_g"] and got[0].about_ref == "goal:2026-10-14:protein_g"
+    assert "40" in got[0].why and "90" in got[0].why and "dal" in got[0].why and "paneer" in got[0].why
+    assert "Name no other food" in got[0].why and "no diet advice" in got[0].why
+    assert await goal_opts(db, at, "2026-10-14 16:40", meals_mode="off") == []
+    food.progress_body["targets"] = [{"nutrient": "sugar_g", "label": "Sugar", "so_far": 40, "target": 25, "unit": "g",
+                                      "left": None, "met": False, "sense": "max"}]
+    assert await goal_opts(db, at, "2026-10-14 16:40") == []  # a maximum is not turned into 'too much'
+    food.progress_body["targets"] = [
+        {"nutrient": "protein_g", "label": "Protein", "so_far": 40, "target": 90, "unit": "g", "left": 50, "met": False, "sense": "min"}]
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    await nudges._log(db, p, nudges.clock.now(), kind="goal", status="sent", text="protein so far", fld="goal:protein_g",
+                      about="goal:2026-10-14:protein_g", sent=True)
+    await db.commit()
+    assert await goal_opts(db, at, "2026-10-14 17:10") == []  # once today
+
+
+async def test_a_water_reminder_follow_up_is_saved_as_water(db, at, sessions, writer):
+    at("2026-10-14 17:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="activity", key="activity:water_intake",
+                           value={"type": "water_intake", "kind": "habit", "label": "Drinking water"}, text="Drinking water",
+                           source_kind="caregiver_said")
+    await db.commit()
+    host = SimHost()
+    at("2026-10-14 18:00")
+    await reminder(db, "2026-10-14 18:00", rid="rem-w", about="activity:water_intake")
+    at("2026-10-14 18:05")
+    out = await nudges.reminder_followups(sessions, lambda f: host, mode="on")
+    assert out["sent"] == 1
+    row = (await rows(db))[-1]
+    assert row.field == "water:count"
+    hint = await nudges.reply_hint(db, FAM, MAA["id"])
+    assert "log_food" in hint and "water" in hint
 
 
 async def test_a_caregiver_is_asked_once_in_the_evening_about_an_elder_who_does_not_write(db, at, sessions, writer, food):

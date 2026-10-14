@@ -72,6 +72,7 @@ class Persona:
     replies: str  # always | half | never | daily
     flows: list[tuple[str, str]] = field(default_factory=list)  # (from, to) HH:MM: a ride or order being booked
     quit_reminder: bool = False  # an hourly custom reminder 14:00–23:00 linked to a quit activity
+    meals: bool = False  # nudge.meals on: meal asks use the real nutrition hooks against an empty food log
 
     @property
     def family(self) -> str:
@@ -84,6 +85,8 @@ PERSONAS = [
     Persona("caregiver_abroad", {"id": "p-abroad", "name": "Neha", "role": "primary caregiver"}, False, "11:30", "19:00", "en", "daily"),
     Persona("never_replies", {"id": "p-never", "name": "Gopal", "role": "elder"}, True, "22:00", "06:30", "en", "never"),
     Persona("mid_order", {"id": "p-order", "name": "Leela", "role": "elder"}, True, "22:00", "06:00", "en", "half", flows=[("10:00", "12:00")]),
+    Persona("meal_self", {"id": "p-meals", "name": "Meera", "role": "elder"}, True, "22:00", "07:00", "en", "half", meals=True),
+    Persona("meal_late", {"id": "p-meal-late", "name": "Ravi", "role": "elder"}, True, "03:00", "13:30", "en", "half", meals=True),
 ]
 CARED_FOR = {"caregiver_abroad": {"id": "p-abroad-mother", "name": "Usha", "role": "elder"}}
 
@@ -150,9 +153,13 @@ async def run(days: int, tick: int, url: str, real: bool, max_inr: float) -> dic
     old_routes = os.environ.get("MODEL_ROUTES")
     if not real:
         router.register_provider("fakewriter", FakeWriter())
-        os.environ["MODEL_ROUTES"] = json.dumps({"worker": ["fakewriter:m"]})
+        # judge_fast too: the no-invention check and the reviewer otherwise call a real model (the sim is not a paid run)
+        os.environ["MODEL_ROUTES"] = json.dumps({"worker": ["fakewriter:m"], "judge_fast": ["fakewriter:m"]})
     router.reset_breakers()
     hosts = {p.family: SimHost(World()) for p in PERSONAS}
+    for p in PERSONAS:
+        if p.meals:
+            hosts[p.family].world.meals_mode = "on"
     for p in PERSONAS:
         await seed(sessions, p)
     timeline: dict[str, list] = defaultdict(list)
@@ -252,6 +259,22 @@ async def check(sessions, timeline: dict[str, list], rows: list, days: int) -> d
                 fails.append(f"{key}: more than 2 early-bird messages in a morning")
             if p.replies == "never" and any(n > 5 for n in per_day.values()):
                 fails.append(f"{key}: {dict(per_day)} nudges a day to someone who never answers (the ladder allows 4, then 1 a morning)")
+            if p.meals:
+                meal_rows = [r for r in rows if r.person_id == p.person["id"] and r.kind == "meal" and r.status == "sent" and r.sent_at]
+                per_day_meals: dict[str, int] = defaultdict(int)
+                wh, wm = (int(x) for x in p.wake.split(":"))
+                wake_m = wh * 60 + wm
+                for r in meal_rows:
+                    local_m = clock.ist(r.sent_at)
+                    per_day_meals[local_m.strftime("%Y-%m-%d")] += 1
+                    if local_m.hour * 60 + local_m.minute < wake_m:
+                        fails.append(f"{key}: a meal ask before wake at {local_m:%a %H:%M}")
+                if any(n > 3 for n in per_day_meals.values()):
+                    fails.append(f"{key}: {dict(per_day_meals)} meal asks in a day (at most 3)")
+                doses = [r.sent_at for r in rows if r.person_id == p.person["id"] and r.kind == "doses" and r.status == "sent" and r.sent_at]
+                for r in meal_rows:
+                    if any(abs((r.sent_at - d).total_seconds()) < 30 * 60 for d in doses):
+                        fails.append(f"{key}: a meal ask within 30 min of a medicine question")
             if p.quit_reminder:
                 rems = [e for e in events if e[1] == "reminder"]
                 for at, _, _ in rems:

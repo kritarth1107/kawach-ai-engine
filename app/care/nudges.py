@@ -60,7 +60,7 @@ REVIEW_BATCH = 15
 WINDOW = timedelta(hours=24) - timedelta(minutes=10)  # WhatsApp's free-message window, with the backend's margin
 SENT = ("sent", "shadow")  # a shadow nudge counts as sent for the clock and the ladder in shadow mode
 PRIORITY = {"doses": 9, "follow_up": 7, "upcoming": 6, "habit": 6, "collect": 4, "reflect": 4, "know": 3, "delight": 3,
-            "early_bird": 5, "reminder_followup": 8, "meal": 7}
+            "early_bird": 5, "reminder_followup": 8, "meal": 7, "goal": 5}
 SLOTS = (("morning", 5 * 60, 12 * 60), ("afternoon", 12 * 60, 17 * 60), ("evening", 17 * 60, 24 * 60))
 COLLECT_EVERY = {"feelings": timedelta(days=1), "sleep": timedelta(days=2), "readings": timedelta(days=4),
                  "weight": timedelta(days=20), "reports": timedelta(days=7), "water": timedelta(days=2), "meals": timedelta(days=2)}
@@ -272,7 +272,7 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         return Due(p, empty, reason="learned_hour", mode=mode or cached_mode())  # they rarely answer at this hour (learned, visible)
     base = (CARED_EVERY if p.cared else CAREGIVER_EVERY) * (2 if lr.fewer else 1)
     # a meal question written in its own shadow (nudge.meals) went to nobody: it never holds back the hour's real nudge
-    engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT and not (r.kind == "meal" and r.status == "shadow")))
+    engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT and not (r.kind in ("meal", "goal") and r.status == "shadow")))
                        if t], default=None)
     if engine_last and now - engine_last < base:
         return Due(p, empty, reason="talking" if last_user and now - last_user < base else "cadence")
@@ -584,9 +584,12 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
 
     roster = await store.roster(session, fid)
     elder = (roster.elder or {}) if roster else None
-    for m in await meal_nudges.options(session, p, ck.rows, now, acts=acts, elder=elder,
-                                       meals_mode=str(ck.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower()):
+    meals_mode = str(ck.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower()
+    for m in await meal_nudges.options(session, p, ck.rows, now, acts=acts, elder=elder, meals_mode=meals_mode):
         add(m["kind"], m["why"], about=m["about"], fld=m["fld"])
+    g = await meal_nudges.goal_option(session, p, ck.rows, now, meals_mode=meals_mode)
+    if g:
+        add(g["kind"], g["why"], about=g["about"], fld=g["fld"])
     return out
 
 
@@ -794,8 +797,8 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     fld = opt.field if opt else None
     about = about or (opt.about_ref if opt else None)
     text = str(draft.get("text") or "").strip()
-    if kind == "meal" and meals_mode != "on":
-        mode = "shadow"  # meal asks have their own switch (nudge.meals): in shadow they are written and logged, never sent
+    if kind in ("meal", "goal") and meals_mode != "on":
+        mode = "shadow"  # meal and goal asks have their own switch (nudge.meals): in shadow they are written and logged, never sent
     async with sessions() as session:
         await _lock_family(session, p.family_id)
         if recheck is not None and not await recheck(session):
@@ -918,6 +921,15 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
 # ── reminder follow-ups (§1.6, §3.9) ──────────────────────────────────────────────────────────────────────────────
 
 
+def _followup_field(act: dict | None, pay: dict) -> str:
+    """Where the answer is saved. A water habit is structured (catalogue type water_intake), so the count goes to log_food."""
+    if act and act.get("type") == "water_intake":
+        return "water:count"
+    if act:
+        return f"activity:{act['type']}:{'count' if act.get('kind') == 'quit' else 'done'}"
+    return f"reminder:{pay.get('reminderId')}"
+
+
 async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: datetime | None = None, mode: str | None = None) -> dict:
     """A reminder that is not about a medicine, delivered 5–10 minutes ago, with no message from them and nothing else sent
     since: one short data question tied to what the reminder is for (the model judges the match from the reminder and its
@@ -995,8 +1007,7 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                 if act:
                     why += f"; it is about their {act['kind']} \"{act['label']}\"" + (f", streak {act['streak']}" if act["streak"] > 1 else "")
                 opt = Option(id="o1", kind="reminder_followup", why=why, about_ref=about,
-                             field=f"activity:{act['type']}:{'count' if act['kind'] == 'quit' else 'done'}" if act else f"reminder:{pay.get('reminderId')}",
-                             score=PRIORITY["reminder_followup"])
+                             field=_followup_field(act, pay), score=PRIORITY["reminder_followup"])
                 ck = await read_clock(session, ev.family_id, person.id, gate, now, m)
                 ctx = await build_context(session, host, person, ck, now, only=[opt])
             draft, problems = await write_and_check(ctx)
@@ -1036,7 +1047,7 @@ def followup_ladder_skips(rows: list[NudgeLedger]) -> bool:
 
 # ── replies ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
+SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("goal:", "log_food"), ("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
              ("know:", "remember"), ("feelings", "log_event mood (and log_event symptom for a problem)"), ("sleep", "log_event"),
              ("reminder:", "log_activity or remember, whichever fits"))
 
@@ -1066,6 +1077,14 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
                 + (f"; meal={slot}" if slot != "day" else "") + (f"; for_whom={whom}" if whom else "")
                 + "). If the amount is unclear, the tool returns one question with options: ask only that. If it does not answer it, "
                 "just answer what they wrote.")
+    if str(fld).startswith("water:"):
+        return (f"YOUR LAST MESSAGE TO THEM asked how much water: \"{(last.text or '')[:160]}\". If they answered, pass it to log_food "
+                "(one item, name water, quantity and unit as they said, unit glass or ml). If the amount is unclear, the tool returns one "
+                "question with options: ask only that. If it does not answer it, just answer what they wrote.")
+    if str(fld).startswith("goal:"):
+        return (f"YOUR LAST MESSAGE TO THEM mentioned a target they already have{about}: \"{(last.text or '')[:160]}\". If they said what they "
+                "ate, pass it to log_food (items with quantity and unit as they said). Do not suggest a food they did not already eat. If it does "
+                "not answer it, just answer what they wrote.")
     return (f"YOUR LAST MESSAGE TO THEM asked about {fld}{about}: \"{(last.text or '')[:160]}\". If what they wrote answers it, save it "
             f"with {tool}; if it does not, just answer what they wrote.")
 
