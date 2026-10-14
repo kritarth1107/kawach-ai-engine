@@ -462,7 +462,8 @@ def voice_block(req: TurnRequest) -> str:
         return ""
     lines = [
         "THIS MESSAGE WAS A VOICE NOTE. The text is a machine transcript and can have wrong words, especially names, "
-        "medicines and numbers. Your reply is sent as a voice note (read aloud) and as text, so write it to be heard: "
+        "medicines and numbers. Reply in the language HOW EACH PERSON WRITES gives. The transcript's script is not a "
+        "request to switch. Your reply is sent as a voice note (read aloud) and as text, so write it to be heard: "
         "short spoken sentences, no emoji, no lists, no links, no symbols; say times and doses simply ('subah aath baje', "
         "'aadhi goli').",
     ]
@@ -1014,6 +1015,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             ctx.known.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
+        if (not is_system and req.speaker.get("id")
+                and any(r["name"] == "log_food" and not r["is_error"] for r in results)
+                and not any(a.get("ok") and a["tool"] == "gap_asked" for a in ctx.actions)):
+            from app.care import gaps
+
+            note = gaps.refresh_note(await gaps.block(session, req.family_id, req.speaker["id"], req.speaker.get("name") or "them"))
+            if note:
+                msgs.append({"role": "user", "content": [{"type": "text", "text": note}]})
 
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):

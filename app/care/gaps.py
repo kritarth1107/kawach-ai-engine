@@ -97,6 +97,14 @@ def _water(payload: dict | None, nutrients: dict | None) -> bool:
     return "water" in tags
 
 
+def refresh_note(block: str) -> str:
+    """After a meal is saved this turn, the opening list still said 'no meal'. Water is now the gap. Empty otherwise."""
+    if "\n- water:" not in f"\n{block}":
+        return ""
+    return (block + "\nThe meal is saved now, so ask the water one, in one question, and call gap_asked with key water. "
+            "Do not ask a second question.")
+
+
 def render(name: str, items: list[tuple[str, str]]) -> str:
     if not items:
         return ""

@@ -283,7 +283,7 @@ async def run_once(sessions: async_sessionmaker, case: dict, n: int) -> dict:
     host = SimHost()
     async with sessions() as s:
         res = await run_turn(s, host, TurnRequest(family_id=fid, elder=dict(ctx.get("elder") or {}), speaker=sp, members=[dict(m) for m in ctx.get("members") or []],
-                                                   text=msg, message_ref=f"replay-{uuid.uuid4().hex[:8]}"))
+                                                   text=msg, modality=ctx.get("modality") or "text", message_ref=f"replay-{uuid.uuid4().hex[:8]}"))
         await s.commit()
     return await verdict(case, res)
 

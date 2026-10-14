@@ -4,7 +4,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from app.brain.tools import wake_from_clock
-from app.care.gaps import _slept, asked_keys, food_gaps, ledger_topics, nudge_covers, pick, render
+from app.care.gaps import _slept, asked_keys, food_gaps, ledger_topics, nudge_covers, pick, refresh_note, render
 from app.core import clock
 
 
@@ -31,6 +31,10 @@ def test_a_nudge_sent_today_covers_that_meal_water_or_sleep():
     left = [("water", "no water"), ("sleep", "when")]
     assert pick(left, {"water", "sleep"}) == []
     assert "gap_asked" in render("Riyan", left)
+    water = render("Riyan", [("water", "no water logged today, and a meal is")])
+    assert "key water" in refresh_note(water)
+    assert refresh_note(render("Riyan", [("meal", "no meal logged today")])) == ""
+    assert refresh_note("") == ""
 
 
 def test_a_follow_up_wakes_at_their_clock_time():
