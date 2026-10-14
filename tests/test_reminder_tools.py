@@ -166,6 +166,17 @@ async def test_change_reminder_skips_stops_and_changes_by_id(db):
     assert err and "does not go out" in out["refused"]
 
 
+async def test_a_failed_change_does_not_create_a_second_reminder(db):
+    h = Host({"update_reminder": {"ok": False, "error": "Reminder not found."}})
+    c = ctx(db, SON, h)
+    out, err = await tools.run(c, "change_reminder", {"id": "nope", "action": "change", "times": ["02:00"], "repeat": "daily", "about": SON["id"]})
+    refused = json.loads(out)
+    assert err and "Do not call set_reminder" in refused["refused"]
+    out, err = await tools.run(c, "set_reminder", {"text": "Take it", "times": ["02:00"], "repeat": "daily", "about": SON["id"]})
+    assert err and "could not change it" in json.loads(out)["refused"]
+    assert not any(call[0] == "create_reminder" for call in h.calls)
+
+
 def test_reminder_writes_are_not_run_in_shadow_and_saheli_knows_the_tools():
     assert {"create_reminder", "cancel_reminder", "skip_reminder", "update_reminder"} <= WRITE_TOOLS
     assert "change_reminder" in persona.PERSONA and "reminders tool" in persona.PERSONA

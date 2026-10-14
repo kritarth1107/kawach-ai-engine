@@ -82,3 +82,22 @@ async def test_a_message_saheli_starts_follows_the_saved_setting(db, at):
     assert "Write it in Hindi with a light Marwari touch" in line and "not the language of an older chat" in line
     assert await wake.saved_language_line(db, FAM, "nobody") == ""
     assert await wake.saved_language_line(db, FAM, None) == ""
+
+
+async def test_a_voice_transcript_cannot_change_the_saved_language(db, at):
+    at("2026-10-14 14:32")
+    elder = {"id": MAA, "name": "Sarla", "role": "elder"}
+    await store.save_roster(db, FAM, elder, [elder])
+    await store.write_fact(db, family_id=FAM, subject_id=MAA, domain="language", key="language:preferred",
+                           value={"language": "en"}, text="Speaks English", source_kind="elder_said", replace=True)
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=elder, speaker=elder, members=[elder], voice=True)
+    out, err = await tools.run(c, "language_preference", {"about": MAA, "language": "hi"})
+    assert err and "transcript" in json.loads(out)["refused"]
+    assert (await store.active_fact(db, FAM, MAA, "language:preferred")).value.get("language") == "en"
+    out, err = await tools.run(c, "remember", {"domain": "language", "name": "Hindi", "details": {"language": "hi"},
+                                               "sentence": "Speaks Hindi", "about": MAA})
+    assert err
+    assert (await store.active_fact(db, FAM, MAA, "language:preferred")).value.get("language") == "en"
+    out, err = await tools.run(c, "language_preference", {"about": MAA, "language": "hi", "asked": True})
+    assert not err, out
+    assert (await store.active_fact(db, FAM, MAA, "language:preferred")).value.get("language") == "hi"

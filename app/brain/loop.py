@@ -172,13 +172,28 @@ async def writing_profiles(session: AsyncSession, family_id: str, people: list[d
     for p in people:
         recent = (await data.turns(p["id"]))[-16:] if data else await store.recent_turns(session, family_id, p["id"], limit=16)
         turns = [t for t in recent if t.role == "user"][-8:]
-        prof = guards.profile([t.text for t in turns]) or {}
+        # A voice-note transcript is the speech engine's guess. It must not teach how they write, and it must not
+        # override a saved language (live 2026-10-14: English speech transcribed as Devanagari, then every reply in Hindi).
+        typed = [t for t in turns if not (t.meta or {}).get("voice")]
+        prof = guards.profile([t.text for t in typed]) or {}
         facts = await data.facts(p["id"]) if data else await store.facts(session, family_id, p["id"])
         saved = next((f for f in facts if f.domain == "language" and f.status == "active"), None)
+        saved_speech = language.normalise(saved.value) if saved else {}
         if saved:
-            prof = {"script": prof.get("script"), "roman": prof.get("roman"), "saved": language.normalise(saved.value)}
+            prof = {"script": prof.get("script"), "roman": prof.get("roman"), "saved": saved_speech}
+        latest = turns[-1] if turns else None
+        if latest and (latest.meta or {}).get("voice") and not saved_speech.get("language"):
+            heard = guards.script_of(latest.text)
+            learned = prof.get("script")
+            # A transcript answers this turn in its script only when we have not already learned another way they write.
+            # English they typed is not replaced by a Devanagari transcript (live 2026-10-14).
+            if heard and heard != "latin" and learned in (None, heard):
+                prof = {**prof, "now": heard, "transcript": True}
+            elif typed:
+                prof["now"] = guards.script_of(typed[-1].text)
+        elif typed and (prof or saved):
+            prof["now"] = guards.script_of(typed[-1].text)  # what they typed wins over the saved script for this reply
         if prof and turns:
-            prof["now"] = guards.script_of(turns[-1].text)  # the script of their latest message wins over the saved one
             mine = [t.text for t in recent if t.role == "assistant" and (t.text or "").strip() not in ("", "none")][-5:]
             if replied := guards.usual_script(mine):
                 prof["replied"] = replied  # the script Saheli has been writing to them in (keeps a short reply in it)
@@ -856,7 +871,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
 
     is_system = req.speaker.get("role") == "system"
     profiles = await writing_profiles(session, req.family_id, [req.elder, *[m for m in req.members if m.get("id") != req.elder["id"]]], data)
-    if not is_system:
+    if not is_system and not req.voice:
+        # A transcript's script is not how they write. Only a message they typed can fill in a profile.
         cur = guards.profile([req.text])
         if cur and req.speaker["id"] not in profiles:
             profiles[req.speaker["id"]] = cur
@@ -881,6 +897,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         tool_texts=tool_texts, known=[fam_block, known_record, known_turn, dynamic, req.text, *[_msg_text(m) for m in msgs]],
         meds=await medicine_times(data), profiles=profiles,
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
+        voice=req.voice,
         location=req.location, images=list(req.images or []),
     )
     ctx.known.append("")  # tool results are appended as they come

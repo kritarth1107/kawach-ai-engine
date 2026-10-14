@@ -69,6 +69,37 @@ def test_no_bare_name_opener_mid_conversation():
     assert g.tidy_opening(other, greeted_today=True, mid_conversation=True, names=names) == other
 
 
+def test_a_transcript_does_not_override_a_saved_language():
+    p = {"script": "latin", "roman": "english", "saved": {"language": "en"}, "now": "devanagari", "transcript": True}
+    assert g.target(p) == "latin"
+    assert not g.language_problems(ENGLISH_DRAFT, p)
+    assert g.language_problems(HINDI_DRAFT, p)
+    assert "they just wrote" not in g.describe(p)
+
+
+async def test_a_voice_transcript_does_not_become_how_they_write(db, at):
+    at("2026-10-14 14:32")
+    await store.add_turn(db, family_id=FAM, thread_id=ROHAN["id"], role="user",
+                         text="Please remind me about the walk tonight", meta={"channel": "whatsapp"})
+    await store.add_turn(db, family_id=FAM, thread_id=ROHAN["id"], role="user", text="मैंने अंग्रेजी में बात की",
+                         meta={"voice": True})
+    await db.commit()
+    prof = (await writing_profiles(db, FAM, [ROHAN]))[ROHAN["id"]]
+    assert prof.get("transcript") is not True and prof["now"] == "latin", prof
+    assert g.target(prof) == "latin" and not g.language_problems(ENGLISH_DRAFT, prof)
+    # nothing saved, and the only message is a transcript: answered in that script this turn, not learned as how they type
+    await store.add_turn(db, family_id=FAM, thread_id=SARLA["id"], role="user", text="दवाई ले ली क्या", meta={"voice": True})
+    await db.commit()
+    heard = (await writing_profiles(db, FAM, [SARLA]))[SARLA["id"]]
+    assert heard.get("transcript") is True and g.target(heard) == "devanagari", heard
+    await store.write_fact(db, family_id=FAM, subject_id=ROHAN["id"], domain="language", key="language:preferred",
+                           value={"language": "en"}, text="Speaks English", source_kind="elder_said", replace=True)
+    await db.commit()
+    saved = (await writing_profiles(db, FAM, [ROHAN]))[ROHAN["id"]]
+    assert saved["saved"]["language"] == "en" and saved.get("transcript") is not True, saved
+    assert g.target(saved) == "latin" and not g.language_problems(ENGLISH_DRAFT, saved)
+
+
 async def test_profiles_read_the_script_of_saheli_replies(db, at):
     at("2026-10-11 19:30")
     for role, text in [("user", "Can you remind me about the gym at 7:30"), ("assistant", "Done, I will remind you at 7:30 PM."),

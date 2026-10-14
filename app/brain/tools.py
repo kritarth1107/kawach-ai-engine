@@ -61,6 +61,8 @@ class TurnCtx:
     confirmed: bool = False
     # The message was a voice note the speech engine was not sure about: health changes from it wait for a confirmation.
     voice_unsure: bool = False
+    # The message is a voice-note transcript. Its script and the speech engine's language are not a request to switch.
+    voice: bool = False
     # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
     messaged: set = field(default_factory=set)
     once: set = field(default_factory=set)  # side effects already done in this turn (a pin saved to a place)
@@ -280,6 +282,9 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     if domain == "language":
         from app.care import language
 
+        if ctx.is_system or ctx.voice:
+            raise ToolRefused("Only a person sets a language, by saying so. A voice-note transcript or a guess does not. "
+                              "If their words ask to switch, use language_preference with asked true.")
         current = next((f for f in await store.facts(ctx.session, ctx.family_id, subject) if f.domain == "language" and f.status == "active"), None)
         speech = language.merge(current.value if current else {}, {**details, "language": details.get("language") or a["name"]})
         if speech.get("language"):
@@ -1233,6 +1238,9 @@ async def set_reminder(ctx: TurnCtx, a: dict) -> dict:
         # live 2026-10-12: "remind me in next 1 hour" became a reminder every night
         raise ToolRefused("Say whether it repeats: repeat once for a one-off ('in an hour', 'tonight at 9', 'tomorrow at 7'), "
                           "daily or weekly only if they asked for it to repeat ('every day', 'every Monday').")
+    if any(act.get("tool") == "change_reminder" and not act.get("ok") for act in ctx.actions):
+        raise ToolRefused("The change to the existing reminder did not happen. Tell them you could not change it. "
+                          "Do not create another reminder.")
     subject = ctx.subject(a.get("about"))
     args: dict = {"text": a["text"], "schedule": _reminder_schedule(a)}
     if a.get("item"):
@@ -1449,7 +1457,8 @@ async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
             raise ToolRefused("Say what to change: the words, times, days, date, until, every_hour or item.")
         out = await ctx.host.call("update_reminder", args, **kw)
     if isinstance(out, dict) and out.get("ok") is False:
-        raise ToolRefused(f"Not done: {out.get('error')}")
+        raise ToolRefused(f"Not done: {out.get('error')} Tell them you could not change it. Do not call set_reminder to make "
+                          "a new one. If this is a medicine's dose time, change that medicine's times with remember.")
     out = out or {}
     r = out.get("reminder") or {}
     return {"result": {"stop": "stopped", "skip": "skipped", "unskip": "unskipped"}.get(action, "changed"),
@@ -3864,7 +3873,9 @@ async def sing(ctx: TurnCtx, a: dict) -> dict:
     "language_preference",
     "The language, dialect and script Saheli uses with a person. Use when someone tells you how they or their parent "
     "speak ('Maa Marwari bolti hain', 'Papa ko Maithili mein bolo', 'amma speaks Tamil', 'English letters mein likho', "
-    "'Hindi mein likho'), or when a person clearly writes in a dialect that is not saved yet. about: whose setting it is "
+    "'Hindi mein likho'). Never because a voice-note transcript came out in another script, or because the speech engine "
+    "guessed a language: those do not change a saved language. On a voice note, set asked true only when their words ask "
+    "to switch. about: whose setting it is "
     "(the speaker's own id for 'talk to me in…', the care recipient's id for 'Maa ko … mein bolo'). language: hi, en, bn, "
     "mr, ta, te, gu, kn, ml, pa, or, as, ur, ne, kok (or the name); a language named without a dialect means it as usually "
     "spoken, so 'Hindi mein baat karo' clears an old dialect. dialect: Marwari, Mewari, Shekhawati, Haryanvi, Bhojpuri, "
@@ -3877,7 +3888,8 @@ async def sing(ctx: TurnCtx, a: dict) -> dict:
      "mix": {"type": "string", "enum": ["light", "full"],
              "description": "With a dialect: light = mostly the main language with a few dialect words ('thodi Marwari wali Hindi', "
                             "'Hindi with a slight Marwari touch'); full = the dialect itself (the default)"},
-     "about": {"type": "string", "description": "Whose setting: a person id from HOUSEHOLD (the speaker's own id when they mean themselves)"}},
+     "about": {"type": "string", "description": "Whose setting: a person id from HOUSEHOLD (the speaker's own id when they mean themselves)"},
+     "asked": {"type": "boolean", "description": "On a voice note: true only when their words ask to change language, dialect or script. Never because of the transcript's script or the speech engine's language."}},
     ["about"],
 )
 async def language_preference(ctx: TurnCtx, a: dict) -> dict:
@@ -3899,6 +3911,10 @@ async def language_preference(ctx: TurnCtx, a: dict) -> dict:
     new = language.merge(now, a)
     if not new.get("language"):
         raise ToolRefused("I did not recognise that language or dialect; ask them which one.")
+    if ctx.voice and language.normalise(new) != now and a.get("asked") is not True:
+        raise ToolRefused("This message is a voice-note transcript. Its script and the speech engine's language are not a "
+                          "request to switch. Keep the saved language. Call this again with asked true only when their words "
+                          "ask to change it.")
     return await _save_language(ctx, subject, new)
 
 

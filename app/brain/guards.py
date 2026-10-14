@@ -161,8 +161,8 @@ def target(p: dict | None) -> str | None:
         return "latin"
     by_saved = language.script_for(saved)
     now = p.get("now")
-    if by_saved and now and now != "latin" and now != by_saved:
-        return now  # they just wrote in another Indian script (Gujarati to a Marwari setting): answer in what they wrote
+    if by_saved and now and now != "latin" and now != by_saved and not p.get("transcript"):
+        return now  # they just typed in another Indian script (Gujarati to a Marwari setting): answer in what they typed
     if by_saved:
         return by_saved
     if now and now != "latin":
