@@ -106,6 +106,9 @@ def test_code_checks_on_her_reply():
     assert runner.code_check({"type": "must_tool", "tools": ["send_message"]}, "", ["remember"])
     assert runner.code_check({"type": "max_sentences", "n": 1}, "One. Two.", [])
     assert runner.code_check({"type": "medicine_time", "medicine": "Metformin", "times": ["08:00"]}, "Metformin 9:00 pm pe lijiye", [])
+    assert runner.code_check({"type": "separate_brief", "marker": "17:00 check-in"}, "Four.", [], ["Four."])
+    assert runner.code_check({"type": "separate_brief", "marker": "17:00 check-in"}, "Four.", [],
+                             ["Four.", "No reply to the 17:00 check-in."]) is None
 
 
 async def test_two_of_three_and_a_reintroduced_bug_blocks(monkeypatch, tmp_path):

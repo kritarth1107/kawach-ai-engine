@@ -1706,7 +1706,12 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     # Wrong script blocks the message; a few English words in it are only advice (never worth not passing it on).
     problems += [x for x in guards.language_problems(text, ctx.profiles.get(to), who="they") if not x.startswith("do not mix scripts")]
     now = clock.ist()
-    problems += guards.ungrounded(text, known="\n".join(ctx.known), fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
+    known = "\n".join(ctx.known)
+    problems += guards.ungrounded(text, known=known, fresh=ctx.user_text, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute)
+    if str(ctx.message_ref or "").startswith(("brief:", "foodrecap:")):
+        for phrase in guards.brief_mood_claims(text, known):
+            problems.append(f"the brief says '{phrase}', which is not in the day's data: do not say how they feel, or that they are fine, "
+                            "stable, peaceful, or free of symptoms, unless the data says it")
     return problems
 
 

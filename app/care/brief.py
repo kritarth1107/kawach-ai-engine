@@ -182,7 +182,10 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
             lines.append(f"  {i.get('time')} {i.get('title')}{dose}: {st}{who}")
         parts.append("SCHEDULE (each dose or item and what happened):\n" + "\n".join(lines))
 
-    events = [e for e in await store.events(session, family_id, eid, day=day) if e.kind not in ("dose_corrected", "checkin")]
+    all_events = [e for e in await store.events(session, family_id, eid, day=day) if e.kind != "dose_corrected"]
+    # A check-in that went out, and whether they wrote back, is part of the day. One that never went out is not.
+    checkins = [e for e in all_events if e.kind == "checkin" and (e.payload or {}).get("sent") is not False]
+    events = [e for e in all_events if e.kind != "checkin"]
     if events:
         parts.append("LEDGER (reminders sent, doses, readings, symptoms, mood, alerts, orders; IST):\n"
                      + "\n".join(f"  {clock.ist(e.at).strftime('%H:%M')} {e.kind}: {e.summary[:200]}" for e in events[-40:]))
@@ -195,6 +198,15 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
                      + "\n".join(f"  {clock.ist(at).strftime('%H:%M')} {str(t)[:160]}" for at, t in said[-25:]))
     else:
         parts.append(f"{name} did not write to Saheli today.")
+    if checkins:
+        lines = []
+        said_at = [at for at, _t in said]
+        for i, e in enumerate(checkins):
+            nxt = checkins[i + 1].at if i + 1 < len(checkins) else end
+            replied = any(e.at < at < nxt for at in said_at)
+            topic = str((e.payload or {}).get("topic") or e.summary or "check-in").split(":")[0][:80]
+            lines.append(f"  {clock.ist(e.at).strftime('%H:%M')} check-in ({topic}): {'they wrote back' if replied else 'no reply'}")
+        parts.append("CHECK-INS (whether they wrote back after Saheli checked in):\n" + "\n".join(lines))
 
     from app.tasks import runtime
 
@@ -246,17 +258,146 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
     return "\n\n".join(parts)
 
 
-def prompt_for(caregiver: dict, elder: dict, day: str, text: str) -> str:
+def prompt_for(caregiver: dict, elder: dict, day: str, text: str, *, send: bool = True) -> str:
     cg, name = caregiver["id"], (elder.get("name") or "them")
+    how = "Write it for them with send_message: " if send else "Write the WhatsApp message: "
+    end = "Then reply none." if send else "Write only that message."
     return (f"[Daily brief] Tonight's brief about {name}'s day ({day}) for person {cg} ({caregiver.get('name') or 'the caregiver'}). "
-            f"Write it for them with send_message: one short opening line, then short sections with bold titles (medicines; health "
+            f"{how}one short opening line, then short sections with bold titles (medicines; health "
             f"and mood; food and nutrition; what {name} did and talked about; orders and rides; reminders; anything that needs "
             "them), skipping a section that has nothing, and one closing line about tomorrow. Use only the data below: times, "
-            "names, doses and amounts exactly as given; a dose that is not marked is 'not marked', never 'taken'. Food and "
-            "nutrition (from FOOD): the meals with their main items, the day's kcal and protein against any targets (who set "
-            "them), water, meals not logged (never call them skipped unless FOOD says skipped), delivered food not yet confirmed "
-            "eaten, and any strict rule or target gone past, plainly and without judging the food; say which numbers are only "
-            f"estimates. Warm and plain, readable in a minute. Then reply none.\n\n{text}")
+            "names, doses and amounts exactly as given; a dose that is not marked is 'not marked', never 'taken'. Do not say "
+            "how they feel, or that they are fine, stable, peaceful, or free of symptoms or complaints, unless the data says "
+            "that. If the data has no mood or health, say there is no mood or health update. If they wrote and a later "
+            "check-in has no reply, say that plainly. Food and nutrition (from FOOD): the meals with their main items, the "
+            "day's kcal and protein against any targets (who set them), water, meals not logged (never call them skipped "
+            "unless FOOD says skipped), delivered food not yet confirmed eaten, and any strict rule or target gone past, "
+            f"plainly and without judging the food; say which numbers are only estimates. Warm and plain, readable in a minute. {end}\n\n{text}")
+
+
+WRITER = (
+    "You write one WhatsApp message from the data in the user message. Use only that data. "
+    "Do not say how they feel, or that they are fine, stable, peaceful, or free of symptoms or complaints, unless the data says that. "
+    "If the data has no mood or health, say there is no mood or health update. If a check-in has no reply, say that plainly. "
+    "Times, names, doses and amounts exactly as given. A dose that is not marked is 'not marked', never 'taken'. "
+    "Skip a section that has nothing. Write only the message, no preamble."
+)
+FOOD_WRITER = (
+    "You write one short WhatsApp note of this person's own food, from the FOOD block only. "
+    "Numbers only as written. No advice, no judgement, no mood and no health. Write only the message."
+)
+
+
+async def write_text(prompt: str, *, food: bool = False) -> str:
+    """The brief writer's message. Empty when no model answers: the raw data is never sent instead."""
+    from app.llm import router
+
+    try:
+        out = await router.complete(
+            "worker", system_stable=FOOD_WRITER if food else WRITER,
+            messages=[{"role": "user", "content": [{"type": "text", "text": prompt[:8000]}]}],
+            max_tokens=2000, effort="low", timeout_s=40,
+        )
+    except Exception:
+        logger.warning("brief writer failed", exc_info=True)
+        return ""
+    text = (out.text or "").strip()
+    return "" if text.lower() == "none" else text
+
+
+def keep(text: str, known: str) -> str:
+    """Drop brief sentences the day's data does not support (a mood, a reading, a time, a condition)."""
+    from app.brain import guards
+
+    kept = []
+    for s in guards.sentences(text):
+        if guards.brief_mood_claims(s, known) or guards.ungrounded(s, known=known):
+            continue
+        kept.append(s.strip())
+    return " ".join(kept).strip()
+
+
+def _lines_under(digest: str, header: str) -> list[str]:
+    lines, on = [], False
+    for line in digest.splitlines():
+        if line.startswith("  "):
+            if on:
+                lines.append(line.strip())
+        else:
+            on = line.startswith(header)
+    return lines
+
+
+def factual_fallback(digest: str, name: str) -> str:
+    """What the data itself says, when the writer invents a mood or sends nothing. No health claim the data lacks."""
+    parts: list[str] = []
+    for line in digest.splitlines():
+        if "did not write to Saheli today" in line:
+            parts.append(line.strip())
+    said = _lines_under(digest, "WHAT ")
+    if said and not parts:
+        parts.append("What they wrote: " + "; ".join(said[:8]))
+    checks = _lines_under(digest, "CHECK-INS")
+    if checks:
+        parts.append("Check-ins: " + "; ".join(checks[:8]))
+    if not any(k in digest.lower() for k in ("vital:", "symptom:", "mood:")):
+        parts.append("No mood or health update today.")
+    text = " ".join(parts).strip()
+    return text or f"{name} did not write to Saheli today. No mood or health update today."
+
+
+async def _checked(text: str, known: str) -> str:
+    """The same no-invention check a reply gets, then the brief's own mood check."""
+    from app.brain import grounding
+
+    text = keep(text, known)
+    if not text:
+        return ""
+    claims = await grounding.check(text, memory=known, their_messages=[], tool_results=[])
+    if claims:
+        text = keep(grounding.strip(text, claims), known)
+    return text
+
+
+async def deliver_waiting(session: AsyncSession, family_id: str, speaker_id: str, elder_name: str) -> list[str]:
+    """Waiting briefs for this speaker, as their own messages: the writer's text, not a rewrite by this conversation.
+    A brief that invents a mood or a fact is not sent; the day's data is said plainly instead. The loop closes."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    out: list[str] = []
+    for lp in await waiting_for(session, family_id, speaker_id):
+        detail = dict(lp.detail or {})
+        known = str(detail.get("text") or "")
+        food = known.startswith("OWN FOOD RECAP")
+        written = str(detail.get("written") or "").strip()
+        if not written:
+            written = await write_text(known, food=food)
+        cleaned = await _checked(written, known)
+        if not cleaned and not food:
+            cleaned = await _checked(factual_fallback(known, elder_name), known)
+        if cleaned and guards_mood_left(cleaned, known):
+            cleaned = keep(cleaned, known)
+        if not cleaned:
+            tries = int(detail.get("tries") or 0) + 1
+            detail["tries"] = tries
+            lp.detail = detail
+            flag_modified(lp, "detail")
+            if tries >= 2:
+                await store.close_loop(session, lp.id, note="not written")
+            continue
+        await store.add_turn(
+            session, family_id=family_id, thread_id=speaker_id, role="assistant", text=cleaned,
+            meta={"proactive": True, "via": "brief", "ref": f"brief-waiting:{lp.id}"},
+        )
+        await store.close_loop(session, lp.id, note="sent with their reply")
+        out.append(cleaned)
+    return out
+
+
+def guards_mood_left(text: str, known: str) -> bool:
+    from app.brain import guards
+
+    return bool(guards.brief_mood_claims(text, known))
 
 
 async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day: str, *, now: datetime | None = None, on_request: bool = False) -> str:
@@ -274,9 +415,10 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
     name = roster.elder.get("name") or "them"
 
     async def wait_for_them(session: AsyncSession, text: str, why: str) -> None:
+        written = await _checked(await write_text(prompt_for(caregiver, roster.elder, day, text, send=False)), text)
         await store.open_loop(session, family_id=fid, subject_id=cg, kind="brief", owner_id=cg,
                               title=f"Daily brief about {name} for {day}: goes to {caregiver.get('name') or 'the caregiver'} when they next write on WhatsApp",
-                              detail={"day": day, "text": text[:6000], "max_wakes": 0}, alert_rule="dashboard",
+                              detail={"day": day, "text": text[:6000], "written": written[:4000], "max_wakes": 0}, alert_rule="dashboard",
                               dedupe_key=f"brief:{cg}:{day}")
         await store.record_event(session, family_id=fid, subject_id=roster.elder["id"], kind="daily_brief",
                                  summary=f"Daily brief for {day} waiting for {caregiver.get('name') or cg} ({why})",

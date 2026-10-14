@@ -438,6 +438,29 @@ def ungrounded(text: str, *, known: str, fresh: str = "", meds: dict[str, set[in
     return sorted(set(problems))
 
 
+# How a brief says someone is. Checked on Saheli's brief, against the day's data: not a reading of what the person meant.
+_MOOD = re.compile(
+    r"\b("
+    r"doing (?:completely |very |quite )?fine|completely fine|doing well|all good|"
+    r"no complaints|no symptoms|peaceful day|feeling (?:fine|well|better)|everything(?:'s| is) fine|"
+    r"stable and peaceful|"
+    r"sab theek|bilkul theek|koi (?:shikayat|takleef) nahi"
+    r")\b",
+    re.I,
+)
+
+
+def brief_mood_claims(text: str, known: str) -> list[str]:
+    """Mood or health phrases in a brief that the day's data does not contain."""
+    k = (known or "").lower()
+    return sorted({m.group(0).lower() for m in _MOOD.finditer(text or "") if m.group(0).lower() not in k})
+
+
+def whatsapp_messages(text: str) -> list[str]:
+    """Separate WhatsApp messages: the model puts a line that is only --- between them. The first is the answer."""
+    return [p.strip() for p in re.split(r"(?m)^---\s*$", text or "") if p.strip() and p.strip().lower() != "none"]
+
+
 # ── one question at a time ─────────────────────────────────────────────────────
 
 QUESTION_MARKS = re.compile(r"[?？؟]")

@@ -173,6 +173,12 @@ async def seed(session, fid: str, ctx: dict) -> None:
     for i, e in enumerate(ctx.get("events") or []):
         await store.record_event(session, family_id=fid, subject_id=e["subject"], kind=e["kind"], summary=e.get("summary") or "", payload={},
                                  actor_id=e["subject"], at=_t(e.get("at"), before), ref=f"replay:{fid}:{i}")
+    for lp in ctx.get("loops") or []:
+        await store.open_loop(
+            session, family_id=fid, subject_id=lp["subject"], kind=lp.get("kind") or "brief",
+            title=lp.get("title") or "brief", detail=lp.get("detail") or {}, owner_id=lp.get("owner") or lp["subject"],
+            dedupe_key=lp.get("dedupe"), alert_rule="dashboard",
+        )
     clock.set_now(at)
 
 
@@ -198,7 +204,7 @@ def message_of(case: dict) -> str:
 # ── checking what must hold ─────────────────────────────────────────────────
 
 
-def code_check(rule: dict, reply: str, tools: list[str]) -> str | None:
+def code_check(rule: dict, reply: str, tools: list[str], messages: list[str] | None = None) -> str | None:
     """None when the rule holds (or is for the judge); else why not."""
     from app.brain import guards
     from app.care import naming
@@ -219,6 +225,16 @@ def code_check(rule: dict, reply: str, tools: list[str]) -> str | None:
         meds = guards.med_times([(str(rule.get("medicine") or ""), " ".join(rule.get("times") or []))])
         probs = [p for p in guards.ungrounded(reply, known="", meds=meds) if p.startswith("gives ")]
         return "; ".join(probs) or None
+    if t == "separate_brief":
+        bubbles = messages or []
+        marker = str(rule.get("marker") or "")
+        if len(bubbles) < 2:
+            return "the waiting brief was not its own message"
+        if marker and marker in (bubbles[0] or ""):
+            return "the answer contains the brief"
+        if marker and not any(marker in m for m in bubbles[1:]):
+            return "the brief text was not sent"
+        return None
     if t == "language" and rule.get("script"):
         got = guards.script_of(reply)
         want = str(rule["script"])
@@ -302,7 +318,7 @@ async def verdict(case: dict, res) -> dict:
     tools = [a["tool"] for a in res.actions if a.get("ok", True)]
     sent = [str((a.get("args") or {}).get("text") or "") for a in res.actions if a.get("tool") == "send_message"]
     reply = "\n".join(x for x in [res.reply or "", *sent] if x and x.strip().lower() != "none")
-    fails = [w for w in (code_check(r, reply, tools) for r in case.get("assertion") or []) if w]
+    fails = [w for w in (code_check(r, reply, tools, list(getattr(res, "messages", None) or [])) for r in case.get("assertion") or []) if w]
     why = ""
     if not fails and (case.get("rubric") or any(r.get("type") in ("grounded", "no_medical_advice", "no_false_claim") for r in case.get("assertion") or [])):
         ok, why = await judge_holds(case, reply, tools)
@@ -529,6 +545,7 @@ SEEDS = Path(__file__).parent / "fixtures" / "replay_seeds.jsonl"  # invented fa
 MISREAD = Path(__file__).parent / "fixtures" / "misread_2026-10-14.jsonl"  # invented families: brain misreads of 14 Oct (open)
 REGISTER = Path(__file__).parent / "fixtures" / "register_2026-10-14.jsonl"  # bookish vs spoken; runs when sunny-ship answers
 CURIOUS = Path(__file__).parent / "fixtures" / "curiosity_2026-10-15.jsonl"  # an event, and one missing fact (open)
+BRIEF = Path(__file__).parent / "fixtures" / "brief_2026-10-15.jsonl"  # a waiting brief stays its own message (open)
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -541,6 +558,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in REGISTER.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and CURIOUS.exists():
         cases += [json.loads(line) for line in CURIOUS.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and BRIEF.exists():
+        cases += [json.loads(line) for line in BRIEF.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]

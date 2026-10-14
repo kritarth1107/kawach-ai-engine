@@ -100,6 +100,7 @@ async def test_the_brief_holds_the_whole_day_as_data(db, at):
     assert "TOMORROW: Metformin at 08:00, 20:00" in text
     p = brief.prompt_for(SON, MAA, "2026-10-12", text)
     assert p.startswith("[Daily brief]") and "never 'taken'" in p and "person son-brief" in p
+    assert "no mood or health update" in p and "no reply" in p
 
 
 async def test_each_caregiver_gets_it_once_and_a_closed_window_keeps_it_waiting(db, at, sessions, monkeypatch):
@@ -120,16 +121,17 @@ async def test_each_caregiver_gets_it_once_and_a_closed_window_keeps_it_waiting(
     from app.brain import wake
 
     monkeypatch.setattr(wake, "system_turn", fake_turn)
+    monkeypatch.setattr(brief, "write_text", _no_writer)
     out = await brief.run(sessions, lambda fid: Host(), now=now)
     assert out == {"due": 2, "sent": 1, "waiting": 1}, out
     assert [to for to, _ in sent] == [SON["id"]], "the doctor gets none; the niece's waits"
     assert await brief.run(sessions, lambda fid: Host(), now=now + timedelta(minutes=10)) == {"due": 0, "sent": 0, "waiting": 0}, "once a day"
     waiting = await brief.waiting_for(db, FAM, NIECE["id"])
     assert len(waiting) == 1 and "DAY: 2026-10-12" in waiting[0].detail["text"]
-    # when she writes, the brief is in her turn's context; the care recipient never sees it
+    # the conversation never sees the brief or its data: it goes out afterwards as its own message
     req = loop.TurnRequest(family_id=FAM, elder=MAA, speaker=NIECE, members=[MAA, SON, NIECE], text="hi")
     dynamic, _ = await loop.turn_context(db, req)
-    assert "A DAILY BRIEF IS WAITING FOR THE SPEAKER" in dynamic and f"close_loop {waiting[0].id}" in dynamic
+    assert "DAILY BRIEF IS WAITING" not in dynamic and "DAY: 2026-10-12" not in dynamic and f"close_loop {waiting[0].id}" not in dynamic
     elder_req = loop.TurnRequest(family_id=FAM, elder=MAA, speaker=MAA, members=[MAA, SON, NIECE], text="hi")
     assert "DAILY BRIEF IS WAITING" not in (await loop.turn_context(db, elder_req))[0]
 
@@ -148,6 +150,7 @@ async def test_if_saheli_sends_nothing_the_raw_data_never_goes(db, at, sessions,
         tries.append(prompt[:60])
 
     monkeypatch.setattr(wake, "system_turn", silent)
+    monkeypatch.setattr(brief, "write_text", _no_writer)
     host = Host()
     roster = await store.roster(db, FAM)
     assert await brief.send(sessions, host, roster, SON, "2026-10-12", now=now) == "waiting"
@@ -170,6 +173,7 @@ async def test_at_their_night_the_brief_waits_instead_of_waking_them(db, at, ses
         tries.append(ref)  # send_message refuses at night, so nothing goes out
 
     monkeypatch.setattr(wake, "system_turn", refused)
+    monkeypatch.setattr(brief, "write_text", _no_writer)
     host = Host()
     roster = await store.roster(db, FAM)
     assert await brief.send(sessions, host, roster, SON, "2026-10-12", now=now) == "waiting"
@@ -273,3 +277,115 @@ async def test_a_backend_restart_at_brief_time_defers_it_and_the_next_run_sends_
     host = Host([{"scheduleId": "s1", "title": "Metformin", "dosage": "500 mg", "time": "08:00", "status": "completed"}])
     assert await brief.run(sessions, lambda fid: host, now=now + timedelta(minutes=5)) == {"due": 1, "sent": 1, "waiting": 0}
     assert "08:00 Metformin 500 mg: taken" in sent[0]
+
+
+async def _no_writer(*_a, **_k):
+    return ""
+
+
+async def test_unanswered_checkins_are_in_the_days_data(db, at):
+    now = at("2026-10-12 22:30")
+    await _family(db)
+    await _wrote(db, MAA["id"], now - timedelta(hours=7), "hi")
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Saheli checked in: evening",
+                             payload={"topic": "evening"}, at=now - timedelta(hours=5))
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Saheli checked in: night",
+                             payload={"topic": "night"}, at=now - timedelta(hours=2))
+    await store.record_event(db, family_id=FAM, subject_id=MAA["id"], kind="checkin", summary="Saheli checked in: skipped",
+                             payload={"topic": "skipped", "sent": False}, at=now - timedelta(hours=1))
+    await db.commit()
+    text = await brief.digest(db, Host(), FAM, MAA, "2026-10-12", now=now)
+    assert "hi" in text and "check-in (evening): no reply" in text and "check-in (night): no reply" in text
+    assert "skipped" not in text
+    quiet = await brief.digest(db, Host(), FAM, {**MAA, "name": "Lata"}, "2026-10-11", now=now)
+    assert "Lata did not write to Saheli today." in quiet and "CHECK-INS" not in quiet
+
+
+async def test_an_invented_mood_is_replaced_by_what_is_known(db, at):
+    at("2026-10-12 22:30")
+    await _family(db)
+    known = "DAY: 2026-10-12 (IST), about Babli\n\nBabli did not write to Saheli today."
+    invented = "She is doing completely fine. No complaints or symptoms; stable and peaceful day."
+    assert brief.keep(invented, known) == ""
+    await store.open_loop(db, family_id=FAM, subject_id=SON["id"], kind="brief", owner_id=SON["id"],
+                          title="Daily brief waiting", detail={"day": "2026-10-12", "text": known, "written": invented},
+                          dedupe_key="brief:son-brief:2026-10-12")
+    await db.commit()
+    sent = await brief.deliver_waiting(db, FAM, SON["id"], "Babli")
+    assert len(sent) == 1 and "doing" not in sent[0].lower() and "peaceful" not in sent[0].lower()
+    assert "did not write" in sent[0] and "No mood or health update today." in sent[0]
+    assert await brief.waiting_for(db, FAM, SON["id"]) == []
+
+
+async def test_a_waiting_brief_and_another_topic_go_out_as_their_own_messages(db, at, monkeypatch):
+    """The answer to what they said is the first WhatsApp message. A change is the next. The waiting brief is never
+    folded into either: it is the writer's text, sent after them."""
+    from app.llm import router
+    from app.llm.router import LLMReply
+
+    at("2026-10-12 21:00")
+    await _family(db)
+    known = ("WHAT BABLI SAID TO SAHELI (1 messages):\n  15:10 hi\n\n"
+             "CHECK-INS (whether they wrote back after Saheli checked in):\n  17:00 check-in (evening): no reply\n  20:00 check-in (night): no reply")
+    written = "Babli wrote hi at 15:10 and did not reply to the 17:00 check-in or the 20:00 check-in. No mood or health update today."
+    await store.open_loop(db, family_id=FAM, subject_id=SON["id"], kind="brief", owner_id=SON["id"],
+                          title="Daily brief waiting", detail={"day": "2026-10-12", "text": known, "written": written},
+                          dedupe_key="brief:son-brief:2026-10-12")
+    await db.commit()
+
+    class Script:
+        def __init__(self):
+            self.dynamic: list[str] = []
+
+        async def complete(self, route, *, messages, system_dynamic="", **kw):
+            self.dynamic.append(system_dynamic or "")
+            return LLMReply(text="Four noted.\n---\nSaved.", tool_calls=[], model="fake")
+
+    script = Script()
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
+    router.reset_breakers()
+    router.register_provider("fake", script)
+    try:
+        out = await loop.run_turn(db, Host(), loop.TurnRequest(
+            family_id=FAM, elder=MAA, speaker=SON, members=[MAA, SON], text="i had 4", message_ref="m-brief-split"))
+    finally:
+        router._providers.pop("fake", None)
+    assert out.reply == "Four noted."
+    assert out.messages[:2] == ["Four noted.", "Saved."]
+    assert out.messages[2:] == [written]
+    assert "17:00" not in out.reply and "doing fine" not in out.reply.lower()
+    assert not any("17:00" in d or "DAILY BRIEF IS WAITING" in d for d in script.dynamic)
+    assert await brief.waiting_for(db, FAM, SON["id"]) == []
+
+
+async def test_a_self_care_food_recap_is_its_own_message(db, at, monkeypatch):
+    from app.llm import router
+    from app.llm.router import LLMReply
+
+    me = {"id": "me-brief", "name": "Meera", "role": "primary caregiver"}
+    at("2026-10-12 18:00")
+    await store.save_roster(db, FAM, me, [me])
+    note = "You logged eggs."
+    await store.open_loop(db, family_id=FAM, subject_id=me["id"], kind="brief", owner_id=me["id"],
+                          title="Food recap waiting",
+                          detail={"day": "2026-10-12", "text": "OWN FOOD RECAP for Meera on 2026-10-12.\n\nFOOD: eggs", "written": note},
+                          dedupe_key="foodrecap:me-brief:2026-10-12")
+    await db.commit()
+    assert brief.self_care(await store.roster(db, FAM))
+
+    class Script:
+        async def complete(self, route, *, messages, **kw):
+            return LLMReply(text="Hello.", tool_calls=[], model="fake")
+
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"]}')
+    router.reset_breakers()
+    router.register_provider("fake", Script())
+    try:
+        out = await loop.run_turn(db, Host(), loop.TurnRequest(
+            family_id=FAM, elder=me, speaker=me, members=[me], text="hello", message_ref="m-food"))
+    finally:
+        router._providers.pop("fake", None)
+    assert out.reply == "Hello."
+    assert out.messages == ["Hello.", note]
+    assert "OWN FOOD" not in out.reply and "eggs" not in out.reply
+    assert await brief.waiting_for(db, FAM, me["id"]) == []

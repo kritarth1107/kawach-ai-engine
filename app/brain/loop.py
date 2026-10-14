@@ -90,6 +90,7 @@ class TurnResult:
     duplicate: bool = False
     shadow_writes: list[dict] = field(default_factory=list)
     ms: int = 0
+    messages: list[str] = field(default_factory=list)  # WhatsApp bubbles, answer first; a waiting brief is its own later bubble
     buttons: list[dict] = field(default_factory=list)  # one-tap WhatsApp answers sent with the reply
     trace_id: str | None = None  # the why-trail this turn is filed under (app.core.trace)
     turn_id: int | None = None  # Saheli's reply turn
@@ -244,7 +245,9 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     data = data or TurnData(session, req)
     now = clock.ist()
     day_events = await store.events(session, req.family_id, req.elder["id"], day=clock.ist_day())
-    loops = await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]])
+    # A waiting brief is not shown here. The conversation would rewrite it into this reply (and invent a day). It is
+    # sent afterwards as its own WhatsApp message, in the words the brief writer already produced.
+    loops = [lp for lp in await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]]) if lp.kind != "brief"]
     from app.care import memory_index
 
     hits = await memory_index.search(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
@@ -269,12 +272,6 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         hint = await nudges.reply_hint(session, req.family_id, req.speaker["id"])
         if hint:
             parts.append(hint)
-        from app.care import brief as care_brief
-
-        for lp in await care_brief.waiting_for(session, req.family_id, req.speaker["id"]):
-            parts.append(f"A DAILY BRIEF IS WAITING FOR THE SPEAKER (it could not be sent while WhatsApp's 24-hour window was "
-                         f"closed): answer what they wrote first, then give them the brief in the same reply, written from this "
-                         f"data only (short sections, bold titles), and close_loop {lp.id}.\n{str((lp.detail or {}).get('text') or '')[:5000]}")
     try:  # the nutrition agent's questions still waiting for an answer (log_food answer_to)
         from app.nutrition import jobs as food_jobs
 
@@ -1049,8 +1046,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             final, greeted_today=greeted, mid_conversation=mid, names=[name, *name.split()[:1]])), ctx.profiles.get(req.speaker["id"]))
 
     after_at = time.monotonic()
+    bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []
+    stored = "\n\n".join(bubbles) if bubbles else final
     turn_id = await store.add_turn(
-        session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=final,
+        session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=stored,
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
     if not is_system:
@@ -1069,13 +1068,23 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             kick_tasks()
         except Exception:  # noqa: BLE001 — the scheduler still runs every minute
             logger.exception("kick tasks failed")
-    if ctx.buttons and final and final != "none" and getattr(ctx, "buttons_spec", None):
+    briefs: list[str] = []
+    if not is_system and req.speaker.get("id"):
+        from app.care import brief as care_brief
+
+        briefs = await care_brief.deliver_waiting(session, req.family_id, req.speaker["id"], req.elder.get("name") or "them")
+    send = [*bubbles, *briefs]
+    if not send and stored and stored != "none":
+        send = [stored]
+    shown = send[0] if send else stored
+    if ctx.buttons and shown and shown != "none" and getattr(ctx, "buttons_spec", None):
         from app.care import outcomes
 
         # in the script of the reply they go with (a Tamil confirm with Tamil buttons, not English ones)
-        ctx.buttons = outcomes.buttons(*ctx.buttons_spec, ctx.profiles.get(req.speaker["id"]), final)
+        ctx.buttons = outcomes.buttons(*ctx.buttons_spec, ctx.profiles.get(req.speaker["id"]), shown)
     return TurnResult(
-        reply=final,
+        reply=shown,
+        messages=send,
         actions=ctx.actions,
         alerts=ctx.alerts,
         model=reply.model if reply else "",
