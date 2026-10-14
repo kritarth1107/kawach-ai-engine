@@ -101,8 +101,9 @@ def refresh_note(block: str) -> str:
     """After a meal is saved this turn, the opening list still said 'no meal'. Water is now the gap. Empty otherwise."""
     if "\n- water:" not in f"\n{block}":
         return ""
-    return (block + "\nThe meal is saved now, so ask the water one, in one question, and call gap_asked with key water. "
-            "Do not ask a second question.")
+    return (block + "\nThe meal is saved now. The reply is the tool's say line in one sentence, then one short water "
+            "question, and nothing more (three sentences at most). Do not name a dish they did not say. "
+            "Call gap_asked with key water. Do not ask a second question.")
 
 
 def render(name: str, items: list[tuple[str, str]]) -> str:

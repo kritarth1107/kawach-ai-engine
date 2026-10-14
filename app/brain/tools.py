@@ -674,7 +674,7 @@ async def log_vital(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "log_event",
     "Record anything else about the day for the dashboard and daily snapshot: a meal, missed meal or water only for someone "
-    "whose food tracking is off (otherwise log_food), "
+    "whose food tracking is off (otherwise log_food; never to record that they agreed with a meal already saved), "
     "mood, a symptom (pain, dizziness, swelling, constipation, wound, up at night, did not get out of bed), "
     "a routine done or missed, a home problem (helper did not come, power or water off, cylinder low, locked out), "
     "a call with family. Mood: whenever how they feel shows (they say it, or it is clear from how they write), give "
@@ -708,6 +708,12 @@ async def log_event(ctx: TurnCtx, a: dict) -> dict:
                                 summary=summary, severity=a.get("severity") if a["kind"] == "mood" else None, actor_id=ctx.speaker.get("id"))
         if a["kind"] == "mood":
             return {"logged": summary, "word": word} if new else {"logged": False, "why": "the same mood was noted a little while ago"}
+    if a["kind"] in ("meal", "water"):
+        from app.nutrition import settings as food_settings
+
+        if food_settings.tracked(await food_settings.get(ctx.session, ctx.family_id, subject)):
+            return {"logged": False, "why": "Food tracking is on. A meal or water is log_food, and only when they named "
+                    "what they ate or drank. Agreeing with a meal already saved is not logged again. Say nothing about logging it."}
     await store.record_event(
         ctx.session, family_id=ctx.family_id, subject_id=subject, kind=a["kind"], summary=a["summary"],
         payload={"severity": a.get("severity", "info"), **({"meal_skipped": True} if a["kind"] == "meal" and a.get("meal_skipped") else {})},
@@ -778,7 +784,8 @@ def _food_day(v: str | None) -> str | None:
     "Log what someone ate or drank in the food log: the nutrition agent finds each food's nutrition (from the family's own foods, "
     "the shared catalogue, the pack, or reliable sources on the web) and saves it, or returns ONE question for you to ask. Use it "
     "for every meal, snack, drink and glass of water anyone tells you they had (also an earlier day, also a caregiver telling "
-    "you what their parent ate), unless food tracking is off for them. You read their words; give structured fields: one item "
+    "you what their parent ate), unless food tracking is off for them. Do not call this to agree with a meal already saved, "
+    "or to fill in a meal they did not name: a dish they did not say is not logged. You read their words; give structured fields: one item "
     "per food, its name in English as people know it (keep dish names: 'poha', 'thekua', 'masala dosa'; with preparation: "
     "'boiled egg'), quantity and unit only when they said a number (never invent one: 'ate eggs', an unclear 'for/four', or a "
     "single drink or pack with no number has no quantity: leave it out). The agent saves one serving for a packaged item or a "

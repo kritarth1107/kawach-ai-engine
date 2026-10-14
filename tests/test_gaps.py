@@ -32,7 +32,8 @@ def test_a_nudge_sent_today_covers_that_meal_water_or_sleep():
     assert pick(left, {"water", "sleep"}) == []
     assert "gap_asked" in render("Riyan", left)
     water = render("Riyan", [("water", "no water logged today, and a meal is")])
-    assert "key water" in refresh_note(water)
+    note = refresh_note(water)
+    assert "key water" in note and "one sentence" in note and "three sentences at most" in note
     assert refresh_note(render("Riyan", [("meal", "no meal logged today")])) == ""
     assert refresh_note("") == ""
 

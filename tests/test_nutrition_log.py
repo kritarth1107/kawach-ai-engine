@@ -333,6 +333,30 @@ async def test_tracking_off_points_to_log_event(db, at, nfake):
     assert err and "log_event kind meal" in r["refused"]
 
 
+async def test_a_meal_event_is_not_a_second_food_log(db, at, nfake):
+    """While food tracking is on, agreeing with a meal must not become a meal or water event."""
+    at("2026-10-14 21:00")
+    meal, err = await call(db, "log_event", {"kind": "meal", "summary": "rice and dal"})
+    assert not err and meal["logged"] is False and "log_food" in meal["why"]
+    water, _ = await call(db, "log_event", {"kind": "water", "summary": "a glass"})
+    assert water["logged"] is False
+    assert not await store.events(db, FAM, MAA["id"], kinds=["meal", "water"])
+    symptom, _ = await call(db, "log_event", {"kind": "symptom", "summary": "knee pain"})
+    assert symptom["logged"] == "knee pain"
+    await call(db, "nutrition_settings", {"tracking": "off"})
+    off, err = await call(db, "log_event", {"kind": "meal", "summary": "tea"})
+    assert not err and off["logged"] == "tea"
+    saved = await store.events(db, FAM, MAA["id"], kinds=["meal"])
+    assert saved and saved[-1].summary == "tea"
+
+
+def test_agreeing_with_a_saved_meal_is_not_a_new_log():
+    from app.brain.persona import PERSONA
+
+    assert "do not call log_food or log_event" in PERSONA
+    assert "three sentences at most" in PERSONA
+
+
 async def test_a_medicine_never_goes_in_the_food_log(db, at, nfake):
     at("2026-10-14 09:00")
     nfake.decisions["vitamin d capsule"] = {"medicine": True}
