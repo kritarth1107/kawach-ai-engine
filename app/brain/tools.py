@@ -1878,18 +1878,32 @@ def first_line(text: str, limit: int = 90) -> str:
     return first if len(first) <= limit else first[: limit - 1].rsplit(" ", 1)[0] + "…"
 
 
-async def _order_label(ctx: TurnCtx, person: str) -> str:
+async def _order_for(ctx: TurnCtx, person: str):
+    """The latest order this person asked for or is the subject of, or None."""
     from sqlalchemy import or_, select
 
     from app.tasks.models import Task
 
-    t = (await ctx.session.execute(
+    return (await ctx.session.execute(
         select(Task).where(Task.family_id == ctx.family_id, or_(Task.requested_by == person, Task.subject_id == person))
         .order_by(Task.updated_at.desc()).limit(1)
     )).scalar_one_or_none()
-    if t is None:
-        return "order"
-    return f"{str(t.service or '').replace('_', ' ').title()} {'ride' if t.kind == 'ride' else 'order'}".strip()
+
+
+def _first_name(ctx: TurnCtx, person_id: str | None) -> str:
+    name = next((str(m.get("name") or "") for m in [ctx.elder, *ctx.members] if m.get("id") == person_id), "")
+    return (name.split() or ["-"])[0]
+
+
+async def _order_notice(ctx: TurnCtx, person: str) -> dict:
+    """The approved one-line notice for a closed chat (Meta, 1 name: who the order is for). An approval waiting on this
+    person uses kavach_alert_approval; every other order update uses kavach_alert_order. The full update waits."""
+    t = await _order_for(ctx, person)
+    who = _first_name(ctx, (t.subject_id if t else None) or ctx.elder.get("id"))
+    approvers = (((t.details or {}) if t else {}).get("approval_needed") or {}).get("approvers") or []
+    if t is not None and t.input_needed == "approve" and person in approvers:
+        return {"purpose": "alert_approval", "params": [who]}
+    return {"purpose": "alert_order", "params": [who]}
 
 
 def _clock_label(at=None) -> str:
@@ -1922,7 +1936,7 @@ async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None 
     if ref.startswith("brief:"):
         return {"purpose": "summary", "params": [who], **lang}
     if ref.startswith("task:"):
-        return {"purpose": "order", "params": [await _order_label(ctx, to), first_line(text)], **lang}
+        return {**(await _order_notice(ctx, to)), **lang}
     if to != ctx.elder_id:
         return {"purpose": "alert", "params": [who, first_line(text)], **lang}
     return None

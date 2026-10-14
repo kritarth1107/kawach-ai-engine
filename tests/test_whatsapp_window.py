@@ -63,7 +63,23 @@ async def test_an_order_update_to_a_closed_chat_names_the_order(db, at):
     await tools.send_message(system_ctx(db, host, "task:abc123"),
                              {"to": SON["id"], "text": "Your ride is booked for tomorrow morning. The driver details come an hour before."})
     t = host.world.templates[-1]
-    assert t["purpose"] == "order" and t["params"] == ["Uber ride", "Your ride is booked for tomorrow morning"]
+    # the approved notice names who it is for; the sentence itself waits for his reply
+    assert t["purpose"] == "alert_order" and t["params"] == ["Kamla"]
+
+
+async def test_an_approval_to_a_closed_chat_uses_the_approval_notice(db, at):
+    now = at("2026-10-12 09:00")
+    await store.save_roster(db, FAM, MAA, [MAA, SON])
+    db.add(Task(family_id=FAM, subject_id=MAA["id"], requested_by=SON["id"], service="blinkit", kind="order", goal="milk",
+                status="awaiting_confirm", input_needed="approve", phase="confirm", created_at=now, updated_at=now, deadline_at=now,
+                details={"approval_needed": {"approvers": [SON["id"]]}}))
+    await db.commit()
+    host = SimHost()
+    host.world.closed.add(SON["id"])
+    await tools.send_message(system_ctx(db, host, "task:approve1"),
+                             {"to": SON["id"], "text": "Kamla's milk from Blinkit is ₹56. May I place it?"})
+    t = host.world.templates[-1]
+    assert t["purpose"] == "alert_approval" and t["params"] == ["Kamla"]
 
 
 async def test_an_open_chat_gets_the_message_itself(db, at):
