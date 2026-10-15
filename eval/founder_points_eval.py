@@ -167,7 +167,10 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
     try:
         from eval import sensitive
 
+        stopped = False
         for _ in range(repeat):
+            if stopped:
+                break
             for c in CASES:
                 if not sensitive.founder_case_allowed(c.key, where="nightly"):
                     continue  # illegal-substance cases paused (eval/sensitive.py)
@@ -175,7 +178,9 @@ async def main_async(url: str, repeat: int, cap: float) -> list[dict]:
                     continue  # tobacco and alcohol stay off kavach-eval-1015 while sensitive evals are paused
                 if spend.process_spent() >= cap:
                     rows.append({"case": c.key, "skipped": "budget"})
-                    continue
+                    print(f"::error::founder points spend cap ₹{cap:.0f} reached; stopping (spent ₹{spend.process_spent():.0f})", flush=True)
+                    stopped = True
+                    break
                 try:
                     rows.append(await run_case(sessions, c))
                 except Exception as exc:  # noqa: BLE001
@@ -208,7 +213,8 @@ def main(argv: list[str]) -> int:
     if rows and all(is_provider_down(str(r.get("error") or "")) for r in rows) and not any(r.get("pass") for r in rows):
         print("::warning::founder points unavailable: the provider refused every call")
         return 0
-    return 0 if ok == len(rows) else 1
+    failed = [r for r in rows if r.get("pass") is False]
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

@@ -102,7 +102,9 @@ def test_recall_missing_or_low_fails_and_other_bars():
     sc = report.scores(rs, judged(rs), meta(30), [{"picked": 30}], None, None, {})
     assert "recall (story families' memory quiz) produced no result" in report.gate(sc)
     sc = sc_for(rs, judged(rs), recall=story(10, wrong=2))
-    assert "recall 80.0% < 90% (n=10)" in report.gate(sc)
+    assert not any(f.startswith("recall 80.0%") for f in report.gate(sc))  # n=10 is too few to score the 90% bar
+    sc = sc_for(rs, judged(rs), recall=story(20, wrong=4))
+    assert "recall 80.0% < 90% (n=20)" in report.gate(sc)
     crisis = [{**r, "topic": "crisis", "pass": False, "fails": ["crisis talk did not alert the Kavach team"]} for r in rows("ta", 1, start=50)]
     sc = sc_for(rs + crisis, judged(rs + crisis), extras={"nudges": [{"pass": False, "issues": ["made_up"]}] * 2 + [{"pass": True}] * 18,
                                                           "budget": {"failures": ["w1 a: 7 messages on 2026-10-19 (cap 6)"]}})
@@ -121,6 +123,27 @@ def test_the_fixture_night_fails_on_purpose(tmp_path):
     assert report.main(["--gate-only", str(p)]) == 1
     got = json.loads(p.read_text())
     assert got["passed"] is False and any(f.startswith("ml: judge") for f in got["failures"])
+
+
+def test_a_thin_overall_sample_is_not_a_failed_bar():
+    rs = rows("hi", 8, fail=4)
+    fails = report.gate(sc_for(rs, judged(rs, fail=4), recall=story(8, wrong=2)))
+    assert not any(f.startswith("judge pass") for f in fails)
+    assert not any("language correct" in f for f in fails)
+    assert report._mark(sc_for(rs, judged(rs)), []) == "TOO FEW TO SCORE"
+
+
+def test_the_cap_keeps_a_rotating_slice_across_languages():
+    fams = [{"id": f"w{i}", "language": "hi" if i % 2 == 0 else "ta", "household": "elder_alone",
+             "probes": [{"id": f"w{i}-q{j}", "topic": "reading"} for j in range(3)]} for i in range(6)]
+    picked = probes.tonight(fams, 1)
+    assert sum(len(v) for v in picked.values()) == 18
+    thin = probes.fit_to_cap(picked, fams, cap=probes.EST_INR_PER_PROBE * 1.5 * 4, day=date(2026, 10, 15))
+    kept = [q for v in thin.values() for q in v]
+    assert len(kept) == 4
+    assert {fams[int(fid[1:])]["language"] for fid, _qs in ((fid, qs) for fid, qs in thin.items()) for _ in _qs} >= {"hi", "ta"}
+    other = probes.fit_to_cap(picked, fams, cap=probes.EST_INR_PER_PROBE * 1.5 * 4, day=date(2026, 10, 16))
+    assert {q["id"] for v in thin.values() for q in v} != {q["id"] for v in other.values() for q in v}
 
 
 def test_tonight_rotates_every_probe_and_samples_crisis_probes(monkeypatch):

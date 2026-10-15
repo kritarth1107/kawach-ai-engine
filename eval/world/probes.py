@@ -20,7 +20,7 @@ import re
 import sys
 import time
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -47,6 +47,48 @@ def _bucket(probe_id: str, every: int) -> int:
     import hashlib
 
     return int(hashlib.sha256(probe_id.encode()).hexdigest()[:8], 16) % every
+
+
+def fit_to_cap(picked: dict[str, list[dict]], families: list[dict], cap: float, day: date | None = None) -> dict[str, list[dict]]:
+    """A rotating slice this cap can pay for, spread across languages and households.
+
+    What does not fit is not selected. A later night runs a different slice of the same rotation, so a short budget
+    does not select a thousand probes and then skip them. Skipping after selection is what fails the night.
+    """
+    by_id = {f["id"]: f for f in families}
+    flat = [(fid, q) for fid, qs in picked.items() for q in qs]
+    afford = int(cap // (EST_INR_PER_PROBE * 1.5)) if cap > 0 else 0
+    if afford <= 0 or len(flat) <= afford:
+        return picked
+    groups: dict[tuple[str, str], list[tuple[str, dict]]] = defaultdict(list)
+    for fid, q in flat:
+        fam = by_id.get(fid) or {}
+        groups[(str(fam.get("language") or "?"), str(fam.get("household") or "?"))].append((fid, q))
+    keys = sorted(groups)
+    shift_night = night_index(day)
+    for k in keys:
+        g = sorted(groups[k], key=lambda item: item[1]["id"])
+        shift = shift_night % len(g)
+        groups[k] = g[shift:] + g[:shift]
+    keys = keys[shift_night % len(keys):] + keys[:shift_night % len(keys)]
+    order: list[tuple[str, dict]] = []
+    at = {k: 0 for k in keys}
+    while len(order) < afford:
+        moved = False
+        for k in keys:
+            i = at[k]
+            if i < len(groups[k]):
+                order.append(groups[k][i])
+                at[k] = i + 1
+                moved = True
+                if len(order) >= afford:
+                    break
+        if not moved:
+            break
+    out: dict[str, list[dict]] = defaultdict(list)
+    for fid, q in order:
+        out[fid].append(q)
+    return dict(out)
 
 
 def tonight(families: list[dict], every: int, day: date | None = None) -> dict[str, list[dict]]:
@@ -278,12 +320,12 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float, every:
     world = make.build()
     attach(world)
     fams = [f for f in world if f["id"] in set(ids)]
-    picked = tonight(fams, every)
+    picked = fit_to_cap(tonight(fams, every), fams, cap)
     selected = sum(len(v) for v in picked.values())
     estimate = selected * EST_INR_PER_PROBE
     # The 13 Oct run skipped 59 % "by the budget": the night's ₹600 was split over 4 shards (₹150 each), each shard stopped at
-    # ₹154-156, and only the per-shard spend was printed, so it looked under the cap. Now each shard prints its own cap, its
-    # estimate and the night's share, and a budget skip makes the night fail (eval/world/report.py: probes executed < 95 %).
+    # ₹154-156, and only the per-shard spend was printed, so it looked under the cap. The slice is now cut to the cap first.
+    # A skip that still happens (the estimate was low) fails the night and is an error, not a quiet stop.
     print(f"shard {shard[0] if shard else 0}/{shard[1] if shard else 1}: {len(fams)} families, {selected} probes tonight (every {every} nights), "
           f"cap ₹{cap:.0f}, estimate ₹{estimate:.0f}", flush=True)
     if cap < estimate:
@@ -312,6 +354,9 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float, every:
     text = summary(rows, time.monotonic() - t0, meta) + f"\nSpent ₹{spend.process_spent():.0f}.\n"
     (OUT / "probes.md").write_text(text)
     print(text[:3000])
+    if meta["skipped_budget"]:
+        print(f"::error::probe spend cap ₹{cap:.0f} reached; stopped with {meta['skipped_budget']} probes not run "
+              f"(spent ₹{meta['spent']:.0f})", flush=True)
     return 0
 
 

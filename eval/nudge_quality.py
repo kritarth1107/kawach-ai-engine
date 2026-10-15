@@ -73,6 +73,20 @@ async def grade(ctx_text: str, message: str) -> dict:
     return parse_json(rep.text or "") or {}
 
 
+def _fit_cap(fams: list[dict], cap: float) -> list[dict]:
+    """A rotating slice the cap can pay for. Later nights start further along the same list."""
+    from eval.world.probes import night_index
+
+    est = float(os.getenv("EST_INR_PER_NUDGE", "1.5"))
+    afford = int(cap // est) if cap > 0 and est > 0 else len(fams)
+    if afford <= 0 or len(fams) <= afford:
+        return fams
+    shift = night_index() % len(fams)
+    spun = fams[shift:] + fams[:shift]
+    print(f"nudge cap ₹{cap:.0f} keeps {afford} of {len(fams)} families", flush=True)
+    return spun[:afford]
+
+
 def pick(world: list[dict], per_language: int) -> list[dict]:
     """per_language families for each language, mixing households (the first ones in world order, deterministic)."""
     by: dict[str, list[dict]] = defaultdict(list)
@@ -124,7 +138,7 @@ async def run(per_language: int, url: str, cap: float, parallel: int) -> list[di
     spend.configure(sessions)
     world = make.build()
     attach(world)
-    fams = pick(world, per_language)
+    fams = _fit_cap(pick(world, per_language), cap)
     async with engine.begin() as c:
         for t in ("turns", "care_events", "care_facts", "memory_notes", "open_loops", "family_rosters", "nudge_ledger"):
             await c.execute(text(f"DELETE FROM {t}"))
@@ -154,7 +168,10 @@ async def run(per_language: int, url: str, cap: float, parallel: int) -> list[di
     finally:
         clock.set_now(None)
         await engine.dispose()
-    print(f"spent ₹{spend.process_spent():.0f}")
+    print(f"spent ₹{spend.process_spent():.0f} of ₹{cap:.0f}")
+    skipped = sum(1 for r in out if r.get("skipped") == "budget")
+    if skipped:
+        print(f"::error::nudge spend cap ₹{cap:.0f} reached; stopped with {skipped} families not written (spent ₹{spend.process_spent():.0f})", flush=True)
     return out
 
 
@@ -200,8 +217,14 @@ def main(argv: list[str]) -> int:
         print("::warning::nudge eval unavailable: the provider refused every call")
         return 0
     issues = Counter(i for r in done for i in r.get("issues") or [])
-    good = (done and sum(r["pass"] for r in done) / len(done) >= 0.9 and not issues.get("made_up")
-            and not issues.get("medical_advice") and not issues.get("dose_reminder"))
+    if issues.get("made_up") or issues.get("medical_advice") or issues.get("dose_reminder"):
+        return 1
+    from eval.world.report import MIN_N
+
+    if len(done) < MIN_N:
+        print(f"::warning::nudge sample n={len(done)} is below {MIN_N}; the 90% bar is not scored")
+        return 0
+    good = bool(done) and sum(r["pass"] for r in done) / len(done) >= 0.9
     return 0 if good else 1
 
 

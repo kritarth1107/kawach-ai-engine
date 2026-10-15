@@ -159,6 +159,13 @@ def main(argv: list[str]) -> int:
         r.update(brief=q.get("brief"), photo_kind=(q.get("expect") or {}).get("photo"), day=q.get("day"))
     chosen = pick(rows, sample)
     cap = float(os.getenv("JUDGE_MAX_INR", "0") or 0)
+    est = float(os.getenv("EST_INR_PER_JUDGE", "1.0"))
+    afford = int(cap // est) if cap > 0 and est > 0 else len(chosen)
+    if 0 < afford < len(chosen):
+        must = [r for r in chosen if r.get("topic") == "crisis" or not r.get("pass")]
+        rest = [r for r in chosen if r not in must]
+        chosen = (must + rest)[:afford]
+        print(f"judge cap ₹{cap:.0f} keeps {len(chosen)} of the picked replies", flush=True)
     if cap <= 0:
         print("Refusing to start: set JUDGE_MAX_INR (₹ the judge may spend).")
         return 2
@@ -177,6 +184,8 @@ def main(argv: list[str]) -> int:
         (p.parent / f"judge_meta_{shard}.json").write_text(json.dumps(meta, indent=1))
     print(f"judged {meta['judged']} of {len(chosen)} replies: {ok} passed" + (f", {skipped} skipped by the budget" if skipped else "")
           + (f", {errors} could not be graded" if errors else "") + f"; spent ₹{meta['spent']:.0f} of ₹{cap:.0f}")
+    if skipped:
+        print(f"::error::judge spend cap ₹{cap:.0f} reached; stopped with {skipped} replies not graded (spent ₹{meta['spent']:.0f})", flush=True)
     if meta["judged"]:
         return 0
     errs = [str(g.get("error") or "") for g in graded if g.get("error")]

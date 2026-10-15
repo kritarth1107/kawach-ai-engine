@@ -10,7 +10,9 @@ run-name: "Nightly ${{ github.event.inputs.repost_run && format('repost {0}', gi
 # memory quiz scored (recall). The report writes scores.json and FAILS the night (exit 1) when a release bar breaks
 # (eval/world/report.py). A provider-wide refusal is UNAVAILABLE (exit 0): deploys go on if the tests passed, and the team
 # is emailed. Engine deploys on AWS wait while the latest full night failed (scripts/nightly_gate.py, deploy-aws.yml).
-# Budget (the founder: not a concern): about ₹1,500-2,500 a night; the caps below are runaway guards above that.
+# The scheduled night is capped at ₹150 (probes 60, judge 40, recall 20, nudge-quality 30, and the points check is ₹10
+# of that 30). Each slice is cut to what that cap can pay for and rotates, so a thin sample is "too few to score", not a
+# failed bar. The bars themselves are unchanged. A manual dispatch keeps the larger inputs below; a bigger night is a choice.
 # Scheduled workflows run only from the default branch (master).
 
 on:
@@ -50,10 +52,11 @@ concurrency:
 env:
   SLICE: ${{ github.event.inputs.slice || 'full' }}
   EVERY: ${{ github.event.inputs.every || 'night' }}
-  MAX_INR: ${{ github.event.inputs.max_inr || '3200' }}
-  JUDGE_INR: ${{ github.event.inputs.judge_inr || '3200' }}
-  RECALL_INR: ${{ github.event.inputs.recall_inr || '700' }}
-  NUDGE_INR: ${{ github.event.inputs.nudge_inr || '400' }}
+  # Schedule uses the ₹150 night. A dispatch uses the inputs above, whose defaults stay the large guards.
+  MAX_INR: ${{ github.event_name == 'schedule' && '60' || github.event.inputs.max_inr || '3200' }}
+  JUDGE_INR: ${{ github.event_name == 'schedule' && '40' || github.event.inputs.judge_inr || '3200' }}
+  RECALL_INR: ${{ github.event_name == 'schedule' && '20' || github.event.inputs.recall_inr || '700' }}
+  NUDGE_INR: ${{ github.event_name == 'schedule' && '30' || github.event.inputs.nudge_inr || '400' }}
   FIXTURE: ${{ github.event.inputs.fixture || 'false' }}
   SHARDS: "4"
   # Crisis, self-harm and illegal-substance test content (eval/sensitive.py): paused since Google started rejecting every
@@ -301,7 +304,7 @@ jobs:
           WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
           LLM_PROVIDER: router
-          NUDGE_EVAL_MAX_INR: ${{ env.NUDGE_INR }}
+          NUDGE_EVAL_MAX_INR: ${{ github.event_name == 'schedule' && '20' || env.NUDGE_INR }}
         run: PYTHONPATH=. python -u -m eval.nudge_quality --per-language 10 --out runs/nudge_quality
       - name: The founder's points of 13 Oct with the live brain (restricted items, scope, health answers, relay, mood)
         if: steps.pre.outputs.down != 'true'
@@ -311,9 +314,15 @@ jobs:
           WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
           LLM_PROVIDER: router
-          POINTS_MAX_INR: "60"
           POINTS_OUT: runs/nudge_quality/founder_points.json
-        run: PYTHONPATH=. python -u -m eval.founder_points_eval --repeat 2 | tee runs/nudge_quality/founder_points.txt
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            export POINTS_MAX_INR=10
+          else
+            export POINTS_MAX_INR=60
+            if [ "${NUDGE_INR}" -lt 60 ]; then export POINTS_MAX_INR="${NUDGE_INR}"; fi
+          fi
+          PYTHONPATH=. python -u -m eval.founder_points_eval --repeat 2 | tee runs/nudge_quality/founder_points.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -355,6 +364,8 @@ jobs:
         id: gate
         run: |
           set +e
+          # The night's cap is the four guards. On the schedule that is ₹150. A dispatch uses whatever was typed.
+          export NIGHT_CAP_INR=$(( MAX_INR + JUDGE_INR + RECALL_INR + NUDGE_INR ))
           args="tonight --out report.md --scores scores.json --extras extras"
           [ -d previous ] && args="$args --previous previous"
           PYTHONPATH=. python -m eval.world.report $args

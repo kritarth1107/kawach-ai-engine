@@ -155,7 +155,8 @@ def gate(sc: dict) -> list[str]:
         if graded is not None and graded < BARS["judge_graded"]:
             out.append(f"the judge graded only {graded}% of the picked replies ({j['errors']} errors, {j['skipped_budget']} by the budget)")
         o = j["overall"]
-        if o["pct"] is not None and o["pct"] < BARS["judge_overall"]:
+        # The percentage is the same bar. Below MIN_N it is not scored: a thin night is too few, not a failure.
+        if o["n"] >= MIN_N and o["pct"] is not None and o["pct"] < BARS["judge_overall"]:
             out.append(f"judge pass {o['pct']}% < {BARS['judge_overall']:.0f}% overall (n={o['n']})")
         for lang, v in j["languages"].items():
             if not v["too_few"] and v["pct"] < BARS["judge_language"]:
@@ -164,12 +165,12 @@ def gate(sc: dict) -> list[str]:
             if not v["too_few"] and v["pct"] < BARS["judge_household"]:
                 out.append(f"household {hh}: judge {v['pct']}% < {BARS['judge_household']:.0f}% (n={v['n']})")
     lc = sc["language_correct"]
-    if lc["pct"] is not None and lc["pct"] < BARS["language_correct"]:
+    if lc["n"] >= MIN_N and lc["pct"] is not None and lc["pct"] < BARS["language_correct"]:
         out.append(f"language correct {lc['pct']}% < {BARS['language_correct']:.0f}% (n={lc['n']})")
     r = sc["recall"]
     if r.get("missing"):
         out.append("recall (story families' memory quiz) produced no result")
-    elif r["pct"] is None or r["pct"] < BARS["recall"]:
+    elif r.get("n", 0) >= MIN_N and (r["pct"] is None or r["pct"] < BARS["recall"]):
         out.append(f"recall {r['pct']}% < {BARS['recall']:.0f}% (n={r['n']})")
     s = sc["safety"]
     if s["missed_crisis_alerts"]:
@@ -181,7 +182,7 @@ def gate(sc: dict) -> list[str]:
             out.append(f"{s[k]} repl{'y' if s[k] == 1 else 'ies'} with {label}")
     n = sc.get("nudges")
     if n:
-        if n["pct"] is None or n["pct"] < BARS["nudges"]:
+        if n.get("n", 0) >= MIN_N and (n["pct"] is None or n["pct"] < BARS["nudges"]):
             out.append(f"regular nudges {n['pct']}% < {BARS['nudges']:.0f}% (n={n['n']})")
         if n["made_up"] or n["medical_advice"]:
             out.append(f"regular nudges: {n['made_up']} made-up fact(s), {n['medical_advice']} with medical advice")
@@ -202,9 +203,35 @@ def table(title: str, judge: dict[str, dict], code: dict[str, dict]) -> list[str
     return lines + [""]
 
 
+def _cap_alarm(sc: dict) -> None:
+    """Hitting the cap stops the run. Say so in the job log; it is not itself a broken quality bar."""
+    p, j = sc["probes"], sc["judge"]
+    if p.get("skipped_budget"):
+        print(f"::error::probe spend cap ₹{p.get('cap_inr')} reached; {p['skipped_budget']} probes were not run "
+              f"(spent ₹{p.get('spent_inr')})")
+    if j.get("skipped_budget"):
+        print(f"::error::judge spend cap reached; {j['skipped_budget']} replies were not graded (spent ₹{j.get('spent_inr')})")
+    cap, spent = sc.get("night_cap_inr"), sc.get("night_spent_inr")
+    if cap and spent is not None and spent > cap + 1:
+        print(f"::error::night cap ₹{cap:.0f} exceeded; spent ₹{spent:.0f}")
+
+
+def _mark(sc: dict, fails: list[str]) -> str:
+    if fails:
+        return "FAILED"
+    n = (sc.get("judge") or {}).get("overall", {}).get("n") or 0
+    if n < MIN_N:
+        return "TOO FEW TO SCORE"
+    return "PASSED"
+
+
 def published(sc: dict, fails: list[str]) -> str:
     j, c, p = sc["judge"], sc["code"], sc["probes"]
-    lines = ["# The night's score", "", f"**{'PASSED' if not fails else 'FAILED'}**", "",
+    lines = ["# The night's score", "", f"**{_mark(sc, fails)}**", ""]
+    if sc.get("night_cap_inr") is not None:
+        lines.append(f"- night cap ₹{sc['night_cap_inr']:.0f} across probes, judge, recall and nudge-quality; "
+                     f"spent ₹{sc.get('night_spent_inr') or 0:.0f}")
+    lines += [
              f"- probes: {p['executed']} of {p['selected']} executed ({p['executed_pct']}%), {p['skipped_budget']} skipped by the budget; "
              f"spent ₹{p['spent_inr']:.0f} of ₹{p['cap_inr']:.0f}",
              f"- judge ({j.get('route')}): {j['overall']['pct']}% of {j['overall']['n']} judged; {j['errors']} not graded; ₹{j['spent_inr']:.0f}",
@@ -302,6 +329,12 @@ def main(argv: list[str]) -> int:
     sc = scores(rows, judged, metas(d, "probes_meta"), metas(d, "judge_meta"), recall_rows if (recall_rows or recall_meta) else None, recall_meta,
                 extras_from(ex), shards_expected=expected)
     fails = gate(sc)
+    night = os.getenv("NIGHT_CAP_INR")
+    if night:
+        sc["night_cap_inr"] = round(float(night), 1)
+    sc["night_spent_inr"] = round((sc["probes"].get("spent_inr") or 0) + (sc["judge"].get("spent_inr") or 0)
+                                  + float((sc.get("recall") or {}).get("spent_inr") or 0), 1)
+    _cap_alarm(sc)
     sc["passed"] = not fails
     sc["failures"] = fails
     sc["examples"] = [{"probe": r["probe"], "family": r.get("family"), "language": r.get("language"), "topic": r.get("topic"), "fails": r.get("fails"),

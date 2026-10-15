@@ -128,12 +128,17 @@ async def run_family(sessions: async_sessionmaker, fam: dict, cap: float) -> tup
 
     fid = fam["familyId"]
     rows: list[dict] = []
+    if spend.process_spent() >= cap:
+        return [{"family": fam["id"], "quiz": "extract", "skipped": "budget"}], {"family": fam["id"], "skipped": "budget"}
     async with sessions() as s:
         await seed_family(s, fam, Seeded())
         told = await seed_history(s, fam)
         await s.commit()
     clock.set_now(ist(TODAY.isoformat(), "02:00"))
     for _ in range(12):  # the nightly re-read over the chats, in batches
+        if spend.process_spent() >= cap:
+            print(f"::error::recall spend cap ₹{cap:.0f} reached during the re-read (spent ₹{spend.process_spent():.0f})", flush=True)
+            break
         async with sessions() as s:
             got = await extract_family(s, fid)
             await s.commit()
@@ -198,6 +203,9 @@ async def main_async(ids: list[str], n: int, parallel: int, url: str, cap: float
     from eval.world.stories import attach_stories
 
     attach_stories(world)
+    est = float(os.getenv("EST_INR_PER_RECALL_FAMILY", "8"))
+    afford = max(1, int(cap // est)) if cap > 0 and est > 0 else n
+    n = min(n, afford)
     fams = tonight_families([f for f in world if f["id"] in set(ids)], n)
     print(f"recall: {len(fams)} story families tonight, cap ₹{cap:.0f}", flush=True)
     rows: list[dict] = []
@@ -232,7 +240,10 @@ async def main_async(ids: list[str], n: int, parallel: int, url: str, cap: float
     (OUT / "recall_meta_0.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1, default=str))
     pct = 100 * meta["correct"] / max(1, meta["questions"])
     print(f"recall {meta['correct']}/{meta['questions']} ({pct:.1f} %), {meta['errors']} not scored; memory score mean {meta['memory_score']['mean']}; "
-          f"spent ₹{meta['spent']:.0f} in {meta['minutes']} min")
+          f"spent ₹{meta['spent']:.0f} of ₹{cap:.0f} in {meta['minutes']} min")
+    skipped = sum(1 for r in rows if r.get("skipped") == "budget")
+    if skipped or meta["spent"] > cap + 1:
+        print(f"::error::recall spend cap ₹{cap:.0f} reached; stopped with {skipped} questions not asked (spent ₹{meta['spent']:.0f})", flush=True)
     return 0
 
 
