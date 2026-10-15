@@ -37,7 +37,7 @@ def test_household_has_no_self_care_line_for_an_elder_or_their_caregiver():
 
 def test_every_health_answer_carries_when_to_see_the_doctor():
     assert "ends with one short line on when to see or call the doctor" in PERSONA
-    assert "says in one short line when to see or call the doctor" in REPLY_FORMAT
+    assert "says in one short line that it is general information and when to see or call the doctor" in REPLY_FORMAT
 
 
 def test_no_dose_decisions_of_her_own_and_no_invented_reason_for_a_missed_reminder():
