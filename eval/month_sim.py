@@ -680,12 +680,17 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
         if "silence" in e[3].lower():
             f.silent_days.setdefault(e[2], set()).add(e[0])
     log = (outdir / f"{spec['key']}.jsonl").open("w")
+    start = 1
+    resumed = await resume_from(f, log)
+    if resumed:
+        start = resumed
+        _scoring.EXTRA_NAMES[f.family_id] = list(spec.get("aliases") or [])
     first_cg = f.caregivers()[0]["id"] if f.caregivers() else f.subjects()[0]["id"]
     setup_who = f.subjects()[0]["id"] if spec["setup"] == "detailed" and spec["key"] == "iyer" else (first_cg if spec["key"] != "menon" else "me-priya")
     setup_ask = (f"Set up Saheli on day 1 in one long, complete message: {spec['truth']} Medicines: {json.dumps(spec['meds'], ensure_ascii=False)} (say clearly whose they are). {spec['setup_text']}"
                  if spec["setup"] == "detailed" else f"Set up Saheli on day 1 as sparsely as described: {spec['setup_text']}")
     print(f"── {spec['key']} start")
-    for day in range(1, days + 1):
+    for day in range(start, days + 1):
         if spend.process_spent() >= sim_budget():
             print(f"── {spec['key']} STOPPED before day {day}: budget ₹{sim_budget():.0f} used (₹{spend.process_spent():.0f})")
             f.stopped = f"budget reached before day {day}"
@@ -796,6 +801,48 @@ async def run_family(spec: dict, days: int, outdir: Path) -> Fam:
     log.close()
     learn_month.dump(f, outdir)
     return f
+
+
+async def resume_from(f: Fam, log) -> int | None:
+    """SIM_RESUME_DIR + SIM_RESUME_START ("sharma:9,menon:14"): carry on a run that stopped (a lost login, a crash) in
+    the same database from that day. Saheli's whole memory is in the database; the sim's own state is rebuilt from the
+    old run's day logs: the messages, grades, audits, true medicines and the reminder schedule (from her care record)."""
+    old = os.getenv("SIM_RESUME_DIR")
+    starts = dict(x.split(":") for x in (os.getenv("SIM_RESUME_START") or "").split(",") if ":" in x)
+    key = f.spec["key"]
+    if not old or key not in starts:
+        return None
+    start = int(starts[key])
+    lines = [json.loads(ln) for ln in (Path(old) / f"{key}.jsonl").open() if json.loads(ln)["day"] < start]
+    async with SessionLocal() as session:
+        fid = (await session.execute(text("SELECT family_id FROM turns WHERE family_id LIKE :p GROUP BY family_id ORDER BY max(at) DESC LIMIT 1"),
+                                     {"p": f"month-{key}-%"})).scalar()
+        if not fid:
+            raise RuntimeError(f"no earlier run of {key} in this database")
+        f.family_id = fid
+        for subject in f.truth_meds:
+            for fx in await store.facts(session, fid, subject, domains=["medicine"], statuses=("active",)):
+                v = fx.value or {}
+                await f.host.call("sync_medicine_schedule", {"key": fx.key, "name": v.get("name") or fx.key.split(":", 1)[-1],
+                                                             "dose": v.get("dose"), "times": v.get("times") or [], "active": True},
+                                  family_id=fid, subject_id=subject, actor_id=subject)
+    for e in f.spec["events"]:
+        if e[0] < start and e[4].get("med_change"):
+            apply_med_change(f, e[4]["med_change"])
+    for x in lines:
+        for m in x["messages"]:
+            at = datetime.strptime(f"{m['at']} {START.year}", "%d %b %H:%M %Y").replace(tzinfo=clock.IST).astimezone(timezone.utc)
+            f.msgs.append(Msg(at, m["who"], m["to"], m["text"], m["kind"], m.get("trigger", ""), tools=m.get("tools") or [],
+                              alerts=m.get("alerts") or [], ms=m.get("ms", 0)))
+        f.verdicts += x["verdicts"]
+        f.checks += [c for c in x["checks"] if "UNAUTHENTICATED" not in " ".join(c.get("fails") or [])]  # the lost login, not Saheli
+        f.audits.append(x["audit"])
+        log.write(json.dumps(x, ensure_ascii=False) + "\n")
+    log.flush()
+    if f.learn:
+        learn_month.resume(f, lines, start)
+    print(f"── {key} resumed at day {start} ({len(lines)} earlier days, family {fid})")
+    return start
 
 
 def learning_summary(fams: list[Fam]) -> list[str]:

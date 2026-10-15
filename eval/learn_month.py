@@ -303,6 +303,8 @@ async def handle(f, at: datetime, kind: str, pl: dict) -> None:
         L.stats["replies_scored"] += await scoring.score_pending(SessionLocal, family_id=f.family_id)
     elif kind == "L:quiz":
         await quiz(f, at, pl["day"])
+    elif kind == "L:regrade":
+        await regrade(f, pl["day"], pl["lines"])
     elif kind == "L:read":
         await read(f, at, pl["day"])
 
@@ -453,6 +455,10 @@ async def read(f, at: datetime, day: int) -> None:
             if busy_h <= avoid:
                 L.learned_on.setdefault("busy_window", day)
             out["timing_false_avoid"] = sorted(avoid - busy_h)
+        out["learned_days"] = await learned_days(session, f, L)
+        for k, d in out["learned_days"].items():
+            if d is not None:
+                L.learned_on[k] = min(L.learned_on.get(k, 99), d)
         facts = list((await session.execute(select(CareFact).where(CareFact.family_id == f.family_id))).scalars())
         active = [x for x in facts if x.status == "active"]
         out["facts_active"] = len(active)
@@ -490,6 +496,74 @@ async def read(f, at: datetime, day: int) -> None:
     out["stale_mentions"] = [m.text[:200] for m in f.msgs if m.who == "saheli" and city0.lower() in (m.text or "").lower()
                              and (clock.ist(m.at).date() - _start_date()).days + 1 > CORRECT_DAY]
     L.reads.append(out)
+
+
+async def learned_days(session, f, L: Learn) -> dict:
+    """The sim day each learning first became right, from every saved version of its fact (not only checkpoint reads)."""
+    from app.care import meal_nudges, outcomes_learn, store
+
+    life = L.life
+    start = _start_date()
+
+    def day_of(row) -> int:
+        return (clock.ist(row.recorded_at).date() - start).days + 1
+
+    out: dict = {"meal_times": None, "meal_times_weekend": None, "busy_window_asks": None, "busy_window": None, "water": None}
+    for row in await store.fact_history(session, f.family_id, L.who, meal_nudges.CLOCKS_KEY):
+        v = row.value or {}
+        for side, when, key in (("weekday", START_WEEKDAY, "meal_times"), ("weekend", START_WEEKEND, "meal_times_weekend")):
+            shift = life["weekend"] if side == "weekend" else 0
+            errs = []
+            for slot, t in life["meals"].items():
+                got = meal_nudges._learned_hhmm(v, slot, now=when)
+                true = hm(t) + (shift if slot == "breakfast" else shift // 3)
+                errs.append(hm(got) - true if got and re.fullmatch(r"\d{1,2}:\d{2}", got) else None)
+            if out[key] is None and all(meal_ok(e) for e in errs) and (side == "weekday" or life["weekend"]):
+                out[key] = day_of(row)
+    busy = set(range(*life["busy"]))
+    for row in await store.fact_history(session, f.family_id, L.who, meal_nudges.ASK_HOURS_KEY):
+        if out["busy_window_asks"] is None and set((row.value or {}).get("avoid_hours") or []) & busy:
+            out["busy_window_asks"] = day_of(row)
+    for row in await store.fact_history(session, f.family_id, L.who, outcomes_learn.TIMING_KEY):
+        if out["busy_window"] is None and busy <= set((row.value or {}).get("avoid_hours") or []):
+            out["busy_window"] = day_of(row)
+    rows = await store.fact_history(session, f.family_id, L.who, meal_nudges.WATER_KEY)
+    out["water"] = day_of(rows[0]) if rows else None
+    return out
+
+
+def resume(f, lines: list[dict], start: int) -> None:
+    """Carry the learning state of a run that stopped (its saved day logs) into a resumed run from day `start`."""
+    from eval.month_sim import day_dt
+
+    L: Learn = f.learn
+    for x in lines:
+        d = x["day"]
+        for m in x["messages"]:
+            trig = m.get("trigger") or ""
+            if trig.startswith("meal: ") and m["kind"] == "human":
+                L.days.setdefault(d, {})[trig.split(": ", 1)[1]] = {"at": None, "dish": None, "told": True}
+            if m["kind"] == "proactive" and trig == "regular nudge":
+                L.nudges.append({"day": d, "hour": int(m["at"].split()[-1].split(":")[0]), "to": m["to"], "kind": "", "text": m["text"][:300]})
+    asked = {d for x in lines for d in [x["day"]] for m in x["messages"] if (m.get("trigger") or "").startswith("learn quiz")
+             and m["who"] == "saheli"}
+    for cp in CHECKPOINTS:
+        if cp < start:
+            # graded again from the saved answers, or asked now when the old run never got its answers
+            f.push(day_dt(start, "10:30"), "L:regrade" if cp in asked else "L:quiz", {"day": cp, "lines": lines})
+
+
+async def regrade(f, day: int, lines: list[dict]) -> None:
+    from eval import month_sim as ms
+
+    L: Learn = f.learn
+    want = {q["q"]: q for q in questions(f, day)}
+    msgs = [m for x in lines if x["day"] == day for m in x["messages"] if (m.get("trigger") or "").startswith("learn quiz")]
+    for i, m in enumerate(msgs):
+        if m["who"] != "saheli" and m["text"] in want and i + 1 < len(msgs) and msgs[i + 1]["who"] == "saheli":
+            item, ans = want[m["text"]], msgs[i + 1]["text"]
+            g = ms.parse_json(await ms.llm("judge_fast", QUIZ_JUDGE, f"QUESTION: {item['q']}\nCORRECT ANSWER: {item['answer']}\nSAHELI: {ans}", tokens=600))
+            L.quiz.append({"day": day, **item, "saheli": ans, "score": int(g.get("score", 0) or 0), "note": g.get("note", "")})
 
 
 # ── report ────────────────────────────────────────────────────────────────────────────────────────────────────────
