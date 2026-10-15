@@ -2003,6 +2003,18 @@ async def _order_notice(ctx: TurnCtx, person: str) -> dict:
     return {"purpose": "alert_order", "params": [who]}
 
 
+async def _refill_who(ctx: TurnCtx, ref: str) -> str:
+    """Who a reorder offer is for: the person whose stock is running out, named on the approved order notice."""
+    try:
+        loop_id = uuid.UUID(ref.split(":")[2])
+    except (IndexError, ValueError):
+        return _first_name(ctx, ctx.elder.get("id"))
+    loop = await ctx.session.get(OpenLoop, loop_id)
+    if loop is None:
+        return _first_name(ctx, ctx.elder.get("id"))
+    return _first_name(ctx, loop.subject_id)
+
+
 def _clock_label(at=None) -> str:
     t = clock.ist(at)
     return t.strftime("%I:%M %p").lstrip("0")
@@ -2011,8 +2023,8 @@ def _clock_label(at=None) -> str:
 async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None = None) -> dict | None:
     """What reaches someone whose WhatsApp chat is closed (no message from them in 24 hours; founder 2026-10-12): the
     backend sends this Utility template, and the message itself waits for their next message. The nightly brief, an
-    order's update, and news for a caregiver have one; a check-in, a question to the person cared for, and a message
-    someone asked Saheli to pass on do not (they are not sent while the chat is closed)."""
+    order's update, a reorder offer, and news for a caregiver have one; a check-in, a question to the person cared
+    for, and a message someone asked Saheli to pass on do not (they are not sent while the chat is closed)."""
     if not ctx.is_system:
         # Someone asked Saheli to send this (live 2026-10-13: a caregiver asked for his mother's missed reminders and the
         # message could not reach her, her chat had been closed for weeks): it goes as the reminder notice, and the full
@@ -2034,6 +2046,8 @@ async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None 
         return {"purpose": "summary", "params": [who], **lang}
     if ref.startswith("task:"):
         return {**(await _order_notice(ctx, to)), **lang}
+    if ref.startswith("refill:"):
+        return {"purpose": "alert_order", "params": [await _refill_who(ctx, ref)], **lang}
     if to != ctx.elder_id:
         return {"purpose": "alert", "params": [who, first_line(text)], **lang}
     return None

@@ -3,7 +3,8 @@
 A medicine uses the care record's count and its doses per day. A grocery uses the pantry count and how fast that
 same stored product was used, and only when they have ordered that product before (a regular one). The offer is one
 question; an order starts only after a yes, through the usual list and confirm, cash on delivery. One offer per
-run-out (the count it was based on), and none while an order for that item is still moving.
+run-out (the count it was based on), and none while an order for that item is still moving. One person hears at most
+one offer a day; a closed WhatsApp chat gets the approved order notice, and the question waits.
 """
 
 from __future__ import annotations
@@ -107,7 +108,7 @@ async def _offered(session: AsyncSession, family_id: str, subject_id: str, item_
     same = (await session.execute(
         select(OpenLoop.id).where(
             OpenLoop.family_id == family_id, OpenLoop.subject_id == subject_id, OpenLoop.kind == "refill",
-            OpenLoop.detail["episode"].astext == episode,
+            OpenLoop.detail["key"].astext == item_key, OpenLoop.detail["episode"].astext == episode,
         )
     )).first()
     return same is not None
@@ -209,15 +210,38 @@ async def _groceries(session: AsyncSession) -> list[dict]:
     return out
 
 
+def _today_start():
+    """Midnight IST of the current day, so one person is asked at most once before the next morning."""
+    day = clock.ist()
+    return day.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _asked_today(session: AsyncSession, family_id: str, owner_id: str) -> bool:
+    row = (await session.execute(
+        select(OpenLoop.id).where(
+            OpenLoop.family_id == family_id, OpenLoop.owner_id == owner_id, OpenLoop.kind == "refill",
+            OpenLoop.created_at >= _today_start(),
+        ).limit(1)
+    )).first()
+    return row is not None
+
+
 async def open_offers(session: AsyncSession) -> int:
-    """Open one reorder offer per item that the stock count says runs out within 3 days. Returns how many opened."""
+    """Open reorder offers for stock that runs out within 3 days. One per person per day. Returns how many opened."""
     opened = 0
-    for offer in [*(await _medicine(session)), *(await _groceries(session))]:
+    asked: set[tuple[str, str]] = set()
+    offers = [*(await _medicine(session)), *(await _groceries(session))]
+    offers.sort(key=lambda o: (o["days"], 0 if o["category"] == "medicine" else 1, o["name"]))
+    for offer in offers:
         if await _offered(session, offer["family_id"], offer["subject_id"], offer["item_key"], offer["episode"]):
             continue
         if await _moving(session, offer["family_id"], offer["subject_id"], slug(offer["item"])):
             continue
         owner = await _owner(session, offer["family_id"], offer["subject_id"])
+        who = (offer["family_id"], owner)
+        if who in asked or await _asked_today(session, offer["family_id"], owner):
+            continue
+        asked.add(who)
         await store.open_loop(
             session, family_id=offer["family_id"], subject_id=offer["subject_id"], kind="refill",
             title=(f"Reorder {offer['name']}: about {offer['days']} days left ({offer['stock']} left) "

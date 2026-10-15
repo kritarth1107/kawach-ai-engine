@@ -67,6 +67,28 @@ async def test_an_order_update_to_a_closed_chat_names_the_order(db, at):
     assert t["purpose"] == "alert_order" and t["params"] == ["Kamla"]
 
 
+async def test_a_reorder_offer_to_a_closed_chat_uses_the_order_notice(db, at):
+    at("2026-10-12 10:00")
+    await store.save_roster(db, FAM, MAA, [MAA, SON])
+    loop = await store.open_loop(
+        db, family_id=FAM, subject_id=MAA["id"], kind="refill", owner_id=SON["id"],
+        title="Reorder Amlodipine", detail={"item": "Amlodipine", "max_wakes": 1}, dedupe_key="refill:maa-win:medicine:amlodipine",
+    )
+    await db.commit()
+    host = SimHost()
+    host.world.closed.add(SON["id"])
+    host.world.closed.add(MAA["id"])
+    await tools.send_message(system_ctx(db, host, f"refill:wake:{loop.id}:1"),
+                             {"to": SON["id"], "text": "Amlodipine is down to about 2 days. Shall I reorder it, cash on delivery?"})
+    notice = host.world.templates[-1]
+    assert notice["purpose"] == "alert_order" and notice["params"] == ["Kamla"] and notice["to"] == SON["id"]
+    # the person cared for, whose chat is also closed, gets the same approved notice, not silence
+    await tools.send_message(system_ctx(db, host, f"refill:wake:{loop.id}:1"),
+                             {"to": MAA["id"], "text": "Amlodipine is down to about 2 days. Shall I reorder it, cash on delivery?"})
+    hers = host.world.templates[-1]
+    assert hers["purpose"] == "alert_order" and hers["params"] == ["Kamla"] and hers["to"] == MAA["id"]
+
+
 async def test_an_approval_to_a_closed_chat_uses_the_approval_notice(db, at):
     now = at("2026-10-12 09:00")
     await store.save_roster(db, FAM, MAA, [MAA, SON])

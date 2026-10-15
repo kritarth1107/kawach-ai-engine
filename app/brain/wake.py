@@ -516,7 +516,7 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                             family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt,
                             # an order's follow-up answers their own order: like a task update, it is not held back as a nudge
                             # (sim 2026-10-11: "has it come?" was blocked because they had not answered "placed")
-                            message_ref=f"{'task:' if kind == 'delivery' else ''}wake:{loop_id}:{runs}", channel="scheduler",
+                            message_ref=f"{'task:' if kind == 'delivery' else 'refill:' if kind == 'refill' else ''}wake:{loop_id}:{runs}", channel="scheduler",
                         ),
                     )
             stats["ran"] += 1

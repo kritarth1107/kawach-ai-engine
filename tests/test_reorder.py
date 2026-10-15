@@ -26,8 +26,11 @@ def ctx(db, speaker=C):
     )
 
 
-async def call(db, name, args, speaker=C):
-    out, err = await tools.run(ctx(db, speaker), name, args)
+async def call(db, name, args, speaker=C, members=None):
+    c = ctx(db, speaker)
+    if members is not None:
+        c.members = members
+    out, err = await tools.run(c, name, args)
     assert not err, out
     return json.loads(out)
 
@@ -134,3 +137,33 @@ async def test_self_care_is_asked_of_the_person_themselves(db, at):
     await _medicine(db, 4, about=CG)
     assert await reorder.open_offers(db) == 1
     assert (await _loops(db))[0].owner_id == CG
+
+
+async def test_one_person_hears_the_sooner_item_and_the_other_the_next_day(db, at):
+    at("2026-10-02 10:00")
+    await _medicine(db, 4)  # Amlodipine, twice a day: 2 days, asked of the caregiver
+    await call(db, "remember", {"domain": "medicine", "name": "Metformin", "about": ELDER,
+                                "details": {"dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin once a day"})
+    await call(db, "set_stock", {"medicine": "Metformin", "count": 3, "about": ELDER})  # 3 days
+    assert await reorder.open_offers(db) == 1
+    titles = [loop.title for loop in await _loops(db)]
+    assert titles == ["Reorder Amlodipine: about 2 days left (4 left) for person elder-ro"]
+    assert await reorder.open_offers(db) == 0
+    at("2026-10-03 10:00")
+    assert await reorder.open_offers(db) == 1
+    assert any(loop.title.startswith("Reorder Metformin") for loop in await _loops(db))
+
+
+async def test_two_people_can_each_hear_one_offer_the_same_morning(db, at):
+    at("2026-10-02 10:00")
+    other = {"id": "other-ro", "name": "Mohan", "role": "caregiver"}
+    people = [E, C, other]
+    await store.save_roster(db, FAM, E, people)
+    await call(db, "remember", {"domain": "medicine", "name": "Amlodipine", "about": ELDER,
+                                "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine twice"}, members=people)
+    await call(db, "set_stock", {"medicine": "Amlodipine", "count": 4, "about": ELDER}, members=people)
+    await call(db, "remember", {"domain": "medicine", "name": "Vitamin D", "about": other["id"],
+                                "details": {"dose": "1", "times": ["08:00"]}, "sentence": "Vitamin D daily"}, members=people)
+    await call(db, "set_stock", {"medicine": "Vitamin D", "count": 2, "about": other["id"]}, members=people)
+    assert await reorder.open_offers(db) == 2
+    assert {loop.owner_id for loop in await _loops(db)} == {CG, other["id"]}
