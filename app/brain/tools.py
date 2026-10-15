@@ -76,6 +76,13 @@ class TurnCtx:
     images: list[dict] = field(default_factory=list)
     # Set when a meal was just saved and water is still an open gap, so the reply asks it.
     pending_gap: str = ""
+    # Her last message asked something, and this message is a short answer to it. Setup and naming stay closed.
+    held_topic: str = ""
+    # The grounding check already said so: the code writes the line, the model does not get another chance to drop it.
+    needs_framing: bool = False
+    force_light: bool = False
+    # True when an earlier message of hers is in the thread (an apology can stand only then).
+    prior_assistant: bool = False
 
     @property
     def elder_id(self) -> str:

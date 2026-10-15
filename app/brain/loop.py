@@ -1067,6 +1067,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         voice=req.voice,
         location=req.location, images=list(req.images or []),
     )
+    if not is_system and req.speaker.get("id"):
+        earlier = await data.turns(req.speaker["id"])
+        last_hers = next((t.text for t in reversed(earlier) if t.role == "assistant" and (t.text or "").strip() not in ("", "none")), "")
+        ctx.prior_assistant = bool(last_hers)
+        ctx.held_topic = guards.held_topic(last_hers, req.text)
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
     brain_role = role_for(situation)
@@ -1172,6 +1177,18 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
+            profile = ctx.profiles.get(req.speaker["id"])
+            if any(c.source == "unwanted_apology" for c in claims):
+                reply.text = guards.light_reply(profile)
+                ctx.force_light = True
+                break
+            if any(c.source == "framing_missing" for c in claims):
+                reply.text = guards.with_framing(profile, text_now)
+                ctx.needs_framing = True
+                break
+            if ctx.held_topic and any(c.source == "followup_missing" for c in claims):
+                reply.text = guards.thread_reply(profile, ctx.held_topic)
+                break
             strippable = [c for c in claims if c.source not in (
                 "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered")]
             if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)):
@@ -1207,7 +1224,13 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                                 "content": json.dumps({"refused": "You have searched enough. If it is not there, say plainly you do not have it and ask."})})
                 continue
             ran_at = time.monotonic()
-            out, is_error = await tools.run(ctx, call.name, call.args)
+            if guards.blocks_held_thread(call.name, call.args or {}, ctx.held_topic):
+                out = json.dumps({"refused": "They answered your last question. Ask one specific question about that. "
+                                              "Do not start setup or ask what to call them."})
+                is_error = True
+                ctx.actions.append({"tool": call.name, "args": call.args, "ok": False, "refused": "held thread"})
+            else:
+                out, is_error = await tools.run(ctx, call.name, call.args)
             trace.note_timed("tool", call.name, (time.monotonic() - ran_at) * 1000)
             tool_texts.append(f"{call.name}{' (failed)' if is_error else ''}: {out}")
             ctx.known.append(out)
@@ -1286,6 +1309,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         name = (req.speaker.get("name") or "").strip()
         final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(
             final, greeted_today=greeted, mid_conversation=mid, names=[name, *name.split()[:1]])), ctx.profiles.get(req.speaker["id"]))
+        naming = any(a.get("ok") and a["tool"] == "remember" and (a.get("args") or {}).get("domain") == "naming" for a in ctx.actions)
+        settled = guards.settle_reply(
+            final, ctx.profiles.get(req.speaker["id"]), situation=ctx.situation, needs_framing=ctx.needs_framing,
+            force_light=ctx.force_light, held_topic_text=ctx.held_topic, actions=ctx.actions,
+            prior_assistant=ctx.prior_assistant, naming=naming)
+        if settled != final:
+            final = settled
+            guarded = True
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []

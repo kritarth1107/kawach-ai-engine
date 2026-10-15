@@ -213,6 +213,55 @@ def test_a_tease_and_a_missed_followup_are_rewritten_not_stripped():
     assert "general information" in more and "Do not only say noted" in more
 
 
+def test_a_medicine_explanation_is_framed_by_code():
+    from app.brain import guards
+
+    explained = ("Metformin helps keep blood sugar steady throughout the day. It reduces the sugar the liver releases. "
+                 "It also slows sugar from meals. It helps the body use insulin.")
+    line = guards.with_framing({"saved": {"language": "en"}}, explained)
+    assert guards.has_framing(line)
+    assert len(guards.sentences(line)) <= 3
+    assert "general information" in line and "doctor" in line
+    hindi = guards.with_framing({"saved": {"language": "hi"}, "now": "devanagari"}, "मेटफॉर्मिन दिन भर शुगर संभालती है।")
+    assert guards.script_of(hindi) == "devanagari"
+    assert "डॉक्टर" in hindi
+    already = "Metformin helps. This is general information; confirm it with your doctor or pharmacist."
+    assert guards.with_framing(None, already) == already
+
+
+def test_an_apology_with_no_earlier_message_of_hers_is_rewritten():
+    from app.brain import guards
+
+    sorry = "अरे नहीं अर्जुन जी, मेरा वो मतलब बिल्कुल नहीं था। मुझसे बड़ी गलती हो गई, मुझे माफ़ कीजिएगा।"
+    hi = {"saved": {"language": "hi"}, "now": "devanagari"}
+    out = guards.settle_reply(sorry, hi, situation="chit_chat", needs_framing=False, force_light=False, held_topic_text="",
+                              actions=[], prior_assistant=False, naming=False)
+    assert not guards.apology_in(out)
+    assert guards.script_of(out) == "devanagari"
+    kept = guards.settle_reply("Sorry, I had your name wrong.", {"saved": {"language": "en"}}, situation="chit_chat",
+                               needs_framing=False, force_light=False, held_topic_text="", actions=[], prior_assistant=True, naming=False)
+    assert kept.startswith("Sorry")
+
+
+def test_a_short_answer_stays_on_her_question():
+    from app.brain import guards
+
+    assert guards.held_topic("Trouble sleeping?", "Yes") == "Trouble sleeping"
+    assert guards.held_topic("Trouble sleeping?", "What time is dinner?") == ""
+    assert guards.held_topic("Trouble sleeping?", "I went out for a long walk today") == ""
+    assert guards.blocks_held_thread("setup_progress", {}, "Trouble sleeping")
+    assert not guards.blocks_held_thread("log_food", {}, "Trouble sleeping")
+    setup = "To get started, what does the family call Meera ji, and how should I address her?"
+    out = guards.settle_reply(setup, {"saved": {"language": "en"}}, situation="chit_chat", needs_framing=False, force_light=False,
+                              held_topic_text="Trouble sleeping", actions=[], prior_assistant=True, naming=False)
+    assert "Trouble sleeping" in out and "?" in out
+    assert "call" not in out.lower()
+    on_topic = "What's keeping you up?"
+    assert guards.settle_reply(on_topic, {"saved": {"language": "en"}}, situation="chit_chat", needs_framing=False,
+                               force_light=False, held_topic_text="Trouble sleeping", actions=[], prior_assistant=True,
+                               naming=False) == on_topic
+
+
 def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
     from eval.replay_cases import LIVE, SEEDS, load_cases
 

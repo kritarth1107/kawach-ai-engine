@@ -886,6 +886,133 @@ def saved_line_for(profile: dict | None, say: str) -> str:
     return canned(profile, _SAVED_LEAD).format(body=body)
 
 
+_FRAMING = {
+    "english": "This is general information; confirm it with your doctor or pharmacist.",
+    "indic": "Yeh general information hai; apne doctor ya pharmacist se confirm kar lijiye.",
+    "devanagari": "यह सामान्य जानकारी है; अपनी दवा डॉक्टर या फार्मासिस्ट से पुष्टि कर लें।",
+    "mr": "ही सामान्य माहिती आहे; तुमच्या डॉक्टर किंवा फार्मासिस्टकडे तपासून घ्या.",
+    "bengali": "এটা সাধারণ তথ্য; আপনার ডাক্তার বা ফার্মাসিস্টের সঙ্গে মিলিয়ে নিন।",
+    "tamil": "இது பொதுவான தகவல்; உங்கள் மருத்துவர் அல்லது மருந்தகரிடம் உறுதி செய்து கொள்ளுங்கள்.",
+    "telugu": "ఇది సాధారణ సమాచారం; మీ వైద్యుడు లేదా ఫార్మసిస్టుతో నిర్ధారించుకోండి.",
+    "kannada": "ಇದು ಸಾಮಾನ್ಯ ಮಾಹಿತಿ; ನಿಮ್ಮ ವೈದ್ಯರು ಅಥವಾ ಫಾರ್ಮಸಿಸ್ಟ್ ಅವರಲ್ಲಿ ಖಚಿತಪಡಿಸಿಕೊಳ್ಳಿ.",
+    "malayalam": "ഇത് പൊതുവായ വിവരമാണ്; നിങ്ങളുടെ ഡോക്ടറോടോ ഫാർമസിസ്റ്റിനോടോ ഉറപ്പാക്കുക.",
+    "gujarati": "આ સામાન્ય માહિતી છે; તમારા ડૉક્ટર અથવા ફાર્માસિસ્ટ પાસે ખાતરી કરો.",
+    "gurmukhi": "ਇਹ ਆਮ ਜਾਣਕਾਰੀ ਹੈ; ਆਪਣੇ ਡਾਕਟਰ ਜਾਂ ਫਾਰਮਾਸਿਸਟ ਨਾਲ ਪੁਸ਼ਟੀ ਕਰੋ।",
+    "odia": "ଏହା ସାଧାରଣ ସୂଚନା; ଆପଣଙ୍କ ଡାକ୍ତର କିମ୍ବା ଫାର୍ମାସିଷ୍ଟଙ୍କ ସହ ମିଳାଇ ନିଅନ୍ତୁ।",
+}
+_FRAMING_INFO = ("general information", "सामान्य जानकारी", "सामान्य माहिती", "সাধারণ তথ্য", "பொதுவான தகவல்", "సాధారణ సమాచారం",
+                 "ಸಾಮಾನ್ಯ ಮಾಹಿತಿ", "പൊതുവായ വിവരം", "સામાન્ય માહિતી", "ਆਮ ਜਾਣਕਾਰੀ", "ସାଧାରଣ ସୂଚନା")
+_FRAMING_WHO = ("doctor", "pharmacist", "डॉक्टर", "फार्मासिस्ट", "डॅाक्टर", "ডাক্তার", "மருத்துவர்", "వైద్యుడు", "ವೈದ್ಯ", "ഡോക്ടർ",
+                "ડૉક્ટર", "ਡਾਕਟਰ", "ଡାକ୍ତର")
+_LIGHT = {
+    "english": "Haha, you caught me there.",
+    "indic": "Arey, aapne pakad liya.",
+    "devanagari": "अरे, आपने पकड़ लिया।",
+    "mr": "अरे, तुम्ही पकडले.",
+    "bengali": "আরে, ধরে ফেলেছেন।",
+    "tamil": "அடா, பிடித்துவிட்டீர்கள்.",
+    "telugu": "అరె, పట్టుకున్నారు.",
+    "kannada": "ಅರೆ, ಹಿಡಿದುಬಿಟ್ಟಿರಿ.",
+    "malayalam": "അരെ, പിടിച്ചു.",
+    "gujarati": "અરે, પકડી પાડ્યા.",
+    "gurmukhi": "ਓਏ, ਫੜ ਲਿਆ।",
+    "odia": "ଆରେ, ଧରି ପକାଇଲେ।",
+}
+_APOLOGY = re.compile(r"sorry|apolog|forgive|\bmaaf\b|\bmaafi\b|माफ|माफ़|माफ़|क्षमा|सॉरी", re.I)
+_OFF_THREAD = re.compile(
+    r"get started|set(?:ting)? up|\bsetup\b|daily routine|medicine timings|"
+    r"what (?:does|should) .*(?:call|address)|how should I address|"
+    r"शुरू|सेटअप|दिनचर्या|क्या बुला|कैसे संबोध",
+    re.I,
+)
+_THREAD = {
+    "english": "{topic}. What's the one thing behind it?",
+    "indic": "{topic}. Uske peeche kaun si ek baat hai?",
+    "devanagari": "{topic}। इसके पीछे कौन सी एक बात है?",
+    "mr": "{topic}. याच्या मागे नेमकं काय आहे?",
+    "bengali": "{topic}। এর পেছনে কোন একটি কথা?",
+    "tamil": "{topic}. அதற்குப் பின்னால் இருக்கும் ஒரு காரணம் என்ன?",
+    "telugu": "{topic}. దాని వెనుక ఉన్న ఒక్క విషయం ఏమిటి?",
+    "kannada": "{topic}. ಅದರ ಹಿಂದೆ ಇರುವ ಒಂದು ವಿಷಯ ಯಾವುದು?",
+    "malayalam": "{topic}. അതിന് പിന്നിലെ ഒരു കാര്യം എന്താണ്?",
+    "gujarati": "{topic}. તેની પાછળ એક વાત શું છે?",
+    "gurmukhi": "{topic}. ਇਸ ਦੇ ਪਿੱਛੇ ਇੱਕ ਗੱਲ ਕੀ ਹੈ?",
+    "odia": "{topic}. ଏହା ପଛରେ ଗୋଟିଏ କଥା କ'ଣ?",
+}
+
+
+def has_framing(reply: str) -> bool:
+    """True when her reply already says both that it is general information and to check with a doctor or pharmacist."""
+    text = reply or ""
+    return any(p in text for p in _FRAMING_INFO) and any(p in text for p in _FRAMING_WHO)
+
+
+def with_framing(profile: dict | None, reply: str) -> str:
+    """A medicine explanation keeps its first sentences and always ends on the framing line. Three sentences at most."""
+    if not reply or has_framing(reply):
+        return reply or ""
+    line = canned(profile, _FRAMING)
+    kept = sentences(reply)[:2]
+    return " ".join([*kept, line]).strip()
+
+
+def apology_in(reply: str) -> bool:
+    """An apology in her own reply. A light 'you caught me' is not one."""
+    return bool(_APOLOGY.search(reply or ""))
+
+
+def light_reply(profile: dict | None) -> str:
+    return canned(profile, _LIGHT)
+
+
+def held_topic(last_assistant: str, user_text: str) -> str:
+    """Her last message asked something, and this message is a short answer, not a new question. The topic stays hers.
+    Empty when there is nothing to hold. A short answer is a few words; what those words are is not listed here."""
+    last = (last_assistant or "").strip()
+    msg = (user_text or "").strip()
+    if not last or ("?" not in last and "？" not in last):
+        return ""
+    if not msg or "?" in msg or "？" in msg or len(words(msg)) > 3 or len(msg) > 24:
+        return ""
+    return last.replace("？", "?").rstrip("?").strip()[:80]
+
+
+def blocks_held_thread(name: str, args: dict | None, topic: str) -> bool:
+    """Setup and a naming question do not start while her own question is still being answered."""
+    if not topic:
+        return False
+    if name == "setup_progress":
+        return True
+    return name == "remember" and str((args or {}).get("domain") or "") == "naming"
+
+
+def off_thread(reply: str, actions: list | None) -> bool:
+    """Her reply left the question she had just asked and started setup or naming."""
+    if any(a.get("ok") and a.get("tool") == "setup_progress" for a in (actions or [])):
+        return True
+    if any(a.get("ok") and a.get("tool") == "remember" and (a.get("args") or {}).get("domain") == "naming" for a in (actions or [])):
+        return True
+    return bool(_OFF_THREAD.search(reply or ""))
+
+
+def thread_reply(profile: dict | None, topic: str) -> str:
+    return canned(profile, _THREAD).format(topic=topic)
+
+
+def settle_reply(text: str, profile: dict | None, *, situation: str, needs_framing: bool, force_light: bool, held_topic_text: str,
+                 actions: list | None, prior_assistant: bool, naming: bool) -> str:
+    """The lines the model keeps dropping, written by code. A medicine explanation gets the framing. An apology with no
+    earlier message of hers becomes a light reply. A short answer that she turned into setup goes back to her question."""
+    out = text or ""
+    if situation == "med_question" or needs_framing:
+        out = with_framing(profile, out)
+    if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"):
+        out = light_reply(profile)
+    if held_topic_text and off_thread(out, actions):
+        out = thread_reply(profile, held_topic_text)
+    return out
+
+
 def medicine_order_problems(reply: str, known: Iterable[str]) -> list[str]:
     """A new medicine order confirms the address and asks what happened. Two questions, in two messages."""
     if not any(d.get("ask_what_happened") for d in _tool_json(known)):
