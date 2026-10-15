@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time
 
 import pytest
 from sqlalchemy import func, select, text
@@ -34,15 +33,22 @@ class Fake:
         self.release = asyncio.Event()
         self.hold_first = False
         self.pause = 0.0
+        self.inflight = 0
+        self.most_at_once = 0
 
     async def complete(self, route, **kw):
         self.calls += 1
+        self.inflight += 1
+        self.most_at_once = max(self.most_at_once, self.inflight)
         self.seen.append(json.dumps(kw.get("messages"), default=str))
-        if self.hold_first and self.calls == 1:
-            self.started.set()
-            await self.release.wait()
-        elif self.pause:
-            await asyncio.sleep(self.pause)
+        try:
+            if self.hold_first and self.calls == 1:
+                self.started.set()
+                await self.release.wait()
+            elif self.pause:
+                await asyncio.sleep(self.pause)
+        finally:
+            self.inflight -= 1
         return LLMReply(text="Noted.", tool_calls=[], model="fake")
 
 
@@ -135,17 +141,15 @@ async def test_a_burst_from_one_person_is_one_follow_up(sessions, model, monkeyp
 
 async def test_two_people_do_not_wait_for_each_other(sessions, model):
     model.pause = 0.35
-    t0 = time.monotonic()
     await _run(sessions, A, "ping from one", "batch-p1")
-    single = time.monotonic() - t0
-    t1 = time.monotonic()
+    model.most_at_once = 0
     one, two = await asyncio.gather(
         _run(sessions, A, "ping from one again", "batch-p2"),
         _run(sessions, B, "ping from two", "batch-p3"),
     )
-    both = time.monotonic() - t1
     assert one.reply and two.reply and not one.duplicate and not two.duplicate
-    assert both < single * 1.7
+    # their model calls ran at the same time (a wall-clock ratio was flaky on a loaded runner)
+    assert model.most_at_once >= 2
 
 
 async def test_a_message_does_not_wait_on_the_family_lock(sessions, model, monkeypatch):
