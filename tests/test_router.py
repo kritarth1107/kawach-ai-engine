@@ -181,12 +181,43 @@ async def test_both_copies_rate_limited_is_one_rate_limit_backed_off_as_before(m
     assert r.text == "after backoff" and a.calls == 3
 
 
-def test_a_rate_limit_pauses_the_hedge_and_the_default_waits_until_a_call_is_stuck(monkeypatch):
+def test_the_hedge_is_off_unless_asked_and_a_rate_limit_keeps_it_off(monkeypatch):
     monkeypatch.delenv("BRAIN_HEDGE_AFTER_S", raising=False)
-    assert router.hedge_after("brain") == router.HEDGE_DEFAULT_S
+    router.reset_breakers()
+    assert router.hedge_after("brain") == 0
     assert router.hedge_after("judge_fast") == 0
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "22")
+    assert router.hedge_after("brain") == 22
     router.note_throttled()
     assert router.hedge_after("brain") == 0
+    router.reset_breakers()
+
+
+async def test_a_mumbai_timeout_stays_in_india_unless_the_flag_is_on(monkeypatch):
+    import asyncio
+
+    seen: list[str] = []
+
+    class Places:
+        async def complete(self, route, **kw):
+            seen.append(route.location)
+            if route.location == "asia-south1":
+                raise asyncio.TimeoutError()
+            return LLMReply(text="from singapore", tool_calls=[], model=route.model)
+
+    route = Route("gemini", "gemini-3.5-flash", "asia-south1")
+    router.register_provider("gemini", Places())
+    try:
+        monkeypatch.delenv("GEMINI_SG_FALLBACK", raising=False)
+        with pytest.raises(router.AllModelsFailed):
+            await router.complete("brain", system_stable="s", messages=MSG, timeout_s=1, routes=[route])
+        assert seen == ["asia-south1"]
+        monkeypatch.setenv("GEMINI_SG_FALLBACK", "on")
+        seen.clear()
+        out = await router.complete("brain", system_stable="s", messages=MSG, timeout_s=1, routes=[route])
+        assert out.text == "from singapore" and seen == ["asia-south1", "asia-southeast1"]
+    finally:
+        router._providers.pop("gemini", None)
 
 
 async def test_a_cancelled_turn_cancels_both_copies(monkeypatch):

@@ -43,6 +43,9 @@ COMPACT_AFTER = 80
 # How long a turn may take (seconds). A person's message: the backend stops waiting at 120 s (aiPostBrainTurn), so past
 # that a reply is wasted while the family stays locked. A scheduled turn: under Cloud Run's 300 s request limit.
 TURN_BUDGET_S = {"message": float(os.getenv("BRAIN_TURN_BUDGET_S", "110")), "system": 240.0}
+# One model call. Live 15 Oct afternoon: a call that should be ~3 s sat for 54–78 s inside a 110 s budget, and the
+# person waited the whole time. 20 s is past a normal call (morning p90 12.5 s) and short of that stall.
+CALL_CAP_S = float(os.getenv("BRAIN_CALL_CAP_S", "20"))
 # Of that, how long it may wait for the family's previous turn to finish.
 LOCK_WAIT_S = {"message": 90.0, "system": 150.0}
 MIN_CALL_S = 8.0  # less left than this: no new model call is started
@@ -829,18 +832,18 @@ WRITE_TOOLS = {
     "log_food", "change_food", "nutrition_target", "pantry", "nutrition_settings", "nutrition_report",
 }
 PARTIAL = {
-    "devanagari": "मैंने आपकी बात नोट कर ली है 🙏 अभी पूरा जवाब देने में दिक्कत आ रही है, कुछ मिनट बाद फिर लिखिए।",
-    "mr": "तुमचं म्हणणं नोंदवून ठेवलं आहे 🙏 आत्ता पूर्ण उत्तर द्यायला अडचण येत आहे, काही मिनिटांनी पुन्हा लिहा.",
-    "bengali": "আপনার কথা লিখে রেখেছি 🙏 এখন পুরো উত্তর দিতে একটু অসুবিধা হচ্ছে, কয়েক মিনিট পরে আবার লিখুন।",
-    "tamil": "நீங்கள் சொன்னதைக் குறித்துக்கொண்டேன் 🙏 இப்போது முழு பதில் தர சிரமமாக உள்ளது, சில நிமிடங்கள் கழித்து மீண்டும் எழுதுங்கள்.",
-    "telugu": "మీరు చెప్పింది రాసుకున్నాను 🙏 ఇప్పుడు పూర్తి సమాధానం ఇవ్వడంలో ఇబ్బంది ఉంది, కొన్ని నిమిషాల తర్వాత మళ్ళీ రాయండి.",
-    "kannada": "ನೀವು ಹೇಳಿದ್ದನ್ನು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ 🙏 ಈಗ ಪೂರ್ತಿ ಉತ್ತರ ಕೊಡಲು ತೊಂದರೆಯಾಗುತ್ತಿದೆ, ಕೆಲವು ನಿಮಿಷಗಳ ನಂತರ ಮತ್ತೆ ಬರೆಯಿರಿ.",
-    "malayalam": "നിങ്ങൾ പറഞ്ഞത് കുറിച്ചുവെച്ചു 🙏 ഇപ്പോൾ മുഴുവൻ മറുപടി നൽകാൻ ബുദ്ധിമുട്ടുണ്ട്, കുറച്ച് മിനിറ്റ് കഴിഞ്ഞ് വീണ്ടും എഴുതൂ.",
-    "gujarati": "તમારી વાત નોંધી લીધી છે 🙏 હમણાં પૂરો જવાબ આપવામાં તકલીફ થાય છે, થોડી મિનિટ પછી ફરી લખજો.",
-    "gurmukhi": "ਮੈਂ ਤੁਹਾਡੀ ਗੱਲ ਨੋਟ ਕਰ ਲਈ ਹੈ 🙏 ਹੁਣੇ ਪੂਰਾ ਜਵਾਬ ਦੇਣ ਵਿੱਚ ਦਿੱਕਤ ਆ ਰਹੀ ਹੈ, ਕੁਝ ਮਿੰਟ ਬਾਅਦ ਫਿਰ ਲਿਖੋ।",
-    "odia": "ଆପଣଙ୍କ କଥା ଲେଖି ରଖିଛି 🙏 ଏବେ ପୂରା ଉତ୍ତର ଦେବାରେ ଅସୁବିଧା ହେଉଛି, କିଛି ମିନିଟ ପରେ ପୁଣି ଲେଖନ୍ତୁ।",
-    "indic": "Maine aapki baat note kar li hai 🙏 Abhi poora jawab dene mein dikkat aa rahi hai, kuch minute baad phir likhiye.",
-    "english": "I've noted what you told me 🙏 I'm having trouble answering fully right now; please write again in a few minutes.",
+    "devanagari": "मैंने आपकी बात नोट कर ली है 🙏 एक मिनट, मैं अभी जवाब देती हूँ।",
+    "mr": "तुमचं म्हणणं नोंदवून ठेवलं आहे 🙏 एक मिनिट, मी लगेच उत्तर देते.",
+    "bengali": "আপনার কথা লিখে রেখেছি 🙏 এক মিনিট, আমি এখনই উত্তর দিচ্ছি।",
+    "tamil": "நீங்கள் சொன்னதைக் குறித்துக்கொண்டேன் 🙏 ஒரு நிமிடம், நான் இப்போதே பதில் சொல்கிறேன்.",
+    "telugu": "మీరు చెప్పింది రాసుకున్నాను 🙏 ఒక్క నిమిషం, నేను ఇప్పుడే జవాబు ఇస్తాను.",
+    "kannada": "ನೀವು ಹೇಳಿದ್ದನ್ನು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ 🙏 ಒಂದು ನಿಮಿಷ, ನಾನು ಈಗಲೇ ಉತ್ತರಿಸುತ್ತೇನೆ.",
+    "malayalam": "നിങ്ങൾ പറഞ്ഞത് കുറിച്ചുവെച്ചു 🙏 ഒരു നിമിഷം, ഞാൻ ഇപ്പോൾ തന്നെ മറുപടി തരാം.",
+    "gujarati": "તમારી વાત નોંધી લીધી છે 🙏 એક મિનિટ, હું હમણાં જ જવાબ આપું છું.",
+    "gurmukhi": "ਮੈਂ ਤੁਹਾਡੀ ਗੱਲ ਨੋਟ ਕਰ ਲਈ ਹੈ 🙏 ਇੱਕ ਮਿੰਟ, ਮੈਂ ਹੁਣੇ ਜਵਾਬ ਦਿੰਦੀ ਹਾਂ।",
+    "odia": "ଆପଣଙ୍କ କଥା ଲେଖି ରଖିଛି 🙏 ଗୋଟିଏ ମିନିଟ୍, ମୁଁ ଏବେ ଉତ୍ତର ଦେଉଛି।",
+    "indic": "Maine aapki baat note kar li hai 🙏 Ek minute, main abhi jawab deti hoon.",
+    "english": "I've noted what you told me 🙏 One moment, I'll reply shortly.",
 }
 
 
@@ -860,6 +863,21 @@ def ack_reply(p: dict | None) -> str:
 
 def partial_reply(p: dict | None) -> str:
     return guards.canned(p, PARTIAL)
+
+
+async def finish_later(session: AsyncSession, req: TurnRequest) -> None:
+    """The model died after something was already saved. A retry of the whole turn would save it again, so a short loop
+    wakes in two minutes and answers what is left. Nothing was saved: the caller gets 503 and the backend holds the turn."""
+    who = req.speaker.get("id") or ""
+    if not who:
+        return
+    await store.open_loop(
+        session, family_id=req.family_id, subject_id=who, kind="finish", title="Finish the reply you owe them",
+        owner_id=who, wake_at=clock.now() + timedelta(minutes=2), alert_rule="dashboard",
+        dedupe_key=f"finish:{(req.message_ref or who)[:120]}",
+        detail={"next_action": "Answer their last message. What already succeeded stays saved; do not do it again.",
+                "max_wakes": 3, "rewake_minutes": 2},
+    )
 
 
 async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
@@ -1080,6 +1098,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         try:
             if left < MIN_CALL_S:
                 raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent")
+            cap = min(left, CALL_CAP_S)
+            # The Singapore call is a second budget only when that flag is on. Off: one call, then stop.
+            bound = cap + (CALL_CAP_S if router.sg_enabled() else 0)
             try:
                 reply = await asyncio.wait_for(router.complete(
                     brain_role,
@@ -1091,16 +1112,19 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                     max_tokens=LIGHT_MAX_TOKENS if effort == "minimal" else 6000,
                     effort=effort,
                     essential=not is_system,  # past the hard cap only people's messages get answers
-                ), timeout=left)
+                    timeout_s=cap,
+                ), timeout=bound)
             except TimeoutError as exc:
                 logger.error("turn budget spent family=%s step=%d", req.family_id, step)
                 raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent") from exc
         except router.AllModelsFailed:
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
-                raise  # nothing happened yet: the caller may safely try another path
-            # Something was already saved or sent: keep it (a retry elsewhere would do it twice) and say so plainly.
+                raise  # nothing happened yet: the caller may safely try another path (503, then the holding line)
+            # Something was already saved or sent: keep it (a retry elsewhere would do it twice). Say we'll finish, and do.
             logger.error("brain failed mid-turn family=%s after %s", req.family_id, [a["tool"] for a in ctx.actions])
             degraded = "none" if is_system else partial_reply(ctx.profiles.get(req.speaker["id"]))
+            if not is_system:
+                await finish_later(session, req)
             reply = None
             break
         msgs.append(reply.as_message())
@@ -1118,24 +1142,25 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             if is_system or not text_now or last:
                 break
             checked_at = time.monotonic()
-            claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                           tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions))
+            # Length and a bookkeeping opener are cut here. A second brain call for that was 5–17 s on live turns.
+            # Two questions, an invention, the wrong language or a missing name still go back to the model.
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
                                             wrong_terms=wrong_terms)
-            problems += grounding.problems(claims)
-            trace.note_step("check", (time.monotonic() - checked_at) * 1000)
-            if not problems:
-                break
-            # Another full brain call only to shorten small talk is most of a slow "Hi". An invention, the wrong
-            # language or a missing name still goes back to the model.
-            light_reply = situation in LIGHT_SITUATIONS and not ctx.actions and not is_system
-            if light_reply and _mechanical(problems):
-                # Another full brain call to shorten a greeting is most of a slow "Hi". Cut the extra sentences here.
+            if _mechanical(problems):
                 clipped = guards.clip_reply(text_now, cap=2 if ctx.speaker_is_elder else 3)
                 if clipped.strip():
                     reply.text = clipped
+                    text_now = clipped.strip()
                     guarded = True
-                    break
+                    problems = []
+            claims: list = []
+            if not problems:
+                claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
+                                               tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions))
+                problems += grounding.problems(claims)
+            trace.note_step("check", (time.monotonic() - checked_at) * 1000)
+            if not problems:
+                break
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
@@ -1247,7 +1272,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     )
     if not is_system:
         await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final))
-    if data.history_full:  # fewer turns than a full history cannot need folding yet
+    # Folding the thread is another model call. A turn that is already slow sends the reply first; the next one folds.
+    if data.history_full and (time.monotonic() - started) < 8:
         await maybe_compact(session, req.family_id, req.speaker["id"])
     await session.commit()
     trace.note_step("after", (time.monotonic() - after_at) * 1000)

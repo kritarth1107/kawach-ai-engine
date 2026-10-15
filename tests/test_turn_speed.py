@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from app.brain import loop
 from app.care import store, why
 from app.llm import router, spend
-from app.llm.router import LLMReply
+from app.care.models import OpenLoop
+from app.llm.router import LLMReply, ToolCall
 from app.sim.world import SimHost
 from tests.conftest import TEST_DB
 
@@ -117,3 +118,47 @@ async def test_hedged_brain_calls_answer_a_slow_turn_sooner(db, monkeypatch):
     finally:
         router._providers.pop("fake", None)
     assert out.reply.startswith("Here I am") and out.ms < 2000
+
+
+async def test_a_long_reply_is_cut_in_code_on_any_turn(db, model, monkeypatch):
+    await store.save_roster(db, FAM, ME, [ME])
+    monkeypatch.setenv("GROUNDING_CHECK", "off")
+    draft = "One thing here. Two things here. Three things here. Four things here. Five things here."
+    p = model(0.01, draft)
+    out = await loop.run_turn(db, SimHost(), req("please order milk", "speed-long"))
+    assert p.calls == 1 and "Four things" not in out.reply and "One thing here." in out.reply
+
+
+async def test_a_stall_after_a_save_promises_a_reply_and_opens_a_loop(db, monkeypatch):
+    await store.save_roster(db, FAM, ME, [ME])
+    monkeypatch.setattr(loop, "CALL_CAP_S", 0.3)
+    monkeypatch.setenv("GROUNDING_CHECK", "off")
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0")
+    monkeypatch.delenv("GEMINI_SG_FALLBACK", raising=False)
+
+    class ThenStuck:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, route, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMReply(text="", tool_calls=[ToolCall(
+                    id="c1", name="remember",
+                    args={"domain": "dish", "name": "khichdi", "details": {"food": "khichdi"}, "sentence": "Likes khichdi"},
+                )], model="fake")
+            await asyncio.sleep(2)
+            return LLMReply(text="Saved.", tool_calls=[], model="fake")
+
+    p = ThenStuck()
+    router.register_provider("fake", p)
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')
+    router.reset_breakers()
+    spend.reset()
+    try:
+        out = await loop.run_turn(db, SimHost(), req("ok", "speed-hold"))
+    finally:
+        router._providers.pop("fake", None)
+    assert "reply shortly" in out.reply
+    row = (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "finish"))).scalar_one()
+    assert row.status == "open" and row.owner_id == ME["id"]

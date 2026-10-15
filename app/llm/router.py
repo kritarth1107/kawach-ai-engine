@@ -335,19 +335,58 @@ async def complete(
                 if not queue:
                     raise AllModelsFailed("; ".join(errors)) from exc
                 continue
+            if exc.status == 429:
+                alt = await _singapore(role, route, call, errors, started)
+                if alt is not None:
+                    return alt
         except asyncio.TimeoutError:
             trip(route, None)
             errors.append(f"{route.key}: timeout")
+            alt = await _singapore(role, route, call, errors, started)
+            if alt is not None:
+                return alt
         logger.warning("llm fallback role=%s from=%s reason=%s", role, route.key, errors[-1])
     raise AllModelsFailed("; ".join(errors))
+
+
+def sg_enabled() -> bool:
+    """One Gemini call in Singapore after Mumbai fails. Off: that call's data stays in India. The founder turns it on."""
+    return os.getenv("GEMINI_SG_FALLBACK", "off").strip().lower() in ("on", "1", "true")
+
+
+def _sg_route(route: Route) -> Route | None:
+    if not sg_enabled() or route.provider != "gemini" or route.location != "asia-south1":
+        return None
+    return Route(route.provider, route.model, "asia-southeast1")
+
+
+async def _singapore(role: str, route: Route, call, errors: list[str], started: float):
+    """A single call in asia-southeast1 after this Mumbai route failed. None when the flag is off or that call fails too."""
+    alt = _sg_route(route)
+    if alt is None:
+        return None
+    logger.warning("llm singapore fallback role=%s from=%s", role, route.key)
+    try:
+        reply = await call(alt)
+    except (ModelUnavailable, asyncio.TimeoutError) as exc:
+        errors.append(f"{alt.key}: {type(exc).__name__} {str(exc)[:80]}")
+        return None
+    from app.llm import spend
+
+    inr = await spend.record(role, alt.model, reply.usage or {})
+    logger.info("llm role=%s model=%s usage=%s inr=%.3f", role, alt.key, reply.usage, inr)
+    from app.core import trace
+
+    trace.note_timed("model", role, (time.monotonic() - started) * 1000)
+    return reply
 
 
 RETRY_429_S: tuple[float, ...] = (1.5, 3.0, 6.0)  # about 10 s in all before the next route or AllModelsFailed
 
 # A duplicate of a call that is merely slow crowds the same shared capacity and comes back as a 429 (live 15 Oct: five
-# hedges in five minutes, then 429s at ~11 calls / 5 min). Hedge only once a single call is clearly stuck, and not at
-# all for a while after a 429.
-HEDGE_DEFAULT_S = 22.0
+# hedges in five minutes, then 429s, and the 22 s copy never returned before the person had given up). Off. Set
+# BRAIN_HEDGE_AFTER_S to turn a single copy back on. A 429 still pauses it.
+HEDGE_DEFAULT_S = 0.0
 HEDGE_PAUSE_S = 120.0
 _hedge_off_until = 0.0
 
@@ -359,9 +398,8 @@ def note_throttled() -> None:
 
 
 def hedge_after(role: str) -> float:
-    """Seconds after which a slow call is sent once more (0: never). Only Saheli's own replies (the brain and brain_hard),
-    where a person is waiting. BRAIN_HEDGE_AFTER_S overrides it. The default is past a normal brain call (live 15 Oct:
-    one call is 2.9 s at p50 and 12.5 s at p90), so a copy goes out only when that call is stuck."""
+    """Seconds after which a slow call is sent once more (0: never, the default). Only Saheli's own replies (the brain
+    and brain_hard), where a person is waiting. BRAIN_HEDGE_AFTER_S turns it on. A 429 turns it back off for a while."""
     if role not in ("brain", "brain_hard"):
         return 0.0
     if time.monotonic() < _hedge_off_until:

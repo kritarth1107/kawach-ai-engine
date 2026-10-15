@@ -216,7 +216,7 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
 
         system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
         reply = await router.complete("judge_fast", system_stable=system, effort=effort_for(doctor_note),
-                                      max_tokens=2000 if doctor_note else 800, timeout_s=12,
+                                      max_tokens=2000 if doctor_note else 800, timeout_s=8 if doctor_note else 6,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")

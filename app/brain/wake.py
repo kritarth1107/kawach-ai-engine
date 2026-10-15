@@ -119,6 +119,11 @@ KIND_PROMPTS = {
         "question with send_message, short and in their language. When they answer later, fix the record (remember / stop / "
         "confirm_change). Then close_loop {id} and reply none."
     ),
+    "finish": (
+        "[Finish the reply] Person {owner} is waiting. You already said you would reply shortly, and anything you saved "
+        "on their last message stays saved: do not log, send or change it again. Write the answer you owe them now, with "
+        "send_message to {owner}, in their language. Then close_loop {id} and reply none."
+    ),
     "refill": (
         "[Scheduled wake-up] {title}. Offer once, in the language they use with you, to reorder it the usual way. "
         "What: {item}. Where: {where}. How many: {qty}. Cash on delivery only. Ask person {owner} (their own self care, "
@@ -454,7 +459,9 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 await session.commit()
                 stats["expired"] += 1
                 continue
-            quiet, morning = await quiet_for(session, family_id, loop.owner_id or loop.subject_id) if loop.alert_rule != "alert_caregiver" else (False, None)
+            # A reply they are already waiting for goes out now, including at night and while an order is moving.
+            owes = loop.kind == "finish" or loop.alert_rule == "alert_caregiver"
+            quiet, morning = (False, None) if owes else await quiet_for(session, family_id, loop.owner_id or loop.subject_id)
             if quiet:
                 loop.wake_at = morning or next_morning()
                 await session.commit()
@@ -466,7 +473,7 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 await session.commit()
                 stats["failed"] += 1
                 continue
-            if loop.kind != "delivery" and loop.alert_rule != "alert_caregiver" and await _order_moving_for(session, loop):
+            if loop.kind not in ("delivery", "finish") and loop.alert_rule != "alert_caregiver" and await _order_moving_for(session, loop):
                 # An order or ride is under way for them and may wait for their answer: a new question waits, the way
                 # check-ins do (live 2026-10-08: "BP check kiya?" right after "send me the login code"). It is not used up.
                 from app.care.checkins import MOVING_WAIT
