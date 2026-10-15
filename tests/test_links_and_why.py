@@ -52,7 +52,7 @@ def ctx(db, speaker=C, host=None, *, channel="whatsapp", ref="m1"):
 
 async def remember(db, speaker=C, *, details=None, sentence="Metformin 500 mg at 08:00", links_=None, name="Metformin", domain="medicine",
                    channel="whatsapp", ref="m1"):
-    args = {"domain": domain, "name": name, "details": details if details is not None else dict(MED), "sentence": sentence}
+    args = {"about": ELDER, "domain": domain, "name": name, "details": details if details is not None else dict(MED), "sentence": sentence}
     if links_ is not None:
         args["links"] = links_
     out, err = await tools.run(ctx(db, speaker, channel=channel, ref=ref), "remember", args)
@@ -328,14 +328,14 @@ async def test_stopping_a_condition_asks_about_its_medicines(db, at):
     await record_basics(db)
     await remember(db, links_=[{"relation": "for", "to_domain": "condition", "to_name": "diabetes"}])
     # a caregiver in the chat is asked right away
-    out, err = await tools.run(ctx(db), "stop", {"domain": "condition", "name": "diabetes", "reason": "doctor says it is reversed"})
+    out, err = await tools.run(ctx(db), "stop", {"about": ELDER, "domain": "condition", "name": "diabetes", "reason": "doctor says it is reversed"})
     r = json.loads(out)
     assert not err and r["linked_medicines"] == ["Metformin"] and "ask" in r
     assert not (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "memory_check"))).scalars().all()
     assert (await store.active_fact(db, FAM, ELDER, "medicine:metformin")) is not None  # nothing stopped on its own
     # from the dashboard, one question goes to the caregiver
     await remember(db, domain="condition", name="diabetes", details={"name": "diabetes"}, sentence="Type 2 diabetes")
-    out, err = await tools.run(ctx(db, channel="dashboard"), "stop", {"domain": "condition", "name": "diabetes", "reason": "reversed"})
+    out, err = await tools.run(ctx(db, channel="dashboard"), "stop", {"about": ELDER, "domain": "condition", "name": "diabetes", "reason": "reversed"})
     loop = (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "memory_check"))).scalar_one()
     assert "Metformin" in loop.title and loop.detail["kind"] == "condition_stopped"
 
@@ -506,7 +506,7 @@ async def test_no_login_code_or_secret_is_stored_in_a_trace(db, at, model):
     await db.commit()
     model([say("", ("task_input", {"task_id": str(t.id), "kind": "otp", "value": "482913"})), say("Code mil gaya, aage badh rahi hoon.")])
     r = await run_turn(db, host, turn("482913", "wamid.OTP1"))
-    model([say("", ("note", {"topic": "misc", "text": "my otp is 553311"})), say("Theek hai.")])
+    model([say("", ("note", {"about": ELDER, "topic": "misc", "text": "my otp is 553311"})), say("Theek hai.")])
     await run_turn(db, host, turn("my otp is 553311", "wamid.OTP2"))
     stored = (await db.execute(select(why.TraceTurn).where(why.TraceTurn.family_id == FAM))).scalars().all()
     blob = json.dumps([{"text": s.text, "reply": s.reply, "tools": s.tools} for s in stored], ensure_ascii=False)
@@ -536,7 +536,7 @@ async def test_backend_calls_and_versions_carry_the_trace(db, at, monkeypatch):
     at("2026-10-11 12:00")
     host = Host()
     with trace.use("wamid.SYNC1", family_id=FAM):
-        out, err = await tools.run(ctx(db, host=host), "remember", {"domain": "medicine", "name": "Metformin", "details": dict(MED),
+        out, err = await tools.run(ctx(db, host=host), "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": dict(MED),
                                                                     "sentence": "Metformin 500 mg at 08:00"})
     assert not err
     sync = next(c for c in host.calls if c[0] == "sync_medicine_schedule")

@@ -46,13 +46,13 @@ async def test_a_retracted_event_is_not_read_back(db, at):
 
 async def test_stop_on_an_event_says_to_call_forget(db, at):
     at("2026-10-14 11:00")
-    out, err = await tools.run(ctx(db, E), "stop", {"domain": "condition", "name": "chest wound", "reason": "it was a joke"})
+    out, err = await tools.run(ctx(db, E), "stop", {"about": ELDER, "domain": "condition", "name": "chest wound", "reason": "it was a joke"})
     assert not err and "forget" in out and "not_found" in out
 
 
 async def test_forget_stops_a_matching_fact_and_a_joke_is_not_in_the_record(db, at):
     at("2026-10-14 11:00")
-    saved, err = await tools.run(ctx(db, C), "remember", {
+    saved, err = await tools.run(ctx(db, C), "remember", {"about": ELDER, 
         "domain": "condition", "name": "chest wound", "details": {"name": "chest wound"}, "sentence": "Chest wound on file",
     })
     assert not err and "created" in saved
@@ -69,7 +69,7 @@ async def test_forget_stops_a_matching_fact_and_a_joke_is_not_in_the_record(db, 
     card = await memory_upkeep.profile_card(db, FAM, E)
     assert "wound" not in card.lower()
     # a non-health fact ends at once
-    await tools.run(ctx(db, C), "remember", {
+    await tools.run(ctx(db, C), "remember", {"about": ELDER, 
         "domain": "preference", "name": "bhajans", "details": {}, "sentence": "Loves morning bhajans",
     })
     gone, err = await tools.run(ctx(db, C), "forget", {"what": "bhajans"})

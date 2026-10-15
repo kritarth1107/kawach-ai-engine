@@ -92,11 +92,11 @@ async def test_forget_and_restore(db, at):
 async def test_record_health_finds_problems_and_asks_once(db, at):
     at("2026-10-02 10:00")
     c = ctx(db)
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin 500 at 8"})
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Metformin SR", "details": {"dose": "1000 mg", "times": ["20:00"]}, "sentence": "Metformin SR 1000 at night"})
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Ecosprin", "details": {"dose": "75 mg"}, "sentence": "Ecosprin 75"})
-    await tools.run(c, "remember", {"domain": "doctor", "name": "Dr Mehra", "details": {"name": "Dr Mehra"}, "sentence": "Dr Mehra is her doctor"})
-    await tools.run(c, "remember", {"domain": "contact", "name": "Mehra clinic", "details": {"name": "Mehra"}, "sentence": "Mehra clinic number"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin 500 at 8"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin SR", "details": {"dose": "1000 mg", "times": ["20:00"]}, "sentence": "Metformin SR 1000 at night"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Ecosprin", "details": {"dose": "75 mg"}, "sentence": "Ecosprin 75"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "doctor", "name": "Dr Mehra", "details": {"name": "Dr Mehra"}, "sentence": "Dr Mehra is her doctor"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "contact", "name": "Mehra clinic", "details": {"name": "Mehra"}, "sentence": "Mehra clinic number"})
     kinds = {i["kind"] for i in await memory_upkeep.health(db, FAM, ELDER)}
     assert {"duplicate_medicine", "no_time", "duplicate_person"} <= kinds
     assert await memory_upkeep.ask_about_health(db, FAM, ELDER, CG) >= 3
@@ -108,9 +108,9 @@ async def test_record_health_finds_problems_and_asks_once(db, at):
 async def test_profile_card_and_notes_order(db, at):
     at("2026-10-02 10:00")
     c = ctx(db)
-    await tools.run(c, "remember", {"domain": "naming", "name": "address_as", "details": {"name": "Kamla ji", "avoid": ["Amma"]}, "sentence": "Call her Kamla ji"})
-    await tools.run(c, "remember", {"domain": "allergy", "name": "sulfa", "details": {"allergen": "sulfa"}, "sentence": "Allergic to sulfa drugs"})
-    await tools.run(c, "remember", {"domain": "preference", "name": "bhajans", "details": {}, "sentence": "Loves morning bhajans"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "naming", "name": "address_as", "details": {"name": "Kamla ji", "avoid": ["Amma"]}, "sentence": "Call her Kamla ji"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "allergy", "name": "sulfa", "details": {"allergen": "sulfa"}, "sentence": "Allergic to sulfa drugs"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "preference", "name": "bhajans", "details": {}, "sentence": "Loves morning bhajans"})
     card = await memory_upkeep.save_profile_card(db, FAM, E)
     assert "Kamla ji" in card and "sulfa" in card and "bhajans" in card
     await store.upsert_note(db, family_id=FAM, subject_id=ELDER, slug="diary", title="Diary", body_md="- 2026-10-01: long day")
@@ -181,8 +181,8 @@ async def test_recall_benchmark(db, at, meaning):
 async def test_two_notes_in_one_turn_both_kept(db, at):
     at("2026-10-02 10:00")
     c = ctx(db, E)
-    await tools.run(c, "note", {"topic": "food", "text": "loves besan chilla"})
-    await tools.run(c, "note", {"topic": "food", "text": "no karela please"})
+    await tools.run(c, "note", {"about": ELDER, "topic": "food", "text": "loves besan chilla"})
+    await tools.run(c, "note", {"about": ELDER, "topic": "food", "text": "no karela please"})
     body = [n for n in await store.notes(db, FAM, [ELDER]) if n.slug == "food"][0].body_md
     assert "besan chilla" in body and "karela" in body
 
@@ -195,7 +195,7 @@ async def test_memory_health_api(db, at):
     from app.main import app
 
     at("2026-10-02 10:00")
-    await tools.run(ctx(db), "remember", {"domain": "medicine", "name": "Ecosprin", "details": {"dose": "75 mg"}, "sentence": "Ecosprin 75"})
+    await tools.run(ctx(db), "remember", {"about": ELDER, "domain": "medicine", "name": "Ecosprin", "details": {"dose": "75 mg"}, "sentence": "Ecosprin 75"})
     await store.upsert_note(db, family_id=FAM, subject_id=ELDER, slug="family", title="Family", body_md="- argued with Rahul")
     await db.commit()
 

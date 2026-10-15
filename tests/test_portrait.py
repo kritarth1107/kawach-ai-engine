@@ -25,12 +25,12 @@ async def test_portrait_holds_the_person_mood_learned_words_people_day_and_doses
         {"domain": "routine", "name": "walks", "details": {"note": "most days"}, "sentence": "Walks most days"},
         {"domain": "preference", "name": "likes", "details": {"topics": ["Bhajans"]}, "sentence": "Enjoys bhajans"},
     ):
-        await tools.run(son, "remember", args)
+        await tools.run(son, "remember", {"about": ELDER["id"], **args})
     # something she said herself, saved from her message
     await store.add_turn(db, family_id=FAM, thread_id=ELDER["id"], role="user", text="Pihu ki birthday 12 November ko hai", speaker_id=ELDER["id"],
                          message_ref="wamid.P1")
     her = tools.TurnCtx(session=db, host=host, family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, SON], message_ref="wamid.P1")
-    await tools.run(her, "remember", {"domain": "occasion", "name": "pihu_birthday", "details": {"date": "11-12"}, "sentence": "Pihu's birthday is on 12 Nov"})
+    await tools.run(her, "remember", {"about": ELDER["id"], "domain": "occasion", "name": "pihu_birthday", "details": {"date": "11-12"}, "sentence": "Pihu's birthday is on 12 Nov"})
     await mood.record(db, family_id=FAM, subject_id=ELDER["id"], score=2, word="worried", summary="Worried about her knee")
     at("2026-10-13 11:40")
     await mood.record(db, family_id=FAM, subject_id=ELDER["id"], score=4, word="calm", summary="Happy after a video call")
@@ -75,9 +75,9 @@ async def test_the_emergency_card_never_shows_has_none_as_an_item_and_carries_th
     at("2026-10-13 09:00")
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])
     son = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=SON, members=[ELDER, SON])
-    await tools.run(son, "remember", {"domain": "allergy", "name": "none", "none": True, "details": {}, "sentence": "No known allergies."})
-    await tools.run(son, "remember", {"domain": "medicine", "name": "none", "none": True, "details": {}, "sentence": "Takes no regular medicines."})
-    await tools.run(son, "remember", {"domain": "home", "name": "address", "details": {"address": "14 Shastri Nagar, Jodhpur"}, "sentence": "Home address"})
+    await tools.run(son, "remember", {"about": ELDER["id"], "domain": "allergy", "name": "none", "none": True, "details": {}, "sentence": "No known allergies."})
+    await tools.run(son, "remember", {"about": ELDER["id"], "domain": "medicine", "name": "none", "none": True, "details": {}, "sentence": "Takes no regular medicines."})
+    await tools.run(son, "remember", {"about": ELDER["id"], "domain": "home", "name": "address", "details": {"address": "14 Shastri Nagar, Jodhpur"}, "sentence": "Home address"})
     card = await features.emergency(db, FAM, ELDER["id"])
     assert card["allergies"] == [] and card["medicines"] == []
     assert card["none"] == {"allergy": True, "condition": False, "medicine": True}

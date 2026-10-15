@@ -52,7 +52,7 @@ async def test_a_medicine_within_3_days_is_offered_once_per_run_out(db, at):
     await _medicine(db, 10)  # 2 a day: 5 days left, still on the dashboard, not offered yet
     assert await reorder.open_offers(db) == 0
     at("2026-10-02 10:01")
-    await call(db, "set_stock", {"medicine": "Amlodipine", "count": 6})  # 3 days
+    await call(db, "set_stock", {"about": ELDER, "medicine": "Amlodipine", "count": 6})  # 3 days
     assert await reorder.open_offers(db) == 1
     assert await reorder.open_offers(db) == 0
     loop = (await _loops(db))[0]
@@ -67,7 +67,7 @@ async def test_a_medicine_within_3_days_is_offered_once_per_run_out(db, at):
     assert await reorder.open_offers(db) == 0
     # A new count that is still within 3 days is a new run-out.
     at("2026-10-03 10:00")
-    await call(db, "set_stock", {"medicine": "Amlodipine", "count": 4})
+    await call(db, "set_stock", {"about": ELDER, "medicine": "Amlodipine", "count": 4})
     assert await reorder.open_offers(db) == 1
 
 

@@ -371,32 +371,60 @@ async def save_profile_card(session: AsyncSession, family_id: str, person: dict)
 # ── forget and restore ─────────────────────────────────────────────────────────
 
 
-async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str, source_kind: str = "caregiver_said", never_true: bool = False) -> dict:
+def line_ref(slug_: str, line: str) -> str:
+    return f"line:{slug_}:{hashlib.sha256(line.strip().encode()).hexdigest()[:8]}"
+
+
+# More matches than one memory usually leaves (its event and a line or two of notes): the tool asks which ones first.
+FORGET_ASK_OVER = 3
+
+
+async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], what: str, *, by: str, source_kind: str = "caregiver_said",
+                 never_true: bool = False, refs: list[str] | None = None, ask_if_many: bool = False) -> dict:
     """Hide memories matching `what` (notes lines, events) and end matching links (a health link from someone weaker than
     who set it only waits for a caregiver). Matching care-record facts are stopped too (with history). never_true: they
-    said it was a joke or never happened, so it is not read back and not proposed again."""
+    said it was a joke or never happened, so it is not read back and not proposed again.
+
+    Numbers in `what` must match too ("sleep at 04:04" is not every sleep). ask_if_many: when the words match more than
+    one memory (more than FORGET_ASK_OVER items, or events from different days), nothing is hidden and the matches come
+    back with refs; refs then hides exactly those (live 2026-10-16: "Sleep at 04:04 AM" hid a mother's whole sleep
+    routine, an older sleep log, her diary and setup notes)."""
     from app.care import links, memory_index
     from app.care.rejected import REJECTED_NOTE
 
-    words = [w for w in re.findall(r"\w{3,}", (what or "").lower())]
-    if not words:
+    words = [w for w in re.findall(r"\w{3,}|\d{1,2}", (what or "").lower())]
+    want = {str(r).strip() for r in refs or [] if str(r).strip()}
+    if not words and not want:
         return {"forgotten": 0, "note": "Nothing to remove. Call forget with the words of the saved event or fact."}
+
+    def hit(text: str, ref: str) -> bool:
+        return ref in want if want else all(w in text.lower() for w in words)
+
     removed_lines, rewrites = [], []
     notes = list((await session.execute(select(MemoryNote).where(MemoryNote.family_id == family_id, MemoryNote.subject_id.in_(subject_ids))
                                         .execution_options(populate_existing=True))).scalars())
     for note in notes:
         keep, drop = [], []
         for ln in (note.body_md or "").splitlines():
-            (drop if all(w in ln.lower() for w in words) else keep).append(ln)
+            (drop if ln.strip() and hit(ln, line_ref(note.slug, ln)) else keep).append(ln)
         if drop:
             rewrites.append((note, "\n".join(keep), drop))
             removed_lines += [{"subject": note.subject_id, "slug": note.slug, "title": note.title, "line": d} for d in drop]
     events = (await session.execute(select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id.in_(subject_ids)))).scalars()
-    hide = [e for e in events if all(w in (e.summary or "").lower() for w in words) and not (e.payload or {}).get("forgotten")]
-    ended_links, waiting_links = await links.forget_matching(session, family_id, subject_ids, words, by=by, source_kind=source_kind)
+    hide = [e for e in events if hit(e.summary or "", f"event:{e.id}") and not (e.payload or {}).get("forgotten")]
     facts = list((await session.execute(select(CareFact).where(
         CareFact.family_id == family_id, CareFact.subject_id.in_(subject_ids), CareFact.status == "active"))).scalars())
-    matched_facts = [f for f in facts if all(w in f"{f.text} {f.key}".lower() for w in words)]
+    matched_facts = [f for f in facts if hit(f"{f.text} {f.key}", f"fact:{f.key}")]
+    total = len(removed_lines) + len(hide) + len(matched_facts)
+    if ask_if_many and not want and (total > FORGET_ASK_OVER or len({e.day for e in hide}) > 1):
+        matches = ([{"ref": f"fact:{f.key}", "what": f.text, "kind": "care record"} for f in matched_facts]
+                   + [{"ref": f"event:{e.id}", "what": e.summary, "when": clock.ist(e.at).strftime("%d %b %H:%M")}
+                      for e in sorted(hide, key=lambda e: e.at, reverse=True)]
+                   + [{"ref": line_ref(i["slug"], i["line"]), "what": i["line"].strip()[:200], "note": i["title"]} for i in removed_lines])
+        return {"forgotten": 0, "matches": matches[:12], "count": total,
+                "note": "Nothing removed yet: these words match more than one memory. Call forget again with refs of only the "
+                        "ones they meant (usually the latest, the one this conversation is about). If it is not clear which, ask."}
+    ended_links, waiting_links = ([], []) if want else await links.forget_matching(session, family_id, subject_ids, words, by=by, source_kind=source_kind)
     why = f"asked to remove: {what[:180]}"
     if never_true:
         why = REJECTED_NOTE + why

@@ -32,7 +32,7 @@ def ist(day, hhmm):
 
 async def medicine(db, start):
     clock.set_now(start)
-    await tools.run(ctx(db), "remember", {"domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00", "21:00"]},
+    await tools.run(ctx(db), "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00", "21:00"]},
                                           "sentence": "Metformin 500 mg at 08:00 and 21:00"})
 
 

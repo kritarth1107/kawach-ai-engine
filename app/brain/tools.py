@@ -148,8 +148,23 @@ class TurnCtx:
         self.resolved_subject = found
         return found
 
+    def own(self, about: str | None) -> str:
+        """Whose a save is: the person named, else the speaker's own. Nothing is saved on someone the message is not about
+        (founder 2026-10-16: his "Good night" was saved as his mother's sleep). Only a scheduled turn and the dashboard,
+        which act on the person on the page, keep the care recipient as the default."""
+        if str(about or "").strip() or self.is_system or self.channel == "dashboard":
+            return self.subject(about)
+        me = self.speaker.get("id")
+        if not me:
+            return self.subject(about)
+        if me != self.elder_id and me not in {m.get("id") for m in self.members}:
+            raise ToolRefused("The speaker is not in HOUSEHOLD, so nothing is saved as theirs. If it is about a member, give "
+                              "about; otherwise save nothing.")
+        self.resolved_subject = me
+        return me
 
-Handler = Callable[[TurnCtx, dict], Awaitable[Any]]
+
+Handler =Callable[[TurnCtx, dict], Awaitable[Any]]
 _TOOLS: dict[str, tuple[ToolSpec, Handler]] = {}
 
 
@@ -239,7 +254,8 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
             if ctx.resolved_subject != addressed:
                 out["for_other"] = True
         blob = json.dumps(out, default=str, ensure_ascii=False)
-        ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400]})
+        ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400],
+                            **({"subject": ctx.resolved_subject} if ctx.resolved_subject else {})})
         return blob, False
     except ToolRefused as exc:
         await _release_record_locks(ctx)
@@ -265,6 +281,15 @@ class ToolRefused(Exception):
 
 ABOUT = {"type": "string", "description": "Who it is about: their id from HOUSEHOLD, or their name when only one member has that name. "
          "Leave out for the care recipient. A relative who is not a member is refused: never saved on someone else."}
+# A save (a log, a fact, a plan): blank is the speaker's own, never the care recipient (founder 2026-10-16).
+ABOUT_OWN = {"type": "string", "description": "Whose it is: their id from HOUSEHOLD, or their name when only one member has it. "
+             "Leave out only for the speaker's own: what the person writing did, felt, ate, measured, plans or wants ('good "
+             "night' is their own sleep). Give another person's id only when the message is about that person: they name or "
+             "mean them, or answer your question about them. Never save one person's things on another."}
+# The tools whose blank about is the speaker's own (TurnCtx.own); log_food has its own for_whom with the same rule.
+SAVES_FOR_SPEAKER = frozenset({"remember", "stop", "note", "fact_still_true", "note_habit", "log_dose", "log_vital", "log_event",
+                               "activity", "log_activity", "open_loop", "note_trip", "accept_trip", "set_stock",
+                               "add_doctor_question", "log_outcome", "feedback", "save_family_skill"})
 
 
 def acts_catalog_line() -> str:
@@ -305,7 +330,7 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
         "sentence": {"type": "string", "description": "One plain sentence for the record, e.g. 'Metformin 500 mg at 08:00 after breakfast'"},
         "none": {"type": "boolean", "description": "true when they said they have none of this (no regular medicines, no allergies, no "
                                                    "long-term conditions): domain medicine, allergy or condition; name is then ignored"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
         "links": {
             "type": "array",
             "description": "Only what they said connects it to something else, e.g. Metformin for diabetes, prescribed by Dr Sharma.",
@@ -334,7 +359,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         raise ToolRefused("Learnings are written by Saheli's nightly learning, not in chat. Save what they said in the domain that fits.")
     if domain in TOOL_DOMAINS:
         raise ToolRefused(f"Use the {TOOL_DOMAINS[domain]} tool for this.")
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     details = dict(a.get("details") or {})
     if a.get("none"):
         if domain not in NONE_DOMAINS:
@@ -460,13 +485,13 @@ async def _sync_medicine(ctx: TurnCtx, subject: str, key: str, value: dict, *, a
     "stop",
     "End a fact: a medicine that was stopped, a diet rule lifted, a routine that no longer happens, an allergy "
     "that was a mistake. A stop the elder reports for a health fact waits for a caregiver to confirm.",
-    {"domain": {"type": "string", "enum": sorted(DOMAINS)}, "name": {"type": "string"}, "reason": {"type": "string"}, "about": ABOUT,
+    {"domain": {"type": "string", "enum": sorted(DOMAINS)}, "name": {"type": "string"}, "reason": {"type": "string"}, "about": ABOUT_OWN,
      "wrong": {"type": "boolean", "description": "true when they say it was never true (a mistake, wrongly saved), not that it "
                                                  "ended; Saheli then never proposes or uses it again"}},
     ["domain", "name", "reason"],
 )
 async def stop(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     key = fact_key(a["domain"], a["name"])
     from app.care.rejected import REJECTED_NOTE
 
@@ -526,14 +551,15 @@ async def _after_condition_stop(ctx: TurnCtx, subject: str, condition) -> dict:
     "how they like things done. Use remember instead for anything that drives care (medicine, diet, allergy, "
     "naming, routine).",
     {
-        "about": {"type": "string", "description": "Person id, or 'family'"},
+        "about": {"type": "string", "description": "Person id, or 'family'. Leave out only for the speaker's own; another "
+                  "person's id only when the message is about them."},
         "topic": {"type": "string", "description": "Short topic, e.g. 'food', 'grandchildren', 'health history'"},
         "text": {"type": "string"},
     },
     ["topic", "text"],
 )
 async def note(ctx: TurnCtx, a: dict) -> dict:
-    subject = "family" if a.get("about") == "family" else ctx.subject(a.get("about"))
+    subject = "family" if a.get("about") == "family" else ctx.own(a.get("about"))
     existing = {n.slug: n for n in await store.notes(ctx.session, ctx.family_id, [subject])}
     s = slug(a["topic"])
     line = f"- {clock.ist_day()}: {a['text'].strip()}"
@@ -653,13 +679,13 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     "fact_still_true",
     "The person confirmed that a saved fact is still right (for one marked 'check it is still right'): it is fresh again. "
     "If it changed, use remember or stop instead.",
-    {"key": {"type": "string", "description": "The fact's key from the CARE RECORD, e.g. medicine:shelcal"}, "about": ABOUT},
+    {"key": {"type": "string", "description": "The fact's key from the CARE RECORD, e.g. medicine:shelcal"}, "about": ABOUT_OWN},
     ["key"],
 )
 async def fact_still_true(ctx: TurnCtx, a: dict) -> dict:
     from app.care import freshness
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     row = await store.active_fact(ctx.session, ctx.family_id, subject, a["key"])
     if not row:
         raise ToolRefused(f"No active fact {a['key']} for this person.")
@@ -676,20 +702,40 @@ async def fact_still_true(ctx: TurnCtx, a: dict) -> dict:
         "what": {"type": "string", "enum": ["breakfast", "lunch", "snack", "dinner", "water", "sleep"]},
         "at": {"type": "string", "description": "Usual time HH:MM, 24-hour. Leave out when they asked not to be asked."},
         "skip": {"type": "boolean", "description": "True when they asked not to be asked about this."},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["what"],
 )
 async def note_habit(ctx: TurnCtx, a: dict) -> dict:
     from app.care import meal_nudges
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     try:
         result = await meal_nudges.state_habit(ctx.session, ctx.family_id, subject, what=str(a.get("what") or ""),
                                                 at=a.get("at"), skip=bool(a.get("skip")))
     except ValueError as e:
         raise ToolRefused(str(e)) from e
     return {"saved": result, "what": a.get("what"), "at": a.get("at"), "skip": bool(a.get("skip"))}
+
+
+async def _not_theirs(ctx: TurnCtx, a: dict, subject: str, medicine: str) -> None:
+    """A medicine saved with no about that the speaker does not take: say who takes it, and let the model read from the
+    message whose dose or stock it is (saves default to the speaker's own, founder 2026-10-16)."""
+    from app.care import features
+
+    if str(a.get("about") or "").strip() or subject == ctx.elder_id or ctx.is_system:
+        return
+    if await features.find_medicine(ctx.session, ctx.family_id, subject, medicine):
+        return
+    owners = []
+    for p in [ctx.elder, *ctx.members]:
+        pid = p.get("id")
+        if pid and pid != subject and await features.find_medicine(ctx.session, ctx.family_id, pid, medicine):
+            owners.append(f"{p.get('name') or pid} (id {pid})")
+    if owners:
+        raise ToolRefused(f"Nothing saved: {ctx.member_name(subject)}, who is writing, has no {medicine} in their care record; "
+                          f"{', '.join(owners)} has it. If the message is about that person's medicine, call again with about = "
+                          "their id.")
 
 
 @tool(
@@ -704,15 +750,16 @@ async def note_habit(ctx: TurnCtx, a: dict) -> dict:
         "day": {"type": "string", "description": "today (default), yesterday, or YYYY-MM-DD within the last 7 days"},
         "time": {"type": "string", "description": "The dose time (HH:MM) when the medicine is taken more than once a day"},
         "note": {"type": "string"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["medicine", "outcome"],
 )
 async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     from app.care import doses
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     name = a["medicine"].split(":", 1)[-1].replace("_", " ")
+    await _not_theirs(ctx, a, subject, a["medicine"])
     day = doses.resolve_day(a.get("day"))
     if not day:
         raise ToolRefused("day must be today, yesterday or a date in the last 7 days.")
@@ -778,12 +825,12 @@ VITAL_KINDS = ["bp", "sugar", "weight", "height", "bmi", "body_fat", "muscle_mas
         "unit": {"type": "string"},
         "taken_on": {"type": "string", "description": "YYYY-MM-DD when measured, if not today"},
         "note": {"type": "string"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["kind", "value"],
 )
 async def log_vital(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     a = {k: v for k, v in a.items() if k != "about" and v not in (None, "")}
     if a["kind"] == "other" and not str(a.get("name") or "").strip():
         raise ToolRefused("Say what was measured in name (e.g. visceral fat).")
@@ -829,12 +876,12 @@ async def log_vital(ctx: TurnCtx, a: dict) -> dict:
         "mood_word": {"type": "string", "description": "How they feel in one English word for the dashboard, e.g. cheerful, calm, tired, "
                                                        "worried, sad, irritated, lonely, unwell"},
         "meal_skipped": {"type": "boolean", "description": "kind meal: they skipped the meal or did not eat"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["kind", "summary"],
 )
 async def log_event(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     from app.care import mood
 
     score = mood.score_of(a.get("mood_score"))
@@ -1533,14 +1580,14 @@ def _reminder_line(r: dict) -> dict:
         "goal": {"type": "string", "description": "What they are working towards, if they said ('lose 5 kg', '10k steps')"},
         "place": {"type": "string"},
         "key": {"type": "string", "description": "change/pause/resume/stop: the activity's key from ACTIVITIES"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["action"],
 )
 async def activity(ctx: TurnCtx, a: dict) -> dict:
     from app.care import activities as acts
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     action = a["action"]
     if action == "add":
         typ = a.get("type") if a.get("type") in acts.CATALOG else "custom"
@@ -1608,14 +1655,14 @@ async def activity(ctx: TurnCtx, a: dict) -> dict:
             "kind": {"type": "string", "enum": [*VITAL_KINDS[:-1], "steps"]},
             "value": {"type": "string"}, "unit": {"type": "string"}}, "required": ["kind", "value"]}},
         "day": {"type": "string", "description": "YYYY-MM-DD when it was not today"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["key", "done", "summary"],
 )
 async def log_activity(ctx: TurnCtx, a: dict) -> dict:
     from app.care import activities as acts
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     key = a["key"] if str(a["key"]).startswith("activity:") else acts.key_for(a["key"])
     fact = await store.active_fact(ctx.session, ctx.family_id, subject, key)
     label = acts.normalise(fact.value)["label"] if fact else (acts.CATALOG.get(str(a["key"])) or {}).get("label") or str(a["key"])
@@ -1824,7 +1871,7 @@ def wake_from_clock(hhmm: str, now: datetime | None = None) -> datetime | None:
         "owner": {"type": "string", "description": "Member id of who must act next (default: the person it is about on a "
                                                    "scheduled turn, else the speaker)"},
         "next_action": {"type": "string", "description": "What has to happen next, in a few words"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["kind", "title"],
 )
@@ -1832,7 +1879,7 @@ async def open_loop_tool(ctx: TurnCtx, a: dict) -> dict:
     wake = wake_from_clock(a["at"]) if a.get("at") else None
     if wake is None and a.get("check_back_in_minutes"):
         wake = clock.now() + timedelta(minutes=a["check_back_in_minutes"])
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     ids = {m.get("id") for m in [ctx.elder, *ctx.members]}
     # Every open job has an owner who acts next (live: check-in questions were owned by the scheduler, so nobody was)
     owner = a.get("owner") if a.get("owner") in ids else (subject if ctx.is_system else ctx.speaker.get("id"))
@@ -3466,7 +3513,7 @@ async def ways_there(ctx: TurnCtx, a: dict) -> dict:
         "arrives": {"type": "string", "description": "Landing time, ISO 8601 in IST"},
         "departs": {"type": "string", "description": "Departure time, ISO 8601 in IST, when known"},
         "pnr": {"type": "string", "description": "The booking reference, when the message has one"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["airline", "flight", "origin", "destination", "arrives"],
 )
@@ -3489,7 +3536,7 @@ async def note_trip(ctx: TurnCtx, a: dict) -> dict:
         logger.warning("flight status not checked: %s", exc)
     if moved:
         arrives = ways.retimed(arrives, moved)
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     cab = ways.pickup_after_landing(arrives)
     departs = later.parse_at(a.get("departs")) if a.get("departs") else None
     origin, destination = str(a.get("origin") or "").strip(), str(a.get("destination") or "").strip()
@@ -3546,7 +3593,7 @@ def _airline_service(name: str) -> str | None:
         "last_name": {"type": "string", "description": "Check-in only: the last name on the ticket"},
         "pnr": {"type": "string", "description": "Check-in only, when it was not on the saved journey"},
         "service": {"type": "string", "description": "Cab only, when they named one app: uber, ola or rapido"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["offer"],
 )
@@ -3557,7 +3604,7 @@ async def accept_trip(ctx: TurnCtx, a: dict) -> dict:
     offer = a.get("offer")
     if offer not in ("cab", "checkin"):
         raise ToolRefused("offer is cab or checkin, and only after they said yes to that offer.")
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     rows = [f for f in await store.facts(ctx.session, ctx.family_id, subject, domains=["trip"], statuses=("active",)) if f.status == "active"]
     flight = str(a.get("flight") or "").strip()
     if flight:
@@ -3877,13 +3924,14 @@ def _name_of(ctx: TurnCtx, subject: str) -> str:
     "arrived ('10 left', 'naya patta aaya', a new bottle). count is tablets or doses on hand now. If they name a new "
     "strip or bottle but no number of tablets, ask how many are in it and then call this; do not guess a pack size. "
     "Saheli then works out days left and can offer a reorder before it runs out.",
-    {"medicine": {"type": "string"}, "count": {"type": "integer", "minimum": 0, "maximum": 2000}, "about": ABOUT},
+    {"medicine": {"type": "string"}, "count": {"type": "integer", "minimum": 0, "maximum": 2000}, "about": ABOUT_OWN},
     ["medicine", "count"],
 )
 async def set_stock_tool(ctx: TurnCtx, a: dict) -> dict:
     from app.care import features
 
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
+    await _not_theirs(ctx, a, subject, a["medicine"])
     f = await features.find_medicine(ctx.session, ctx.family_id, subject, a["medicine"])
     if not f:
         raise ToolRefused("That medicine is not in the care record. Save it with remember first.")
@@ -3938,11 +3986,11 @@ async def care_team_tool(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "add_doctor_question",
     "Add a question to ask the doctor at an appointment (saved with the appointment and shown on the report).",
-    {"appointment": {"type": "string", "description": "Appointment name or key, e.g. the doctor's name"}, "question": {"type": "string"}, "about": ABOUT},
+    {"appointment": {"type": "string", "description": "Appointment name or key, e.g. the doctor's name"}, "question": {"type": "string"}, "about": ABOUT_OWN},
     ["appointment", "question"],
 )
 async def add_doctor_question(ctx: TurnCtx, a: dict) -> dict:
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     appts = await store.facts(ctx.session, ctx.family_id, subject, domains=["appointment"], statuses=("active",))
     want = slug(a["appointment"].split(":", 1)[-1])
     hit = next((f for f in appts if f.key.split(":", 1)[1] == want or want in f.key or want in slug(str(f.value.get("doctor", "")))), None)
@@ -4101,14 +4149,14 @@ async def patterns_tool(ctx: TurnCtx, a: dict) -> dict:
     {
         "kind": {"type": "string", "enum": ["fall", "hospital_visit", "er_visit", "doctor_visit", "medicine_changed", "recovered", "all_fine", "other"]},
         "summary": {"type": "string", "description": "One line in plain words, e.g. 'slipped in the bathroom, knee hurts'"},
-        "about": ABOUT,
+        "about": ABOUT_OWN,
     },
     ["kind", "summary"],
 )
 async def log_outcome(ctx: TurnCtx, a: dict) -> dict:
     from app.care import outcomes
 
-    fresh = await outcomes.record_outcome(ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), kind=a["kind"],
+    fresh = await outcomes.record_outcome(ctx.session, family_id=ctx.family_id, subject_id=ctx.own(a.get("about")), kind=a["kind"],
                                           summary=a["summary"], source="said", actor_id=ctx.speaker.get("id"),
                                           ref=ctx.message_ref and f"oc:{ctx.message_ref}:{a['kind']}")
     return {"logged": fresh, "kind": a["kind"]}
@@ -4154,13 +4202,13 @@ async def offer_buttons(ctx: TurnCtx, a: dict) -> dict:
     "feedback",
     "Record that someone found something you said useful or not (when they say so in words): a pattern, an alert or a "
     "suggestion. target is the key it was given (for patterns: 'pattern:<key>:subj=<id>').",
-    {"target": {"type": "string"}, "vote": {"type": "string", "enum": ["up", "down"]}, "about": ABOUT},
+    {"target": {"type": "string"}, "vote": {"type": "string", "enum": ["up", "down"]}, "about": ABOUT_OWN},
     ["target", "vote"],
 )
 async def feedback(ctx: TurnCtx, a: dict) -> dict:
     from app.care import outcomes
 
-    await outcomes.record_feedback(ctx.session, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")), target=a["target"],
+    await outcomes.record_feedback(ctx.session, family_id=ctx.family_id, subject_id=ctx.own(a.get("about")), target=a["target"],
                                    vote=a["vote"], by=ctx.speaker.get("id"), source="said")
     return {"recorded": True}
 
@@ -4186,8 +4234,11 @@ async def learning_consent(ctx: TurnCtx, a: dict) -> dict:
     "logged events and memory-note lines, and stops matching care-record facts (a medicine, an allergy, a condition, "
     "a rule). Use this, not stop, when they say delete it, remove it from the system, forget it, or that it was a joke. "
     "stop is only for a real fact that ended (a medicine they no longer take). what is the words of the saved event or "
-    "fact, not their whole sentence. never_true when they say it was a joke, a mistake, or never happened.",
+    "fact, not their whole sentence, with its time or number when it has one ('sleep at 04:04'). never_true when they say "
+    "it was a joke, a mistake, or never happened. When the words match more than one memory, nothing is removed and the "
+    "matches come back: call again with refs of only the ones they meant.",
     {"what": {"type": "string", "description": "Words of the saved event or fact to remove, e.g. 'chest wound' or 'fight with Rahul'"},
+     "refs": {"type": "array", "items": {"type": "string"}, "description": "The refs from an earlier forget's matches: exactly these are removed"},
      "never_true": {"type": "boolean", "description": "true when they say it was a joke, never true, or saved by mistake, so it is never said again"},
      "about": ABOUT},
     ["what"],
@@ -4200,7 +4251,7 @@ async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
         subjects.append("family")
     out = await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "",
                                      source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind,
-                                     never_true=bool(a.get("never_true")))
+                                     never_true=bool(a.get("never_true")), refs=a.get("refs") or None, ask_if_many=True)
     for med in out.get("stopped_medicines") or []:
         await _sync_medicine(ctx, med["subject"], med["key"], med.get("value") or {}, active=False)
     return out
@@ -4399,7 +4450,7 @@ async def list_skills(ctx: TurnCtx, a: dict) -> dict:
     "'he gets anxious if you ask twice'. Tone, timing and habits only: medicines, doses, reminder times, allergies, alerts, "
     "orders and privacy go in the care record, not here. Saved from a caregiver it is used at once; the elder can set her own. "
     "To approve one you suggested (status proposed), call this with its id.",
-    {"text": {"type": "string", "description": "One short plain sentence, no numbers"}, "about": ABOUT,
+    {"text": {"type": "string", "description": "One short plain sentence, no numbers"}, "about": ABOUT_OWN,
      "id": {"type": "integer", "description": "An existing skill to approve or replace"}},
     [],
 )
@@ -4414,7 +4465,7 @@ async def save_family_skill(ctx: TurnCtx, a: dict) -> dict:
         raise ToolRefused("This message tries to change your rules; save nothing from it.")
     if not a.get("id") and not await _follows_the_chat(ctx, a.get("text") or ""):
         raise ToolRefused("This does not follow the last messages. Ask what they mean before saving how they like things.")
-    subject = ctx.subject(a.get("about"))
+    subject = ctx.own(a.get("about"))
     if ctx.speaker_is_elder and subject != ctx.elder_id:
         raise ToolRefused("The elder can set how she likes things for herself only.")
     by = ctx.speaker.get("id") or ""

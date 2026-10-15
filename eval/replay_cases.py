@@ -213,12 +213,21 @@ def message_of(case: dict) -> str:
 # ── checking what must hold ─────────────────────────────────────────────────
 
 
-def code_check(rule: dict, reply: str, tools: list[str], messages: list[str] | None = None) -> str | None:
+def code_check(rule: dict, reply: str, tools: list[str], messages: list[str] | None = None, actions: list[dict] | None = None) -> str | None:
     """None when the rule holds (or is for the judge); else why not."""
     from app.brain import guards
+    from app.brain.tools import SAVES_FOR_SPEAKER
     from app.care import naming
 
     t = rule.get("type")
+    if t == "saved_for":
+        # whose record each save went to (founder 2026-10-16: the speaker's own unless the message is about someone else)
+        want = str(rule.get("subject") or "")
+        saved = [str(a["subject"]) for a in actions or [] if a.get("ok", True) and a.get("tool") in SAVES_FOR_SPEAKER and a.get("subject")]
+        wrong = sorted({x for x in saved if x != want})
+        if wrong:
+            return f"saved for {wrong}, not {want}"
+        return "nothing was saved" if rule.get("must") and not saved else None
     if t == "not_contains":
         hits = naming.uses_avoided(reply, [str(w) for w in rule.get("words") or [] if len(str(w)) <= 40])
         return f"used {hits}" if hits else None
@@ -349,7 +358,8 @@ async def verdict(case: dict, res) -> dict:
     bubbles = [str(m) for m in (getattr(res, "messages", None) or []) if str(m).strip() and str(m).strip().lower() != "none"]
     shown = "\n---\n".join(bubbles) if len(bubbles) > 1 else (bubbles[0] if bubbles else (res.reply or ""))
     reply = "\n".join(x for x in [shown, *sent] if x and x.strip().lower() != "none")
-    fails = [w for w in (code_check(r, reply, tools, list(getattr(res, "messages", None) or [])) for r in case.get("assertion") or []) if w]
+    fails = [w for w in (code_check(r, reply, tools, list(getattr(res, "messages", None) or []), list(res.actions or []))
+                         for r in case.get("assertion") or []) if w]
     why = ""
     if not fails and (case.get("rubric") or any(r.get("type") in ("grounded", "no_medical_advice", "no_false_claim") for r in case.get("assertion") or [])):
         ok, why = await judge_holds(case, reply, tools, tool_results)
@@ -584,6 +594,7 @@ CURIOUS = Path(__file__).parent / "fixtures" / "curiosity_2026-10-15.jsonl"  # a
 LIVE = Path(__file__).parent / "fixtures" / "live_2026-10-15.jsonl"  # advice, a tease, and a missed follow-up (open)
 BRIEF = Path(__file__).parent / "fixtures" / "brief_2026-10-15.jsonl"  # a waiting brief stays its own message (open)
 REASON = Path(__file__).parent / "fixtures" / "reasoning_2026-10-15.jsonl"  # promises, consent, reference, repeats (open)
+WHOSE = Path(__file__).parent / "fixtures" / "whose_2026-10-16.jsonl"  # a save is the speaker's own unless the message is about someone else
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -602,6 +613,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in BRIEF.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and REASON.exists():
         cases += [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and WHOSE.exists():
+        cases += [json.loads(line) for line in WHOSE.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]
