@@ -118,6 +118,38 @@ async def medicine_times(session: AsyncSession, family_id: str, subject_id: str,
     return sorted(t for t in (hhmm(x) for x in f.value.get("times") or []) if t) if f else []
 
 
+async def ended_medicines(session: AsyncSession, family_id: str, subject_ids: list[str]) -> tuple[set[str], list[str]]:
+    """Keys and names of medicines that were stopped or replaced, and are not current under any dose.
+
+    The names are that family's own record. A dose answer must not take a time from one of these."""
+    current: set[str] = set()
+    ended_keys: set[str] = set()
+    ended_names: list[str] = []
+    seen: set[str] = set()
+    for sid in dict.fromkeys(s for s in subject_ids if s and s != "family"):
+        rows = await store.facts(session, family_id, sid, domains=["medicine"], statuses=("active", "stopped", "superseded"))
+        for f in rows:
+            if f.status == "active":
+                name = str((f.value or {}).get("name") or "").strip()
+                if name:
+                    current.add(name.casefold())
+        for f in rows:
+            if f.status == "active":
+                continue
+            ended_keys.add(f.key)
+            name = str((f.value or {}).get("name") or "").strip()
+            folded = name.casefold()
+            if len(name) >= 4 and folded not in current and folded not in seen:
+                seen.add(folded)
+                ended_names.append(folded)
+    return ended_keys, ended_names
+
+
+def mentions_ended_medicine(text: str, ended_names: list[str]) -> bool:
+    low = (text or "").casefold()
+    return any(name in low for name in ended_names)
+
+
 def _slot(times: list[str], given: str | None, at_time: str | None) -> str | None:
     """Which dose of the day this is about: the time given, the only time, or (said on the day) the latest dose time
     that has come by then; None when it cannot be told."""

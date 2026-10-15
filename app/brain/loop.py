@@ -272,7 +272,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         digest.loops(loops),
         ("ACTIVE TASKS (orders and rides running in the background):\n" + "\n".join(f"  - {task_runtime.describe(t)}" for t in tasks))
         if tasks else "ACTIVE TASKS: none.",
-        reminders_block(req),
+        await reminders_block(session, req),
         *([dose] if dose else []),
         onboarding_block(req),
         waiting_block(req),
@@ -496,10 +496,16 @@ async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
     return dose_answer_line(last.text, meds)
 
 
-def reminders_block(req: TurnRequest) -> str:
+async def reminders_block(session: AsyncSession, req: TurnRequest) -> str:
     """Reminders due in the next hours, so one the person says is already done is skipped instead of going out anyway
-    (live 2026-10-12: "i had the medicine" at 00:12, and the reminder for it still came at 00:15)."""
-    rows = [r for r in (req.reminders_soon or []) if isinstance(r, dict) and r.get("id")]
+    (live 2026-10-12: "i had the medicine" at 00:12, and the reminder for it still came at 00:15).
+    A medicine that was stopped or replaced is left out: its old time is not an answer."""
+    from app.care import doses
+
+    ended, names = await doses.ended_medicines(session, req.family_id, [req.elder["id"], req.speaker.get("id") or ""])
+    rows = [r for r in (req.reminders_soon or [])
+            if isinstance(r, dict) and r.get("id") and str(r.get("item") or "") not in ended
+            and not doses.mentions_ended_medicine(str(r.get("text") or ""), names)]
     if not rows:
         return ""
     names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
@@ -858,6 +864,8 @@ SCOPE = {
     "indic": "Yeh mere kaam se bahar hai 🙏 Main aapki sehat, routine, schedule aur parivaar ki dekhbhaal mein madad karti hoon. Iske liye koi search engine ya doosra AI assistant behtar rahega.",
     "english": "That's outside what I do 🙏 I help with your health, routines, schedules and family care. A search engine or a general AI assistant is better for that.",
 }
+# A question. An acknowledgement is not the answer. The tag comes from the situation already on the turn.
+ANSWER_SITUATIONS = frozenset({"med_question", "caregiver_update", "refill", "appointment", "order", "relay"})
 ACK = {"devanagari": "जी, ठीक है 🙏", "mr": "हो, ठीक आहे 🙏", "indic": "Ji, theek hai 🙏", "english": "Okay, noted 🙏",
        "bengali": "ঠিক আছে 🙏", "tamil": "சரி 🙏", "telugu": "సరే 🙏", "kannada": "ಸರಿ 🙏", "malayalam": "ശരി 🙏",
        "gujarati": "ઠીક છે 🙏", "gurmukhi": "ਠੀਕ ਹੈ 🙏", "odia": "ଠିକ ଅଛି 🙏"}
@@ -865,6 +873,10 @@ ACK = {"devanagari": "जी, ठीक है 🙏", "mr": "हो, ठीक �
 
 def ack_reply(p: dict | None) -> str:
     return guards.canned(p, ACK)
+
+
+def _only_ack(text: str, profile: dict | None) -> bool:
+    return (text or "").strip() == ack_reply(profile).strip()
 
 
 def partial_reply(p: dict | None) -> str:
@@ -1286,9 +1298,30 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
         guarded = True
-    if guarded and not final and not is_system:
+    profile = ctx.profiles.get(req.speaker["id"])
+    saved = any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions)
+    if not is_system and situation in ANSWER_SITUATIONS and not saved and (not final or final == "none" or _only_ack(final, profile)):
+        # They asked something and nothing was saved. "Okay, noted" is not the answer.
+        try:
+            again = await router.complete(
+                brain_role, system_stable=stable,
+                system_dynamic=dynamic + "\n\nThey asked a question. The last draft was not an answer. Answer it from the "
+                "care record and this turn. If the record does not have it, say you do not have it. Do not reply with only an acknowledgement.",
+                messages=msgs, tools=None, max_tokens=600, effort=effort, essential=True, timeout_s=CALL_CAP_S,
+            )
+            final = guards.strip_tool_chrome((again.text or "").strip())
+        except router.AllModelsFailed:
+            final = ""
+        if final and final != "none":
+            still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
+                                          doctor_note=health_turn(ctx.actions))
+            if still:
+                final = grounding.strip(final, still) or ""
+        if _only_ack(final, profile):
+            final = ""
+    elif guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
-        final = ack_reply(ctx.profiles.get(req.speaker["id"]))
+        final = ack_reply(profile)
     if not is_system and guards.food_line_problems(final, ctx.known):
         # The rewrite still dropped the saved numbers. Send the tool's line, in their script, and keep a question
         # already in the reply (the water ask). Never replace a Bengali reply with the English "Saved:" line.

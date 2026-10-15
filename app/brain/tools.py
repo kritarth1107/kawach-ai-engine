@@ -1289,11 +1289,16 @@ async def reminder_log(ctx: TurnCtx, a: dict) -> dict:
         "get_reminder_log", {"dateKey": day}, family_id=ctx.family_id, subject_id=subject,
         actor_id=ctx.actor_id,
     )
+    from app.care import doses as care_doses
+
+    _, ended_names = await care_doses.ended_medicines(ctx.session, ctx.family_id, [subject])
+    scheduled = [row for row in sent.get("scheduled", [])
+                 if not care_doses.mentions_ended_medicine(row if isinstance(row, str) else str((row or {}).get("item") or ""), ended_names)]
     doses = await store.events(ctx.session, ctx.family_id, subject, day=day)
     return {
         "day": day,
         "reminder_attempts": sent.get("attempts", []),
-        "medicine_schedule": sent.get("scheduled", []),
+        "medicine_schedule": scheduled,
         "logged": [f"{clock.ist(e.at).strftime('%H:%M')} {e.kind}: {e.summary}" for e in doses if e.kind.startswith(("dose_", "reminder"))],
         "rule": "If a reminder is not in reminder_attempts with delivered=true, it was not sent. Say so plainly; never invent why.",
     }
@@ -3916,9 +3921,12 @@ async def forget_tool(ctx: TurnCtx, a: dict) -> dict:
     subjects = [ctx.subject(a.get("about"))]
     if not ctx.speaker_is_elder and subjects[0] == ctx.elder_id:
         subjects.append("family")
-    return await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "",
-                                      source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind,
-                                      never_true=bool(a.get("never_true")))
+    out = await memory_upkeep.forget(ctx.session, ctx.family_id, subjects, a["what"], by=ctx.speaker.get("id") or "",
+                                     source_kind="caregiver_said" if ctx.is_caregiver else ctx.source_kind,
+                                     never_true=bool(a.get("never_true")))
+    for med in out.get("stopped_medicines") or []:
+        await _sync_medicine(ctx, med["subject"], med["key"], med.get("value") or {}, active=False)
+    return out
 
 
 # ── memory history: what changed, and undo ─────────────────────────────────────

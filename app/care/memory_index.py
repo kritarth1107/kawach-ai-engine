@@ -398,6 +398,7 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
             rank += 1
             if rank >= VECTOR_POOL:
                 break
+    await _drop_ended_medicines(session, family_id, subject_ids, hits, scores)
     now = clock.now()
     for ref, h in hits.items():
         w = weight.get(ref)
@@ -408,6 +409,40 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
         scores[ref] *= 0.6 + 0.4 * w
     ranked = sorted(hits.values(), key=lambda h: (scores[h.ref], kw_score.get(h.ref, 0.0)), reverse=True)
     return _by_subject(ranked, limit)
+
+
+async def _drop_ended_medicines(session: AsyncSession, family_id: str, subject_ids: list[str], hits: dict[str, store.Hit],
+                                scores: dict[str, float]) -> None:
+    """A stopped or replaced medicine is not a current time. The event that saved it, and a note that still names it,
+    stay out of recall: a dose question was answered with that old clock time."""
+    from app.care import doses
+
+    keys, names = await doses.ended_medicines(session, family_id, subject_ids)
+    if not keys and not names:
+        return
+    event_ids: list[uuid.UUID] = []
+    by_id: dict[uuid.UUID, str] = {}
+    for ref in list(hits):
+        if not ref.startswith("event:"):
+            continue
+        try:
+            eid = uuid.UUID(ref.split(":", 1)[1])
+        except ValueError:
+            continue
+        event_ids.append(eid)
+        by_id[eid] = ref
+    if event_ids:
+        for event in (await session.execute(select(CareEvent).where(CareEvent.id.in_(event_ids)))).scalars():
+            if str((event.payload or {}).get("key") or "") in keys:
+                ref = by_id[event.id]
+                hits.pop(ref, None)
+                scores.pop(ref, None)
+    for ref, hit in list(hits.items()):
+        if hit.source == "fact":
+            continue
+        if doses.mentions_ended_medicine(hit.text, names):
+            hits.pop(ref, None)
+            scores.pop(ref, None)
 
 
 def _query_words(query: str) -> list[str]:

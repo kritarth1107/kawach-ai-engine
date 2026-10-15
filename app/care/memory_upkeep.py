@@ -402,12 +402,15 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
         why = REJECTED_NOTE + why
     stopped_keys: list[str] = []
     waiting_keys: list[str] = []
+    stopped_medicines: list[dict] = []
     for f in matched_facts:
         w = await store.stop_fact(session, family_id=family_id, subject_id=f.subject_id, key=f.key, reason=why,
                                   source_kind=source_kind, stated_by=by)
         if w is None or w.result == "kept_pinned":
             continue
         (stopped_keys if w.result == "stopped" else waiting_keys).append(f.key)
+        if w.result == "stopped" and f.domain == "medicine":
+            stopped_medicines.append({"subject": f.subject_id, "key": f.key, "value": f.value or {}})
     # the record first, so each note's version can point at it (undoing any of them restores the whole forget)
     eid = await store.record_event(session, family_id=family_id, subject_id=subject_ids[0], kind="memory_forgotten", summary=f"Forgot: {what[:200]}",
                                    payload={"what": what, "by": by, "note_lines": removed_lines, "events": [e.id for e in hide], "forgotten": True,
@@ -425,6 +428,8 @@ async def forget(session: AsyncSession, family_id: str, subject_ids: list[str], 
     out: dict[str, object] = {"forgotten": len(removed_lines) + len(hide) + len(ended_links) + len(stopped_keys) + len(waiting_keys)}
     if stopped_keys:
         out["facts"] = stopped_keys
+    if stopped_medicines:
+        out["stopped_medicines"] = stopped_medicines
     if waiting_keys:
         out["facts_waiting"] = waiting_keys
     said: list[str] = []
