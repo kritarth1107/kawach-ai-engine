@@ -60,7 +60,7 @@ REVIEW_BATCH = 15
 WINDOW = timedelta(hours=24) - timedelta(minutes=10)  # WhatsApp's free-message window, with the backend's margin
 SENT = ("sent", "shadow")  # a shadow nudge counts as sent for the clock and the ladder in shadow mode
 PRIORITY = {"doses": 9, "follow_up": 7, "upcoming": 6, "habit": 6, "collect": 4, "reflect": 4, "know": 3, "delight": 3,
-            "early_bird": 5, "reminder_followup": 8, "meal": 7, "water": 7, "sleep": 7, "goal": 5}
+            "early_bird": 5, "reminder_followup": 8, "meal": 7, "water": 7, "sleep": 7, "goal": 5, "stock": 6}
 HABIT_SHADOW = ("meal", "goal", "water", "sleep")  # nudge.meals: off sends nothing; shadow logs them and does not hold the hour
 SLOTS = (("morning", 5 * 60, 12 * 60), ("afternoon", 12 * 60, 17 * 60), ("evening", 17 * 60, 24 * 60))
 COLLECT_EVERY = {"feelings": timedelta(days=1), "sleep": timedelta(days=2), "readings": timedelta(days=4),
@@ -499,6 +499,51 @@ def _mentions(text: str, name: str) -> bool:
         start = i + 1
 
 
+def near_dose(times, now: datetime, *, before: int = 45, after: int = 30) -> bool:
+    """True when now is close to one of this medicine's dose times (45 minutes before, 30 after)."""
+    m = clock.ist(now).hour * 60 + clock.ist(now).minute
+    for t in times or []:
+        hm = _hm(t)
+        if hm is None:
+            continue
+        delta = (m - hm + 12 * 60) % (24 * 60) - 12 * 60
+        if -before <= delta <= after:
+            return True
+    return False
+
+
+async def stock_ask(session: AsyncSession, person: Person, facts: list, now: datetime) -> tuple[str, str, str, str] | None:
+    """One medicine with no count, at a quiet hour that is not its dose time. One a day. Two sent asks with no reply
+    and that medicine is left alone. The answer is a count, never a dose."""
+    from app.care import features
+
+    today = clock.ist_day(now)
+    sent = (await session.execute(select(NudgeLedger.field, NudgeLedger.replied_at, NudgeLedger.sent_at).where(
+        NudgeLedger.family_id == person.family_id, NudgeLedger.person_id == person.id, NudgeLedger.status == "sent",
+        NudgeLedger.field.like("stock:%")))).all()
+    if any(at and clock.ist_day(at) == today for _field, _replied, at in sent):
+        return None
+    silent: dict[str, int] = {}
+    for asked, replied, _at in sent:
+        if asked and replied is None:
+            silent[asked] = silent.get(asked, 0) + 1
+    known = {r["key"] for r in await features.stock(session, person.family_id, person.id) if r.get("stock") is not None}
+    meds = [f for f in facts if getattr(f, "domain", None) == "medicine" and getattr(f, "status", "active") == "active"
+            and not str(f.key).endswith(":none") and f.key not in known]
+    for f in sorted(meds, key=lambda x: x.key):
+        fld = f"stock:{f.key}"
+        if silent.get(fld, 0) >= 2:
+            continue
+        times = [t for t in ((f.value or {}).get("times") or []) if isinstance(t, str)]
+        if near_dose(times, now):
+            continue
+        name = (f.value or {}).get("name") or str(f.key).split(":", 1)[-1].replace("_", " ")
+        why = (f"how many tablets of {name} are left in the strip: one question, only the count; "
+               "do not mention the dose, the time, or whether they took it")
+        return "stock", why, fld, fld
+    return None
+
+
 def _hm(v) -> int | None:
     try:
         h, m = str(v).strip()[:5].split(":")
@@ -769,6 +814,9 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
     g = await meal_nudges.goal_option(session, p, ck.rows, now, meals_mode=meals_mode)
     if g:
         add(g["kind"], g["why"], about=g["about"], fld=g["fld"])
+    ask = await stock_ask(session, p, facts, now)
+    if ask and not light and not early_bird:
+        add(ask[0], ask[1], about=ask[2], fld=ask[3])
     return out
 
 
@@ -808,7 +856,8 @@ Rules:
   word for them.
 - Medicines: never remind them of a dose, a time or how to take it, and never ask whether they took one, even if they
   just set that reminder or it is in the last messages. Their reminders do that. Only a "doses" option may ask whether
-  today's past items were done.
+  today's past items were done. A "stock" option asks only how many of that one medicine are left. Name it. Do not
+  mention the dose, the time, or whether they took it.
 - Fresh: a different opening and angle from the last messages and your last nudges. Never repeat a line they already got
   in the last few days, never ask a question already asked today, and never contradict the last messages; if the last
   chat ended on an open thread, pick it up.
@@ -891,7 +940,7 @@ def check(draft: dict, ctx: Context) -> list[str]:
     for name in naming.uses_avoided(text, ctx.avoid):
         problems.append(f"they asked never to be called \"{name}\": use the name in PERSON or none")
     chosen = next((o for o in ctx.options if o.id == draft.get("option_id")), None)
-    if (chosen is None or chosen.kind != "doses") and any(_mentions(text, name) for name in ctx.medicines):
+    if (chosen is None or chosen.kind not in ("doses", "stock")) and any(_mentions(text, name) for name in ctx.medicines):
         problems.append("a regular nudge does not ask about a medicine or its dose; their reminders do that")
     low = text.lower()
     for term in ctx.never:
@@ -943,7 +992,8 @@ VERIFY = """You check one WhatsApp message Saheli is about to send, against the 
 - invented: it states anything not in the context, including saying something already happened when the context does not
   say so (a walk "done" that is still ahead, "yesterday's" anything without a date), or a number, name or time not given;
 - medical: it tells them what to take, stop or change, or how to take a medicine, or it asks whether they took a dose
-  or reminds them of a dose or its time (their own reminders do that; only a doses option may ask about an unmarked item);
+  or reminds them of a dose or its time (their own reminders do that; only a doses option may ask about an unmarked item;
+  a stock option asking only how many are left is not a dose reminder);
 - two_questions: it asks more than one thing (two questions joined, or a question plus "tell me");
 - not_personal: nothing in it is specific to this person (it would fit anyone).
 Return only JSON: {"ok": true|false, "problems": ["invented: ...", ...]}"""
@@ -1269,7 +1319,7 @@ def followup_ladder_skips(rows: list[NudgeLedger]) -> bool:
 # ── replies ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("goal:", "log_food"), ("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
-             ("know:", "remember"), ("feelings", "log_event mood (and log_event symptom for a problem)"), ("sleep", "log_event"),
+             ("stock:", "set_stock"), ("know:", "remember"), ("feelings", "log_event mood (and log_event symptom for a problem)"), ("sleep", "log_event"),
              ("reminder:", "log_activity or remember, whichever fits"))
 
 
@@ -1308,6 +1358,10 @@ async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:
     if str(fld).startswith("sleep:"):
         return (f"YOUR LAST MESSAGE TO THEM asked when they slept and woke: \"{(last.text or '')[:160]}\". If they answered, save it with "
                 "log_event (kind sleep, the times as they said). If they did not answer it, just answer what they wrote.")
+    if str(fld).startswith("stock:"):
+        return (f"YOUR LAST MESSAGE TO THEM asked how many are left{about}: \"{(last.text or '')[:160]}\". If they gave a number "
+                "on hand, call set_stock with that medicine and count (tablets or doses now). A new strip or bottle with no number: "
+                "ask how many are in it, then set_stock. Do not guess a pack size. If they did not answer it, just answer what they wrote.")
     if str(fld).startswith("goal:"):
         return (f"YOUR LAST MESSAGE TO THEM mentioned a target they already have{about}: \"{(last.text or '')[:160]}\". If they said what they "
                 "ate, pass it to log_food (items with quantity and unit as they said). Do not suggest a food they did not already eat. If it does "
@@ -1518,7 +1572,8 @@ Fail it for any of these (list each in issues):
 - made_up: it states a fact, number, name, time, event or reading that is not in the context.
 - medical_advice: it tells them what to take, stop or change, or diagnoses anything.
 - dose_reminder: it asks whether they took a medicine, or reminds them of a dose or its time. Their reminders do that.
-  A doses option asking about an unmarked item already listed in the context is not this.
+  A doses option asking about an unmarked item already listed in the context is not this. A stock option asking only
+  how many are left, naming that medicine, is not this.
 - not_personal: it would fit anyone ("How are you today?") instead of naming something real from the context.
 - wrong_language: not in the language, script or dialect the context says to write in.
 - too_long: longer than the limit in the context, or more than one question.

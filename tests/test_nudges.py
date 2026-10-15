@@ -1496,3 +1496,66 @@ async def test_a_closed_chat_gets_one_morning_update_and_the_greeting_waits(db, 
     at("2026-10-16 08:30")  # the next morning still sends, until a caregiver says stop
     out = await run(sessions, host)
     assert out.get("waiting") == 1 and len(host.world.templates) == 2
+
+
+async def test_a_medicine_with_no_count_is_asked_once_away_from_its_dose(db, at):
+    from datetime import datetime
+
+    from app.care import features
+
+    at("2026-10-14 11:00")
+    await family(db, (MAA,))
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="medicine", key="medicine:thyronorm",
+                           value={"name": "Thyronorm", "dose": "75", "times": ["06:30"]},
+                           text="Thyronorm 75 at 06:30", source_kind="user_said")
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="medicine", key="medicine:telma",
+                           value={"name": "Telma", "dose": "40", "times": ["11:00"]},
+                           text="Telma 40 at 11:00", source_kind="user_said")
+    await db.commit()
+    p = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+
+    async def stock_fields():
+        facts = [f for f in await store.facts(db, FAM, MAA["id"]) if f.status == "active"]
+        opts = await nudges.candidates(db, p, nudges.Clock(None, None, 0, False), nudges.clock.now(), facts=facts,
+                                       acts=[], schedule={}, reminders=[])
+        return [o for o in opts if o.kind == "stock"]
+
+    got = await stock_fields()
+    assert len(got) == 1 and got[0].field == "stock:medicine:thyronorm" and "Telma" not in got[0].why
+    at("2026-10-14 06:30")  # Thyronorm's dose: ask about the other one
+    got = await stock_fields()
+    assert len(got) == 1 and got[0].field == "stock:medicine:telma"
+    at("2026-10-14 15:00")
+    sent = datetime(2026, 10, 14, 10, 0, tzinfo=nudges.clock.IST)
+    rid = __import__("uuid").uuid4()
+    db.add(NudgeLedger(id=rid, family_id=FAM, person_id=MAA["id"], kind="stock", slot_key="stock-today", status="sent",
+                       ref=f"nudge:{rid}", field="stock:medicine:thyronorm", about_ref="stock:medicine:thyronorm",
+                       planned_at=sent, sent_at=sent, text="How many tablets of Thyronorm are left in the strip?"))
+    await db.commit()
+    assert await stock_fields() == []  # one medicine a day
+    at("2026-10-15 15:00")
+    for i, day in enumerate((12, 13)):
+        when = datetime(2026, 10, day, 15, 0, tzinfo=nudges.clock.IST)
+        rid = __import__("uuid").uuid4()
+        db.add(NudgeLedger(id=rid, family_id=FAM, person_id=MAA["id"], kind="stock", slot_key=f"stock-old-{i}", status="sent",
+                           ref=f"nudge:{rid}", field="stock:medicine:telma", about_ref="stock:medicine:telma",
+                           planned_at=when, sent_at=when, text="How many tablets of Telma are left?"))
+    await db.commit()
+    got = await stock_fields()
+    assert len(got) == 1 and got[0].field == "stock:medicine:thyronorm"  # Telma was silent twice
+    await features.set_stock(db, family_id=FAM, subject_id=MAA["id"], key="medicine:thyronorm", name="Thyronorm", count=8, actor_id=MAA["id"])
+    await db.commit()
+    assert await stock_fields() == []
+    opt = nudges.Option(id="o1", kind="stock", why="how many", field="stock:medicine:thyronorm")
+    allowed = ctx(options=[opt], medicines=["Thyronorm", "Telma"])
+    assert nudges.check({"option_id": "o1", "text": "How many tablets of Thyronorm are left in the strip?"}, allowed) == []
+    blocked = ctx(medicines=["Thyronorm"])
+    assert any("medicine" in p for p in nudges.check({"option_id": "o1", "text": "How many tablets of Thyronorm are left?"}, blocked))
+    at("2026-10-15 15:10")
+    await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="assistant",
+                         text="How many tablets of Thyronorm are left in the strip?",
+                         meta={"proactive": True, "nudge": {"kind": "stock", "field": "stock:medicine:thyronorm",
+                                                            "about_ref": "stock:medicine:thyronorm"}})
+    await db.commit()
+    hint = await nudges.reply_hint(db, FAM, MAA["id"])
+    assert "set_stock" in hint and "guess" in hint
