@@ -50,10 +50,12 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
 3. For advice: prescriptive = true when it tells them to do something specific about their own health, food, medicine or
    activity (a dose, "X is fine to eat", a threshold, "you can skip it", how far to walk). Recommending a dish, snack or
    drink for their health is prescriptive even when hedged ("a good option", "usually", "try this"), and it is unsupported
-   unless that dish is in THEIR MESSAGES, MEMORY or a TOOL RESULT. A place, or a kinship word used to address them, is a
-   claim and is unsupported when that place or relation is not in the sources. Telling them to drink water or ORS, to
-   rest, or to see a doctor for loose motions, weakness or dehydration is a safety step (source "safety"), not a dish
-   recommendation. source = "tool" when it repeats a
+   unless that dish is in THEIR MESSAGES, MEMORY or a TOOL RESULT. Lifestyle tips of her own are prescriptive too, with
+   source "none": how to sleep (screens, caffeine, a dark room), keeping meals light, or "stay hydrated", when they did
+   not report loose motions, weakness or dehydration. Ask what is going on instead of handing out those tips. A place, or
+   a kinship word used to address them, is a claim and is unsupported when that place or relation is not in the sources.
+   Telling them to drink water or ORS, to rest, or to see a doctor for loose motions, weakness or dehydration is a safety
+   step (source "safety"), not a dish recommendation. source = "tool" when it repeats a
    TOOL RESULT (e.g. a web search) as general information, "doctor" when it repeats a doctor's instruction in MEMORY,
    "safety" when it is a safety step (call 112 or an ambulance, tell the family, see a doctor), else "none".
 
@@ -90,6 +92,17 @@ _ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "
 PROMPT_ACTIONS = PROMPT.replace("what Saheli herself will do, ", "").replace("\nReturn only JSON", "\n" + _ACTIONS_RULE + "Return only JSON", 1)
 
 
+# Every reply, including ones that are not about health: a tease is not an apology, and something personal gets one question.
+_LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR MESSAGES are a joke, a tease, or an accusation of a
+   motive she did not state (she did not call them a liar). A real correction, or a fact she had wrong, still gets one brief
+   sorry. followup_missing = true when their latest message shares something personal (an outing, a friend, a film, a meal
+   they loved, a worry, the gym, a trip, trouble sleeping) and the REPLY does not ask one question about that thing and no
+   TOOL RESULT shows remember saved it. False on a health problem, a medicine, an order, or when they said they are busy or
+   will tell you later. Add "unwanted_apology": true|false and "followup_missing": true|false to the JSON.
+
+"""
+
+
 # Health turns only, with the doctor-note rule: her own dose decisions (13 Oct live: "hold off on that Magnesium tablet
 # tonight" passed as general information). Kept out of the other checks: every extra rule at effort "minimal" cost the
 # action/promise claims accuracy (eval/grounding_eval.py 10-12 of 13; KP, 14 Oct), so health turns are checked at "low".
@@ -103,9 +116,10 @@ _DOSE_RULE = """M. For each advice claim also add "dose_change": true when it te
 
 def _system(actions: bool, doctor_note: bool) -> str:
     base = PROMPT_ACTIONS if actions else PROMPT
+    n = 5 if actions else 4
+    base = base.replace("\nReturn only JSON", "\n" + _LIFE_RULE.replace("L.", f"{n}.") + "Return only JSON", 1)
     if doctor_note:
-        n = 5 if actions else 4
-        rules = _DOCTOR_RULE.replace("N.", f"{n}.") + _DOSE_RULE.replace("M.", f"{n + 1}.")
+        rules = _DOCTOR_RULE.replace("N.", f"{n + 1}.") + _DOSE_RULE.replace("M.", f"{n + 2}.")
         base = base.replace("\nReturn only JSON", "\n" + rules + "Return only JSON", 1)
     return base
 
@@ -139,7 +153,7 @@ class Claim:
 
     @property
     def problem(self) -> bool:
-        if self.source == "doctor_note":
+        if self.source in ("doctor_note", "unwanted_apology", "followup_missing"):
             return True
         if self.kind == "advice":
             if self.dose_change:
@@ -167,6 +181,10 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
             continue
         out.append(Claim(kind=c["kind"], quote=str(c["quote"]).strip()[:300], supported=c.get("supported") is True,
                          prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none"), dose_change=c.get("dose_change") is True))
+    if isinstance(data, dict) and data.get("unwanted_apology") is True:
+        out.append(Claim(kind="advice", quote="[apology for a tease]", supported=False, prescriptive=True, source="unwanted_apology"))
+    if isinstance(data, dict) and data.get("followup_missing") is True:
+        out.append(Claim(kind="advice", quote="[no follow-up]", supported=False, prescriptive=True, source="followup_missing"))
     if isinstance(data, dict) and data.get("doctor_note_missing") is True and doctor_note:
         # Health information always comes with when to see a doctor (persona; founder's health rule). No quote: nothing to
         # strip, only a rewrite that adds the line.
@@ -200,6 +218,12 @@ def problems(claims: list[Claim]) -> list[str]:
         if c.source == "doctor_note":
             out.append("you share health or medicine information but not when to see a doctor: add one short line (when to see "
                        "a doctor, or to check with their doctor or pharmacist)")
+        elif c.source == "unwanted_apology":
+            out.append("they were teasing, or you did not do what they said: reply lightly in their language, and do not apologise. "
+                       "One brief sorry only when a fact you stated was wrong")
+        elif c.source == "followup_missing":
+            out.append("they shared something personal: ask one question about that thing, or save it with remember. Do not only "
+                       "wish them well, and do not give tips of your own")
         elif c.kind == "advice" and c.dose_change:
             out.append(f"'{c.quote}' tells them to skip, delay, double or change a dose: only their doctor decides that. Do not say it; "
                        "ask them to check with their doctor or pharmacist (or that you are checking with the family), and offer to note it")
@@ -219,6 +243,6 @@ _SENT = re.compile(r"(?<=[.!?।])\s+|\n+")
 
 def strip(text: str, claims: list[Claim]) -> str:
     """Remove the sentences that carry an unsupported quote (the last resort after a rewrite still invents)."""
-    quotes = [c.quote.lower() for c in claims if c.quote and c.source != "doctor_note"]
+    quotes = [c.quote.lower() for c in claims if c.quote and c.source not in ("doctor_note", "unwanted_apology", "followup_missing")]
     kept = [s for s in _SENT.split(text or "") if s.strip() and not any(q in s.lower() for q in quotes)]
     return " ".join(kept).strip()

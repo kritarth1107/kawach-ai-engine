@@ -1045,7 +1045,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
-            strippable = [c for c in claims if c.source != "doctor_note"]
+            strippable = [c for c in claims if c.source not in ("doctor_note", "unwanted_apology", "followup_missing")]
             if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)):
                 # A second draft that still invents, advises, or opens as a note is not sent on for another wording.
                 # A missing "see a doctor" line has nothing to cut, so that one gets one more rewrite.

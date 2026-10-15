@@ -110,7 +110,8 @@ def scores(rows: list[dict], judged: list[dict], probe_metas: list[dict], judge_
                   "overall": overall(jrows, _bar_pass), "languages": group(jrows, lambda r: r.get("language"), _bar_pass),
                   "households": group(jrows, lambda r: r.get("household"), _bar_pass), "topics": group(jrows, lambda r: r.get("topic"), _bar_pass),
                   "issues": dict(Counter(i for r in jrows for i in r["issues"]).most_common()),
-                  "bookish": sum(1 for r in jrows if "bookish" in r["issues"])},
+                  "bookish": sum(1 for r in jrows if "bookish" in r["issues"]),
+                  "uncurious": sum(1 for r in jrows if "uncurious" in r["issues"])},
         "language_correct": {**overall(done, _lang_ok), "languages": group(done, lambda r: r.get("language"), _lang_ok)},
     }
     crisis = [r for r in done if r.get("topic") == "crisis"]
@@ -235,7 +236,8 @@ def published(sc: dict, fails: list[str]) -> str:
              f"- probes: {p['executed']} of {p['selected']} executed ({p['executed_pct']}%), {p['skipped_budget']} skipped by the budget; "
              f"spent ₹{p['spent_inr']:.0f} of ₹{p['cap_inr']:.0f}",
              f"- judge ({j.get('route')}): {j['overall']['pct']}% of {j['overall']['n']} judged; {j['errors']} not graded; ₹{j['spent_inr']:.0f}",
-             f"- register: {j.get('bookish', 0)} replies sounded bookish (fails the night only when the brain is Gemini)",
+             f"- register: {j.get('bookish', 0)} replies sounded bookish (fails the night only when the brain is Gemini); "
+             f"{j.get('uncurious', 0)} missed a follow-up on something personal",
              f"- code checks: {c['overall']['pct']}% of {c['overall']['n']}",
              f"- language correct: {sc['language_correct']['pct']}%",
              f"- recall: {sc['recall'].get('pct')}% of {sc['recall'].get('n', 0)} quiz answers" + (" (missing)" if sc["recall"].get("missing") else ""),

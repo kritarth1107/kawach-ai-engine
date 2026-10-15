@@ -197,6 +197,31 @@ def test_health_information_without_a_doctor_note_is_a_problem_but_nothing_is_st
     assert grounding._parse(json.dumps({"claims": [], "doctor_note_missing": False})) == []
 
 
+def test_a_tease_and_a_missed_followup_are_rewritten_not_stripped():
+    raw = json.dumps({"claims": [], "unwanted_apology": True, "followup_missing": True})
+    cs = grounding._parse(raw)
+    assert {c.source for c in cs} == {"unwanted_apology", "followup_missing"}
+    assert all(c.problem for c in cs)
+    text = "Sorry, please forgive me. Enjoy the film."
+    assert grounding.strip(text, cs) == text
+    notes = " ".join(grounding.problems(cs))
+    assert "do not apologise" in notes and "one question" in notes
+
+
+def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
+    from eval.replay_cases import LIVE, SEEDS, load_cases
+
+    live = [json.loads(line) for line in LIVE.read_text().splitlines() if line.strip()]
+    curious = [c for c in live if c["kind"].startswith("curious_")]
+    assert len(curious) == 10
+    assert {c["status"] for c in live} == {"open"}
+    seeds = [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
+    protein = next(c for c in seeds if c["id"] == "seed-promise-protein-tracking")
+    assert protein["status"] == "open"
+    loaded = load_cases([])
+    assert any(c["id"] == "live-advice-sleep-en" for c in loaded)
+
+
 async def test_a_side_effect_reply_gets_its_doctor_line(db, fake, monkeypatch):
     from app.llm.router import ToolCall
 

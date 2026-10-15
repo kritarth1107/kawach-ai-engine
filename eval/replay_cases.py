@@ -553,6 +553,7 @@ SEEDS = Path(__file__).parent / "fixtures" / "replay_seeds.jsonl"  # invented fa
 MISREAD = Path(__file__).parent / "fixtures" / "misread_2026-10-14.jsonl"  # invented families: brain misreads of 14 Oct (open)
 REGISTER = Path(__file__).parent / "fixtures" / "register_2026-10-14.jsonl"  # bookish vs spoken; runs when sunny-ship answers
 CURIOUS = Path(__file__).parent / "fixtures" / "curiosity_2026-10-15.jsonl"  # an event, and one missing fact (open)
+LIVE = Path(__file__).parent / "fixtures" / "live_2026-10-15.jsonl"  # advice, a tease, and a missed follow-up (open)
 BRIEF = Path(__file__).parent / "fixtures" / "brief_2026-10-15.jsonl"  # a waiting brief stays its own message (open)
 
 
@@ -566,6 +567,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in REGISTER.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and CURIOUS.exists():
         cases += [json.loads(line) for line in CURIOUS.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and LIVE.exists():
+        cases += [json.loads(line) for line in LIVE.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and BRIEF.exists():
         cases += [json.loads(line) for line in BRIEF.read_text().splitlines() if line.strip()]
     for a in argv:
