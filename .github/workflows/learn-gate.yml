@@ -1,13 +1,10 @@
-name: Learn gate (a waiting playbook draft through the replay cases)
+name: Learn gate (retired: it runs in AWS)
 
-# Trust plan §10.2 step 2. The 02:00 night makes a draft and cannot run the replay cases (no eval/ in the image).
-# This job runs that draft's cases on Gemini 3.5 Flash in kavach-eval-1015, never kavach-care, capped at ₹30.
-# The world night stays capped at ₹150 in nightly-saheli.yml. A deploy replay is a smaller set, capped at ₹20.
-# GitHub cannot reach engine.kavach.local, so when the engine is not reachable this job spends nothing and the draft waits.
+# GitHub cannot reach the engine, and it will not. The draft gate is the kavach-learn-gate task at 03:30 IST
+# (kavach-infra-aws images/cron/crontab), capped at ₹30, same pass rules. This workflow is not scheduled.
+# A deploy replay stays in replay.yml.
 
 on:
-  schedule:
-    - cron: "0 22 * * *"   # 03:30 IST, after the 02:00 dream
   workflow_dispatch:
     inputs:
       dry_run:

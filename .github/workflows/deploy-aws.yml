@@ -142,4 +142,35 @@ jobs:
                       | if any(.[]; .name == "GEMINI_SG_FALLBACK") then . else . + [{"name":"GEMINI_SG_FALLBACK","value":"on"}] end)
                 else . end)' /tmp/td.json > /tmp/dream.json
           aws ecs register-task-definition --cli-input-json file:///tmp/dream.json --query taskDefinition.revision --output text
+          # The draft gate. GitHub cannot reach the engine. This task can: Gemini in kavach-eval-1015, ₹30,
+          # a throwaway database beside it. The live service stays on kavach-care.
+          jq '.family = "kavach-learn-gate"
+            | .cpu = "1024"
+            | .memory = "4096"
+            | .containerDefinitions |= (
+                map(if .name == "engine" then
+                  .command = ["python", "-m", "app.jobs.learn_gate"]
+                  | .logConfiguration.options["awslogs-stream-prefix"] = "learn-gate"
+                  | .environment = ((.environment // [])
+                      | map(if .name == "GCP_PROJECT_ID" or .name == "GOOGLE_CLOUD_PROJECT" then .value = "kavach-eval-1015"
+                           elif .name == "GOOGLE_CLOUD_LOCATION" then .value = "asia-south1"
+                           elif .name == "LEARN_REPLAY_MAX_INR" then .value = "30"
+                           elif .name == "REPLAY_DATABASE_URL" then .value = "postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/kawach_replay"
+                           elif .name == "WEB_SEARCH_PROVIDER" then .value = "off"
+                           elif .name == "MEMORY_EMBEDDINGS" then .value = "off"
+                           elif .name == "EMBED_DIM_MIGRATE" then .value = "off"
+                           else . end)
+                      | if any(.[]; .name == "GCP_PROJECT_ID") then . else . + [{"name":"GCP_PROJECT_ID","value":"kavach-eval-1015"}] end
+                      | if any(.[]; .name == "GOOGLE_CLOUD_PROJECT") then . else . + [{"name":"GOOGLE_CLOUD_PROJECT","value":"kavach-eval-1015"}] end
+                      | if any(.[]; .name == "GOOGLE_CLOUD_LOCATION") then . else . + [{"name":"GOOGLE_CLOUD_LOCATION","value":"asia-south1"}] end
+                      | if any(.[]; .name == "LEARN_REPLAY_MAX_INR") then . else . + [{"name":"LEARN_REPLAY_MAX_INR","value":"30"}] end
+                      | if any(.[]; .name == "REPLAY_DATABASE_URL") then . else . + [{"name":"REPLAY_DATABASE_URL","value":"postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/kawach_replay"}] end
+                      | if any(.[]; .name == "WEB_SEARCH_PROVIDER") then . else . + [{"name":"WEB_SEARCH_PROVIDER","value":"off"}] end
+                      | if any(.[]; .name == "MEMORY_EMBEDDINGS") then . else . + [{"name":"MEMORY_EMBEDDINGS","value":"off"}] end
+                      | if any(.[]; .name == "EMBED_DIM_MIGRATE") then . else . + [{"name":"EMBED_DIM_MIGRATE","value":"off"}] end)
+                else . end)
+                + [{name:"replay-db", image:"pgvector/pgvector:pg16", essential:false,
+                    environment:[{name:"POSTGRES_USER",value:"postgres"},{name:"POSTGRES_PASSWORD",value:"postgres"},{name:"POSTGRES_DB",value:"kawach_replay"}],
+                    portMappings:[{containerPort:5432,protocol:"tcp"}]}])' /tmp/td.json > /tmp/learn-gate.json
+          aws ecs register-task-definition --cli-input-json file:///tmp/learn-gate.json --query taskDefinition.revision --output text
           aws ecs wait services-stable --cluster kavach --service "$SERVICE"

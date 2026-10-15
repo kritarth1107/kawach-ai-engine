@@ -258,7 +258,10 @@ async def replay_gate(sessions: async_sessionmaker, pb: PlaybookVersion) -> dict
     if run is None:
         return {"status": "unavailable", "why": "replay runner has no run_for_playbook"}
     try:
-        res = await run(sessions, pb, budget_inr=float(os.getenv("LEARN_REPLAY_MAX_INR", "30")))
+        from app.learn.replay import deploy_case_ids
+
+        res = await run(sessions, pb, budget_inr=float(os.getenv("LEARN_REPLAY_MAX_INR", "30")), max_cases=8,
+                        only_ids=deploy_case_ids() or None)
     except Exception as exc:  # noqa: BLE001 — a broken runner never lets a lesson through
         logger.exception("replay gate failed version=%s", pb.version)
         return {"status": "unavailable", "why": str(exc)[:200]}
