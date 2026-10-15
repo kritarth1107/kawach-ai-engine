@@ -37,28 +37,65 @@ def _port() -> int:
     return p
 
 
-@pytest.fixture
-def chrome():
+def _launch() -> tuple[subprocess.Popen, str]:
+    """A fresh headless Chrome whose debug port is answering. One start can exit before the port is up (seen on the
+    engine test job: the page open got ConnectError and the code was never typed)."""
     port, home = _port(), tempfile.mkdtemp(prefix="kv-chrome-")
-    proc = subprocess.Popen([CHROME, "--headless=new", f"--remote-debugging-port={port}", f"--user-data-dir={home}", "--no-first-run",
-                             "--no-sandbox", "about:blank"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(
+        [CHROME, "--headless=new", f"--remote-debugging-port={port}", f"--user-data-dir={home}",
+         "--no-first-run", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "about:blank"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     url = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            httpx.get(url + "/json/version", timeout=1)
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if proc.poll() is not None:
             break
+        try:
+            httpx.get(url + "/json/version", timeout=0.5)
+            return proc, url
         except Exception:  # noqa: BLE001
             time.sleep(0.1)
+    proc.kill()
+    proc.wait(timeout=5)
+    raise RuntimeError(f"Chrome debug port never answered (exit {proc.returncode})")
+
+
+@pytest.fixture
+def chrome():
+    last = None
+    proc = url = None
+    for _ in range(3):
+        try:
+            proc, url = _launch()
+            break
+        except RuntimeError as e:
+            last = e
+    else:
+        pytest.fail(str(last))
     yield url
-    proc.terminate()
-    proc.wait(timeout=10)
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 async def _open(cdp: str, html: str) -> None:
-    async with httpx.AsyncClient() as c:
-        t = (await c.put(f"{cdp}/json/new?" + "data:text/html," + html.replace("#", "%23").replace("\n", " "))).json()
-    assert t.get("id")
-    await asyncio.sleep(0.8)
+    target = f"{cdp}/json/new?" + "data:text/html," + html.replace("#", "%23").replace("\n", " ")
+    last = None
+    for _ in range(5):
+        try:
+            async with httpx.AsyncClient() as c:
+                t = (await c.put(target)).json()
+            if t.get("id"):
+                await asyncio.sleep(0.8)
+                return
+            last = t
+        except (httpx.ConnectError, httpx.RemoteProtocolError, httpx.ReadError) as e:
+            last = e
+        await asyncio.sleep(0.3)
+    raise AssertionError(f"could not open the code page: {last}")
 
 
 async def _boxes(cdp: str) -> str:
