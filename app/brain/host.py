@@ -24,6 +24,7 @@ WRITE_TOOLS = {
     "sync_medicine_schedule",
     "mark_schedule_completed",
     "mark_schedule_missed",
+    "clear_schedule_completion",
     "log_vitals",
     "log_dose",
     "log_check_in",

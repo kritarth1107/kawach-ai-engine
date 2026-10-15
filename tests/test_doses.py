@@ -126,3 +126,34 @@ async def test_a_dashboard_tick_for_yesterday_replaces_saheli_s_answer(db, at):
     finally:
         app.dependency_overrides.clear()
     assert await _standing(db, "2026-10-08") == {"folvite": "missed"}
+
+
+async def test_saheli_reads_dose_status_from_the_care_record_and_can_unmark_it(db, at):
+    """Live 15 Oct 2026: a 2 am dose was marked, its time moved to 11:30 pm, the reminder service's new row read
+    "upcoming" while the dashboard (the care record) showed it taken, and Saheli said it was not marked. He then asked to
+    unmark today and mark yesterday instead; there was no way to unmark."""
+    host = SimHost()
+    at("2026-10-15 01:58")
+    c = ctx(db, host)
+    await call(c, "remember", {"domain": "medicine", "name": "Magnesium", "details": {"times": ["02:00"]}, "sentence": "Magnesium at 2 am"})
+    await call(c, "log_dose", {"medicine": "magnesium", "outcome": "taken"})
+    at("2026-10-15 14:15")
+    await call(c, "remember", {"domain": "medicine", "name": "Magnesium", "details": {"times": ["23:30"]}, "sentence": "Magnesium at 11:30 pm"})
+    # the reminder service still says upcoming for its new row; Saheli answers from the care record, as the dashboard does
+    out = await call(c, "today_schedule", {})
+    mag = [m for m in out["medicines"] if m["name"].lower().startswith("magnesium")]
+    assert mag and mag[0]["status"] == "taken", out
+    assert all(str(i.get("type") or "").upper() != "MEDICINE" for i in out.get("items") or [])
+    # "mark it for yesterday and unmark today, I haven't taken it yet"
+    await call(c, "log_dose", {"medicine": "magnesium", "outcome": "taken", "day": "yesterday"})
+    un = await call(c, "log_dose", {"medicine": "magnesium", "outcome": "not_taken"})
+    assert "not taken yet" in un["unmarked"] and un["schedule"]["cleared"] >= 1, un
+    out = await call(c, "today_schedule", {})
+    mag = [m for m in out["medicines"] if m["name"].lower().startswith("magnesium")]
+    assert mag and mag[0]["status"] in ("upcoming", "due", "unmarked"), out
+    assert await _standing(db, "2026-10-14") == {"magnesium": "taken"}
+    assert await _standing(db, "2026-10-15") == {}
+    # taking it tonight marks it again
+    at("2026-10-15 23:35")
+    await call(c, "log_dose", {"medicine": "magnesium", "outcome": "taken"})
+    assert await _standing(db, "2026-10-15") == {"magnesium": "taken"}

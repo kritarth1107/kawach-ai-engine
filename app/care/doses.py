@@ -172,7 +172,9 @@ async def record(
         if not first or _first(str(p.get("medicine") or e.summary.split(":")[0])) != first:
             continue
         theirs = _slot(times, hhmm(p.get("time")), clock.ist(e.at).strftime("%H:%M"))
-        if slot != theirs and (slot or times):  # another dose of the day (a twice-daily medicine)
+        # another dose of the day (a twice-daily medicine). A once-a-day medicine whose time moved since (live 15 Oct:
+        # marked at 2 am, moved to 11:30 pm) still has one dose that day: the earlier answer is about the same dose.
+        if slot != theirs and (slot or times) and not (len(times) == 1 and theirs not in times):
             continue
         e.payload = {**p, "was": e.kind, "replaced_by": new_id}
         e.kind = CORRECTED

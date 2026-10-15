@@ -83,6 +83,11 @@ class SimHost:
         if tool in ("mark_schedule_completed", "mark_schedule_missed"):
             w.marks.append({"tool": tool, **args, "day": day})
             return {"ok": True}
+        if tool == "clear_schedule_completion":
+            d = args.get("dateKey") or day
+            n = len(w.marks)
+            w.marks[:] = [m for m in w.marks if not (m.get("title") == args.get("title") and (m.get("dateKey") or m["day"]) == d)]
+            return {"cleared": n - len(w.marks), "title": args.get("title"), "dateKey": d}
         if tool == "log_vitals":
             w.vitals.append({**args, "day": day})
             return {"ok": True}

@@ -616,10 +616,11 @@ async def note_habit(ctx: TurnCtx, a: dict) -> dict:
     "log_dose",
     "Record what happened with a medicine dose: taken, skipped, refused, missed, or the strip is empty. Works for today or "
     "an earlier day (day), and for one dose of a medicine taken more than once a day (time). Logging the same dose again "
-    "replaces the earlier answer (a correction).",
+    "replaces the earlier answer (a correction). not_taken unmarks it: they have not taken it yet (marked by mistake, or "
+    "for the wrong day), so it shows as still to take.",
     {
         "medicine": {"type": "string", "description": "Medicine name or key"},
-        "outcome": {"type": "string", "enum": ["taken", "skipped", "refused", "missed", "empty_strip"]},
+        "outcome": {"type": "string", "enum": ["taken", "skipped", "refused", "missed", "empty_strip", "not_taken"]},
         "day": {"type": "string", "description": "today (default), yesterday, or YYYY-MM-DD within the last 7 days"},
         "time": {"type": "string", "description": "The dose time (HH:MM) when the medicine is taken more than once a day"},
         "note": {"type": "string"},
@@ -654,6 +655,12 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
     )
     if saved is None:
         return {"logged": summary, "already": True}
+    if a["outcome"] == "not_taken":
+        res = await ctx.host.call(
+            "clear_schedule_completion", {"title": name, "dateKey": day, **({"time": a["time"]} if a.get("time") else {})},
+            family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
+        )
+        return {"unmarked": f"{name} for {day}: not taken yet", "schedule": res}
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
         tool_name, {"title": name, "dateKey": day, "note": a.get("note") or a["outcome"], **({"time": a["time"]} if a.get("time") else {})},
@@ -1656,15 +1663,30 @@ async def change_reminder(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "today_schedule",
-    "Today's care schedule with each item's status (done, missed, due, upcoming).",
+    "Today's care schedule with each item's status (done, missed, due, upcoming). Medicines are read from the care record, "
+    "the same list the family's dashboard shows.",
     {"about": ABOUT},
     [],
 )
 async def today_schedule(ctx: TurnCtx, a: dict) -> dict:
-    return await ctx.host.call(
-        "get_today_schedule", {}, family_id=ctx.family_id, subject_id=ctx.subject(a.get("about")),
-        actor_id=ctx.actor_id,
-    )
+    from app.api.dash import _day_doses
+
+    subject = ctx.subject(a.get("about"))
+    out = await ctx.host.call("get_today_schedule", {}, family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id)
+    # live 15 Oct 2026: the dashboard showed a dose taken while the reminder service's row (its time had moved) read
+    # "upcoming", and Saheli told him it was not marked. Medicines come from the care record, the one the dashboard reads.
+    meds = [m for m in await store.facts(ctx.session, ctx.family_id, subject, domains=["medicine"], statuses=("active",))]
+    day = clock.ist_day()
+    doses_today = _day_doses(meds, list(await store.events(ctx.session, ctx.family_id, subject, day=day, limit=500)), day)
+    if not isinstance(out, dict):
+        out = {}
+    from app.api.dash import _mentions
+
+    names = [str((m.value or {}).get("name") or m.key.split(":", 1)[-1]) for m in meds]
+    items = [i for i in (out.get("items") or []) if isinstance(i, dict) and str(i.get("type") or "").upper() != "MEDICINE"
+             and not any(_mentions(str(i.get("title") or ""), n) for n in names)]
+    return {**out, "dateKey": day, "medicines": [{"name": d["name"], "dose": d.get("dose"), "time": d["time"], "status": d["status"]}
+                                                 for d in doses_today], "items": items}
 
 
 # ── loops ──────────────────────────────────────────────────────────────────────
