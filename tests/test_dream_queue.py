@@ -52,14 +52,28 @@ def _ist(y, m, d, hh, mm):
     return datetime(y, m, d, hh, mm, tzinfo=clock.IST)
 
 
+def _server_url(database: str) -> str:
+    """The CI Postgres is TEST_DATABASE_URL (port 5432). A hardcoded 5433 never connects there."""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(os.getenv("TEST_DATABASE_URL") or TEST_DB)
+    return url.set(database=database).render_as_string(hide_password=False)
+
+
+async def test_the_scale_database_is_on_the_test_server(monkeypatch):
+    monkeypatch.setenv("TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_test")
+    assert _server_url("postgres") == "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
+    assert _server_url("kawach_test_dream") == "postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_test_dream"
+
+
 async def _scale_engine():
-    admin = create_async_engine("postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/postgres", isolation_level="AUTOCOMMIT")
+    admin = create_async_engine(_server_url("postgres"), isolation_level="AUTOCOMMIT")
     async with admin.connect() as conn:
         exists = (await conn.execute(text("SELECT 1 FROM pg_database WHERE datname = 'kawach_test_dream'"))).first()
         if not exists:
             await conn.execute(text("CREATE DATABASE kawach_test_dream"))
     await admin.dispose()
-    engine = create_async_engine("postgresql+asyncpg://postgres:postgres@127.0.0.1:5433/kawach_test_dream")
+    engine = create_async_engine(_server_url("kawach_test_dream"))
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
