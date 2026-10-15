@@ -155,6 +155,10 @@ class SimHost:
         if tool == "export_care_record":
             return dict(w.backend_record)
         if tool == "send_whatsapp":
+            if w.paused:
+                # the backend holds every message Saheli sends while the family is paused (careMemorySync.sendSaheliWhatsApp:
+                # purpose "proactive"); caregiver alerts go by alert_caregiver and are never held
+                return {"delivered": False, "reason": "paused"}
             if args.get("to") in w.closed:
                 # the backend: a closed chat gets the template (the message waits for their next one), or nothing
                 if not args.get("template"):
@@ -184,6 +188,8 @@ class SimHost:
         if tool == "escalation_status":
             return {"unanswered": 0, "state": w.escalations.get(args.get("to") or subject_id, "none")}
         if tool == "send_template":
+            if w.paused:
+                return {"sent": False, "reason": "paused"}
             if args.get("to") not in w.closed:
                 return {"sent": False, "reason": "chat open"}
             w.templates.append({"to": args.get("to"), **(args.get("template") or {}), "at": clock.now().isoformat()})

@@ -71,3 +71,17 @@ def test_the_ai_written_texts_still_match_the_world(world):
     probes = sum(len(f["probes"]) for f in fams)
     assert attach(fams) >= 0.98 * probes
     assert attach_stories([f for f in fams if f["tier"] == "story"]) >= 95
+
+
+async def test_a_paused_family_gets_nothing_saheli_starts():
+    """The backend holds every message Saheli sends while the admin console pauses the family (purpose "proactive");
+    the simulated backend does the same, so world checks see what a family would really get."""
+    from app.sim.world import SimHost, World
+
+    host = SimHost(World(paused=True))
+    sent = await host.call("send_whatsapp", {"to": "p1", "text": "How was lunch?"}, family_id="f", subject_id="p1", actor_id="p1")
+    assert sent == {"delivered": False, "reason": "paused"} and host.world.sent == []
+    tpl = await host.call("send_template", {"to": "p1", "template": {"purpose": "reminder"}}, family_id="f", subject_id="p1", actor_id="p1")
+    assert tpl["sent"] is False and host.world.templates == []
+    open_ = SimHost(World())
+    assert (await open_.call("send_whatsapp", {"to": "p1", "text": "hi"}, family_id="f", subject_id="p1", actor_id="p1"))["delivered"] is True

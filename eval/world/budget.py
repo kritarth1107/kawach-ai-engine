@@ -75,6 +75,7 @@ def world_host(fam: dict) -> SimHost:
     closed = {x["phone"] for x in fam["backend"]["windows"] if x["hoursSinceInbound"] >= 24}
     w.closed = {p["id"] for p in fam["people"] if p["phone"] in closed}
     w.other_caregivers = sum(1 for p in fam["people"] if p["role"] in ("primary caregiver", "caregiver") and not p["selfCare"])
+    w.paused = "paused" in (fam.get("shapes") or [])  # the admin console's pause, as the backend applies it
     return SimHost(w)
 
 
