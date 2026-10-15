@@ -215,7 +215,7 @@ def test_a_lost_post_is_retried_then_emailed(tmp_path, monkeypatch):
     assert len(calls) == 1 and sent  # a setup problem is not retried, and the team hears
 
 
-def test_a_provider_wide_refusal_is_unavailable_not_a_red_night(tmp_path):
+def test_a_provider_wide_refusal_is_unavailable_not_a_red_night(tmp_path, monkeypatch):
     d = tmp_path / "tonight"
     shard = d / "probes-0" / "runs" / "nightly" / "2026-10-14"
     shard.mkdir(parents=True)
@@ -225,10 +225,12 @@ def test_a_provider_wide_refusal_is_unavailable_not_a_red_night(tmp_path):
     }) + "\n")
     scores = tmp_path / "scores.json"
     out = tmp_path / "report.md"
+    monkeypatch.setenv("NIGHT_CAP_INR", "150")
     assert report.main([str(d), "--out", str(out), "--scores", str(scores)]) == 0
     sc = json.loads(scores.read_text())
     assert sc["unavailable"] is True and sc["passed"] is False and "403" in sc["why"]
-    assert "UNAVAILABLE" in out.read_text()
+    assert sc["night_cap_inr"] == 150 and sc["night_spent_inr"] == 0
+    assert "UNAVAILABLE" in out.read_text() and "night cap ₹150" in out.read_text().lower()
     # a real reply beside the refusal is a mix: the quality bars still apply
     (shard / "probes.jsonl").write_text((shard / "probes.jsonl").read_text() + json.dumps({
         "probe": "p2", "family": "w1", "language": "hi", "household": "two_elders", "topic": "reading",

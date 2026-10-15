@@ -314,9 +314,14 @@ def main(argv: list[str]) -> int:
     judged = load(d, "judged.jsonl")
     why = outage(d, rows, judged)
     if why:
-        sc = {"unavailable": True, "why": why, "passed": False, "failures": [f"nightly gate unavailable: {why}"]}
+        night = os.getenv("NIGHT_CAP_INR")
+        cap = round(float(night), 1) if night else None
+        sc = {"unavailable": True, "why": why, "passed": False, "failures": [f"nightly gate unavailable: {why}"],
+              "night_cap_inr": cap, "night_spent_inr": 0}
         sp.write_text(json.dumps(sc, ensure_ascii=False, indent=1))
+        cap_line = (f"Night cap ₹{cap:.0f} across probes, judge, recall and nudge-quality; spent ₹0.\n\n" if cap is not None else "")
         text = ("# The night's score\n\n**UNAVAILABLE**\n\n"
+                f"{cap_line}"
                 f"{why}\n\nNo reply was graded, so this is not a quality failure. Engine deploys go on if the tests passed. "
                 "The team is emailed. The gate is back on the next night that reaches the model.\n")
         out.write_text(text)
