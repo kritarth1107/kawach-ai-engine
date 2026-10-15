@@ -420,13 +420,13 @@ async def _drop_ended_medicines(session: AsyncSession, family_id: str, subject_i
     keys, names = await doses.ended_medicines(session, family_id, subject_ids)
     if not keys and not names:
         return
-    event_ids: list[uuid.UUID] = []
-    by_id: dict[uuid.UUID, str] = {}
+    event_ids: list[int] = []
+    by_id: dict[int, str] = {}
     for ref in list(hits):
         if not ref.startswith("event:"):
             continue
         try:
-            eid = uuid.UUID(ref.split(":", 1)[1])
+            eid = int(ref.split(":", 1)[1])
         except ValueError:
             continue
         event_ids.append(eid)

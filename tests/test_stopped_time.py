@@ -45,7 +45,7 @@ async def _stopped_amlong(db):
     )
     await store.record_event(
         db, family_id=FAM, subject_id=ME["id"], kind="fact_created",
-        summary="Amlong 5 mg at 08:00, also mentioned with Thyronorm",
+        summary="A morning tablet at 08:00, noted beside Thyronorm",
         payload={"key": key},
     )
 
