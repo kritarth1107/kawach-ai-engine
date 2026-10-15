@@ -64,8 +64,8 @@ class Who:
     caregiver: bool = False  # the speaker is a caregiver (or the dashboard)
 
 
-ASK_FIELDS = ("eaten_at", "meal", "for_whom", "from_photo", "label_photo", "confidence", "confirmed", "unsure", "cancel", "consumed",
-              "portion_eaten", "skipped", "from_order_task", "usual")
+ASK_FIELDS = ("eaten_at", "minutes_ago", "meal", "for_whom", "from_photo", "label_photo", "confidence", "confirmed", "unsure", "cancel",
+              "consumed", "portion_eaten", "skipped", "from_order_task", "usual")
 ITEM_FIELDS = ("name", "quantity", "unit", "brand", "restaurant", "from_order_task", "barcode", "notes", "said", "food_id")
 
 
@@ -127,6 +127,36 @@ def parse_at(v) -> datetime | None:
     except ValueError:
         return None
     return at.replace(tzinfo=clock.IST) if at.tzinfo is None else at
+
+
+def _minutes_ago(v) -> float | None:
+    """A number of minutes the brain passed. Not a reading of anyone's words."""
+    if isinstance(v, bool) or v is None:
+        return None
+    if isinstance(v, (int, float)):
+        n = float(v)
+    elif isinstance(v, str):
+        try:
+            n = float(v.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    if n < 0 or n > 18 * 60:
+        return None
+    return n
+
+
+def eaten_time(ask: dict | None, *, now: datetime | None = None) -> datetime:
+    """When they ate: a clock time the brain named, else minutes_ago before the message, else the message time."""
+    named = parse_at((ask or {}).get("eaten_at"))
+    if named is not None:
+        return named
+    base = now or clock.now()
+    ago = _minutes_ago((ask or {}).get("minutes_ago"))
+    if ago is None:
+        return base
+    return base - timedelta(minutes=ago)
 
 
 # A missing number is one of these. Decided from the food record (kind and tags), never from what they typed.
@@ -374,7 +404,7 @@ class NutritionAgent:
         sizes = (await settings.get(s, who.family_id, job.subject_id))["sizes"]
 
         if ask.get("skipped") and not items:
-            at = parse_at(ask.get("eaten_at")) or clock.now()
+            at = eaten_time(ask)
             slot = await entries.assign_slot(s, who.family_id, job.subject_id, at, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)
             meal = slot.meal
             if not await jobs.claim(s, job):
@@ -434,7 +464,7 @@ class NutritionAgent:
                           "_grams": i.get("grams"), "_photo": True} for i in draft["photo"]["items"]]
 
         learned = await self._usuals(job.subject_id)
-        at_guess = parse_at(ask.get("eaten_at")) or clock.now()
+        at_guess = eaten_time(ask)
         meal_guess = (await entries.assign_slot(
             s, who.family_id, job.subject_id, at_guess, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)).meal
         if ask.get("usual") and not items and not ask.get("from_photo"):
@@ -520,7 +550,7 @@ class NutritionAgent:
                 return self._question(job, "quantity", f"How many {it['name']}?", opts, item=it["name"])
 
         # save
-        at = parse_at(ask.get("eaten_at")) or clock.now()
+        at = eaten_time(ask)
         if at > clock.now() + timedelta(minutes=10):
             at = clock.now()
         if at < clock.now() - timedelta(days=30):
@@ -868,7 +898,7 @@ async def expire(session: AsyncSession, job: NutritionJob) -> dict:
             await photos.delete((job.draft or {})["photo_ref"])
         jobs.finish(job, "dropped", {"why": f"no answer ({reason})"})
         return {"result": "dropped"}
-    at = parse_at(ask.get("eaten_at")) or job.created_at
+    at = eaten_time(ask, now=job.created_at)
     slot = await entries.assign_slot(session, job.family_id, job.subject_id, at, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)
     meal = slot.meal
     rows = await entries.save_meal(

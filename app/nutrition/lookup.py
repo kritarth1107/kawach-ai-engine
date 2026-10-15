@@ -112,11 +112,11 @@ Return only JSON: {"items": [{"i": 0, "match": "id or null", "canonical": "...",
 "needs": null, "options": [], "countable": false, "default_unit": "...", "typical_qty": 1, "tags": []}]}"""
 
 
-PARTS_PROMPT = """You decide whether each item is its own food, or only a flavour, filling, or variety of another item in this same meal.
+PARTS_PROMPT = """You decide whether these items are one dish or several foods.
 
-ITEMS are already in English. A flavour, a filling, or a variety describes the dish; it is not a food of its own. Two foods eaten together stay two foods. One amount stated for a mix belongs to the dish.
+ITEMS are already in English. Two or more items that are flavours, fillings, or varieties of the same dish are that one dish, even when each name sounds like a whole food. Keep one of them: set part_of on every other item to that item's index, and leave part_of null on the one you keep. One amount stated for the mix is one portion, including when that same amount was copied onto more than one item. A filling named beside its dish is that dish.
 
-For each item, part_of is the index of the dish it describes, or null when it is its own food. Never its own index.
+Two different foods eaten together stay separate, each with part_of null. Never set part_of to an item's own index.
 
 Return only JSON: {"items": [{"i": 0, "part_of": null}]}"""
 
@@ -170,7 +170,7 @@ def merge_parts(items: list[dict], rows: list) -> list[dict]:
     return out
 
 
-async def fold_descriptions(items: list[dict], *, essential: bool = True, timeout_s: float = 6.0) -> list[dict]:
+async def fold_descriptions(items: list[dict], *, essential: bool = True, timeout_s: float = 20.0) -> list[dict]:
     """A flavour or a filling named beside a dish becomes part of that dish. The items stay as given when the model fails."""
     if len(items) < 2:
         return items
@@ -178,7 +178,7 @@ async def fold_descriptions(items: list[dict], *, essential: bool = True, timeou
                                   **({"unit": it.get("unit")} if it.get("unit") else {})} for i, it in enumerate(items)]},
                       ensure_ascii=False)
     try:
-        got = await ask("nutrition", PARTS_PROMPT, body, essential=essential, max_tokens=400, timeout_s=timeout_s)
+        got = await ask("nutrition", PARTS_PROMPT, body, essential=essential, max_tokens=2000, timeout_s=timeout_s)
     except router.AllModelsFailed:
         return items
     rows = got.get("items") if isinstance(got, dict) else got

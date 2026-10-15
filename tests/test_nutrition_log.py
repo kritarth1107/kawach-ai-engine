@@ -864,3 +864,27 @@ async def test_a_meal_they_moved_stays_and_a_later_evening_is_after_dinner(db, a
     assert got["08:30"] == "breakfast" and got["04:58"] == "breakfast"
     assert got["20:30"] == "dinner" and got["23:40"] == "after_dinner"
     assert out["kept"] == 1 and not any(m["id"] == str(stated.id) for m in out["moves"])
+
+
+async def test_a_meal_reported_later_is_stored_when_they_ate_it(db, at, nfake):
+    """They write at 14:15 about a lunch they finished 45 minutes earlier. The log keeps 13:30, and a named clock time wins."""
+    at("2026-10-15 14:15")
+    late, err = await call(db, "log_food", {"minutes_ago": 45, "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert not err and late["result"] == "saved" and late["meal"] == "lunch", late
+    got = {_at(e): e.meal for e in await active(db)}
+    assert got.get("13:30") == "lunch", got
+    named, _ = await call(db, "log_food", {"eaten_at": "2026-10-15T13:00:00+05:30", "minutes_ago": 5,
+                                           "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
+    assert named["result"] == "saved"
+    assert any(_at(e) == "13:00" for e in await active(db))
+
+
+async def test_learned_lunch_uses_when_they_ate_not_when_they_wrote(db, at, nfake):
+    """Seven days written at 14:15, each 45 minutes after eating, learn 13:30 rather than 2:15."""
+    for day in range(8, 15):
+        at(f"2026-10-{day:02d} 14:15")
+        saved, err = await call(db, "log_food", {"minutes_ago": 45,
+                                                 "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+        assert not err and saved["result"] == "saved", saved
+    times = await nudge_hooks.usual_meal_times(db, FAM, MAA["id"])
+    assert times["lunch"] == "13:30" and times["stable"]["lunch"], times

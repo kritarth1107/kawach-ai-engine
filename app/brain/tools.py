@@ -883,8 +883,9 @@ def _food_day(v: str | None) -> str | None:
     "for a meal, snack, drink or glass of water named in the message they just sent (also an earlier day, also a caregiver telling "
     "you what their parent ate), unless food tracking is off for them. Do not call this to agree with a meal already saved, "
     "to praise it, or to log food from an earlier turn again, and do not fill in a meal they did not name: a dish they did not say is not logged. You read their words; give structured fields: one item "
-    "per food they ate. A flavour, a filling, or a variety named with a dish is that one item, not a second food, and one "
-    "amount they stated for the mix is that item's quantity, once. Two foods eaten together stay two items. The name is in "
+    "per food they ate. Two flavours or varieties of one dish, or a filling with its dish, are that one item: both belong in "
+    "the one name, and the one amount they stated for the mix is that item's quantity once. Do not make a second item, and do "
+    "not copy the amount onto two items. Two foods eaten together stay two items. The name is in "
     "English as people know it (keep dish names: 'poha', 'thekua', 'masala dosa'; with preparation: "
     "'boiled egg'), quantity and unit only when they said a number (never invent one: 'ate eggs', an unclear 'for/four', or a "
     "single drink or pack with no number has no quantity: leave it out). The agent saves one serving for a packaged item or a "
@@ -898,7 +899,9 @@ def _food_day(v: str | None) -> str | None:
     "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. Water: one item, unit glass "
-    "or ml, quantity when they said one, eaten_at when they said a time; each time they drink is its own call. If the result "
+    "or ml, quantity when they said one, eaten_at when they said a time; each time they drink is its own call. A meal they "
+    "already finished: set eaten_at when they named a clock time, otherwise minutes_ago (how long before this message). Do not "
+    "leave both empty, or the log uses this message's clock. If the result "
     "has needs, say exactly the result's say sentence and pass the answer with answer_to. If the result has already=true, say "
     "nothing about this meal (it is already saved or being saved) and do not say you are checking. Never read options, ids, or "
     "the words Options or Reply aloud. Say only what the result says ('say', 'today'); never a number of your own, and never a "
@@ -915,8 +918,11 @@ def _food_day(v: str | None) -> str | None:
             "notes": {"type": "string", "description": "What is in it, if they said (for a home dish nobody knows: 'besan, jaggery, ghee')"},
             "said": {"type": "string", "description": "What they called it, in their words, if different from name ('anda', 'roti')"}},
             "required": ["name"], "additionalProperties": False}},
-        "eaten_at": {"type": "string", "description": "When they ate it, ISO 8601 in IST (e.g. 2026-10-13T21:00), worked out from NOW and their "
-                     "words ('last night' → yesterday about 21:00). Leave out for just now."},
+        "eaten_at": {"type": "string", "description": "A clock time they named, ISO 8601 in IST (e.g. 2026-10-13T13:30, or last night → "
+                     "yesterday about 21:00). Leave out when they did not name a clock time; set minutes_ago instead."},
+        "minutes_ago": {"type": "number", "description": "Minutes before this message that they ate, when they are reporting a meal "
+                       "they already finished and did not name a clock time. The gap they implied is not zero. Leave out when they "
+                       "are eating as they write, or when eaten_at is set."},
         "meal": {"type": "string", "enum": ["breakfast", "lunch", "snack", "dinner", "other"]},
         "for_whom": FOOD_FOR_WHOM,
         "from_photo": {"type": "boolean", "description": "The food is in the photo attached to this message"},

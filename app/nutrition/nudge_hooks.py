@@ -39,9 +39,9 @@ async def meal_logged(session: AsyncSession, family_id: str, person_id: str, slo
         ask = j.ask or {}
         at = None
         try:
-            from app.nutrition.agent import parse_at
+            from app.nutrition.agent import eaten_time
 
-            at = parse_at(ask.get("eaten_at")) or j.created_at
+            at = eaten_time(ask, now=j.created_at)
         except Exception:  # noqa: BLE001
             at = j.created_at
         named = ask.get("meal") if isinstance(ask.get("meal"), str) else None
