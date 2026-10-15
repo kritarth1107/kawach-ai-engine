@@ -280,6 +280,10 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         hint = await nudges.reply_hint(session, req.family_id, req.speaker["id"])
         if hint:
             parts.append(hint)
+        still = await questions_still_open(session, req.speaker["id"])
+        if still:
+            parts.append("ALREADY ASKED TODAY, still unanswered. Do not ask any of these again:\n"
+                         + "\n".join(f"- {t[:180]}" for t in still[:8]))
     try:  # the nutrition agent's questions still waiting for an answer (log_food answer_to)
         from app.nutrition import jobs as food_jobs
 
@@ -717,6 +721,21 @@ async def recently_messaged(session: AsyncSession, req: TurnRequest) -> set[str]
     return set(rows.scalars())
 
 
+async def questions_still_open(session: AsyncSession, person: str) -> list[str]:
+    """Today's questions, from a nudge or from here, that they have not answered in their own words."""
+    from app.care.models import NudgeLedger
+
+    start = clock.ist(clock.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+    asked = [(at, text) for text, at in (await session.execute(select(Turn.text, Turn.at).where(
+        Turn.thread_id == person, Turn.role == "assistant", Turn.at >= start, ~Turn.family_id.startswith("shadow:")))).all()]
+    asked += [(at, text) for text, at in (await session.execute(select(NudgeLedger.text, NudgeLedger.sent_at).where(
+        NudgeLedger.person_id == person, NudgeLedger.status == "sent", NudgeLedger.sent_at >= start,
+        ~NudgeLedger.family_id.startswith("shadow:")))).all() if at]
+    wrote = [(at, text) for text, at in (await session.execute(select(Turn.text, Turn.at).where(
+        Turn.thread_id == person, Turn.role == "user", Turn.at >= start, ~Turn.family_id.startswith("shadow:")))).all()]
+    return guards.unanswered(asked, wrote)
+
+
 async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, *, avoid: list[str], unreachable: list[str],
                          data: TurnData | None = None, wrong_terms: list[str] | None = None) -> list[str]:
     """Everything wrong with a reply before the person reads it (policy + guards)."""
@@ -760,6 +779,11 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     earlier = [t.text for t in recent
                if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
     problems += guards.repeats(final, earlier)
+    problems += guards.timed_promise(final, ctx.actions)
+    if (req.text or "").strip() and not ctx.is_system:
+        still = await questions_still_open(session, req.speaker["id"])
+        if hit := guards.question_again(final, still):
+            problems.append(f"this question was already asked today (\"{hit[:80]}\"); wait until they answer")
     if not (req.text or "").strip():
         # A question already asked today, by a nudge or here, waits until they write something new (founder 2026-10-15).
         from app.care.models import NudgeLedger

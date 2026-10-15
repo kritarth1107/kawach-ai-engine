@@ -640,6 +640,20 @@ def _question_words(text: str) -> set[str]:
     return {w for w in re.findall(r"[0-9a-z\u0900-\u0d7f\u0600-\u06ff]+", (text or "").lower()) if len(w) >= 5}
 
 
+def unanswered(asked: list[tuple], wrote: list[tuple]) -> list[str]:
+    """Questions we sent that a later message from them does not share a content word with.
+    asked and wrote are (at, text). A greeting or a short ack shares no content word, so it is not the answer."""
+    out = []
+    for at, text in asked:
+        if not text or ("?" not in text and "？" not in text):
+            continue
+        words = _question_words(text)
+        if words and any(ta >= at and (words & _question_words(msg)) for ta, msg in wrote):
+            continue
+        out.append(text)
+    return out
+
+
 def question_again(text: str, earlier: list[str]) -> str | None:
     """A question we already asked, even in different words. earlier: our own unanswered questions (never their words).
     Two shared words of five letters or more is the same question."""
@@ -674,6 +688,24 @@ APPOINTMENT_BOOK = re.compile(r"\b(book|set|fix|schedule)\b.{0,25}\b(appointment
 # A store price said as fact. Live 2026-10-09 15:43: with no look-up running, Saheli re-offered a cancelled Blinkit
 # price from earlier in the day ("Blinkit par ₹209… aage badhun?") instead of starting a new look-up.
 STORE_PRICE = re.compile(r"(₹|\brs\.?|rupees?|रुपय|रुपए)\s*\d", re.I)
+# A clock time in Saheli's own reply. Checked on her text, never on what the person meant.
+_CLOCK = re.compile(r"\b(?:[01]?\d|2[0-3])[:.][0-5]\d\b|\b\d{1,2}\s*(?:am|pm|baje)\b", re.I)
+_LATER = re.compile(r"\b(will|shall|dungi|dunga|bhej\w*|message\w*|msg)\b", re.I)
+_LATER_ACT = re.compile(r"\b(bhej\w*|message\w*|msg|remind\w*|reminder|utha)\b", re.I)
+_SCHEDULE_TOOLS = frozenset({"set_reminder", "change_reminder", "open_loop"})
+
+
+def timed_promise(reply: str, actions: list[dict]) -> list[str]:
+    """A reply that promises a message or a wake-up at a time, with no reminder or loop set this turn.
+    Checked on Saheli's own words. A question is an offer, not a promise."""
+    if any(a.get("tool") in _SCHEDULE_TOOLS and a.get("ok") for a in actions or []):
+        return []
+    text = reply or ""
+    if "?" in text or not _CLOCK.search(text) or not _LATER.search(text) or not _LATER_ACT.search(text):
+        return []
+    return ["a timed message or wake-up was promised but nothing was scheduled: call set_reminder or open_loop, or do not promise it"]
+
+
 STORE_NAME = re.compile(
     r"\b(1mg|apollo|pharmeasy|swiggy|zepto|instamart|blinkit|zomato|amazon|uber|ola|rapido)\b|"
     r"ब्लिंक|इंस्टामार्ट|इन्स्टामार्ट|स्विगी|ज़ेप्टो|जेप्टो|ज़ोमैटो|जोमैटो|अपोलो|फार्मईज़ी|फार्मेसी|रैपिडो|उबर|ओला",

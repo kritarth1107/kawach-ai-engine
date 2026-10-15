@@ -85,6 +85,9 @@ _ACTIONS_RULE = """4. Also list what Saheli says SHE has done or WILL do (kind "
    calories, a reminder is not a phone call. Logging one meal does not cover a promise to track protein, calories or
    diet from now on. A tool result that says "one meal only" does not support "I set up tracking" or "I will track".
    A promise no ability covers is unsupported, however kind it sounds.
+   later = true when the promise is for a later time: a message, a wake-up, a reminder, or a check-back at a clock
+   time or "in the morning". A later promise is supported only when a TOOL RESULT this turn is set_reminder,
+   change_reminder, or open_loop. log_event and remember do not schedule anything, and a tool existing is not enough.
    Offers and questions ("shall I…?", "want me to…?") are not claims.
 
 """
@@ -98,7 +101,9 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    sorry. followup_missing = true when their latest message shares something personal (an outing, a friend, a film, a meal
    they loved, a worry, the gym, a trip, trouble sleeping) and the REPLY does not ask one question about that thing and no
    TOOL RESULT shows remember saved it. False on a health problem, a medicine, an order, or when they said they are busy or
-   will tell you later. Add "unwanted_apology": true|false and "followup_missing": true|false to the JSON.
+   will tell you later. A short yes to the previous question still shares whatever that question was about (trouble
+   sleeping, a film, a meal, a trip): tips instead of one question about that thing is followup_missing. Add
+   "unwanted_apology": true|false and "followup_missing": true|false to the JSON.
 
 """
 
@@ -150,6 +155,7 @@ class Claim:
     prescriptive: bool = False
     source: str = "none"
     dose_change: bool = False
+    later: bool = False
 
     @property
     def problem(self) -> bool:
@@ -180,7 +186,8 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
         if not isinstance(c, dict) or c.get("kind") not in KINDS or not str(c.get("quote") or "").strip():
             continue
         out.append(Claim(kind=c["kind"], quote=str(c["quote"]).strip()[:300], supported=c.get("supported") is True,
-                         prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none"), dose_change=c.get("dose_change") is True))
+                         prescriptive=c.get("prescriptive") is True, source=str(c.get("source") or "none"),
+                         dose_change=c.get("dose_change") is True, later=c.get("later") is True))
     if isinstance(data, dict) and data.get("unwanted_apology") is True:
         out.append(Claim(kind="advice", quote="[apology for a tease]", supported=False, prescriptive=True, source="unwanted_apology"))
     if isinstance(data, dict) and data.get("followup_missing") is True:
@@ -214,7 +221,22 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")
         return []
-    return [c for c in _parse(reply.text or "", doctor_note) if c.problem and (actions or c.kind != "action")]
+    claims = _parse(reply.text or "", doctor_note)
+    # A clock-time promise is unsupported unless this turn scheduled it. An ability existing is not the schedule.
+    if actions and not scheduled(tool_results):
+        for c in claims:
+            if c.later:
+                c.supported = False
+    return [c for c in claims if c.problem and (actions or c.kind != "action")]
+
+
+_SCHEDULED = ("set_reminder:", "change_reminder:", "open_loop:")
+
+
+def scheduled(tool_results: list[str]) -> bool:
+    """True when this turn's tool results include a reminder or a loop that wakes later."""
+    blob = "\n".join(tool_results or [])
+    return any(name in blob for name in _SCHEDULED)
 
 
 def problems(claims: list[Claim]) -> list[str]:
@@ -235,6 +257,9 @@ def problems(claims: list[Claim]) -> list[str]:
         elif c.kind == "advice":
             out.append(f"'{c.quote}' is your own health advice: give no doses, food rules or limits of your own; share only what a "
                        "search result or their doctor said (as general information, check with the doctor), or ask")
+        elif c.kind == "action" and c.later:
+            out.append(f"'{c.quote}' promises a later message or reminder, but this turn did not schedule it: call "
+                       "set_reminder, change_reminder or open_loop, or do not promise it")
         elif c.kind == "action":
             out.append(f"'{c.quote}' says you did or will do something that no tool did this turn and none of your tools can do: "
                        "do it now with a tool if one fits, otherwise say plainly what you did and what you can do")

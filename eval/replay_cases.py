@@ -173,6 +173,15 @@ async def seed(session, fid: str, ctx: dict) -> None:
     for i, e in enumerate(ctx.get("events") or []):
         await store.record_event(session, family_id=fid, subject_id=e["subject"], kind=e["kind"], summary=e.get("summary") or "", payload={},
                                  actor_id=e["subject"], at=_t(e.get("at"), before), ref=f"replay:{fid}:{i}")
+    from app.care.models import NudgeLedger
+
+    for i, n in enumerate(ctx.get("nudges") or []):
+        when = _t(n.get("at"), before)
+        session.add(NudgeLedger(
+            family_id=fid, person_id=n["person"], kind=n.get("kind") or "know",
+            slot_key=f"replay:{i}"[:120], status="sent", reason="", ref=f"nudge:replay:{i}",
+            text=n.get("text") or "", planned_at=when, sent_at=when,
+        ))
     for lp in ctx.get("loops") or []:
         await store.open_loop(
             session, family_id=fid, subject_id=lp["subject"], kind=lp.get("kind") or "brief",
@@ -225,6 +234,9 @@ def code_check(rule: dict, reply: str, tools: list[str], messages: list[str] | N
         meds = guards.med_times([(str(rule.get("medicine") or ""), " ".join(rule.get("times") or []))])
         probs = [p for p in guards.ungrounded(reply, known="", meds=meds) if p.startswith("gives ")]
         return "; ".join(probs) or None
+    if t == "timed_promise":
+        hit = guards.timed_promise(reply, [{"tool": name, "ok": True} for name in tools])
+        return hit[0] if hit else None
     if t == "separate_brief":
         bubbles = messages or []
         marker = str(rule.get("marker") or "")
@@ -555,6 +567,7 @@ REGISTER = Path(__file__).parent / "fixtures" / "register_2026-10-14.jsonl"  # b
 CURIOUS = Path(__file__).parent / "fixtures" / "curiosity_2026-10-15.jsonl"  # an event, and one missing fact (open)
 LIVE = Path(__file__).parent / "fixtures" / "live_2026-10-15.jsonl"  # advice, a tease, and a missed follow-up (open)
 BRIEF = Path(__file__).parent / "fixtures" / "brief_2026-10-15.jsonl"  # a waiting brief stays its own message (open)
+REASON = Path(__file__).parent / "fixtures" / "reasoning_2026-10-15.jsonl"  # promises, consent, reference, repeats (open)
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -571,6 +584,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in LIVE.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and BRIEF.exists():
         cases += [json.loads(line) for line in BRIEF.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and REASON.exists():
+        cases += [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]
