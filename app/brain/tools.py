@@ -3407,6 +3407,70 @@ async def ways_there(ctx: TurnCtx, a: dict) -> dict:
                     "Nothing was booked and nothing was paid."}
 
 
+@tool(
+    "note_trip",
+    "Save a journey from a forwarded airline message or from what they said: airline, flight number, from, to, and the "
+    "landing time. A public flight-status page can move the landing time only when that time is written on the page. "
+    "Then offer the cab (start_task with landing), offer once to tell the family, and say check-in can be done when it "
+    "opens. Ask only for a field this refuses.",
+    {
+        "airline": {"type": "string"},
+        "flight": {"type": "string", "description": "The flight number as written, such as 6E-204"},
+        "origin": {"type": "string", "description": "Where it takes off, city or airport"},
+        "destination": {"type": "string", "description": "Where it lands"},
+        "arrives": {"type": "string", "description": "Landing time, ISO 8601 in IST"},
+        "departs": {"type": "string", "description": "Departure time, ISO 8601 in IST, when known"},
+        "pnr": {"type": "string", "description": "The booking reference, when the message has one"},
+        "about": ABOUT,
+    },
+    ["airline", "flight", "origin", "destination", "arrives"],
+)
+async def note_trip(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import ways
+    from app.care.domains import fact_key
+    from app.tasks import later
+
+    arrives = later.parse_at(a.get("arrives"))
+    if arrives is None:
+        raise ToolRefused("arrives must be a date and time like 2026-10-16T00:30 (IST). Ask for the landing time.")
+    flight = str(a.get("flight") or "").strip()
+    if not flight:
+        raise ToolRefused("Give the flight number.")
+    moved = None
+    try:
+        raw, _sources = await ways.fetch_text(f"{a.get('airline') or ''} {flight} flight status arrival time")
+        moved = ways.checked_arrival(await ways.judge_time(raw, flight), raw, flight)
+    except Exception as exc:  # noqa: BLE001 — no page text: the forwarded time stands
+        logger.warning("flight status not checked: %s", exc)
+    if moved:
+        arrives = ways.retimed(arrives, moved)
+    subject = ctx.subject(a.get("about"))
+    cab = ways.pickup_after_landing(arrives)
+    value = {"airline": str(a.get("airline") or "").strip(), "flight": flight,
+             "origin": str(a.get("origin") or "").strip(), "destination": str(a.get("destination") or "").strip(),
+             "arrives": arrives.isoformat(), "cab_at": cab.isoformat(),
+             **({"departs": later.parse_at(a["departs"]).isoformat()} if a.get("departs") and later.parse_at(a.get("departs")) else {}),
+             **({"pnr": str(a["pnr"]).strip()} if str(a.get("pnr") or "").strip() else {})}
+    sentence = f"{value['airline']} {flight} from {value['origin']} to {value['destination']}, lands {later.hm(arrives)}".strip()
+    w = await store.write_fact(
+        ctx.session, family_id=ctx.family_id, subject_id=subject, domain="trip", key=fact_key("trip", flight),
+        value=value, text=sentence, source_kind=ctx.source_kind, source_ref=ctx.message_ref,
+        stated_by=ctx.speaker.get("id"), confidence=1.0)
+    wake = arrives - timedelta(hours=3)
+    loop_id = None
+    if wake > clock.now():
+        loop = await store.open_loop(
+            ctx.session, family_id=ctx.family_id, subject_id=subject, kind="followup",
+            title=f"Flight {flight} lands {later.hm(arrives)}: offer the cab and ask if the family has been told",
+            detail={"key": w.fact.key, "arrives": arrives.isoformat(), "max_wakes": 1},
+            owner_id=ctx.speaker.get("id"), wake_at=wake, alert_rule="dashboard", dedupe_key=f"trip:{subject}:{w.fact.key}")
+        loop_id = str(loop.id)
+    return {"saved": sentence, "key": w.fact.key, "arrives": arrives.isoformat(), "cab_at": cab.isoformat(),
+            "landing_moved": bool(moved), "reminder": loop_id,
+            "next": "Offer the cab now: start_task kind ride with landing set to arrives, and ask only what is still missing. "
+                    "Offer once to tell the family. Say check-in can be done when it opens. Do not message anyone until they say yes."}
+
+
 def websearch_limit() -> int:
     from app.brain import websearch
 

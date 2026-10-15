@@ -30,13 +30,14 @@ DOMAINS = {
     "preference": "Likes and dislikes that matter for care",
     "profile": "Emergency profile: blood_group, height, weight, insurance, mobility, id_note (one fact each)",
     "appointment": "Doctor appointments: doctor, when (YYYY-MM-DDTHH:MM IST), place, purpose, questions to ask",
+    "trip": "A journey: airline, flight, from, to, departure and landing (saved with note_trip)",
     "learned": "What Saheli learned from what happened (best times to write, habits); written by her nightly learning, never by the brain",
     "nutrition_target": "Nutrition targets and food rules with who set them and how strictly (saved with the nutrition_target tool)",
     "setting": "Settings for what Saheli does, e.g. setting:nutrition (food tracking; saved with nutrition_settings)",
 }
 
 # Domains with their own tool: remember never writes them (it points to the tool).
-TOOL_DOMAINS = {"learned": "", "nutrition_target": "nutrition_target", "setting": "nutrition_settings"}
+TOOL_DOMAINS = {"learned": "", "nutrition_target": "nutrition_target", "setting": "nutrition_settings", "trip": "note_trip"}
 
 # A change from a weaker source to these waits for a caregiver to confirm.
 HEALTH_DOMAINS = {"medicine", "allergy", "condition", "vital_target", "nutrition_target"}

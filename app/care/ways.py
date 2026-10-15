@@ -115,12 +115,34 @@ def messages(options: list[dict]) -> list[str]:
     return out
 
 
+def checked_arrival(proposed: str, raw: str, flight: str) -> str | None:
+    """An arrival clock time only when that time and the flight number are both in the page text."""
+    found = re.search(r"ARRIVES=([0-2]\d:[0-5]\d)", proposed or "")
+    if not found or not flight:
+        return None
+    hhmm = found.group(1)
+    if hhmm not in (raw or "") or flight.lower() not in (raw or "").lower():
+        return None
+    return hhmm
+
+
+def retimed(arrives: datetime, hhmm: str) -> datetime:
+    hour, minute = (int(p) for p in hhmm.split(":"))
+    from app.core import clock
+
+    return clock.ist(arrives).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
 async def fetch(origin: str, destination: str, at: datetime | None) -> tuple[str, list[dict]]:
     """The page text of one live look-up, and its sources. Raises when search is off or fails."""
-    from app.brain import websearch
-
     when = at.strftime("%H:%M") if at else ""
     query = f"{origin} to {destination} {when} airport prepaid taxi bus metro fare route".strip()
+    return await fetch_text(query)
+
+
+async def fetch_text(query: str) -> tuple[str, list[dict]]:
+    """Page text for one query. Raises when search is off, or when the answer has no page text to check."""
+    from app.brain import websearch
     if websearch.provider() == "tavily":
         rows = await websearch.tavily_search(query, max_results=5)
         raw = "\n".join(f"{r.get('title') or ''}\n{r.get('content') or ''}" for r in rows)
@@ -147,4 +169,15 @@ async def judge(raw: str) -> str:
     )
     reply = await router.complete("classify", system_stable=system, effort="low", max_tokens=600,
                                   messages=[{"role": "user", "content": [{"type": "text", "text": raw[:6000]}]}])
+    return (reply.text or "").strip()
+
+
+async def judge_time(raw: str, flight: str) -> str:
+    """ARRIVES=HH:MM proposed from the page. Tests replace this; checked_arrival still requires the time on the page."""
+    from app.llm import router
+
+    system = (f"If the page text gives an arrival time for flight {flight}, reply with exactly ARRIVES=HH:MM using that "
+              "time. If it does not, reply ARRIVES=unknown. No other text.")
+    reply = await router.complete("classify", system_stable=system, effort="low", max_tokens=40,
+                                  messages=[{"role": "user", "content": [{"type": "text", "text": raw[:4000]}]}])
     return (reply.text or "").strip()

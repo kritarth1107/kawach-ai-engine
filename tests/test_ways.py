@@ -67,6 +67,15 @@ def test_a_blocked_ride_says_nothing_was_booked_and_asks_for_the_other_ways():
     assert "security check" in said
 
 
+def test_a_status_page_moves_the_landing_only_when_it_writes_the_time():
+    raw = "Flight 6E-204 arrival 00:45. Departure was 22:00."
+    assert ways.checked_arrival("ARRIVES=00:45", raw, "6E-204") == "00:45"
+    assert ways.checked_arrival("ARRIVES=01:10", raw, "6E-204") is None
+    assert ways.checked_arrival("ARRIVES=00:45", raw, "6E-999") is None
+    land = datetime(2026, 10, 16, 0, 30, tzinfo=clock.IST)
+    assert ways.retimed(land, "00:45") == datetime(2026, 10, 16, 0, 45, tzinfo=clock.IST)
+
+
 def test_a_landing_time_sets_the_cab_45_minutes_later():
     land = datetime(2026, 10, 16, 0, 30, tzinfo=clock.IST)
     assert ways.pickup_after_landing(land) == datetime(2026, 10, 16, 1, 15, tzinfo=clock.IST)
@@ -105,3 +114,25 @@ async def test_ways_there_sends_only_what_the_page_wrote(db, monkeypatch):
     assert "₹50" not in text and "MADE-UP" not in text
     assert out["messages"][-1] == "Which feels right?"
     assert "Nothing was booked and nothing was paid" in out["note"]
+
+
+async def test_a_forwarded_flight_is_a_trip_and_the_cab_follows_the_page(db, at, monkeypatch):
+    at("2026-10-15 18:00")
+    await store.save_roster(db, FAM, E, [E, S])
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=S, members=[E, S], message_ref="m1")
+
+    async def fetch_text(query):
+        return "Flight 6E-204 arrival 00:45.", []
+
+    async def judge_time(raw, flight):
+        return "ARRIVES=00:45"
+
+    monkeypatch.setattr(ways, "fetch_text", fetch_text)
+    monkeypatch.setattr(ways, "judge_time", judge_time)
+    out = await tools.note_trip(ctx, {"airline": "IndiGo", "flight": "6E-204", "origin": "Testpur", "destination": "Homepur",
+                                     "departs": "2026-10-16T22:00", "arrives": "2026-10-16T00:30", "pnr": "TESTPN", "about": ELDER})
+    assert out["landing_moved"] is True and out["arrives"].startswith("2026-10-16T00:45")
+    assert out["cab_at"].startswith("2026-10-16T01:30") and out["reminder"]
+    assert "start_task" in out["next"] and "TESTPN" not in out["saved"]
+    saved = await store.facts(db, FAM, ELDER, domains=["trip"])
+    assert saved and saved[0].value["pnr"] == "TESTPN" and saved[0].value["flight"] == "6E-204"
