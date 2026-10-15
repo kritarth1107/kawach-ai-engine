@@ -622,6 +622,27 @@ def duplicate_message(text: str, sent: list[tuple[str, bool]], *, near: float = 
     return None
 
 
+def _question_words(text: str) -> set[str]:
+    """Words of five letters or more. Vowel signs stay with the letter, so a Devanagari word counts as one word."""
+    return {w for w in re.findall(r"[0-9a-z\u0900-\u0d7f\u0600-\u06ff]+", (text or "").lower()) if len(w) >= 5}
+
+
+def question_again(text: str, earlier: list[str]) -> str | None:
+    """A question we already asked, even in different words. earlier: our own unanswered questions (never their words).
+    Two shared words of five letters or more is the same question."""
+    if "?" not in (text or "") and "？" not in (text or ""):
+        return None
+    mine = _question_words(text)
+    if len(mine) < 2:
+        return None
+    for old in earlier:
+        if not old or ("?" not in old and "？" not in old):
+            continue
+        if len(mine & _question_words(old)) >= 2:
+            return old
+    return None
+
+
 # ── claims of doing things ─────────────────────────────────────────────────────
 
 MSG_VERB = re.compile(

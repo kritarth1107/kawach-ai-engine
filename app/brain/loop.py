@@ -718,6 +718,19 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     earlier = [t.text for t in recent
                if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
     problems += guards.repeats(final, earlier)
+    if not (req.text or "").strip():
+        # A question already asked today, by a nudge or here, waits until they write something new (founder 2026-10-15).
+        from app.care.models import NudgeLedger
+
+        start = clock.ist(clock.now()).replace(hour=0, minute=0, second=0, microsecond=0)
+        me = req.speaker["id"]
+        asked = [t for t in (await session.execute(select(Turn.text).where(
+            Turn.thread_id == me, Turn.role == "assistant", Turn.at >= start, ~Turn.family_id.startswith("shadow:")))).scalars() if t]
+        asked += [t for t in (await session.execute(select(NudgeLedger.text).where(
+            NudgeLedger.person_id == me, NudgeLedger.status == "sent", NudgeLedger.sent_at >= start,
+            ~NudgeLedger.family_id.startswith("shadow:")))).scalars() if t]
+        if hit := guards.question_again(final, asked):
+            problems.append(f"this question was already asked today (\"{hit[:80]}\"); wait until they answer")
     me = req.speaker["id"]
     others = {}
     for m in [req.elder, *req.members]:

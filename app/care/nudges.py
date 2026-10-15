@@ -206,6 +206,48 @@ async def sent_lines(session: AsyncSession, family_id: str, person: str, since: 
     return [t for t in rows if t]
 
 
+def _day_start(now: datetime) -> datetime:
+    return clock.ist(now).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def sent_today(session: AsyncSession, person: str, now: datetime) -> list[NudgeLedger]:
+    """Nudges sent to this person today, in every family they belong to."""
+    return list((await session.execute(
+        select(NudgeLedger).where(NudgeLedger.person_id == person, NudgeLedger.status == "sent", NudgeLedger.sent_at >= _day_start(now),
+                                  NudgeLedger.kind != "reminder_followup", ~NudgeLedger.family_id.startswith("shadow:"))
+    )).scalars())
+
+
+async def sent_in_other_family(session: AsyncSession, person: str, family_id: str, since: datetime) -> bool:
+    """True when another family's stream already reached this person since `since` (one stream per person)."""
+    found = await session.scalar(select(NudgeLedger.id).where(
+        NudgeLedger.person_id == person, NudgeLedger.family_id != family_id, NudgeLedger.status == "sent",
+        NudgeLedger.sent_at >= since, ~NudgeLedger.family_id.startswith("shadow:")).limit(1))
+    return found is not None
+
+
+async def asked_open(session: AsyncSession, person: str, now: datetime) -> tuple[set[str], list[str]]:
+    """Fields and question texts we already asked today and they have not answered since, in any family."""
+    start = _day_start(now)
+    rows = await sent_today(session, person, now)
+    wrote = list((await session.execute(select(Turn.at).where(
+        Turn.thread_id == person, Turn.role == "user", Turn.at >= start, ~Turn.family_id.startswith("shadow:")))).scalars())
+    fields: set[str] = set()
+    texts: list[str] = []
+    for r in rows:
+        if r.replied_at or (r.sent_at and any(t >= r.sent_at for t in wrote)):
+            continue
+        if r.field:
+            fields.add(r.field)
+        if r.text and ("?" in r.text or "？" in r.text):
+            texts.append(r.text)
+    for text, at in (await session.execute(select(Turn.text, Turn.at).where(
+            Turn.thread_id == person, Turn.role == "assistant", Turn.at >= start, ~Turn.family_id.startswith("shadow:")))).all():
+        if text and ("?" in text or "？" in text) and not any(t >= at for t in wrote):
+            texts.append(text)
+    return fields, texts
+
+
 async def read_clock(session: AsyncSession, family_id: str, person: str, gate: dict, now: datetime, mode: str) -> Clock:
     last_user, last_bot = await engine_times(session, family_id, person)
     last_in = max([t for t in (last_user, _iso(gate.get("last_inbound_at"))) if t], default=None)
@@ -258,6 +300,29 @@ class Due:
     early_bird: bool = False
     reason: str = ""  # why not, when not due
     mode: str | None = None  # off | shadow | on, once the backend was asked (None: not asked, a cheap skip)
+    light: str = ""  # opener | morning | lunch | evening: a reduced line, still due
+
+
+def light_slot(now: datetime, wake_min: int | None) -> str | None:
+    """Their morning (from their own wake, else 08:30, for 90 minutes), around lunch, or early evening."""
+    local = clock.ist(now)
+    m = local.hour * 60 + local.minute
+    wake = 8 * 60 + 30 if wake_min is None else wake_min
+    if wake <= m < wake + 90:
+        return "morning"
+    if 12 * 60 + 30 <= m < 14 * 60 + 30:
+        return "lunch"
+    if 17 * 60 <= m < 18 * 60 + 30:
+        return "evening"
+    return None
+
+
+_LIGHT_WHY = {
+    "morning": "a warm good morning from something you know about them; one easy question; not a dose; not anything already asked today",
+    "lunch": "a light hello around lunch, from something you know about them; one easy question; not a dose; not anything already asked today",
+    "evening": "a warm early-evening line about how their day is going, from something you know; one easy question; not a dose; not anything already asked today",
+    "opener": "the good morning that waits behind the notice: warm, from something you know, one easy question, not a dose, not anything already asked today",
+}
 
 
 async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str | None, *, busy: bool) -> Due:
@@ -304,19 +369,40 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         return Due(p, ck, reason="paused", mode=m)
     if gate.get("active_flow"):
         return Due(p, ck, reason="busy", mode=m)
+    if await sent_in_other_family(session, p.id, p.family_id, now - CARED_EVERY):
+        return Due(p, ck, reason="other_family", mode=m)  # one stream per person, whichever family runs first
     # Their own message in the last 24 hours, by either side's record: a free message to someone who never wrote (or not
     # lately) fails at WhatsApp, even when the backend has no record of their chat yet and calls it open.
-    if not gate.get("window_open", False) or ck.last_in is None or now - ck.last_in >= WINDOW:
+    closed = not gate.get("window_open", False) or ck.last_in is None or now - ck.last_in >= WINDOW
+    if closed:
+        if p.cared:
+            from app.brain.wake import own_night
+
+            night = await own_night(session, p.family_id, p.id)
+            if light_slot(now, night[1] if night else None) == "morning":
+                today = await sent_today(session, p.id, now)
+                if not any(r.field == "hello" or (r.reason or "").startswith("waiting:") for r in today):
+                    return Due(p, ck, light="opener", mode=m)  # one utility template; the greeting waits behind it
         return Due(p, ck, reason="window_closed", mode=m)
     if gate.get("reason"):
         return Due(p, ck, reason=str(gate["reason"])[:60], mode=m)
-    if ck.run >= 2:  # near the escalation: once the caregiver is being told, the ladder adds nothing to that streak (B2)
+    if ck.run >= 2:  # the caregiver is being told: the person themselves still gets a light line, a caregiver does not
         try:
             esc = await host.call("escalation_status", {"to": p.id}, family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id) or {}
         except Exception:  # noqa: BLE001 — the ladder's own rules still hold
             esc = {}
         if esc.get("state") in ("pending", "deferred", "sent"):
-            return Due(p, ck, reason="escalating", mode=m)
+            if not p.cared:
+                return Due(p, ck, reason="escalating", mode=m)
+            from app.brain.wake import own_night
+
+            night = await own_night(session, p.family_id, p.id)
+            slot = light_slot(now, night[1] if night else None)
+            today = await sent_today(session, p.id, now)
+            wake = night[1] if night else None
+            if slot and len(today) < 3 and not any(light_slot(_when(r), wake) == slot for r in today):
+                return Due(p, ck, light=slot, mode=m)
+            return Due(p, ck, reason="gentle", mode=m)
     last = ck.last_activity
     if bird:
         if last is not None and now - last < CARED_EVERY:
@@ -366,6 +452,7 @@ class Context:
     theirs: list[str] = field(default_factory=list)  # what they wrote lately
     sent_texts: list[str] = field(default_factory=list)  # lines sent to them in the last few days: do not send one again
     medicines: list[str] = field(default_factory=list)  # names on their record: a regular nudge may not ask about them
+    today_asks: list[str] = field(default_factory=list)  # questions we already asked today and they have not answered
 
 
 def _medicine_reminder(reminder: dict) -> bool:
@@ -463,7 +550,7 @@ async def last_messages(session: AsyncSession, family_id: str, person: str, gate
 
 
 async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: datetime, *, early_bird: bool = False,
-                        only: list[Option] | None = None, extra: str = "") -> Context:
+                        only: list[Option] | None = None, extra: str = "", light: str = "") -> Context:
     from app.brain.loop import writing_profiles
     from app.care import activities, checkins, language, naming
     from app.care import mood as care_mood
@@ -493,8 +580,9 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     except Exception:  # noqa: BLE001
         rems = []
 
+    open_fields, today_asks = await asked_open(session, p.id, now)
     options = only if only is not None else await candidates(session, p, ck, now, facts=facts, acts=acts, schedule=schedule, reminders=rems,
-                                                              early_bird=early_bird)
+                                                              early_bird=early_bird, open_fields=open_fields, light=light)
     options = sorted(options, key=lambda o: -o.score)[:5]
 
     m_now = local.hour * 60 + local.minute
@@ -539,13 +627,15 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
         "OPTIONS (pick one id):\n" + "\n".join(f"  - {o.id} [{o.kind}] {o.why}" + (f" (field: {o.field})" if o.field else "") for o in options),
         f"LIMITS: at most {max_len} characters; at most one question"
         + ("; expects_reply false: no question they must answer, a soft 'whenever you're up' tone" if early_bird else "")
-        + (f"; they have not answered your last {ck.run} messages: be lighter and easier to answer" if ck.run >= 2 else ""),
+        + (f"; they have not answered your last {ck.run} messages: be lighter and easier to answer" if ck.run >= 2 else "")
+        + ("; one easy question, not a dose, and not a question already asked today" if light else ""),
     ]
     if extra:
         lines.append(extra)
     profiles = await writing_profiles(session, fid, [{"id": p.id}])
-    earlier = await sent_lines(session, fid, p.id, now - timedelta(days=3))
-    saheli = [t for _, who, t in recent if who == "Saheli"] + [r.text for r in reversed(nudges) if r.text]
+    earlier = list(dict.fromkeys([*await sent_lines(session, fid, p.id, now - timedelta(days=3)),
+                                  *[r.text for r in await sent_today(session, p.id, now - timedelta(days=3)) if r.text]]))
+    saheli = [t for _, who, t in recent if who == "Saheli"] + [r.text for r in reversed(nudges) if r.text] + earlier[:8]
     known = "\n".join([*known_facts, *notes, *coming, *(t for _, _, t in recent), *(o.why for o in options), local.strftime("%A %d %B %H:%M")])
     memory = "\n".join([*known_facts, *notes, *coming, *(o.why for o in options), *([mood.summary] if mood else []),
                         *(e.summary for e in symptoms[-3:]), f"Now: {local.strftime('%A %d %B %H:%M')} IST"])
@@ -553,11 +643,11 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
                    profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run,
                    avoid=names["avoid"], never=rejected_facts.terms(wrong), memory=memory,
                    theirs=[t for _, who, t in recent if who == "them"], sent_texts=earlier,
-                   medicines=medicine_names(facts, rems))
+                   medicines=medicine_names(facts, rems), today_asks=today_asks)
 
 
 async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime, *, facts: list, acts: list[dict], schedule: dict,
-                     reminders: list[dict], early_bird: bool = False) -> list[Option]:
+                     reminders: list[dict], early_bird: bool = False, open_fields: set[str] | None = None, light: str = "") -> list[Option]:
     """What is worth writing about now (the plan's §3.4), each scored by how due it is and how much it helps, minus a
     penalty for the same kind among the last two nudges and for a field asked within its cooldown."""
     from app.care import checkins
@@ -587,9 +677,15 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
             return
         if (fld and fld in lr.unwelcome) or kind in lr.unwelcome:
             return  # they did not want this asked: it rests for 30 days
+        if fld and open_fields and fld in open_fields and not light:
+            return  # asked today, in this family or another, and they have not answered
         score = PRIORITY.get(kind, 3) + boost - (3 if kind in last_kinds else 0) + lr.weight(kind)
         out.append(Option(id=f"o{len(out) + 1}", kind=kind, why=why, about_ref=about, field=fld, score=score))
 
+    if light:
+        day = clock.ist(now).strftime("%Y-%m-%d")
+        add("follow_up", _LIGHT_WHY[light], fld="hello" if light == "opener" else f"gentle:{light}", about=f"light:{light}:{day}")
+        return out
     if early_bird:
         plan = [f"{a['start']} {a['label']}" for a in acts if a["today"] == "upcoming" and a.get("start")][:3]
         add("early_bird", "a soft no-rush good-morning for when they wake" + (f"; today: {', '.join(plan)}" if plan else ""), boost=2)
@@ -714,7 +810,8 @@ Rules:
   just set that reminder or it is in the last messages. Their reminders do that. Only a "doses" option may ask whether
   today's past items were done.
 - Fresh: a different opening and angle from the last messages and your last nudges. Never repeat a line they already got
-  in the last few days, and never contradict the last messages; if the last chat ended on an open thread, pick it up.
+  in the last few days, never ask a question already asked today, and never contradict the last messages; if the last
+  chat ended on an open thread, pick it up.
 - Their language, script and dialect exactly as WRITE IN says. English stays English. Never switch language. The name
   they like; emoji only if their messages use them. Everyday words, the way a person texts now: no "Reminder:" label,
   no poster line, no slogan.
@@ -780,6 +877,9 @@ def check(draft: dict, ctx: Context) -> list[str]:
     dup = guards.duplicate_message(text, [(t, False) for t in ctx.saheli_recent], near=0.6)
     if dup:
         problems.append(f"too close to an earlier message: \"{dup[:80]}\"")
+    asked = guards.question_again(text, ctx.today_asks)
+    if asked:
+        problems.append(f"this question was already asked today: \"{asked[:80]}\"")
     first = " ".join(_norm(text).split()[:3])
     if first and any(" ".join(_norm(t).split()[:3]) == first for t in ctx.saheli_recent[-3:]):
         problems.append("opens the same way as one of your last messages")
@@ -913,15 +1013,29 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
         if row is None:
             await session.commit()
             return "duplicate"
+        saved = ((ctx.profile or {}).get("saved") or {})
+        opener = fld == "hello"
+        payload: dict = {"to": p.id, "text": text, "kind": "nudge", "ref": row.ref}
+        if saved.get("voice") == "always":
+            payload["voice"] = True  # their setting: a voice note, not a typed line alone
+        if opener:
+            first = ((p.name or "there").split() or ["there"])[0] or "there"
+            template: dict = {"purpose": "update", "params": [first]}
+            if saved.get("language"):
+                template["lang"] = saved["language"]
+            payload["template"] = template  # kavach_saheli_update only; the text waits until they tap or reply
         try:
             # labelled for the backend's delivery ledger: a nudge counts toward "3 unanswered → the caregiver hears" (B2)
-            res = await host.call("send_whatsapp", {"to": p.id, "text": text, "kind": "nudge", "ref": row.ref},
-                                  family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id)
+            res = await host.call("send_whatsapp", payload, family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id)
         except Exception as exc:  # noqa: BLE001
             row.status, row.reason = "failed", f"send:{type(exc).__name__}"
             await session.commit()
             return "failed"
         row.wamid = str((res or {}).get("wamid") or "")[:120] or None
+        if (res or {}).get("via") == "template" and opener:
+            row.status, row.sent_at, row.reason = "sent", clock.now(), "waiting:update"
+            await session.commit()
+            return "waiting"  # the template went; the greeting is queued, not said in the chat yet
         if not (res or {}).get("delivered", True) or (res or {}).get("via") == "template":
             # not said yet: the chat was closed (only the opener template went, or it waits for their next message)
             row.status = "failed"
@@ -964,55 +1078,58 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
         stats["mode"] = known or stats["mode"]
     sem = asyncio.Semaphore(int(os.getenv("NUDGE_PARALLEL") or PARALLEL))
     sends = {"n": 0}
+    person_locks: dict[str, asyncio.Lock] = {}
 
     async def one(r: FamilyRoster, p: Person) -> None:
         async with sem:
-            host = host_for(r.family_id)
-            try:
-                async with sessions() as session:
-                    live = await runtime.live_tasks(session, r.family_id)
-                    d = await due(session, host, p, now, mode or env_mode(), busy=checkins.moving_for(live, p.id, now))
-                    if d.mode:
-                        stats["mode"] = d.mode
-                    if d.mode == "off":
-                        return
-                    if d.reason:
-                        stats["skipped"][d.reason] = stats["skipped"].get(d.reason, 0) + 1
-                        if d.mode and d.mode != "off" and d.reason not in ("cadence", "asleep", "talking"):
-                            await log_skip(session, p, now, d.reason, d.clock.rows)
-                            await session.commit()
-                        return
-                    m = d.mode or "off"
-                    if sends["n"] >= MAX_SENDS:
-                        stats["skipped"]["run_full"] = stats["skipped"].get("run_full", 0) + 1
-                        return
-                    sends["n"] += 1
-                    stats["due"] += 1
-                    ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird)
-                if not ctx.options:
-                    stats["skipped"]["no_option"] = stats["skipped"].get("no_option", 0) + 1
-                    return
-                draft, problems = await write_and_check(ctx)
-                if draft is None:
+            lock = person_locks.setdefault(p.id, asyncio.Lock())
+            async with lock:  # the same person in two families is one stream, even in one run
+                host = host_for(r.family_id)
+                try:
                     async with sessions() as session:
-                        await log_skip(session, p, now, "guard:" + (problems[0][:60] if problems else "?"), d.clock.rows, cost=ctx.cost)
-                        await session.commit()
-                    stats["skipped"]["guard"] = stats["skipped"].get("guard", 0) + 1
-                    return
-                seen = d.clock.last_activity
+                        live = await runtime.live_tasks(session, r.family_id)
+                        d = await due(session, host, p, now, mode or env_mode(), busy=checkins.moving_for(live, p.id, now))
+                        if d.mode:
+                            stats["mode"] = d.mode
+                        if d.mode == "off":
+                            return
+                        if d.reason:
+                            stats["skipped"][d.reason] = stats["skipped"].get(d.reason, 0) + 1
+                            if d.mode and d.mode != "off" and d.reason not in ("cadence", "asleep", "talking"):
+                                await log_skip(session, p, now, d.reason, d.clock.rows)
+                                await session.commit()
+                            return
+                        m = d.mode or "off"
+                        if sends["n"] >= MAX_SENDS:
+                            stats["skipped"]["run_full"] = stats["skipped"].get("run_full", 0) + 1
+                            return
+                        sends["n"] += 1
+                        stats["due"] += 1
+                        ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird, light=d.light)
+                    if not ctx.options:
+                        stats["skipped"]["no_option"] = stats["skipped"].get("no_option", 0) + 1
+                        return
+                    draft, problems = await write_and_check(ctx)
+                    if draft is None:
+                        async with sessions() as session:
+                            await log_skip(session, p, now, "guard:" + (problems[0][:60] if problems else "?"), d.clock.rows, cost=ctx.cost)
+                            await session.commit()
+                        stats["skipped"]["guard"] = stats["skipped"].get("guard", 0) + 1
+                        return
+                    seen = d.clock.last_activity
 
-                async def still_quiet(session: AsyncSession) -> bool:
-                    last_user, last_bot = await engine_times(session, p.family_id, p.id)
-                    newest = max([t for t in (last_user, last_bot) if t], default=None)
-                    return newest is None or seen is None or newest <= seen
+                    async def still_quiet(session: AsyncSession) -> bool:
+                        last_user, last_bot = await engine_times(session, p.family_id, p.id)
+                        newest = max([t for t in (last_user, last_bot) if t], default=None)
+                        return newest is None or seen is None or newest <= seen
 
-                out = await send(sessions, host, p, ctx, draft, kind_default="early_bird" if d.early_bird else "follow_up", mode=m,
-                                 now=now, run=d.clock.run, recheck=still_quiet,
-                                 meals_mode=str(d.clock.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower())
-                stats[out] = stats.get(out, 0) + 1
-            except Exception:  # noqa: BLE001 — one person's problem never stops the others
-                logger.exception("regular nudge failed family=%s person=%s", r.family_id, p.id)
-                stats["skipped"]["error"] = stats["skipped"].get("error", 0) + 1
+                    out = await send(sessions, host, p, ctx, draft, kind_default="early_bird" if d.early_bird else "follow_up", mode=m,
+                                     now=now, run=d.clock.run, recheck=still_quiet,
+                                     meals_mode=str(d.clock.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower())
+                    stats[out] = stats.get(out, 0) + 1
+                except Exception:  # noqa: BLE001 — one person's problem never stops the others
+                    logger.exception("regular nudge failed family=%s person=%s", r.family_id, p.id)
+                    stats["skipped"]["error"] = stats["skipped"].get("error", 0) + 1
 
     await asyncio.gather(*(one(r, p) for r, p in work))
     return stats
@@ -1084,6 +1201,10 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                     reason = "talking"
                 elif gate.get("paused") or gate.get("active_flow") or checkins.moving_for(live, person.id, now):
                     reason = "busy"
+                elif any(r.status == "sent" and r.kind != "reminder_followup" and r.sent_at and now - r.sent_at < CARED_EVERY for r in rows):
+                    reason = "cadence"  # a nudge already went this hour: the follow-up does not make a second message
+                elif await sent_in_other_family(session, person.id, ev.family_id, now - CARED_EVERY):
+                    reason = "other_family"
                 elif not gate.get("window_open", False) or inbound is None or now - inbound >= WINDOW:
                     reason = "window_closed"
                 elif (await quiet_for(session, ev.family_id, person.id, now))[0]:

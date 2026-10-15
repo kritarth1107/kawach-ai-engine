@@ -1245,13 +1245,16 @@ async def test_while_the_caregiver_is_being_told_the_ladder_adds_nothing(db, at,
         await run(sessions, host)
     assert len(sent_to(host, MAA)) == 2
     host.world.escalations[MAA["id"]] = "pending"
-    at("2026-10-14 14:00")
+    at("2026-10-14 14:00")  # lunch: she still hears from Saheli while the caregiver is told
     out = await run(sessions, host)
-    assert len(sent_to(host, MAA)) == 2 and out["skipped"].get("escalating") == 1
-    host.world.escalations[MAA["id"]] = "replied"
-    at("2026-10-14 14:05")
+    assert len(sent_to(host, MAA)) == 3 and out.get("sent") == 1 and "escalating" not in out["skipped"]
+    at("2026-10-14 14:05")  # the same slot does not send a second
     await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3
+    host.world.escalations[MAA["id"]] = "replied"
+    at("2026-10-14 17:05")  # three hours after the lunch line, the ordinary ladder runs again
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 4
 
 
 def test_one_odd_day_and_a_weekend_shift_still_settle():
@@ -1350,3 +1353,119 @@ async def test_a_last_message_that_is_not_a_regular_nudge_gives_no_hint_and_no_c
                          meta={"proactive": True, "nudge": "pre"})
     await db.commit()
     assert await nudges.reply_hint(db, FAM, MAA["id"]) == ""
+
+
+def test_a_question_already_asked_is_the_same_question_in_roman_and_devanagari():
+    from app.brain.guards import question_again
+
+    assert question_again("Did the ice cream leave your stomach uneasy?", ["How is your stomach after the ice cream?"])
+    assert question_again("नाश्ता बगीचे के बाद कैसा लगा?", ["क्या नाश्ता बगीचे में हो गया?"])
+    assert question_again("How is the new book?", ["How is your stomach after the ice cream?"]) is None
+
+
+async def test_a_question_asked_today_waits_until_they_answer(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    first = "How is your stomach after the ice cream?"
+    again = "Did the ice cream leave your stomach uneasy?"
+    writer.script = [json.dumps({"option_id": "o1", "text": line}) for line in (first, again, again, again, again)]
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    assert sent_to(host, MAA) == [first]
+    at("2026-10-14 13:30")
+    out = await run(sessions, host)
+    assert sent_to(host, MAA) == [first] and out["skipped"].get("guard") == 1
+    await wrote(db, MAA, "It is fine now")  # something new from them: the question may be asked again
+    at("2026-10-14 15:00")
+    await run(sessions, host)
+    assert sent_to(host, MAA) == [first, again]
+
+
+async def test_one_person_in_two_families_gets_one_nudge_an_hour(db, at, sessions, writer):
+    from datetime import datetime
+
+    from app.core import clock
+
+    at("2026-10-14 10:00")
+    for fid in ("fam-a", "fam-b"):
+        await store.save_roster(db, fid, MAA, [])
+        await store.add_turn(db, family_id=fid, thread_id=MAA["id"], role="user", text="I went to the temple today", speaker_id=MAA["id"])
+    sent = datetime(2026, 10, 14, 10, 30, tzinfo=clock.IST)
+    db.add(NudgeLedger(family_id="fam-a", person_id=MAA["id"], kind="meal", status="sent", field="meal:breakfast",
+                       slot_key="fam-a-breakfast", ref="nudge:breakfast-a", text="Did you have breakfast?",
+                       planned_at=sent, sent_at=sent))
+    await db.commit()
+    fields, _ = await nudges.asked_open(db, MAA["id"], clock.now())
+    assert "meal:breakfast" in fields  # the other family must not ask it again today
+    host = SimHost()
+    at("2026-10-14 11:35")
+    out = await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 1 and out["skipped"].get("other_family") == 1
+    assert not any(m.get("text") == "Did you have breakfast?" for m in host.world.sent)
+
+
+async def test_a_caregiver_stays_quiet_while_a_cared_person_and_self_care_still_hear(db, at, sessions, writer):
+    from datetime import datetime
+
+    from app.core import clock
+
+    self_care = {"id": "self-n", "name": "Meera", "role": "member"}
+    at("2026-10-14 10:00")
+    await store.save_roster(db, FAM, MAA, [SON, self_care])
+    await store.write_fact(db, family_id=FAM, subject_id=self_care["id"], domain="condition", key="condition:knee",
+                           value={"name": "a stiff knee"}, text="A stiff knee on cold mornings.", source_kind="told")
+    await wrote(db, SON, "Reached home")
+    await store.add_turn(db, family_id=FAM, thread_id=self_care["id"], role="user", text="I am up", speaker_id=self_care["id"])
+    for pid, hour, key in ((SON["id"], 11, "son-1"), (SON["id"], 14, "son-2"), (self_care["id"], 11, "self-1"), (self_care["id"], 12, "self-2")):
+        sent = datetime(2026, 10, 14, hour, 0, tzinfo=clock.IST)
+        db.add(NudgeLedger(family_id=FAM, person_id=pid, kind="follow_up", status="sent", field="follow_up",
+                           slot_key=key, ref=f"nudge:{key}", text="How is the morning?", planned_at=sent, sent_at=sent))
+    await db.commit()
+    host = SimHost()
+    host.world.escalations[SON["id"]] = "pending"
+    host.world.escalations[self_care["id"]] = "pending"
+    at("2026-10-14 14:00")
+    await run(sessions, host)
+    assert sent_to(host, SON) == []  # a caregiver is not the person being escalated about
+    assert len(sent_to(host, self_care)) == 1  # self-care still gets the lunch line
+    at("2026-10-14 17:30")
+    out = await run(sessions, host)
+    assert sent_to(host, SON) == [] and out["skipped"].get("escalating", 0) >= 1
+
+
+async def test_a_closed_chat_gets_one_morning_update_and_the_greeting_waits(db, at, sessions, writer):
+    at("2026-10-14 08:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="language", key="language",
+                           value={"language": "hi", "script": "devanagari", "voice": "always"},
+                           text="Speaks Hindi.", source_kind="told")
+    await db.commit()
+    greeting = "सुबह की चाय कैसी रही आज?"
+    writer.script = [json.dumps({"option_id": "o1", "text": greeting}), json.dumps({"option_id": "o1", "text": "शाम की सैर कैसी रही?"})]
+    host = SimHost()
+    host.world.closed.add(MAA["id"])
+    seen: list[dict] = []
+
+    async def grab(tool, args, **kw):
+        if tool == "send_whatsapp":
+            seen.append(args)
+        return await SimHost.call(host, tool, args, **kw)
+
+    host.call = grab
+    at("2026-10-15 08:30")
+    out = await run(sessions, host)
+    assert out.get("waiting") == 1 and host.world.sent == []
+    assert seen[-1]["template"]["purpose"] == "update" and seen[-1]["template"]["lang"] == "hi" and seen[-1]["voice"] is True
+    assert host.world.templates[-1]["waiting"] == greeting and host.world.templates[-1]["params"] == ["Kamla"]
+    row = (await rows(db))[-1]
+    assert row.status == "sent" and row.reason == "waiting:update" and row.field == "hello"
+    assert not any(t.message_ref == row.ref for t in await store.recent_turns(db, FAM, MAA["id"]))
+    at("2026-10-15 12:00")  # not her morning: still nothing
+    out = await run(sessions, host)
+    assert len(host.world.templates) == 1 and out["skipped"].get("window_closed") == 1
+    at("2026-10-16 08:30")  # the next morning still sends, until a caregiver says stop
+    out = await run(sessions, host)
+    assert out.get("waiting") == 1 and len(host.world.templates) == 2
