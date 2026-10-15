@@ -2484,6 +2484,8 @@ async def _task(ctx: TurnCtx, task_id: str):
                "that time as ISO 8601 in IST, e.g. 2026-10-16T06:00 (work it out from NOW). Leave out for now."},
         "at_means": {"type": "string", "enum": ["arrive", "book"], "description": "With at: arrive (default) = the cab should come / the "
                      "order should arrive by then; book = they want it booked or placed exactly then"},
+        "landing": {"type": "string", "description": "Ride only, when a flight's landing time is known (ISO 8601 in IST) and they did not "
+                    "name the pickup time. The cab is set for 45 minutes after landing, for the bags. Leave out when they named a time (use at)."},
     },
     ["kind", "goal", "for_whom"],
 )
@@ -2525,6 +2527,14 @@ async def start_task(ctx: TurnCtx, a: dict) -> dict:
                 a = {**a, "services": got}
             elif got:
                 a = {**a, "service": got if isinstance(got, str) else got[0]}
+    if a.get("kind") == "ride" and a.get("landing") and not a.get("at"):
+        from app.care import ways
+        from app.tasks import later
+
+        land = later.parse_at(a["landing"])
+        if land is None:
+            raise ToolRefused("landing must be a date and time like 2026-10-16T00:30 (IST).")
+        a = {**a, "at": ways.pickup_after_landing(land).isoformat(), "at_means": "arrive", "landing_at": land.isoformat()}
     if a.get("at"):
         # Set for later (founder 2026-10-12): looked up now, then ONE question with everything and the most they will pay;
         # booked at its time without asking (app/tasks/later.py).
@@ -2851,7 +2861,7 @@ async def _create_task(ctx: TurnCtx, a: dict, service: str, extra: dict | None =
         return await runtime.create(
             ctx.session, family_id=ctx.family_id, subject_id=who, requested_by=ctx.speaker.get("id") or ctx.elder_id,
             service=service, kind=a["kind"], goal=a["goal"],
-            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place", "later") if a.get(k)},
+            details={**{k: a[k] for k in ("items", "pickup", "drop", "vehicle", "area", "pickup_place", "drop_place", "later", "landing_at") if a.get(k)},
                      "for_set": True, **({"usual_vehicle": usual} if usual else {}), **(extra or {})}, limits=limits,
         )
     except runtime.TaskRefused as exc:
@@ -3353,6 +3363,54 @@ async def web_search(ctx: TurnCtx, a: dict) -> dict:
                              summary=f"Looked up: {q[:160]}", payload={"question": q[:300], "sources": out["sources"]},
                              actor_id=ctx.speaker.get("id") or "saheli")
     return {**out, "note": "From the internet. Tell it simply; name the source only if they ask or it matters."}
+
+
+@tool(
+    "ways_there",
+    "Other ways to make a trip when a ride app cannot book it, or they want cheaper. Looks up the airport prepaid taxi, "
+    "the airport bus, the metro, a city bus, an auto and a cab on their own app. Returns short messages: send each one, "
+    "in their language, and add nothing. A fare or a route that was not on the page is not in the messages. Call this "
+    "instead of guessing. Nothing is booked or paid.",
+    {
+        "origin": {"type": "string", "description": "Where the trip starts, as they named it (a terminal only when the city is known)"},
+        "destination": {"type": "string", "description": "Where it ends"},
+        "at": {"type": "string", "description": "When, ISO 8601 in IST, when known"},
+        "elder": {"type": "boolean", "description": "True when the person travelling is the care recipient or an elder"},
+    },
+    ["origin", "destination"],
+)
+async def ways_there(ctx: TurnCtx, a: dict) -> dict:
+    from app.care import ways
+    from app.tasks import later
+
+    origin, dest = str(a.get("origin") or "").strip(), str(a.get("destination") or "").strip()
+    if not origin or not dest:
+        raise ToolRefused("Give origin and destination, the places they named.")
+    at = later.parse_at(a.get("at")) if a.get("at") else None
+    today = await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - timedelta(hours=24), kinds=["web_search"])
+    if len(today) >= websearch_limit():
+        return {"found": False, "messages": [ways.NOT_FOUND]}
+    try:
+        raw, sources = await ways.fetch(origin, dest, at)
+        proposed = await ways.judge(raw)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("ways look-up failed: %s", exc)
+        return {"found": False, "messages": [ways.NOT_FOUND]}
+    options = ways.options_from(proposed, raw, at=at, elder=bool(a.get("elder")))
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
+                             summary=f"Ways from {origin[:80]} to {dest[:80]}", payload={"sources": sources},
+                             actor_id=ctx.speaker.get("id") or "saheli")
+    if not options:
+        return {"found": False, "messages": [ways.NOT_FOUND], "sources": sources}
+    return {"found": True, "options": options, "messages": ways.messages(options), "sources": sources,
+            "note": "Send these messages, one each, in their language. Add no fare, route or time that is not here. "
+                    "Nothing was booked and nothing was paid."}
+
+
+def websearch_limit() -> int:
+    from app.brain import websearch
+
+    return websearch.daily_limit()
 
 
 @tool(

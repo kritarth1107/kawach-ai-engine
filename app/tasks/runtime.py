@@ -2605,6 +2605,14 @@ async def _stop_before_confirm(agent: BrowserAgent, task: Task) -> tuple[str, st
     return _start_check(task, then="cancelled", why="they asked to stop it")
 
 
+def _ride_stopped(task: Task, why: str) -> tuple[str, str]:
+    """A ride that did not book: said plainly, then the other real ways (looked up, never guessed)."""
+    label = SKILLS[task.service]["label"]
+    pickup, drop = (task.details or {}).get("pickup") or "the pickup", (task.details or {}).get("drop") or "the drop"
+    return "failed", (f"{label} {why}. Nothing was booked and nothing was paid. "
+                      f"Call ways_there for {pickup} to {drop} and send only the messages it returns. Do not invent a fare or a route.")
+
+
 def _outcome(task: Task, out: dict) -> tuple[str, str]:
     """(new status, what the family should hear) from an agent report for the current phase. Every cart and
     every placement passes the guard: a rule broken in the report stops it here, whatever the agent said."""
@@ -2622,6 +2630,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
                               f"{', '.join(d['restricted_found'])} is tobacco, alcohol or the like, which you never order. Say so plainly "
                               f"in one line, kindly, and offer something harmless instead (for example {', '.join(r['alternatives'][:3])}).")
         if out.get("blocked"):
+            if task.kind == "ride":
+                return _ride_stopped(task, f"blocked the login ({out.get('problem') or 'a security check'})")
             return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
         return _browse_outcome(task, out)
     login = d.get("login")
@@ -2635,6 +2645,8 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         task.details = d = {**d, "code_fails": fails}
         label = SKILLS[task.service]["label"]
         if fails >= CODE_TRIES:
+            if task.kind == "ride":
+                return _ride_stopped(task, f"did not take the login code ({fails} codes tried), so no more codes are asked for")
             return "failed", (f"{label}'s login did not take the login code ({fails} codes tried), so nothing was ordered and no more "
                               f"codes are asked for. Say so plainly in one short line, sorry for the codes, and offer another store or "
                               f"ordering in the {label} app.")
@@ -2663,9 +2675,13 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
         return "queued", ""
     if (out.get("problem") or "").lower().startswith("login needed") and not out.get("blocked"):
         task.details = {**(task.details or {}), "login_missing": True}  # true on every store: no next store is tried
+        if task.kind == "ride":
+            return _ride_stopped(task, "needs a login and there is no phone number to log in with, so no code was sent")
         return "failed", (f"{SKILLS[task.service]['label']} needs a login and there is no phone number to log in with, so nothing was "
                           "ordered and no code was sent. Offer another service, or the family can order in the app.")
     if out.get("blocked"):
+        if task.kind == "ride":
+            return _ride_stopped(task, f"blocked the login ({out.get('problem') or 'a security check'})")
         return "failed", f"{SKILLS[task.service]['label']} blocked the request ({out.get('problem') or 'site wall'}). Offer another service."
     if task.phase in ("prepare", "otp") and (out.get("placed") or out.get("booked") or out.get("order_id") or out.get("ride_id")):
         # The agent went past the cart without anyone's yes (a bad hint, a misread page). Never place again on top of it:
@@ -2675,7 +2691,7 @@ def _outcome(task: Task, out: dict) -> tuple[str, str]:
     if task.phase in ("prepare", "otp"):
         if task.kind == "ride":
             if not out.get("options"):
-                return "failed", f"No ride options came up ({out.get('problem') or 'unknown'})."
+                return _ride_stopped(task, f"showed no fares ({out.get('problem') or 'unknown'})")
             v = guard.check_cart("ride", spec.name, [], out, limits)
             task.details = {**d, "approval": v.approval, "confirm_token": None,
                             "cart_fp": guard.cart_fingerprint({"items": [{"name": f"{o.get('type')} {o.get('fare')}"} for o in out["options"]], "total": None})}
@@ -3045,7 +3061,7 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
             return "queued", ""
     found = [i for i in (out.get("items") or []) if i.get("name") and i.get("available") is not False]
     if task.kind == "ride" and not out.get("login_required"):
-        return "failed", f"No ride options came up on {label} ({out.get('problem') or 'unknown'}); nothing was booked. Offer another service."
+        return _ride_stopped(task, f"showed no fares ({out.get('problem') or 'unknown'})")
     if not found and out.get("login_required") and task.kind == "ride":
         task.input_needed = "go"
         return "awaiting_confirm", (f"{label} shows fares only after a login; nothing is booked. To see the fares there: {_code_line(task)}. "
