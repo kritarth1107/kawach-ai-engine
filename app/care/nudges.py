@@ -1148,7 +1148,7 @@ async def next_check(session: AsyncSession, person: Person, d: Due, now: datetim
     if d.reason == "ladder":
         return await _next_look(session, person, now, early_bird=False)
     if d.reason == "window_closed":
-        return now  # a tap the backend saw is not a turn, so the next run has to look again
+        return await _next_look(session, person, now, early_bird=False)  # a tap pulls this forward; until then the next morning
     if d.reason == "asked_stop":
         return now + timedelta(minutes=5)  # an undo has no turn either; the fact is read on the next look
     if d.reason == "learned_hour":
@@ -1524,6 +1524,20 @@ def followup_ladder_skips(rows: list[NudgeLedger]) -> bool:
 SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("goal:", "log_food"), ("activity:", "log_activity"), ("reading:", "log_vital"), ("weight", "log_vital"), ("doses", "log_dose"),
              ("stock:", "set_stock"), ("know:", "remember"), ("feelings", "log_event mood (and log_event symptom for a problem)"), ("sleep", "log_event"),
              ("reminder:", "log_activity or remember, whichever fits"))
+
+
+async def pull_due(session: AsyncSession, family_id: str, person_id: str, when: datetime | None = None) -> None:
+    """The backend saw a tap and no turn (a Done button, the opener). Look at this person on the next tick.
+    A claim another task already holds is left alone, so this cannot cause a second send."""
+    when = when or clock.now()
+    stmt = pg_insert(NudgeDue).values(
+        family_id=family_id, person_id=person_id, next_due=when, anchored_at=when, claimed_until=None,
+    ).on_conflict_do_update(
+        index_elements=["family_id", "person_id"],
+        set_={"next_due": when, "anchored_at": when},
+        where=or_(NudgeDue.claimed_until.is_(None), NudgeDue.claimed_until < when),
+    )
+    await session.execute(stmt)
 
 
 async def note_reply(session: AsyncSession, family_id: str, person: str) -> None:
