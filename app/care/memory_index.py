@@ -419,17 +419,24 @@ def _hit_words(text: str) -> list[str]:
 
 
 def _phrase_len(query_tokens: list[str], hit_tokens: list[str]) -> int:
-    """Longest run of the question's words that appears, in order, in the memory."""
+    """Longest run of the question's words that appears, in order, in the memory.
+
+    A run that is not in the memory cannot be part of a longer one (each run's text starts the next one's), so from each
+    start it grows until it stops matching: about two lookups per word. The old every-start-every-end loop was cubic in
+    the question's length; a scheduler turn's whole prompt is a long question, and 15 Oct those turns held the engine's
+    event loop for seconds at a time (the nightly's message week ran past its 4 hours)."""
     if not query_tokens or not hit_tokens:
         return 0
     hay = " ".join(hit_tokens)
     best = 0
-    for i in range(len(query_tokens)):
-        for j in range(i + 1, len(query_tokens) + 1):
-            if j - i <= best:
-                continue
-            if " ".join(query_tokens[i:j]) in hay:
-                best = j - i
+    n = len(query_tokens)
+    for i in range(n):
+        if n - i <= best:
+            break
+        j = i + 1
+        while j <= n and " ".join(query_tokens[i:j]) in hay:
+            j += 1
+        best = max(best, j - 1 - i)
     return best
 
 
@@ -442,12 +449,12 @@ def _by_overlap(query: str, found: list[store.Hit]) -> list[tuple[float, store.H
     words = _query_words(query)
     if not words or not found:
         return []
-    tokenised = [(h, _hit_words(h.text)) for h in found]
-    df = {w: sum(1 for _, toks in tokenised if w in toks) for w in words}
+    tokenised = [(h, toks, set(toks)) for h in found for toks in [_hit_words(h.text)]]
+    df = {w: sum(1 for _, _, seen in tokenised if w in seen) for w in set(words)}
     scored: list[tuple[int, float, store.Hit]] = []
-    for h, toks in tokenised:
+    for h, toks, seen in tokenised:
         phrase = _phrase_len(words, toks)
-        raw = sum(1.0 / df[w] for w in words if df[w] and w in toks)
+        raw = sum(1.0 / df[w] for w in words if df[w] and w in seen)
         if phrase or raw:
             scored.append((phrase, raw, h))
     if not scored:
