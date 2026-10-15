@@ -60,7 +60,9 @@ async def test_the_go_path_uses_no_profile_and_stops_the_session(monkeypatch):
     monkeypatch.delenv("BROWSER_MODEL", raising=False)
     agent = _Agent()
     rows = await bench.execute(agent, polls=1)
-    assert len(rows) == len(bench.RUNS) * len(bench.CASES)
+    assert len(rows) == len(bench.jobs())
+    opus = {service for service, _, _, _, model in bench.jobs() if model == "claude-opus-5"}
+    assert opus == bench.OPUS_SERVICES
     assert all(run["profile_id"] is None and "Do not pay" in run["goal"] for run in agent.runs)
     assert {run["_api"] for run in agent.runs} == {"v2", "v4"}
     assert os.environ.get("BROWSER_API") is None
@@ -78,3 +80,18 @@ async def test_a_run_that_does_not_finish_is_stopped(monkeypatch):
     assert all(row["status"] == "stopped" for row in rows)
     assert agent.polls == len(rows) * 2
     assert ("stop", "t1", True) in agent.stopped
+
+
+@pytest.mark.asyncio
+async def test_it_stops_when_the_balance_hits_the_floor():
+    seen = {"n": 0}
+
+    async def bal():
+        seen["n"] += 1
+        return 100.0 if seen["n"] == 1 else 50.0
+
+    agent = _Agent()
+    rows = await bench.execute(agent, polls=1, balance=bal, floor=58, max_spend=45, concurrency=4)
+    assert len(agent.runs) == 4
+    assert sum(row["status"] == "not_run" for row in rows) == len(bench.jobs()) - 4
+    assert rows[-1]["reason"] == "$50.00 left"

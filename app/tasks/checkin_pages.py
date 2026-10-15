@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 PAGES = {
     "indigo": "https://www.goindigo.in/web-check-in.html",
-    "airindia": "https://www.airindia.com/in/en/manage/web-check-in.html",
+    "airindia": "https://www.airindia.com/in/en/manage/web-checkin.html",
     "airindiaexpress": "https://www.airindiaexpress.com/check-in",
     "akasa": "https://www.akasaair.com/check-in",
     "spicejet": "https://www.spicejet.com/checkin",

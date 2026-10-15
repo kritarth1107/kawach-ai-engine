@@ -84,24 +84,24 @@ SKILLS: dict[str, dict] = {
         "hints": "Bike taxi, auto and cab on rapido.bike. Enter pickup and drop to see fare ranges for Bike, Auto, Cab Economy and Cab Premium without a login; booking needs a login (phone + OTP). If booking is not possible on the web, stop and report web_booking_unavailable=true.",
     },
     "indigo": {
-        "label": "IndiGo", "kind": "checkin", "start_url": "https://www.goindigo.in/",
-        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+        "label": "IndiGo", "kind": "checkin", "start_url": "https://www.goindigo.in/web-check-in.html",
+        "hints": "Web check-in, or a read of the booking. The start page is the check-in form. Stop when a booking reference and a last name are both visible, and set form_found true only then. Do not type a booking reference. Never pay, never cancel, and never change a booking when the task says only to read it. A free seat only when checking in. Skip every paid add-on. Save the boarding pass when check-in finishes.",
     },
     "airindia": {
-        "label": "Air India", "kind": "checkin", "start_url": "https://www.airindia.com/",
-        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+        "label": "Air India", "kind": "checkin", "start_url": "https://www.airindia.com/in/en/manage/web-checkin.html",
+        "hints": "Web check-in, or a read of the booking. The start page is the check-in form. Stop when a booking reference and a last name are both visible, and set form_found true only then. Do not type a booking reference. Never pay, never cancel, and never change a booking when the task says only to read it. A free seat only when checking in. Skip every paid add-on. Save the boarding pass when check-in finishes.",
     },
     "airindiaexpress": {
-        "label": "Air India Express", "kind": "checkin", "start_url": "https://www.airindiaexpress.com/",
-        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+        "label": "Air India Express", "kind": "checkin", "start_url": "https://www.airindiaexpress.com/check-in",
+        "hints": "Web check-in, or a read of the booking. The start page is the check-in form. Stop when a booking reference and a last name are both visible, and set form_found true only then. Do not type a booking reference. Never pay, never cancel, and never change a booking when the task says only to read it. A free seat only when checking in. Skip every paid add-on. Save the boarding pass when check-in finishes.",
     },
     "akasa": {
-        "label": "Akasa Air", "kind": "checkin", "start_url": "https://www.akasaair.com/",
-        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+        "label": "Akasa Air", "kind": "checkin", "start_url": "https://www.akasaair.com/check-in",
+        "hints": "Web check-in, or a read of the booking. The start page is the check-in form. Stop when a booking reference and a last name are both visible, and set form_found true only then. Do not type a booking reference. Never pay, never cancel, and never change a booking when the task says only to read it. A free seat only when checking in. Skip every paid add-on. Save the boarding pass when check-in finishes.",
     },
     "spicejet": {
-        "label": "SpiceJet", "kind": "checkin", "start_url": "https://www.spicejet.com/",
-        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+        "label": "SpiceJet", "kind": "checkin", "start_url": "https://www.spicejet.com/checkin",
+        "hints": "Web check-in, or a read of the booking. The start page is the check-in form. Stop when a booking reference and a last name are both visible, and set form_found true only then. Do not type a booking reference. Never pay, never cancel, and never change a booking when the task says only to read it. A free seat only when checking in. Skip every paid add-on. Save the boarding pass when check-in finishes.",
     },
 }
 
@@ -120,7 +120,13 @@ def schema_for(kind: str, phase: str) -> dict:
     if kind == "checkin":
         return {"type": "object", "properties": {**base, "checked_in": {"type": "boolean"}, "free_seat": {"type": "boolean"},
                 "seat": {"type": "string"}, "paid": {"type": "boolean"}, "pnr_found": {"type": "boolean"},
-                "not_open": {"type": "boolean"}, "boarding_pass": {"type": "boolean"}},
+                "not_open": {"type": "boolean"}, "boarding_pass": {"type": "boolean"},
+                "flight": {"type": "string"}, "departs": {"type": "string"}, "arrives": {"type": "string"},
+                "from_terminal": {"type": "string"}, "to_terminal": {"type": "string"},
+                "flight_status": {"type": "string", "description": "On time or delayed, as the page shows it"},
+                "passengers": {"type": "array", "items": {"type": "string"}},
+                "form_found": {"type": "boolean", "description": "True only when a booking reference and a last name are both on the page"},
+                "changed": {"type": "boolean", "description": "True only if the booking was changed. A read leaves this false"}},
                 "required": ["logged_in", "needs_otp", "blocked", "problem", "checked_in", "paid"]}
     if kind == "ride":
         extra = {

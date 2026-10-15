@@ -12,13 +12,19 @@ from urllib.parse import parse_qs, urlparse
 
 AIRLINES = ("indigo", "airindia", "airindiaexpress", "akasa", "spicejet")
 KNOWN = {("TESTPN", "Devi")}
+# One synthetic booking. A value is reported only when this text is on the page.
+BOOKING = {
+    "number": "6E-204", "date": "2026-10-18", "depart": "09:10", "arrive": "11:05",
+    "from": "Testpur", "from_terminal": "1", "to": "Homepur", "to_terminal": "2",
+    "status": "on time", "passenger": "Kamla Devi",
+}
 
 
 def fields_present(html: str) -> bool:
     """The page shows a booking reference and a last name. Code checks the page text."""
     low = (html or "").lower()
-    ref = any(m in low for m in ("field name=pnr", "booking reference", "record locator", "name=\"pnr\"", "name='pnr'"))
-    last = "field name=last_name" in low or "last name" in low
+    ref = any(m in low for m in ("field name=pnr", "booking reference", "record locator", "name=\"pnr\"", "name='pnr'", "pnr"))
+    last = "field name=last_name" in low or "last name" in low or "surname" in low
     return ref and last
 
 
@@ -50,6 +56,70 @@ def _seats(paid_only: bool) -> str:
     return "\n".join(lines)
 
 
+def _booking_text(*, passengers: bool, status: str | None = None, arrive: str | None = None) -> str:
+    lines = [
+        f"FLIGHT number={BOOKING['number']} date={BOOKING['date']} depart={BOOKING['depart']} arrive={arrive or BOOKING['arrive']}",
+        f"FROM place={BOOKING['from']} terminal={BOOKING['from_terminal']}",
+        f"TO place={BOOKING['to']} terminal={BOOKING['to_terminal']}",
+        f"STATUS value={status or BOOKING['status']}",
+    ]
+    if passengers:
+        lines.append(f"PASSENGER name={BOOKING['passenger']}")
+        lines.append("SEAT id=12A")
+    lines.append("READ ONLY. Nothing was changed.")
+    return "\n".join(lines)
+
+
+def _marked(page: str, prefix: str) -> dict[str, str]:
+    """key=value marks. A value may contain spaces up to the next key."""
+    for line in (page or "").splitlines():
+        if prefix not in line:
+            continue
+        parts = line.split(prefix, 1)[1].split()
+        out: dict[str, str] = {}
+        i = 0
+        while i < len(parts):
+            if "=" not in parts[i]:
+                i += 1
+                continue
+            key, val = parts[i].split("=", 1)
+            i += 1
+            while i < len(parts) and "=" not in parts[i]:
+                val = f"{val} {parts[i]}"
+                i += 1
+            out[key] = val
+        return out
+    return {}
+
+
+def _kept(page: str, value: str | None) -> str | None:
+    """A field counts only when that exact text is on the page."""
+    if value and value in (page or ""):
+        return value
+    return None
+
+
+def parse_booking(page: str) -> dict:
+    """Flight, times, terminals, status and passengers, each only if the page shows it."""
+    flight, origin, dest = _marked(page, "FLIGHT "), _marked(page, "FROM "), _marked(page, "TO ")
+    status, people, seat = _marked(page, "STATUS "), _marked(page, "PASSENGER "), _marked(page, "SEAT ")
+    passenger = _kept(page, people.get("name"))
+    return {
+        "flight": _kept(page, flight.get("number")),
+        "date": _kept(page, flight.get("date")),
+        "departs": _kept(page, flight.get("depart")),
+        "arrives": _kept(page, flight.get("arrive")),
+        "origin": _kept(page, origin.get("place")),
+        "from_terminal": _kept(page, origin.get("terminal")),
+        "destination": _kept(page, dest.get("place")),
+        "to_terminal": _kept(page, dest.get("terminal")),
+        "status": _kept(page, status.get("value")),
+        "passengers": [passenger] if passenger else [],
+        "seat": _kept(page, seat.get("id")),
+        "changed": False,
+    }
+
+
 def _page(title: str, body: str) -> bytes:
     return f"<!doctype html><title>{title}</title><pre>{body}</pre>".encode()
 
@@ -73,8 +143,20 @@ class _Desk(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         path = urlparse(self.path)
         parts = [p for p in path.path.split("/") if p]
-        if len(parts) == 2 and parts[0] in AIRLINES and parts[1] == "check-in":
+        if len(parts) == 2 and parts[0] in AIRLINES and parts[1] in ("check-in", "manage"):
             self._send(_page(parts[0], "FIELD name=pnr\nFIELD name=last_name\nBooking reference\nLast name"))
+            return
+        if len(parts) == 2 and parts[0] in AIRLINES and parts[1] == "status":
+            flight = (parse_qs(path.query).get("flight") or [""])[0]
+            state = (parse_qs(path.query).get("state") or [""])[0]
+            if flight == BOOKING["number"] and state == "delayed":
+                self._send(_page(parts[0], _booking_text(passengers=False, status="delayed", arrive="11:40")))
+            elif flight == BOOKING["number"] and state == "landed":
+                self._send(_page(parts[0], _booking_text(passengers=False, status="landed")))
+            elif flight == BOOKING["number"]:
+                self._send(_page(parts[0], _booking_text(passengers=False)))
+            else:
+                self._send(_page(parts[0], "NOT_FOUND\nThat flight was not found."))
             return
         if len(parts) == 2 and parts[0] in AIRLINES and parts[1] == "pass.pdf":
             q = parse_qs(path.query)
@@ -90,6 +172,18 @@ class _Desk(BaseHTTPRequestHandler):
             self._send(b"not found", 404)
             return
         form, step = self._form(), parts[1]
+        if step == "manage":
+            if form.get("pnr") == "BLOCKED":
+                self._send(_page(parts[0], "BLOCKED\nThe airline page would not open."))
+                return
+            if form.get("pnr") not in {pnr for pnr, _name in KNOWN}:
+                self._send(_page(parts[0], "NOT_FOUND\nThat booking was not found."))
+                return
+            if (form.get("pnr"), form.get("last_name")) not in KNOWN:
+                self._send(_page(parts[0], "NAME_REJECTED\nThat last name was not accepted."))
+                return
+            self._send(_page(parts[0], _booking_text(passengers=True)))
+            return
         if step == "check-in":
             if (form.get("pnr"), form.get("last_name")) not in KNOWN:
                 self._send(_page(parts[0], "NOT_FOUND\nThat booking was not found."))
@@ -163,3 +257,44 @@ async def walk(base: str, airline: str = "indigo", *, pnr: str = "TESTPN", last_
         calls.append("GET /pass.pdf")
     paid = b"paid=no" in pdf.content and f"seat={seat}".encode() in pdf.content
     return {"ok": paid, "pnr_found": True, "free_seat": True, "seat": seat, "paid": False, "boarding_pass": paid, "calls": calls}
+
+
+async def read_booking(base: str, airline: str = "indigo", *, pnr: str = "TESTPN", last_name: str = "Devi") -> dict:
+    """Read a booking. A missing one is not found. Nothing is changed, cancelled or paid."""
+    import httpx
+
+    calls: list[str] = []
+    async with httpx.AsyncClient(timeout=5) as client:
+        form = (await client.get(f"{base}/{airline}/manage")).text
+        calls.append("GET /manage")
+        if not fields_present(form):
+            return {"found": False, "problem": "the booking form was not on the page", "calls": calls, "changed": False}
+        missing = await client.post(f"{base}/{airline}/manage", data={"pnr": "XXXXXX", "last_name": last_name})
+        calls.append("POST /manage missing")
+        if "NOT_FOUND" not in missing.text:
+            return {"found": False, "problem": "a booking that is not there was accepted", "calls": calls, "changed": False}
+        page = (await client.post(f"{base}/{airline}/manage", data={"pnr": pnr, "last_name": last_name})).text
+        calls.append("POST /manage")
+    if "BLOCKED" in page:
+        return {"found": False, "blocked": True, "changed": False, "paid": False, "calls": calls}
+    if "NAME_REJECTED" in page:
+        return {"found": False, "pnr_found": True, "name_rejected": True, "changed": False, "paid": False, "calls": calls}
+    if "NOT_FOUND" in page:
+        return {"found": False, "pnr_found": False, "changed": False, "paid": False, "calls": calls}
+    got = parse_booking(page)
+    got.update({"found": bool(got.get("flight")), "pnr_found": True, "paid": False, "calls": calls})
+    return got
+
+
+async def read_status(base: str, airline: str = "indigo", *, flight: str = "6E-204", state: str = "") -> dict:
+    """The public flight-status page. No booking is sent."""
+    import httpx
+
+    calls = ["GET /status"]
+    async with httpx.AsyncClient(timeout=5) as client:
+        page = (await client.get(f"{base}/{airline}/status", params={"flight": flight, **({"state": state} if state else {})})).text
+    if "NOT_FOUND" in page:
+        return {"found": False, "changed": False, "paid": False, "calls": calls}
+    got = parse_booking(page)
+    got.update({"found": bool(got.get("flight")), "changed": False, "paid": False, "calls": calls})
+    return got

@@ -112,6 +112,18 @@ def secret_hosts(service: str | None, start_url: str | None) -> list[str]:
     return hosts
 
 
+def _cost(payload: dict) -> float | None:
+    """USD the service reports for this run, when the payload has it."""
+    for key in ("costUsd", "cost", "totalCostUsd", "billedUsd"):
+        if payload.get(key) is None:
+            continue
+        try:
+            return float(payload[key])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _json_object(raw) -> tuple[dict | None, bool]:
     """(object, bad). Bad when a finished reply is not a JSON object."""
     if isinstance(raw, dict):
@@ -145,6 +157,7 @@ class AgentRun:
     live_url: str | None = None
     steps: int = 0
     path: list[str] = field(default_factory=list)  # pages visited, in order (for learning a route that worked)
+    cost: float | None = None
 
 
 class BrowserAgent(Protocol):
@@ -296,6 +309,7 @@ class BrowserUseCloud:
             error=None if t.get("status") != "failed" else str(t.get("output") or "failed")[:300],
             steps=len(t.get("steps") or []),
             path=[str(st.get("url") or "") for st in (t.get("steps") or []) if isinstance(st, dict) and st.get("url")],
+            cost=_cost(t),
         )
 
     async def _poll_v4(self, task_id: str) -> AgentRun:
@@ -308,6 +322,7 @@ class BrowserUseCloud:
         return AgentRun(
             task_id=task_id, session_id=t.get("sessionId", ""), status=status, output=parsed,
             error="bad json" if bad and status == "finished" else (None if status != "failed" else str(t.get("error") or "failed")[:300]),
+            cost=_cost(t),
         )
 
     async def downloads(self, session_id: str, *, api: str = "v2") -> list:
@@ -331,8 +346,24 @@ class BrowserUseCloud:
         return (await self._req("POST", "/profiles", {"name": name[:100]}))["id"]
 
     async def stop_session(self, session_id: str) -> None:
-        """Stop the cloud browser (it keeps running, and billing, after a task finishes)."""
-        await self._req("PATCH", f"/sessions/{session_id}", {"action": "stop"})
+        """Stop the cloud browser. A finished run keeps billing until this. V4's browser id is not the session id."""
+        if not session_id:
+            return
+        try:
+            await self._req("PATCH", f"/sessions/{session_id}", {"action": "stop"})
+            return
+        except RuntimeError:
+            logger.warning("v2 session stop missed %s", session_id[:8])
+        try:
+            data = await self._req_v4("GET", "/browsers?limit=50")
+        except RuntimeError:
+            return
+        for item in data.get("items") or []:
+            if item.get("status") != "active":
+                continue
+            if item.get("agentSessionId") != session_id and item.get("id") != session_id:
+                continue
+            await self._req_v4("PATCH", f"/browsers/{item['id']}", {"action": "stop"})
 
     async def open_session(self, profile_id: str | None) -> str:
         """A kept-alive cloud browser on the family's profile, for fixed fast steps and the agent runs after them."""

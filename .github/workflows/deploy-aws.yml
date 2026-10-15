@@ -123,6 +123,14 @@ jobs:
                     # GEMINI_SG_FALLBACK=on is the founder yes (15 Oct): one Singapore call after a Mumbai 429 or timeout.
                     | setenv("EMBED_DIM_MIGRATE"; "off")
                     | setenv("GEMINI_SG_FALLBACK"; "on")
+                    # 16 Oct guest bench: Apollo and Rapido stay on v2; 1mg uses v4 Gemini. Browse thinks high, matching the winning runs.
+                    | setenv("BROWSER_API_APOLLO"; "v2")
+                    | setenv("BROWSER_API_RAPIDO"; "v2")
+                    | setenv("BROWSER_API_1MG"; "v4")
+                    | setenv("BROWSER_MODEL_1MG"; "gemini-3.5-flash")
+                    | setenv("BROWSER_THINKING_APOLLO"; "browse:high")
+                    | setenv("BROWSER_THINKING_RAPIDO"; "browse:high")
+                    | setenv("BROWSER_THINKING_1MG"; "browse:high")
                   else . end)
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
             > /tmp/td.json

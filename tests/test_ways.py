@@ -157,3 +157,81 @@ async def test_a_forwarded_flight_is_a_trip_and_the_cab_follows_the_page(db, at,
     task = (await runtime.shown_tasks(db, FAM))[0]
     assert task.service == "indigo" and task.kind == "checkin" and "Never pay" in task.goal and "free seat" in task.goal
     assert task.details["pnr"] == "TESTPN" and "TESTPN" not in got["next"]
+
+
+async def test_a_booking_is_read_on_the_desk_and_a_missing_name_is_asked_once(db, at, monkeypatch):
+    from app.tasks import checkin_desk
+
+    at("2026-10-15 18:00")
+    await store.save_roster(db, FAM, E, [E, S])
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=E, speaker=S, members=[E, S], message_ref="m1")
+
+    async def fetch_text(query):
+        return "Flight 6E-204 arrival 11:05.", []
+
+    async def judge_time(raw, flight):
+        return ""
+
+    monkeypatch.setattr(ways, "fetch_text", fetch_text)
+    monkeypatch.setattr(ways, "judge_time", judge_time)
+    asked = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "TESTPN", "about": ELDER})
+    assert asked["started"] is False and "last name" in asked["next"] and await runtime.shown_tasks(db, FAM) == []
+    desk = checkin_desk.Desk()
+    monkeypatch.setenv("CHECKIN_DESK", desk.start())
+    try:
+        got = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "TESTPN", "last_name": "Devi", "about": ELDER})
+        missing = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "NOBODY", "last_name": "Devi", "about": ELDER})
+    finally:
+        desk.stop()
+    assert got["found"] is True and got["changed"] is False and got["paid"] is False
+    assert got["flight"] == "6E-204" and got["departs"].startswith("2026-10-18T09:10") and got["arrives"].startswith("2026-10-18T11:05")
+    assert got["passengers"] == ["Kamla Devi"] and got["seat"] == "12A" and got["status"] == "on time"
+    assert "nothing was changed" in got["next"] and "12A" in got["next"]
+    saved = await store.facts(db, FAM, ELDER, domains=["trip"])
+    assert saved and saved[0].value["flight"] == "6E-204" and saved[0].value["passengers"] == ["Kamla Devi"]
+    assert saved[0].value["seat"] == "12A"
+    assert missing["found"] is False and "not found" in missing["next"] and "forward" in missing["next"]
+    assert await runtime.shown_tasks(db, FAM) == []
+
+
+async def test_a_saved_surname_is_used_and_a_rejected_one_is_asked_once(db, at, monkeypatch):
+    from app.tasks import checkin_desk
+
+    at("2026-10-15 18:00")
+    elder = {"id": ELDER, "name": "Kamla Devi", "role": "elder"}
+    await store.save_roster(db, FAM, elder, [elder, S])
+    ctx = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=elder, speaker=S, members=[elder, S], message_ref="m1")
+
+    async def fetch_text(query):
+        return "Flight 6E-204 arrival 11:05.", []
+
+    async def judge_time(raw, flight):
+        return ""
+
+    monkeypatch.setattr(ways, "fetch_text", fetch_text)
+    monkeypatch.setattr(ways, "judge_time", judge_time)
+    desk = checkin_desk.Desk()
+    base = desk.start()
+    monkeypatch.setenv("CHECKIN_DESK", base)
+    try:
+        got = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "TESTPN", "about": ELDER})
+        rejected = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "TESTPN", "last_name": "Nobody", "about": ELDER})
+        blocked = await tools.read_trip(ctx, {"airline": "IndiGo", "pnr": "BLOCKED", "last_name": "Devi", "about": ELDER})
+        ctx.message_ref = "m2"
+        cab = await tools.accept_trip(ctx, {"offer": "cab", "when": "lands", "about": ELDER})
+        delayed = await checkin_desk.read_status(base, state="delayed")
+        moved = await tools.note_trip(ctx, {"airline": "IndiGo", "flight": delayed["flight"], "origin": delayed["origin"],
+                                            "destination": delayed["destination"], "arrives": f"{delayed['date']}T{delayed['arrives']}",
+                                            "about": ELDER})
+    finally:
+        desk.stop()
+    assert got["found"] is True and got["seat"] == "12A" and got["passengers"] == ["Kamla Devi"]
+    assert rejected["found"] is False and rejected["name_rejected"] is True and "last name" in rejected["next"]
+    assert blocked["found"] is False and blocked["blocked"] is True and "forward" in blocked["next"]
+    assert cab["started"] is False and cab["watching"] is True and cab["booked"] is False and cab["paid"] is False
+    assert "once it has landed" in cab["next"] and "Do not book now" in cab["next"] and "family" in cab["next"]
+    assert cab["wake_at"].startswith("2026-10-18T09:05")
+    assert delayed["status"] == "delayed" and delayed["arrives"] == "11:40"
+    assert moved["arrives"].startswith("2026-10-18T11:40") and moved["cab_at"].startswith("2026-10-18T12:25")
+    assert "Do not book" in moved["next"]
+    assert await runtime.shown_tasks(db, FAM) == []
