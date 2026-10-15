@@ -286,7 +286,10 @@ async def test_a_meal_photo_is_confirmed_before_anything_is_saved(db, at, nfake)
         {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
     r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
-    assert r["needs"][0]["question"] == "Looks like 2 boiled egg, 1 cup tea, about 215 kcal, 14 g protein, 12 g fat, 9 g sugar. Right?"
+    assert r["needs"][0]["question"] == (
+        "Looks like 2 boiled egg, 1 cup tea, about 215 kcal, 14 g protein, 12 g fat, 9 g sugar. "
+        "Did you eat this, or is it for someone else — like Ravi's diary?")
+    assert r["needs"][0]["options"] == ["I ate it", "Ravi", "Just sharing"]
     assert await active(db) == []
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True})  # the yes comes in a later message, no photo
     assert r["result"] == "saved"
@@ -302,7 +305,90 @@ async def test_a_photo_is_not_saved_when_the_same_message_says_it_is_confirmed(d
         {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
     r, _ = await call(db, "log_food", {"from_photo": True, "confirmed": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
-    assert "215 kcal" in r["needs"][0]["question"] and await active(db) == []
+    assert "215 kcal" in r["needs"][0]["question"] and "Did you eat this" in r["needs"][0]["question"]
+    assert await active(db) == []
+
+
+NOODLES = {"food": True, "description": "a plate of instant noodles", "items": [
+    {"name": "instant noodles", "quantity": 1, "unit": "plate", "grams": 240, "confidence": 0.8}]}
+
+
+async def test_a_food_photo_asks_once_then_a_yes_saves_and_naming_it_does_not_ask_again(db, at, nfake):
+    """A plate photo, a yes, then the food named again: never 'what's in it' or 'send a photo'."""
+    at("2026-10-16 00:58")
+    nfake.meal = NOODLES
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    assert r["result"] == "needs_input"
+    q = r["needs"][0]["question"]
+    assert "Did you eat this, or is it for someone else — like Ravi's diary?" in q
+    assert "send a photo" not in q.lower() and "what's in" not in q.lower()
+    assert await active(db) == []
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True})
+    assert r["result"] == "saved", r
+    assert "tell me if" in r["say"] and "what's in" not in r["say"].lower()
+    named, _ = await call(db, "log_food", {"items": [{"name": "instant noodles", "quantity": 1, "unit": "plate"}]})
+    assert named["result"] == "saved", named
+    assert "what's in" not in named.get("say", "").lower()
+    assert "send a photo" not in json.dumps(named).lower()
+
+
+async def test_an_answer_that_names_the_food_does_not_get_the_same_question(db, at, nfake):
+    at("2026-10-16 00:58")
+    nfake.meal = NOODLES
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "instant noodles", "quantity": 1, "unit": "plate"}]})
+    assert r["result"] == "saved", r
+    assert "Did you eat" not in r.get("say", "") and "what's in" not in r.get("say", "").lower()
+    rows = await active(db)
+    assert len(rows) == 1 and rows[0].name == "instant noodles"
+
+
+async def test_a_photo_they_did_not_eat_saves_nothing(db, at, nfake):
+    at("2026-10-16 00:58")
+    nfake.meal = NOODLES
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "consumed": "no"})
+    assert r["result"] == "dropped" and await active(db) == []
+
+
+async def test_a_photo_already_said_to_be_eaten_is_saved_without_asking(db, at, nfake):
+    at("2026-10-16 00:58")
+    nfake.meal = {"food": True, "description": "two boiled eggs and tea", "items": [
+        {"name": "boiled egg", "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8},
+        {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "consumed": "yes", "items": []}, images=IMG)
+    assert r["result"] == "saved", r
+    assert {e.confidence for e in await active(db)} == {"photo"}
+
+
+async def test_a_photo_for_someone_else_is_saved_to_their_diary(db, at, nfake):
+    at("2026-10-16 00:58")
+    nfake.meal = NOODLES
+    r, _ = await call(db, "log_food", {"from_photo": True, "for_whom": MAA["id"], "consumed": "yes", "items": []},
+                      images=IMG, speaker=SON)
+    assert r["result"] == "saved", r
+    assert len(await active(db, MAA["id"])) == 1
+    assert await active(db, SON["id"]) == []
+
+
+async def test_a_named_food_is_saved_when_nothing_is_published_for_it(db, at, nfake):
+    at("2026-10-16 01:00")
+    r, _ = await call(db, "log_food", {"items": [{"name": "instant noodles", "quantity": 1, "unit": "plate"}]})
+    assert r["result"] == "saved", r
+    assert "what's in" not in r.get("say", "").lower() and "send a photo" not in json.dumps(r).lower()
+    assert "tell me if" in r["say"]
+
+
+async def test_a_home_dish_is_asked_what_is_in_it_once_then_saved(db, at, nfake):
+    at("2026-10-16 01:00")
+    nfake.decisions["home khichdi"] = {"kind": "recipe"}
+    r, _ = await call(db, "log_food", {"items": [{"name": "home khichdi"}]})
+    assert r["result"] == "needs_input"
+    assert r["needs"][0]["question"] == "What's in the home khichdi, roughly?"
+    assert "photo" not in r["needs"][0]["question"].lower()
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "home khichdi"}]})
+    assert r["result"] == "saved", r
+    assert "What's in" not in r.get("say", "")
 
 
 async def test_a_label_photo_becomes_the_familys_food(db, at, nfake):

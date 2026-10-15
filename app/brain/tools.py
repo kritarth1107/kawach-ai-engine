@@ -915,8 +915,11 @@ def _food_day(v: str | None) -> str | None:
     "ask that one question after the save line and nothing more: no second question, no advice. A question about the sugar, "
     "fat, protein, calories or any other nutrient of food already logged is food_log (what=entries); the numbers there are "
     "the only numbers. Do not ask how many yourself "
-    "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
-    "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
+    "before the tool returns. A photo of food is not food eaten: from_photo=true, and nothing is saved until they say "
+    "they ate it or whose diary it is. If this message already says that (they ate it, or who had it), set consumed "
+    "(yes or part) or for_whom; otherwise the tool asks once, and you say only that sentence. A yes to that question "
+    "is confirmed=true and consumed=yes; just sharing or not eaten is consumed=no; a person is for_whom that id and "
+    "consumed=yes. A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. Water: one item, unit glass "
     "or ml, quantity when they said one, eaten_at when they said a time; each time they drink is its own call. A meal they "
     "already finished: set eaten_at when they named a clock time, otherwise minutes_ago (how long before this message). Do not "
@@ -948,12 +951,12 @@ def _food_day(v: str | None) -> str | None:
         "label_photo": {"type": "boolean", "description": "The attached photo is a pack's nutrition label or back"},
         "confidence": {"type": "string", "enum": ["said", "photo", "guess"]},
         "answer_to": {"type": "string", "description": "The job id of the nutrition agent's question they are answering"},
-        "confirmed": {"type": "boolean", "description": "They confirmed what was read from their photo"},
+        "confirmed": {"type": "boolean", "description": "They confirmed what was read from their photo. On its own it is not eaten: also set consumed."},
         "unsure": {"type": "boolean", "description": "With answer_to: they don't know the amount ('pata nahi', 'roughly'): a usual portion is saved"},
         "cancel": {"type": "boolean", "description": "With answer_to: never mind, or they don't know what they ate: nothing is saved"},
         "from_order_task": {"type": "string", "description": "The order's task id when they are saying whether they ate food that came "
                             "from an order (items may be left out: the dishes come from the order)"},
-        "consumed": {"type": "string", "enum": ["yes", "no", "part"], "description": "Food from an order: did they eat it"},
+        "consumed": {"type": "string", "enum": ["yes", "no", "part"], "description": "Did they eat it. An order, and a photo of food, are not eaten until this is yes or part. no means nothing is saved."},
         "portion_eaten": {"type": "string", "enum": ["all", "most", "half", "little"]},
         "skipped": {"type": "boolean", "description": "They said they skipped this meal (give meal); nothing was eaten"},
         "usual": {"type": "boolean", "description": "They mean the meal or amount their own logs show they usually have. Never set this "

@@ -106,7 +106,7 @@ def merge(job: NutritionJob, a: dict) -> None:
         if k == "items":
             if v:
                 ask["items"] = v
-                job.draft = {k2: v2 for k2, v2 in (job.draft or {}).items() if k2 in ("photo", "photo_ref", "label_food")}
+                job.draft = {k2: v2 for k2, v2 in (job.draft or {}).items() if k2 in ("photo", "photo_ref", "label_food", "asked")}
             continue
         ask[k] = v
     job.ask = ask
@@ -339,6 +339,37 @@ async def log_order_meal(session: AsyncSession, task, *, consumed: str, portion_
 # ── the agent ────────────────────────────────────────────────────────────────
 
 
+_ONCE = frozenset({"photo", "confirm", "who_ate", "consumed"})
+
+
+def _already_asked(job: NutritionJob, reason: str, question: str) -> bool:
+    """The same question text, or a second confirm / photo / who / eaten question, for this one job."""
+    for row in (job.draft or {}).get("asked") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("question") == question:
+            return True
+        if reason in _ONCE and row.get("reason") == reason:
+            return True
+    return False
+
+
+def _note_asked(job: NutritionJob, reason: str, question: str) -> None:
+    draft = dict(job.draft or {})
+    draft["asked"] = [*list(draft.get("asked") or []), {"reason": reason, "question": question}]
+    job.draft = draft
+
+
+def _photo_settled(job: NutritionJob, ask: dict) -> bool:
+    """They already said this photo was eaten, or whose diary it is. A confirm on the photo's own message is not that."""
+    if ask.get("consumed") in ("yes", "part"):
+        return True
+    whom = ask.get("for_whom")
+    if isinstance(whom, str) and whom.strip():
+        return True
+    return bool(ask.get("confirmed") and (job.answers or []))
+
+
 def _still_looking(job: NutritionJob) -> dict:
     """The turn is out of time. The background save is the one line they hear."""
     job.state, job.updated_at = "resolving", clock.now()
@@ -388,8 +419,12 @@ class NutritionAgent:
                                "actually ate from it as food (log_food items), and a pack at home is counted down."}
             dishes = ", ".join(i["name"] for i in order_items(task))[:120] or task.goal
             if ask.get("consumed") not in ("yes", "part", "no"):
-                return self._question(job, "consumed", f"Did {self._you(job)} eat the {dishes} that came? All of it?",
-                                      ["All", "Half", "A little", "No / someone else"])
+                q = self._question(job, "consumed", f"Did {self._you(job)} eat the {dishes} that came? All of it?",
+                                   ["All", "Half", "A little", "No / someone else"])
+                if q:
+                    return q
+                jobs.finish(job, "dropped", {"why": "not eaten", "order_task": str(task.id)})
+                return {"result": "dropped", "job_id": str(job.id), "why": "Not eaten: nothing logged from this order."}
             if ask["consumed"] == "no":
                 jobs.finish(job, "dropped", {"why": "not eaten", "order_task": str(task.id)})
                 return {"result": "dropped", "job_id": str(job.id), "why": "Not eaten: nothing logged from this order."}
@@ -398,11 +433,14 @@ class NutritionAgent:
                 ask["items"] = items
                 job.ask = ask
 
-        if ask.get("for_whom") == "":
+        if ask.get("for_whom") == "" and not ask.get("from_photo"):
             # One person in the household is not a guess. Asking them "who ate it" only repeats.
+            # A photo asks eaten and whose diary in the one confirm, not a second who question.
             people = [(i, n) for i, n in who.names.items() if n]
             if len(people) > 1:
-                return self._question(job, "who_ate", "Who ate it?", [n for _, n in people][:5])
+                q = self._question(job, "who_ate", "Who ate it?", [n for _, n in people][:5])
+                if q:
+                    return q
             if len(people) == 1:
                 job.subject_id = people[0][0]
             ask = dict(ask)
@@ -444,11 +482,12 @@ class NutritionAgent:
                     ask["items"] = items
                     job.ask, job.draft = ask, draft
             if not draft.get("label_food"):
-                if jobs.can_ask(job):
-                    return self._question(job, "label", "I couldn't read the label. Could you send a clear photo of the nutrition table on the pack?")
+                q = self._question(job, "label", "I couldn't read the label. Could you send a clear photo of the nutrition table on the pack?") if jobs.can_ask(job) else None
+                if q:
+                    return q
                 ask["label_photo"] = False
 
-        # a meal photo: read, then always confirmed first (founder Q4)
+        # a meal photo: one question, the reading and whether it was eaten (and whose diary), then save only on a clear answer
         if ask.get("from_photo"):
             if who.images and not draft.get("photo"):
                 reading = await vision.read_meal(who.images, hints=", ".join(i.get("name", "") for i in items), essential=who.essential)
@@ -459,18 +498,27 @@ class NutritionAgent:
             if not draft.get("photo"):
                 if items:
                     ask["from_photo"] = False  # their words are what we have
-                elif jobs.can_ask(job):
-                    return self._question(job, "photo", "I couldn't make out the food in the photo. What was it, and how much?")
                 else:
+                    q = self._question(job, "photo", "I couldn't make out the food in the photo. What was it, and how much?") if jobs.can_ask(job) else None
+                    if q:
+                        return q
                     jobs.finish(job, "dropped", {"why": "photo unreadable"})
                     return {"result": "dropped", "job_id": str(job.id), "why": "The photo could not be read and no food was named; nothing saved."}
-            elif not ask.get("confirmed") or not (job.answers or []):
+            elif ask.get("consumed") == "no":
+                await self._close_photo(draft)
+                jobs.finish(job, "dropped", {"why": "not eaten"})
+                return {"result": "dropped", "job_id": str(job.id), "why": "Not eaten: nothing was saved."}
+            elif not _photo_settled(job, ask):
                 # A confirm flag on the same message as the photo does not count: they have not seen the reading yet.
                 about = await self._photo_numbers(job, draft["photo"])
-                return self._question(job, "confirm", f"Looks like {vision.describe(draft['photo'])}{about}. Right?", ["Yes", "Change"])
-            elif not items or not any(i.get("quantity") for i in items):
+                q = self._photo_question(job, draft["photo"], about)
+                if q:
+                    return q
+            if draft.get("photo") and (not items or not any(i.get("quantity") for i in items)):
                 items = [{"name": i["name"], **({"quantity": i["quantity"]} if i.get("quantity") else {}), **({"unit": i["unit"]} if i.get("unit") else {}),
                           "_grams": i.get("grams"), "_photo": True} for i in draft["photo"]["items"]]
+                ask["items"] = items
+                job.ask = ask
 
         learned = await self._usuals(job.subject_id)
         at_guess = eaten_time(ask)
@@ -534,10 +582,23 @@ class NutritionAgent:
             if r.assumed_kind:
                 it["_kind_open"] = True
             if r.needs == "label" and jobs.can_ask(job):
-                return self._question(job, "label", f"Which {it['name']} was it? Or send a photo of the label (the nutrition table on the back).",
-                                      item=it["name"])
-            if r.needs == "photo" and r.food is None and jobs.can_ask(job):
-                return self._question(job, "photo", f"What's in the {it['name']}, roughly? Or send a photo.", item=it["name"])
+                q = self._question(job, "label", f"Which {it['name']} was it? Or send a photo of the label (the nutrition table on the back).",
+                                   item=it["name"])
+                if q:
+                    return q
+                it["_kind_open"] = True
+            if r.needs == "photo" and r.food is None:
+                # A photo, or a food they already named, is never asked for as another photo. "What's in it" is only
+                # a home-cooked dish of unknown make, and only once. Anything else is saved, with one correction.
+                home = (r.decision or {}).get("kind") == "recipe" and not ask.get("from_photo") and not it.get("notes")
+                if home and jobs.can_ask(job):
+                    q = self._question(job, "photo", f"What's in the {it['name']}, roughly?", item=it["name"])
+                    if q:
+                        return q
+                if estimates_only:
+                    # The web search has not run yet. An empty estimate is not the save; the background look-up is.
+                    return _still_looking(job)
+                it["_kind_open"] = True
         # how much: one pack or one drink is saved; a counted food with no number is asked once
         # (unless they don't know, or a photo showed it). A plate or a katori stays a usual-portion estimate.
         # A meal that already has an amount is saved; one counted item with no number does not hold the rest back.
@@ -561,7 +622,10 @@ class NutritionAgent:
                 continue
             if r.food.countable and jobs.can_ask(job) and ask.get("confidence") != "photo":
                 opts = await self._quantity_options(job.subject_id, r.food)
-                return self._question(job, "quantity", f"How many {it['name']}?", opts, item=it["name"])
+                q = self._question(job, "quantity", f"How many {it['name']}?", opts, item=it["name"])
+                if q:
+                    return q
+                _fill_one(it, r.food)
 
         # save
         at = eaten_time(ask)
@@ -641,13 +705,32 @@ class NutritionAgent:
             return "photo"
         return "caregiver" if job.subject_id != self.who.speaker_id else "chat"
 
-    def _question(self, job: NutritionJob, reason: str, question: str, options: list[str] | None = None, item: str | None = None) -> dict:
+    def _question(self, job: NutritionJob, reason: str, question: str, options: list[str] | None = None, item: str | None = None) -> dict | None:
+        """One question. The same question, and a confirm or a photo question, is never sent twice for this job."""
+        if _already_asked(job, reason, question):
+            return None
+        _note_asked(job, reason, question)
         n = jobs.ask_needs(job, reason, question, options, item)
-        return {"result": "needs_input", "job_id": str(job.id), "say": question, "needs": [{**n, "job_id": str(job.id)}],
-                "how": ("Say only the say sentence, in their language and script. Do not mention options, ids, or the words Options or Reply, "
-                        "and do not add a health warning of your own. Nothing is saved yet. When they answer, call log_food with "
-                        f"answer_to=\"{job.id}\" and the answer as fields (the full items if they changed; unsure=true if they don't know "
-                        "the amount; cancel=true if they say never mind). If this message already answers it, call log_food now and do not ask.")}
+        how = ("Say only the say sentence, in their language and script. Do not mention options, ids, or the words Options or Reply, "
+               "and do not add a health warning of your own. Nothing is saved yet. When they answer, call log_food with "
+               f"answer_to=\"{job.id}\" and the answer as fields (the full items if they changed; unsure=true if they don't know "
+               "the amount; cancel=true if they say never mind). If this message already answers it, call log_food now and do not ask.")
+        if reason == "confirm":
+            how += (" I ate it is confirmed=true and consumed=yes. A person is for_whom that household id and consumed=yes. "
+                    "Just sharing, or they did not eat it, is consumed=no. Do not ask this again.")
+        return {"result": "needs_input", "job_id": str(job.id), "say": question, "needs": [{**n, "job_id": str(job.id)}], "how": how}
+
+    def _photo_question(self, job: NutritionJob, reading: dict, about: str) -> dict | None:
+        """The reading, and whether it was eaten or is for someone else's diary, in one question."""
+        desc = vision.describe(reading)
+        others = [n for i, n in self.who.names.items() if n and i != self.who.speaker_id]
+        if others:
+            text = f"Looks like {desc}{about}. Did you eat this, or is it for someone else — like {others[0]}'s diary?"
+            opts = ["I ate it", *others[:4], "Just sharing"]
+        else:
+            text = f"Looks like {desc}{about}. Did you eat this, or are you just sharing the photo?"
+            opts = ["I ate it", "Just sharing"]
+        return self._question(job, "confirm", text, opts[:6])
 
     async def _quantity_options(self, subject: str, food: NutritionFood) -> list[str]:
         opts: list[str] = []
@@ -878,12 +961,23 @@ async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str
             prior = await jobs.by_source(session, who.family_id, who.message_ref)
             if prior is not None:
                 return _attach(prior)
+        job = None
         if ask.get("items") and not any(ask.get(k) for k in ("from_photo", "label_photo", "skipped", "from_order_task")):
             existing = await jobs.same_recent(session, who.family_id, subject_id, who.speaker_id, ask)
-            if existing is not None:
+            if existing is not None and existing.state == "needs_input":
+                # An answer that arrived as a new call still closes the open question. It is not asked again.
+                merge(existing, args)
+                if args.get("for_whom"):
+                    existing.subject_id = subject_id
+                    kept = dict(existing.ask)
+                    kept.pop("for_whom", None)
+                    existing.ask = kept
+                job = existing
+            elif existing is not None:
                 return _attach(existing)
-        job = await jobs.create(session, family_id=who.family_id, subject_id=subject_id, requested_by=who.speaker_id, ask=ask,
-                                source_ref=who.message_ref, channel=who.channel)
+        if job is None:
+            job = await jobs.create(session, family_id=who.family_id, subject_id=subject_id, requested_by=who.speaker_id, ask=ask,
+                                    source_ref=who.message_ref, channel=who.channel)
     out = await NutritionAgent(session, who).run(job, deadline=time.monotonic() + jobs.inline_seconds())
     await session.flush()
     if out.get("result") == "looking_up":
