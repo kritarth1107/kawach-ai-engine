@@ -98,7 +98,7 @@ def test_extra_rules_and_low_effort_only_on_health_turns():
     base = grounding._system(True, False)
     health = grounding._system(True, True)
     assert "dose_change" not in base and "doctor_note_missing" not in base  # those two stay on health turns only
-    assert "followup_missing" in base and "unwanted_apology" in base
+    assert "followup_missing" in base and "unwanted_apology" in base and "tease_as_question" in base
     assert "framing_missing" in base and "question_unanswered" in base
     assert "6. doctor_note_missing" in health and '7. For each advice claim also add "dose_change"' in health
     assert grounding._system(False, True).count("5. doctor_note_missing") == 1

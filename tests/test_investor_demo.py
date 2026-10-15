@@ -98,6 +98,7 @@ def test_a_saved_medicine_does_not_answer_the_price_she_just_gave():
 def test_a_reading_or_a_red_flag_is_one_calm_line_and_a_week_keeps_its_facts():
     from app.brain import guards
 
+    assert guards.already_on_record(None, "Telmisartan 40 mg at 09:00") == "Telmisartan 40 mg at 09:00 is already on the record."
     assert guards.noted_reading(None, "sugar 280") == "Noted: sugar 280."
     assert guards.calm_noted(None, "no one else in the family to tell").endswith("no one else in the family to tell")
     assert "skip" in guards.missed_reminder_line(None)

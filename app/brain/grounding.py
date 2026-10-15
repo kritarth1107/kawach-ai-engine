@@ -109,8 +109,11 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    with a doctor or pharmacist. False when she only repeats their schedule, dose or record, or the reply already says both.
    question_unanswered = true when their latest message asks her for a fact or a time (when not to message, what she has
    saved, which one) and the REPLY only acknowledges it (noted, okay, sure) without the fact and without one question that
-   asks them for it. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it. Add
-   "unwanted_apology", "followup_missing", "framing_missing" and "question_unanswered" as true|false to the JSON.
+   asks them for it. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it.
+   tease_as_question = true when their latest message is a joke or a tease, not a real question, and the REPLY asks for a
+   name or a fact about someone, or asks anything instead of a light reply. False when they asked a real question, or the
+   reply is already light and does not ask for a name. Add "unwanted_apology", "followup_missing", "framing_missing",
+   "question_unanswered" and "tease_as_question" as true|false to the JSON.
 
 """
 
@@ -166,7 +169,7 @@ class Claim:
 
     @property
     def problem(self) -> bool:
-        if self.source in ("doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered"):
+        if self.source in ("doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered", "tease_as_question"):
             return True
         if self.kind == "advice":
             if self.dose_change:
@@ -203,6 +206,8 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
         out.append(Claim(kind="advice", quote="[general information]", supported=False, prescriptive=True, source="framing_missing"))
     if isinstance(data, dict) and data.get("question_unanswered") is True:
         out.append(Claim(kind="advice", quote="[no answer]", supported=False, prescriptive=True, source="question_unanswered"))
+    if isinstance(data, dict) and data.get("tease_as_question") is True:
+        out.append(Claim(kind="advice", quote="[tease answered with a question]", supported=False, prescriptive=True, source="tease_as_question"))
     if isinstance(data, dict) and data.get("doctor_note_missing") is True and doctor_note:
         # Health information always comes with when to see a doctor (persona; founder's health rule). No quote: nothing to
         # strip, only a rewrite that adds the line.
@@ -268,6 +273,8 @@ def problems(claims: list[Claim]) -> list[str]:
                        "confirm with their doctor or pharmacist. Do not change a dose")
         elif c.source == "question_unanswered":
             out.append("they asked you something: answer it, or ask the one fact you do not have. Do not only say noted or okay")
+        elif c.source == "tease_as_question":
+            out.append("they were teasing: one light reply in their language. Do not ask for a name or a fact, and do not apologise")
         elif c.kind == "advice" and c.dose_change:
             out.append(f"'{c.quote}' tells them to skip, delay, double or change a dose: only their doctor decides that. Do not say it; "
                        "ask them to check with their doctor or pharmacist (or that you are checking with the family), and offer to note it")
@@ -291,6 +298,6 @@ _SENT = re.compile(r"(?<=[.!?।])\s+|\n+")
 def strip(text: str, claims: list[Claim]) -> str:
     """Remove the sentences that carry an unsupported quote (the last resort after a rewrite still invents)."""
     quotes = [c.quote.lower() for c in claims if c.quote and c.source not in (
-        "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered")]
+        "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered", "tease_as_question")]
     kept = [s for s in _SENT.split(text or "") if s.strip() and not any(q in s.lower() for q in quotes)]
     return " ".join(kept).strip()

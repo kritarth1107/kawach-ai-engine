@@ -1837,9 +1837,14 @@ async def gap_asked(ctx: TurnCtx, a: dict) -> dict:
     key = str(a.get("key") or "").strip()[:80]
     if not key:
         raise ToolRefused("key is the item from NOT KNOWN YET")
-    from app.care.gaps import ledger_topics
+    from app.care import gaps as gap_list
 
     who = ctx.speaker.get("id") or ctx.elder_id
+    listed = await gap_list.block(ctx.session, ctx.family_id, who, ctx.speaker.get("name") or "them")
+    allowed = {line.split(":", 1)[0].removeprefix("- ").strip() for line in listed.splitlines() if line.startswith("- ")}
+    if key not in allowed and key.split(":")[0] not in allowed:
+        raise ToolRefused("That is not on NOT KNOWN YET. Do not ask it. If they were teasing, reply lightly and do not ask for a name.")
+    from app.care.gaps import ledger_topics
     topics = ledger_topics(key)
     for topic in topics:
         await store.record_event(

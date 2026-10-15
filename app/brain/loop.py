@@ -1237,7 +1237,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
             profile = ctx.profiles.get(req.speaker["id"])
-            if any(c.source == "unwanted_apology" for c in claims):
+            if any(c.source in ("unwanted_apology", "tease_as_question") for c in claims):
                 reply.text = guards.light_reply(profile)
                 ctx.force_light = True
                 break
@@ -1447,6 +1447,18 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             bodies = [b for b in bodies if b]
             if bodies and any(b[:24] not in (final or "") for b in bodies):
                 final = ". ".join(bodies[:3]) + "."
+                guarded = True
+        same = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "remember" and _json_result(a).get("result") == "unchanged"), None)
+        if same:
+            note = str(_json_result(same).get("note") or "")
+            what = note.split("Already on the record as ", 1)[-1].split(".", 1)[0].strip()
+            final = guards.already_on_record(profile, what)
+            guarded = True
+        reminder = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "reminder_log"), None)
+        if reminder and situation == "med_question":
+            attempts = _json_result(reminder).get("reminder_attempts") or []
+            if not any(isinstance(row, dict) and row.get("delivered") for row in attempts):
+                final = guards.missed_reminder_line(profile)
                 guarded = True
 
     if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):

@@ -1169,6 +1169,26 @@ _CALM = {
     "gurmukhi": "ਮੈਂ ਨੋਟ ਕਰ ਲਿਆ।",
     "odia": "ମୁଁ ଲେଖିଲି।",
 }
+_SAME = {
+    "english": "{what} is already on the record.",
+    "indic": "{what} pehle se record mein hai.",
+    "devanagari": "{what} पहले से record में है।",
+    "mr": "{what} आधीच record मध्ये आहे.",
+    "bengali": "{what} আগে থেকেই record-এ আছে।",
+    "tamil": "{what} ஏற்கெனவே record-ல் உள்ளது.",
+    "telugu": "{what} ఇప్పటికే record లో ఉంది.",
+    "kannada": "{what} ಈಗಾಗಲೇ record ನಲ್ಲಿದೆ.",
+    "malayalam": "{what} നേരത്തേ record-ൽ ഉണ്ട്.",
+    "gujarati": "{what} પહેલેથી record માં છે.",
+    "gurmukhi": "{what} ਪਹਿਲਾਂ ਤੋਂ record ਵਿੱਚ ਹੈ।",
+    "odia": "{what} ଆଗରୁ record ରେ ଅଛି।",
+}
+
+
+def already_on_record(profile: dict | None, what: str) -> str:
+    return canned(profile, _SAME).format(what=what or "That")
+
+
 _NONE_SENT = {
     "english": "No reminder went out for that. I will not tell you to skip it or take an extra one.",
     "indic": "Uske liye koi reminder nahi gaya. Main skip karne ya extra lene ko nahi kahungi.",
