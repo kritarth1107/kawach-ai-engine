@@ -46,6 +46,12 @@ IMPORTANCE = {
 }
 NEVER_FADE = 0.8  # memories at least this important do not fade with age
 EARLIER_IMPORTANCE = 0.3  # an earlier value of a fact ranks below current ones and fades like everyday memories
+# Reciprocal-rank fusion, same k on both lists. A shared rare word outranks a
+# neighbour that only sits near the question; a common word ("ki", "at") does not.
+KEYWORD_RRF_K = 60
+VECTOR_RRF_K = 60
+KEYWORD_POOL = 80
+VECTOR_POOL = 30
 HISTORY_NOTES = {"diary"}  # dated history: lines that drop out of these notes stay findable
 
 Embedder = Callable[[list[str]], Awaitable[list[list[float]]]]
@@ -135,8 +141,8 @@ class Item:
 
 def fact_item(f: CareFact) -> Item | None:
     """A care-record row as it reads in the index: a current row with its status; an earlier one (replaced or stopped)
-    marked with the day it ended, so meaning-search can still answer "what was the dose before?"; a proposal that was
-    turned down or taken back not at all (it was never true)."""
+    marked with the day it ended and kept in the index; search does not return it. A proposal that was turned down
+    or taken back is not indexed (it was never true)."""
     if f.status in ("active", "pending"):
         return Item("fact", f"fact:{f.id}", f"({f.status}) {f.text}"[:600], f.recorded_at, IMPORTANCE["fact"])
     if f.status in ("superseded", "stopped"):
@@ -355,37 +361,43 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
     Every hit says what is true now, whatever the index holds: a fact found by meaning is written from the care record
     as it is (an earlier value says when it ended and ranks as an earlier value; a turned-down one is dropped), and a
     note line found by meaning must still be in its note (dated diary lines excepted)."""
-    keyword = await store.recall(session, family_id, subject_ids, query, limit=limit * 3)
+    keyword = await store.recall(session, family_id, subject_ids, query, limit=KEYWORD_POOL, include_past_facts=False)
     scores: dict[str, float] = {}
     hits: dict[str, store.Hit] = {}
     weight: dict[str, float] = {}
-    for rank, h in enumerate(keyword):
-        scores[h.ref] = scores.get(h.ref, 0) + 1.0 / (60 + rank)
+    kw_score: dict[str, float] = {}
+    for spec, h in _by_overlap(query, [h for h in keyword if not h.text.startswith("(EARLIER:")]):
+        scores[h.ref] = scores.get(h.ref, 0) + spec
+        kw_score[h.ref] = spec
         hits[h.ref] = h
     vec = await embed([query], query=True) if query.strip() else None
     if vec:
         rows = list((await session.execute(
             select(MemoryVector).where(MemoryVector.family_id == family_id, MemoryVector.subject_id.in_(subject_ids),
                                        MemoryVector.embedding.is_not(None))
-            .order_by(MemoryVector.embedding.cosine_distance(vec[0])).limit(limit * 3)
+            .order_by(MemoryVector.embedding.cosine_distance(vec[0])).limit(VECTOR_POOL * 3)
         )).scalars())
         lines = await _current_note_lines(session, family_id, subject_ids) if any(r.source == "note" for r in rows) else {}
         facts = await _facts_by_ref(session, family_id, [r.ref for r in rows if r.source == "fact"])
         rank = 0
         for r in rows:
-            hit, imp, at = store.Hit(r.source, r.at, r.text, r.ref), r.importance, r.at
+            hit, imp, at = store.Hit(r.source, r.at, r.text, r.ref, r.subject_id), r.importance, r.at
             if r.source == "note" and r.ref.split(":", 1)[-1] not in HISTORY_NOTES and r.text not in lines.get(r.ref, set()):
                 continue  # this line is no longer in its note
             if r.source == "fact":
                 f = facts.get(r.ref)
-                item = fact_item(f) if f is not None else None
+                if f is None or f.status not in ("active", "pending"):
+                    continue  # gone, replaced, stopped, or a proposal that was turned down
+                item = fact_item(f)
                 if item is None:
-                    continue  # the fact is gone, or was a proposal that was turned down
-                hit, imp, at = store.Hit("fact", f.recorded_at, store.fact_label(f), r.ref), item.importance, item.at
-            scores[r.ref] = scores.get(r.ref, 0) + 1.0 / (60 + rank)
+                    continue
+                hit, imp, at = store.Hit("fact", f.recorded_at, store.fact_label(f), r.ref, f.subject_id), item.importance, item.at
+            scores[r.ref] = scores.get(r.ref, 0) + 1.0 / (VECTOR_RRF_K + rank)
             weight[r.ref] = imp * decay(at, imp)
             hits.setdefault(r.ref, hit)
             rank += 1
+            if rank >= VECTOR_POOL:
+                break
     now = clock.now()
     for ref, h in hits.items():
         w = weight.get(ref)
@@ -394,8 +406,75 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
             imp = importance_of(kind) if h.source == "event" else IMPORTANCE.get(h.source, 0.4)
             w = imp * decay(h.when, imp, now)
         scores[ref] *= 0.6 + 0.4 * w
-    ranked = sorted(hits.values(), key=lambda h: scores[h.ref], reverse=True)
-    return ranked[:limit]
+    ranked = sorted(hits.values(), key=lambda h: (scores[h.ref], kw_score.get(h.ref, 0.0)), reverse=True)
+    return _by_subject(ranked, limit)
+
+
+def _query_words(query: str) -> list[str]:
+    return store.query_words(query)
+
+
+def _hit_words(text: str) -> list[str]:
+    return store.query_words(text)
+
+
+def _phrase_len(query_tokens: list[str], hit_tokens: list[str]) -> int:
+    """Longest run of the question's words that appears, in order, in the memory."""
+    if not query_tokens or not hit_tokens:
+        return 0
+    hay = " ".join(hit_tokens)
+    best = 0
+    for i in range(len(query_tokens)):
+        for j in range(i + 1, len(query_tokens) + 1):
+            if j - i <= best:
+                continue
+            if " ".join(query_tokens[i:j]) in hay:
+                best = j - i
+    return best
+
+
+def _by_overlap(query: str, found: list[store.Hit]) -> list[tuple[float, store.Hit]]:
+    """Rank keyword hits by a shared phrase, not by which row was written last.
+
+    "बीपी की गोली" ranks the blood-pressure tablet above one that only shares "गोली".
+    A common word ("ki", "the") does not. The best match is a full reciprocal-rank point;
+    a weaker one is worth less, so it cannot bury a meaning match."""
+    words = _query_words(query)
+    if not words or not found:
+        return []
+    tokenised = [(h, _hit_words(h.text)) for h in found]
+    df = {w: sum(1 for _, toks in tokenised if w in toks) for w in words}
+    scored: list[tuple[int, float, store.Hit]] = []
+    for h, toks in tokenised:
+        phrase = _phrase_len(words, toks)
+        raw = sum(1.0 / df[w] for w in words if df[w] and w in toks)
+        if phrase or raw:
+            scored.append((phrase, raw, h))
+    if not scored:
+        return []
+    scored.sort(key=lambda triple: (triple[0], triple[1]), reverse=True)
+    best = max(phrase for phrase, _, _ in scored) or 1
+    return [(phrase / best / (KEYWORD_RRF_K + rank), h) for rank, (phrase, _, h) in enumerate(scored)]
+
+
+def _by_subject(ranked: list[store.Hit], limit: int) -> list[store.Hit]:
+    """Each person keeps a share of the list. One person's notes do not fill every slot."""
+    buckets: dict[str, list[store.Hit]] = {}
+    for h in ranked:
+        buckets.setdefault(h.subject or "", []).append(h)
+    if len(buckets) <= 1:
+        return ranked[:limit]
+    out: list[store.Hit] = []
+    cols = list(buckets.values())
+    i = 0
+    while len(out) < limit and i < max(len(c) for c in cols):
+        for col in cols:
+            if i < len(col):
+                out.append(col[i])
+                if len(out) >= limit:
+                    return out
+        i += 1
+    return out
 
 
 def cosine(a: list[float], b: list[float]) -> float:

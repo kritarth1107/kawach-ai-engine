@@ -250,7 +250,8 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     loops = [lp for lp in await store.live_loops(session, req.family_id, [req.elder["id"], req.speaker["id"]]) if lp.kind != "brief"]
     from app.care import memory_index
 
-    hits = await memory_index.search(session, req.family_id, [req.elder["id"], "family"], req.text, limit=8) if req.text.strip() else []
+    subjects = list(dict.fromkeys([req.elder["id"], req.speaker.get("id") or req.elder["id"], "family"]))
+    hits = await memory_index.search(session, req.family_id, subjects, req.text, limit=8) if req.text.strip() else []
     from app.tasks import runtime as task_runtime
 
     tasks = await data.tasks()
@@ -702,7 +703,6 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         final, known=known, fresh=fresh, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute,
         allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
     )
-    problems += guards.split_problems(final)
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
     problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
     if not ctx.is_system and not ctx.buttons:

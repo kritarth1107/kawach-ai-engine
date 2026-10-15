@@ -628,12 +628,24 @@ async def set_summary(session: AsyncSession, family_id: str, thread_id: str, tex
 # ── recall ─────────────────────────────────────────────────────────────────────
 
 
+def query_words(query: str) -> list[str]:
+    """Words of a question. Vowel signs stay on the letter (Hindi, Bengali, Tamil); they are not spaces."""
+    import unicodedata
+
+    def keep(ch: str) -> bool:
+        return ch.isalnum() or unicodedata.category(ch) in ("Mn", "Mc")
+
+    folded = "".join(ch if keep(ch) else " " for ch in query.lower())
+    return [w for w in folded.split() if len(w) > 1]
+
+
 @dataclass
 class Hit:
     source: str  # fact | note | event
     when: datetime
     text: str
     ref: str
+    subject: str = ""
 
 
 async def recall(
@@ -646,7 +658,7 @@ async def recall(
     include_past_facts: bool = True,
 ) -> list[Hit]:
     """Keyword search over notes, the ledger, and the care record including past values."""
-    words = [w for w in "".join(c if c.isalnum() else " " for c in query.lower()).split() if len(w) > 1]
+    words = query_words(query)
     if not words:
         return []
     tsq = func.to_tsquery("simple", " | ".join(f"{w}:*" for w in words[:12]))
@@ -659,7 +671,7 @@ async def recall(
         .limit(limit)
     )
     for n, _ in note_rows:
-        hits.append(Hit("note", n.updated_at, f"{n.title}: {n.body_md[:600]}", f"note:{n.slug}"))
+        hits.append(Hit("note", n.updated_at, f"{n.title}: {n.body_md[:600]}", f"note:{n.slug}", n.subject_id))
 
     ev_rows = await session.execute(
         select(CareEvent)
@@ -669,7 +681,7 @@ async def recall(
         .limit(limit)
     )
     for e in ev_rows.scalars():
-        hits.append(Hit("event", e.at, f"[{e.kind}] {e.summary}", f"event:{e.id}"))
+        hits.append(Hit("event", e.at, f"[{e.kind}] {e.summary}", f"event:{e.id}", e.subject_id))
 
     statuses = ("active", "pending", "superseded", "stopped") if include_past_facts else ("active", "pending")
     like = or_(*[func.lower(CareFact.text).contains(w) for w in words[:12]], *[CareFact.key.contains(w) for w in words[:12]])
@@ -685,7 +697,7 @@ async def recall(
     for f in facts:
         if f.key in never or str(f.note or "").startswith("rejected: "):
             continue
-        hits.append(Hit("fact", f.recorded_at, fact_label(f), f"fact:{f.id}"))
+        hits.append(Hit("fact", f.recorded_at, fact_label(f), f"fact:{f.id}", f.subject_id))
 
     hits.sort(key=lambda h: h.when, reverse=True)
     return hits[:limit]

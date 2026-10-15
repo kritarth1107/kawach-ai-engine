@@ -472,9 +472,8 @@ async def note(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "recall",
-    "Search memory: past messages and events, notes, and the care record including past values with dates. "
-    "Use it before saying you don't know, and for questions about the past ('what did the doctor say', "
-    "'what was the dose before').",
+    "Search memory: notes, events, and the care record as it is now. A value that was replaced or stopped is not "
+    "returned. Use it before saying you don't know, and for questions about the past ('what did the doctor say').",
     {"query": {"type": "string"}, "about": ABOUT},
     ["query"],
 )
