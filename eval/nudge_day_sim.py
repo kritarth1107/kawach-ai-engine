@@ -158,6 +158,7 @@ async def run(days: int, tick: int, url: str, real: bool, max_inr: float) -> dic
         os.environ["MODEL_ROUTES"] = json.dumps({"worker": ["fakewriter:m"], "judge_fast": ["fakewriter:m"]})
     router.reset_breakers()
     hosts = {p.family: SimHost(World()) for p in PERSONAS}
+    spare = SimHost(World())  # for another job's families in the same database
     for p in PERSONAS:
         if p.meals:
             hosts[p.family].world.meals_mode = "on"
@@ -193,8 +194,10 @@ async def run(days: int, tick: int, url: str, real: bool, max_inr: float) -> dic
                     pending.pop(p.key, None)
                     if await answer(sessions, p, now, seen[p.key]):
                         timeline[p.key].append((now, "they wrote", "(reply)"))
-            out = await nudges.run(sessions, lambda f: hosts[f], mode="on")
-            await nudges.reminder_followups(sessions, lambda f: hosts[f], mode="on")
+            # only this sim's families: another job's world can share the database (the nightly's message-week runs the
+            # 200-family budget world first); a follow-up for one of its reminders goes to a throwaway host
+            out = await nudges.run(sessions, lambda f: hosts[f], mode="on", families=set(hosts))
+            await nudges.reminder_followups(sessions, lambda f: hosts.get(f) or spare, mode="on")
             for p in PERSONAS:
                 sent = [m for m in hosts[p.family].world.sent if m.get("to") == p.person["id"]]
                 for m in sent[len([x for x in timeline[p.key] if x[1] == "nudge"]):]:
