@@ -170,7 +170,7 @@ def merge_parts(items: list[dict], rows: list) -> list[dict]:
     return out
 
 
-async def fold_descriptions(items: list[dict], *, essential: bool = True, timeout_s: float = 20.0) -> list[dict]:
+async def fold_descriptions(items: list[dict], *, essential: bool = True, timeout_s: float = 4.0) -> list[dict]:
     """A flavour or a filling named beside a dish becomes part of that dish. The items stay as given when the model fails."""
     if len(items) < 2:
         return items
@@ -211,10 +211,11 @@ Return only JSON, nothing else:
 
 ESTIMATE_PROMPT = """You estimate the nutrition of a food eaten in India when no published value was found.
 
-Build it from its usual recipe and ingredients (and the ingredients given, if any). Give values per 100 g as eaten, and
-the usual grams of the units people use for it in Indian homes. Leave out nutrients you cannot estimate.
+FOODS is every food in the meal that has no published value. Build each from its usual recipe and ingredients (and the
+ingredients given, if any). Give values per 100 g as eaten, and the usual grams of the units people use for it in Indian
+homes. Leave out nutrients you cannot estimate.
 
-Return only JSON, nothing else:
+Return only JSON: {"items": [{"i": 0}]} and each item has this shape plus its i:
 """ + FOOD_JSON
 
 
@@ -375,13 +376,49 @@ async def web(item: dict, canonical: str | None, *, timeout_s: float, problem: s
     return None
 
 
-async def estimate(item: dict, canonical: str | None, *, essential: bool = True, timeout_s: float = 8.0) -> dict | None:
+def _decorate(item: dict, decision: dict, food: dict) -> dict:
+    """The normaliser's kind and units fill only what the look-up left blank."""
+    canonical = str(decision.get("canonical") or "").strip() or None
+    kind = decision.get("kind") if decision.get("kind") in KINDS else ("packaged" if item.get("brand") else "generic")
+    food.setdefault("kind", kind)
+    if kind in ("restaurant", "packaged", "recipe"):
+        food["kind"] = kind
+    if item.get("restaurant") and food["kind"] == "restaurant":
+        food["restaurant"] = str(item["restaurant"])[:160]
+    if item.get("brand") and not food.get("brand"):
+        food["brand"] = str(item["brand"])[:120]
+    if not food.get("name"):
+        food["name"] = canonical or str(item.get("name") or "")
+    for k in ("countable", "default_unit", "typical_qty"):
+        if decision.get(k) not in (None, "") and (k != "default_unit" or decision[k] in P.UNITS) and not food.get(k):
+            food[k] = decision[k]
+    food["tags"] = sorted({*(food.get("tags") or []), *[t for t in decision.get("tags") or [] if t in TAGS]})
+    return food
+
+
+async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True, timeout_s: float = 6.0) -> list[dict | None]:
+    """One call for every food in the meal that still has no published value. None where the model failed."""
+    if not pairs:
+        return []
+    body = json.dumps({"FOODS": [{"i": i, "food": _describe(item, str(decision.get("canonical") or "") or None)}
+                                  for i, (item, decision) in enumerate(pairs)]}, ensure_ascii=False)
     try:
-        d = await ask("nutrition", ESTIMATE_PROMPT, "FOOD: " + _describe(item, canonical), essential=essential, max_tokens=1500,
-                      timeout_s=timeout_s)
+        got = await ask("nutrition", ESTIMATE_PROMPT, body, essential=essential, max_tokens=2000, timeout_s=timeout_s)
     except router.AllModelsFailed:
-        return None
-    return _food_from_json(d, source="model")
+        return [None] * len(pairs)
+    rows = got.get("items") if isinstance(got, dict) else None
+    out: list[dict | None] = [None] * len(pairs)
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(pairs):
+                food = _food_from_json(row, source="model")
+                if food is not None:
+                    out[row["i"]] = _decorate(pairs[row["i"]][0], pairs[row["i"]][1], food)
+    elif len(pairs) == 1:
+        food = _food_from_json(got, source="model")
+        if food is not None:
+            out[0] = _decorate(pairs[0][0], pairs[0][1], food)
+    return out
 
 
 # ── the catalogue ────────────────────────────────────────────────────────────
@@ -496,9 +533,9 @@ class Resolved:
         return bool(self.food and (self.food.source == "model" or (self.food.checked or {}).get("rough")))
 
 
-async def fetch(item: dict, decision: dict, *, deadline: float | None, essential: bool, estimates_only: bool = False) -> dict | None:
-    """Steps 3–5 for one item with no catalogue match: network only (no database), so a meal's new foods are looked up
-    together."""
+async def fetch(item: dict, decision: dict, *, deadline: float | None, estimates_only: bool = False) -> dict | None:
+    """Barcode, brand, or one web look-up for an item the catalogue does not have. No database, so a meal's new foods
+    run together. An estimate is a separate call for the whole meal."""
     canonical = str(decision.get("canonical") or "").strip() or None
     kind = decision.get("kind") if decision.get("kind") in KINDS else ("packaged" if item.get("brand") else "generic")
     food: dict | None = None
@@ -522,23 +559,20 @@ async def fetch(item: dict, decision: dict, *, deadline: float | None, essential
             if not chk.ok:
                 food["rough"] = True  # refined after they are told; not a second search before the save
     if food is None:
-        food = await estimate(item, canonical, essential=essential, timeout_s=8.0)
-    if food is None:
         return None
-    food.setdefault("kind", kind)
-    if kind in ("restaurant", "packaged", "recipe"):
-        food["kind"] = kind
-    if item.get("restaurant") and food["kind"] == "restaurant":
-        food["restaurant"] = str(item["restaurant"])[:160]
-    if item.get("brand") and not food.get("brand"):
-        food["brand"] = str(item["brand"])[:120]
-    if not food.get("name"):
-        food["name"] = canonical or str(item.get("name") or "")
-    for k in ("countable", "default_unit", "typical_qty"):
-        if decision.get(k) not in (None, "") and (k != "default_unit" or decision[k] in P.UNITS) and not food.get(k):
-            food[k] = decision[k]
-    food["tags"] = sorted({*(food.get("tags") or []), *[t for t in decision.get("tags") or [] if t in TAGS]})
-    return food
+    return _decorate(item, decision, food)
+
+
+async def _keep_fetched(session: AsyncSession, family_id: str, item: dict, food: dict, resolved: Resolved) -> None:
+    kept = await keep(session, family_id, item, food)
+    resolved.food = kept
+    p = resolved.pantry
+    if p is not None and p.food_id is None:
+        from app.nutrition import pantry as pantry_mod
+
+        p.food_id = kept.id
+        p.unit_g = p.unit_g or (kept.units or {}).get("piece") or kept.serving_g
+        p.per_unit_nutrients = pantry_mod.per_unit(kept, p.unit_g)
 
 
 async def keep(session: AsyncSession, family_id: str, item: dict, food: dict) -> NutritionFood:
@@ -550,7 +584,7 @@ async def keep(session: AsyncSession, family_id: str, item: dict, food: dict) ->
 
 async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, pantry_rows: list[NutritionPantry] | None = None,
                   deadline: float | None = None, essential: bool = True, no_questions: bool = False,
-                  estimates_only: bool = False) -> list[Resolved]:
+                  estimates_only: bool = False, cache_only: bool = False) -> list[Resolved]:
     """Find every item's food. Raises Slow when a web look-up does not fit before `deadline` (time.monotonic()).
     no_questions: the meal has had its two questions; a vague or unlabelled item is looked up (or estimated) as it is."""
     pantry_rows = list(pantry_rows or [])
@@ -569,16 +603,26 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
                 continue
         c, exact = await candidates(session, family_id, it, pantry_rows)
         cards.append(c)
-        if exact is not None and (not pantry_rows or exact.id in by_food):
+        if exact is not None:
+            # A name already in the catalogue is that food. Pantry stock is counted down when it is the same food;
+            # it does not send a known food back to the model.
             out[i].food = exact
             out[i].pantry = by_food.get(exact.id)
         else:
             todo.append(i)
+    if cache_only or not todo:
+        if not (cache_only and todo):
+            for r in out:
+                if r.food is not None:
+                    r.food.uses = (r.food.uses or 0) + 1
+        return out
     slow: list[int] = []
     if todo:
-        left = (deadline - time.monotonic()) if deadline else 15.0
+        left = (deadline - time.monotonic()) if deadline else 4.0
+        if deadline is not None and left < 2.0:
+            raise Slow()
         decisions = await normalise([items[i] for i in todo], [cards[i] for i in todo], essential=essential,
-                                    timeout_s=max(3.0, min(8.0, left)))
+                                    timeout_s=min(4.0, left))
         for i, d in zip(todo, decisions):
             r = out[i]
             r.decision = d or {}
@@ -611,27 +655,30 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
             p = out[i].pantry
             return items[i] if p is None else {**items[i], "name": p.name, "brand": p.brand}
 
-        got = await asyncio.gather(*(fetch(asked(i), out[i].decision, deadline=deadline, essential=essential,
-                                           estimates_only=estimates_only) for i in slow),
-                                   return_exceptions=True)
+        got = await asyncio.gather(*(fetch(asked(i), out[i].decision, deadline=deadline, estimates_only=estimates_only)
+                                     for i in slow), return_exceptions=True)
         if any(isinstance(g, Slow) for g in got):
             raise Slow()
+        missing: list[int] = []
         for i, g in zip(slow, got):
             if isinstance(g, BaseException):
                 logger.warning("nutrition look-up failed: %s", str(g)[:200])
                 g = None
             if g is None:
-                out[i].needs = "photo"
+                missing.append(i)
                 continue
-            kept = await keep(session, family_id, asked(i), g)
-            out[i].food = kept
-            p = out[i].pantry
-            if p is not None and p.food_id is None:
-                from app.nutrition import pantry as pantry_mod
-
-                p.food_id = kept.id
-                p.unit_g = p.unit_g or (kept.units or {}).get("piece") or kept.serving_g
-                p.per_unit_nutrients = pantry_mod.per_unit(kept, p.unit_g)
+            await _keep_fetched(session, family_id, asked(i), g, out[i])
+        if missing:
+            left = (deadline - time.monotonic()) if deadline else 4.0
+            if deadline is not None and left < 1.5:
+                raise Slow()
+            foods = await estimate_all([(asked(i), out[i].decision) for i in missing], essential=essential,
+                                       timeout_s=min(4.0, max(1.5, left)))
+            for i, food in zip(missing, foods):
+                if food is None:
+                    out[i].needs = "photo"
+                    continue
+                await _keep_fetched(session, family_id, asked(i), food, out[i])
     for r in out:
         if r.food is not None:
             r.food.uses = (r.food.uses or 0) + 1

@@ -84,6 +84,16 @@ class FakeNutritionModels:
             return LLMReply(text=json.dumps({"items": out}), tool_calls=[], model="fake")
         if system.startswith(lookup.ESTIMATE_PROMPT[:40]):
             self.calls.append("estimate")
+            raw = text.strip()
+            if raw.startswith("{"):
+                body = json.loads(raw)
+                items = []
+                for f in body.get("FOODS") or []:
+                    name = str(f.get("food") or "").split(",")[0].strip().lower()
+                    est = dict(self.estimates.get(name) or {})
+                    est["i"] = f["i"]
+                    items.append(est)
+                return LLMReply(text=json.dumps({"items": items}), tool_calls=[], model="fake")
             name = text.split("FOOD: ", 1)[-1].split(",")[0].strip().lower()
             return LLMReply(text=json.dumps(self.estimates.get(name) or {}), tool_calls=[], model="fake")
         if system.startswith(vision.MEAL_PROMPT[:40]):

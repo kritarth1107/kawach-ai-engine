@@ -18,6 +18,7 @@ Its rules:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -338,6 +339,14 @@ async def log_order_meal(session: AsyncSession, task, *, consumed: str, portion_
 # ── the agent ────────────────────────────────────────────────────────────────
 
 
+def _still_looking(job: NutritionJob) -> dict:
+    """The turn is out of time. The background save is the one line they hear."""
+    job.state, job.updated_at = "resolving", clock.now()
+    return {"result": "looking_up", "job_id": str(job.id),
+            "say": "Tell them once, in a few words, that you are checking its nutrition and will tell them when it is saved "
+                   "(no numbers yet). If you already said that, say nothing."}
+
+
 class NutritionAgent:
     """One job, one step at a time: returns a saved meal, a question, "looking_up" or "dropped"."""
 
@@ -484,32 +493,37 @@ class NutritionAgent:
             jobs.finish(job, "dropped", {"why": "nothing named"})
             return {"result": "dropped", "job_id": str(job.id), "why": "No food was named; nothing saved."}
 
-        # A flavour, filling, or variety named with a dish is that dish, not a second food. The model says which
-        # item describes another; a photo and an order's dishes are already separate foods.
-        if (len(items) > 1 and not ask.get("from_photo") and not ask.get("from_order_task") and not estimates_only):
-            items = await lookup.fold_descriptions(items, essential=who.essential)
-            ask["items"] = items
-            job.ask = ask
-
-        # find each food
+        # A known food (their usual, or a name already in the catalogue) is saved with no model call.
+        clean = [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items]
         stock = await pantry.in_stock(s, who.family_id, job.subject_id)
-        try:
-            found = await lookup.resolve(s, who.family_id, [{k: v for k, v in i.items() if not k.startswith("_")} for i in items],
-                                         pantry_rows=stock, deadline=deadline, essential=who.essential, no_questions=not jobs.can_ask(job),
-                                         estimates_only=estimates_only)
-        except lookup.Slow:
-            if not estimates_only:
-                # The search did not fit. Save the estimate in this same turn so the reply has numbers, then a web
-                # look-up replaces them. Asking them to wait left the meal unlogged when the reply dropped that line.
-                estimated = await self.run(job, deadline=time.monotonic() + 10, background=background, estimates_only=True)
-                if estimated.get("result") == "saved":
-                    return estimated
-                job.needs = None
-                job.questions = 0
-            job.state, job.updated_at = "resolving", clock.now()
-            return {"result": "looking_up", "job_id": str(job.id),
-                    "say": "Tell them once, in a few words, that you are checking its nutrition and will tell them when it is saved "
-                           "(no numbers yet). If you already said that, say nothing."}
+        cached = await lookup.resolve(s, who.family_id, clean, pantry_rows=stock, cache_only=True)
+        found = cached if all(r.food is not None or r.medicine for r in cached) else None
+
+        # A flavour, filling, or variety named with a dish is that dish, not a second food. Only when the catalogue
+        # did not already know every item. A photo and an order's dishes are already separate foods.
+        if found is None and len(items) > 1 and not ask.get("from_photo") and not ask.get("from_order_task") and not estimates_only:
+            left = (deadline - time.monotonic()) if deadline else 4.0
+            if deadline is None or left >= 1.5 or background:
+                items = await lookup.fold_descriptions(items, essential=who.essential, timeout_s=min(4.0, max(1.5, left)))
+                ask["items"] = items
+                job.ask = ask
+                clean = [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items]
+
+        if found is None:
+            try:
+                found = await lookup.resolve(s, who.family_id, clean, pantry_rows=stock, deadline=deadline,
+                                             essential=who.essential, no_questions=not jobs.can_ask(job),
+                                             estimates_only=estimates_only)
+            except lookup.Slow:
+                if not estimates_only:
+                    # One estimate for the whole meal, not another search and not one call per food. If that also
+                    # does not fit, the background save is the one line they hear.
+                    estimated = await self.run(job, deadline=time.monotonic() + 3, background=background, estimates_only=True)
+                    if estimated.get("result") == "saved":
+                        return estimated
+                    job.needs = None
+                    job.questions = 0
+                return _still_looking(job)
         medicines = [r.item.get("name") for r in found if r.medicine]
         keep = [(i, r) for i, r in zip(items, found) if not r.medicine]
         if medicines and not keep:
@@ -974,17 +988,23 @@ async def refine_saved(sessions, job_id) -> None:
     async with sessions() as session:
         rows = list((await session.execute(select(NutritionEntry).where(
             NutritionEntry.job_id == job_id, NutritionEntry.status == "active"))).scalars())
-        changed = False
+        pending = []
         for e in rows:
             if not (e.flags or {}).get("refine") or e.food_id is None:
                 continue
             food = await session.get(NutritionFood, e.food_id)
-            if food is None:
-                continue
+            if food is not None:
+                pending.append((e, food))
+
+        async def _look(entry, food):
             try:
-                got = await lookup.web({"name": e.name_said or e.name}, food.name, timeout_s=lookup.WEB_S)
+                return await lookup.web({"name": entry.name_said or entry.name}, food.name, timeout_s=lookup.WEB_S)
             except lookup.Slow:
-                continue
+                return None
+
+        looked = await asyncio.gather(*(_look(e, food) for e, food in pending))
+        changed = False
+        for (e, food), got in zip(pending, looked):
             if not got or not N.check_per_100g(got.get("per_100g") or {}).ok:
                 continue
             food.per_100g = N.clean(got["per_100g"])

@@ -33,7 +33,9 @@ MAX_QUESTIONS = 2
 
 
 def inline_seconds() -> float:
-    return float(os.getenv("NUTRITION_INLINE_S", "8"))
+    """How long log_food may spend before the reply. The brain has already used part of the turn; past this the meal
+    finishes in the background and that save is the one line they hear."""
+    return float(os.getenv("NUTRITION_INLINE_S", "4"))
 
 
 async def by_source(session: AsyncSession, family_id: str, source_ref: str) -> NutritionJob | None:

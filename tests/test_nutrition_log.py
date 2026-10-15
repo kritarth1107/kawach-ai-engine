@@ -888,3 +888,97 @@ async def test_learned_lunch_uses_when_they_ate_not_when_they_wrote(db, at, nfak
         assert not err and saved["result"] == "saved", saved
     times = await nudge_hooks.usual_meal_times(db, FAM, MAA["id"])
     assert times["lunch"] == "13:30" and times["stable"]["lunch"], times
+
+
+def _cached(name: str, alias: str) -> NutritionFood:
+    now = clock.now()
+    return NutritionFood(id=uuid.uuid4(), family_id=None, name=name, aliases=[alias], kind="generic",
+                         per_100g={"energy_kcal": 120, "protein_g": 4, "carbs_g": 20, "fat_g": 2},
+                         units={"piece": 40, "katori": 150}, default_unit="piece", typical_qty=1, countable=True,
+                         tags=["grain"], allergens=[], source="ifct", source_urls=["https://example.org/food"],
+                         confidence=0.9, checked={}, uses=0, created_at=now, updated_at=now)
+
+
+async def test_a_known_meal_is_saved_with_no_model_call(db, at, nfake):
+    """Four foods already in the catalogue: the reply has the numbers, and nothing is asked of a model."""
+    import time
+
+    at("2026-10-15 13:00")
+    for name, alias in (("Chapati", "roti"), ("Dal", "dal"), ("Rice", "rice"), ("Sabzi", "sabzi")):
+        db.add(_cached(name, alias))
+    await db.flush()
+    nfake.calls.clear()
+    nfake.web.asked.clear()
+    started = time.monotonic()
+    saved, err = await call(db, "log_food", {"items": [
+        {"name": "roti", "quantity": 2, "unit": "piece"},
+        {"name": "dal", "quantity": 1, "unit": "katori"},
+        {"name": "rice", "quantity": 1, "unit": "katori"},
+        {"name": "sabzi", "quantity": 1, "unit": "katori"},
+    ]})
+    elapsed = time.monotonic() - started
+    assert not err and saved["result"] == "saved" and saved["notice"] == "reply", saved
+    assert saved["say"].startswith("Saved:") and "kcal" in saved["say"]
+    assert nfake.calls == [] and nfake.web.asked == []
+    assert elapsed < 1.0, elapsed
+
+
+async def test_a_slow_search_does_not_hold_the_reply_or_start_a_second_wave(db, at, nfake, monkeypatch):
+    """Four new foods and a search that would take half a minute. The turn does not wait, and estimates them once, together."""
+    import time
+
+    at("2026-10-15 13:00")
+    monkeypatch.setenv("NUTRITION_INLINE_S", "0.4")
+    monkeypatch.setattr(jobs, "kick_nutrition", lambda: None)
+    nfake.web.slow = True
+    nfake.calls.clear()
+    started = time.monotonic()
+    out, _ = await call(db, "log_food", {"items": [
+        {"name": "idli", "quantity": 2, "unit": "piece"},
+        {"name": "dosa", "quantity": 1, "unit": "piece"},
+        {"name": "sambar", "quantity": 1, "unit": "katori"},
+        {"name": "pongal", "quantity": 1, "unit": "katori"},
+    ]})
+    elapsed = time.monotonic() - started
+    assert out["result"] == "looking_up" and await active(db) == [], out
+    assert nfake.calls.count("estimate") == 1
+    assert elapsed < 1.0, elapsed
+
+
+async def test_unknown_foods_are_estimated_in_one_call(db, at, nfake):
+    """What the catalogue and the web don't have is one estimate for the whole meal, not one call per food."""
+    at("2026-10-15 13:00")
+    for name in ("idli", "dosa", "sambar", "pongal"):
+        nfake.estimates[name] = {"name": name, "per_100g": {"energy_kcal": 150, "protein_g": 4, "carbs_g": 25, "fat_g": 3},
+                                 "units": {"piece": 50, "katori": 150}, "default_unit": "piece", "typical_qty": 1}
+    nfake.calls.clear()
+    nfake.web.asked.clear()
+    saved, err = await call(db, "log_food", {"items": [
+        {"name": "idli", "quantity": 2, "unit": "piece"},
+        {"name": "dosa", "quantity": 1, "unit": "piece"},
+        {"name": "sambar", "quantity": 1, "unit": "katori"},
+        {"name": "pongal", "quantity": 1, "unit": "katori"},
+    ]})
+    assert not err and saved["result"] == "saved", saved
+    assert nfake.calls.count("estimate") == 1
+    assert nfake.calls.count("normalise") == 1
+    assert len(saved["saved"]) == 4
+
+
+async def test_pantry_stock_does_not_send_a_known_food_to_the_model(db, at, nfake):
+    at("2026-10-15 17:00")
+    tea = _cached("Tea", "tea")
+    tea.tags = ["tea"]
+    tea.default_unit = "cup"
+    tea.units = {"cup": 150}
+    db.add(tea)
+    await db.flush()
+    bar = _cached("Protein bar", "protein bar")
+    bar.family_id = FAM
+    db.add(bar)
+    await db.flush()
+    await pantry.add(db, family_id=FAM, subject_id=None, name="Protein bar", count=2, source="order", task_id="t-9", food=bar)
+    nfake.calls.clear()
+    saved, err = await call(db, "log_food", {"items": [{"name": "tea", "quantity": 1, "unit": "cup"}]})
+    assert not err and saved["result"] == "saved", saved
+    assert "normalise" not in nfake.calls and "estimate" not in nfake.calls
