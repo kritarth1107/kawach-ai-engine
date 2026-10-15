@@ -489,3 +489,38 @@ async def test_feedback_on_a_product_number_the_order_does_not_have_gets_the_ord
     assert err and "Products are numbered by this order" in out and "1. " in out and "2. " in out
     out, err = await tools.run(_ctx(db), "order_feedback", {"task_id": str(t.id), "items": [{"item": 2, "liked": "yes", "usual": "new"}]})
     assert not err
+
+
+def test_a_strip_is_counted_in_tablets_from_the_stores_pack():
+    assert aftercare.tablets_ordered({"name": "Amlodipine 5 mg strip of 10", "qty": 2}) == 20
+    assert aftercare.tablets_ordered({"name": "Amlodipine 5 mg", "pack": "10 tablets", "qty": 1}) == 10
+    assert aftercare.tablets_ordered({"name": "Amlodipine 5 mg", "qty": 10}) == 10
+    assert aftercare.tablets_ordered({"name": "Amlodipine 5 mg", "qty": 1}) == 1
+
+
+async def test_saying_a_medicine_came_sets_stock_from_what_was_ordered(db, at):
+    at("2026-10-11 10:00")
+    from app.care import features
+
+    t = await _placed(db, service="apollo", eta="2 hr", items=[
+        {"name": "Amlodipine 5 mg strip of 10", "qty": 2}, {"name": "Crocin 500", "qty": 1}])
+    await tools.run(_ctx(db), "remember", {"domain": "medicine", "name": "Amlodipine",
+                                           "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine twice"})
+    await db.commit()
+    assert (await features.stock(db, FAM, ELDER))[0]["stock"] is None
+    await aftercare.store_delivered(db, t, clock.now())
+    await db.commit()
+    assert (await features.stock(db, FAM, ELDER))[0]["stock"] is None  # the store saying so is not their yes
+    await _say(db, {"task_id": str(t.id), "arrived": "partly", "problem": "one strip was missing"})
+    assert (await features.stock(db, FAM, ELDER))[0]["stock"] is None
+    said = await _say(db, {"task_id": str(t.id), "arrived": "yes"})
+    assert "Amlodipine: 20 on hand" in " ".join(said["saved"])
+    assert (await features.stock(db, FAM, ELDER))[0]["stock"] == 20
+    assert [f.key for f in await store.facts(db, FAM, ELDER, domains=["medicine"])] == ["medicine:amlodipine"]
+    await _say(db, {"task_id": str(t.id), "arrived": "yes"})
+    assert (await features.stock(db, FAM, ELDER))[0]["stock"] == 20
+
+
+def test_set_stock_asks_for_a_count_they_state():
+    text = tools._TOOLS["set_stock"][0].description
+    assert "naya patta aaya" in text and "do not guess" in text

@@ -213,6 +213,51 @@ async def _log_meal(session: AsyncSession, task: Task, eaten: str, *, by: str) -
     return str((res or {}).get("say") or "")[:200] or None
 
 
+def tablets_ordered(item: dict) -> int:
+    """Tablets in one ordered line. The store's pack is data ('strip of 10'); otherwise the ordered quantity."""
+    qty = max(1, min(int(item.get("qty") or 1), 50))
+    text = f"{item.get('name') or ''} {item.get('pack') or ''}"
+    found = re.search(r"strips?\s+of\s+(\d+)", text, re.I) or re.search(r"(\d+)\s*(?:tablets?|tabs?|capsules?|caps?)\b", text, re.I)
+    each = int(found.group(1)) if found and 0 < int(found.group(1)) <= 500 else 1
+    return qty * each
+
+
+def _cart(task: Task) -> list[dict]:
+    r, d = task.result or {}, task.details or {}
+    rows = r.get("items") or d.get("chosen") or d.get("items") or []
+    return [i for i in rows if isinstance(i, dict) and str(i.get("name") or "").strip()]
+
+
+async def note_medicine_stock(session: AsyncSession, task: Task) -> str | None:
+    """They said a medicine order came: the care record's count becomes what is on hand, from the ordered quantity.
+    A medicine that is not already in the record is left alone. A count already there has the new tablets added."""
+    if kind_of(task) != "medicine":
+        return None
+    from app.care import features
+
+    added: dict[str, tuple] = {}
+    for item in _cart(task):
+        fact = await features.find_medicine(session, task.family_id, task.subject_id, str(item["name"]))
+        if fact is None:
+            continue
+        have = added.get(fact.key)
+        added[fact.key] = (fact, (have[1] if have else 0) + tablets_ordered(item))
+    if not added:
+        return None
+    known = {row["key"]: row.get("stock") for row in await features.stock(session, task.family_id, task.subject_id)}
+    bits = []
+    for key, (fact, more) in added.items():
+        left = known.get(key)
+        count = more if left is None else int(left) + more
+        name = features.med_name(fact)
+        await features.set_stock(
+            session, family_id=task.family_id, subject_id=task.subject_id, key=key, name=name, count=count,
+            actor_id=task.requested_by,
+        )
+        bits.append(f"{name}: {count} on hand")
+    return "; ".join(bits)
+
+
 async def on_delivered(session: AsyncSession, task: Task) -> None:
     """Delivered (the store says so, or they said it came): once per order, a food_delivered event with what came, and
     groceries go to the pantry at home (counts and pack nutrition; nothing is logged as eaten)."""
@@ -421,6 +466,11 @@ async def record(session: AsyncSession, task: Task, *, by: str, source_kind: str
             r = dict(task.result or {})
             if not problem:
                 out["saved"].append("it came" if arrived == "yes" else "it came, partly")
+        if arrived == "yes" and kind == "medicine" and not r.get("stock_set"):
+            noted = await note_medicine_stock(session, task)
+            if noted:
+                r["stock_set"] = now.isoformat()
+                out["saved"].append(f"stock from the order: {noted}")
     if problem:
         fb["problem"] = str(problem)[:300]
 

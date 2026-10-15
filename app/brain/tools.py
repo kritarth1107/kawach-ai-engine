@@ -3570,8 +3570,10 @@ def _name_of(ctx: TurnCtx, subject: str) -> str:
 
 @tool(
     "set_stock",
-    "Record how many tablets (or doses) of a medicine are on hand now, e.g. after a new strip arrives or when "
-    "someone counts them. Saheli then works out days left and asks about a refill before it runs out.",
+    "Call this whenever someone says how many of a medicine are on hand, or that a new strip, bottle or pack has "
+    "arrived ('10 left', 'naya patta aaya', a new bottle). count is tablets or doses on hand now. If they name a new "
+    "strip or bottle but no number of tablets, ask how many are in it and then call this; do not guess a pack size. "
+    "Saheli then works out days left and can offer a reorder before it runs out.",
     {"medicine": {"type": "string"}, "count": {"type": "integer", "minimum": 0, "maximum": 2000}, "about": ABOUT},
     ["medicine", "count"],
 )
