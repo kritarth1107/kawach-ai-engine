@@ -1332,6 +1332,33 @@ async def test_five_silent_hours_are_dropped_and_asks_move_to_a_fast_hour(db, at
     assert [o.field for o in await meal_opts(db, at, "2026-10-14 19:50")] == ["meal:lunch"]
 
 
+async def test_a_two_hour_window_answered_only_later_is_learned_within_a_week(db, at, sessions, writer, food):
+    """A reply three hours later is not an answer. Four asks across 10:00–12:00, over four days, are enough."""
+    from datetime import datetime, timedelta
+
+    from app.care import meal_nudges
+    from app.core import clock
+
+    await meal_day(db, at)
+    for i, hour in enumerate((10, 11, 10, 11)):
+        sent = datetime(2026, 10, 10, hour, 5, tzinfo=clock.IST) + timedelta(days=i)
+        db.add(NudgeLedger(family_id=FAM, person_id=MAA["id"], kind="regular", status="sent", field="know:day",
+                           slot_key=f"busy-{i}", ref=f"nudge:busy-{i}", text="hello?", planned_at=sent, sent_at=sent,
+                           replied_at=sent + timedelta(hours=3)))
+    for i in range(3):
+        sent = datetime(2026, 10, 10, 19, 0, tzinfo=clock.IST) + timedelta(days=i)
+        db.add(NudgeLedger(family_id=FAM, person_id=MAA["id"], kind="regular", status="sent", field="know:evening",
+                           slot_key=f"eve-{i}", ref=f"nudge:eve-{i}", text="evening?", planned_at=sent, sent_at=sent,
+                           replied_at=sent + timedelta(minutes=4)))
+    await db.commit()
+    at("2026-10-14 21:00")
+    assert await meal_nudges.learn_reply_hours(db, FAM, MAA["id"]) in ("created", "superseded")
+    await db.commit()
+    fact = await store.active_fact(db, FAM, MAA["id"], meal_nudges.ASK_HOURS_KEY)
+    assert fact and (fact.value or {}).get("avoid_hours") == [10, 11] and (fact.value or {}).get("prefer_hour") == 19
+    assert "10:00–12:00" in (fact.text or "") and "19:00" in (fact.text or "")
+
+
 async def test_a_run_for_named_families_leaves_the_others_alone(db, at, sessions, writer):
     """A simulation runs each family on its own clock: a run for one family never nudges another."""
     at("2026-10-14 10:00")

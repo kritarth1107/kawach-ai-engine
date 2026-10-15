@@ -56,8 +56,27 @@ async def test_check_ins_stay_out_of_the_learned_hours(db, at):
 
 async def test_too_few_tries_teach_nothing(db, at):
     await store.save_roster(db, FAM, ME, [ME])
-    await seed_replies(db, at, bad=(14, 4, 0), good=(16, 4, 4))
+    await seed_replies(db, at, bad=(14, 3, 0), good=(16, 3, 3))
     assert await outcomes_learn.timing(db, FAM, ME["id"]) is None
+
+
+async def test_a_silent_window_is_learned_without_a_better_hour(db, at):
+    """Four starts in one two-hour window, answered only hours later, are enough. No other window is required."""
+    await store.save_roster(db, FAM, ME, [ME])
+    now = at("2026-10-28 22:00")
+    for i in range(4):
+        when = clock.ist(now - timedelta(days=i + 1)).replace(hour=10, minute=15)
+        db.add(ReplyLog(family_id=FAM, thread_id=ME["id"], at=when, kind="proactive", situation="nudge", text="hi",
+                        sent_hour=10 + (i % 2), replied=True, reply_delay_s=3 * 3600))
+    await db.flush()
+    t = await outcomes_learn.timing(db, FAM, ME["id"])
+    assert t is not None
+    assert t["value"]["avoid_hours"] == [10, 11] and t["value"]["prefer_hours"] == []
+    assert "10–12 am" in t["text"] and "stops starting a conversation" in t["text"]
+    out = await outcomes_learn.run_family(db, FAM, [ME["id"]])
+    assert out["learned"] == 1
+    f = await store.active_fact(db, FAM, ME["id"], outcomes_learn.TIMING_KEY)
+    assert f and "10–12" in f.text
 
 
 async def test_undo_is_respected_for_60_days(db, at):

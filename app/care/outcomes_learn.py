@@ -5,9 +5,10 @@ code and updating instructions").
 
 Nightly, from 28 days of outcomes per person:
 - message timing: when Saheli starts a conversation (check-ins, follow-ups, regular nudges; ReplyLog "proactive"), which
-  two-hour windows get answers. A window answered at most 20% of the time while another gets at least 60% (6+ tries
-  each, smoothed with all families as the prior) becomes `learned:timing_messages` {avoid_hours, prefer_hours, evidence}.
-  Check-ins and nudges then stay out of the avoided hours.
+  two-hour windows get answers. A reply counts only when it comes within 45 minutes; a message hours later is not an
+  answer to that hour. A window answered at most 20% of the time, with at least 4 tries (about a week when one lands
+  there a day), becomes `learned:timing_messages` {avoid_hours, prefer_hours, evidence}. A window answered at least 60%
+  of the time is where she writes instead, when one exists. Check-ins and nudges then stay out of the avoided hours.
 - habits: an activity skipped on the same weekday at least 5 of the last 7 times becomes
   `learned:habit_<activity>_<weekday>`, so Saheli asks about that day's plans instead of nudging.
 - Medicine times are never changed by a learning (the caregiver sets doses); dose delays stay a suggestion to the
@@ -34,9 +35,9 @@ from app.core import clock
 logger = logging.getLogger(__name__)
 
 LEARN_DAYS = 28
-MIN_TRIES = 6
+MIN_TRIES = 4  # about a week when one conversation a day lands in the window
 LOW, HIGH = 0.2, 0.6
-PRIOR_WEIGHT = 2.0  # pseudo-tries of the all-family rate added to each window
+ANSWER_WITHIN_S = 45 * 60  # a reply after this is a later conversation, not an answer to that message
 COOLDOWN = timedelta(days=60)
 WINDOWS = [(8, 10), (10, 12), (12, 14), (14, 16), (16, 18), (18, 20), (20, 22)]
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -47,9 +48,19 @@ def _window(hour: int) -> int | None:
     return next((i for i, (a, b) in enumerate(WINDOWS) if a <= hour < b), None)
 
 
+def answered_soon(replied: bool | None, delay_s: int | None) -> bool:
+    """True when they answered that message. A marked reply with no recorded delay still counts (older rows). A reply
+    that arrives after 45 minutes is something they wrote later, not an answer to this one."""
+    if not replied:
+        return False
+    return delay_s is None or delay_s <= ANSWER_WITHIN_S
+
+
 def _label(i: int) -> str:
     a, b = WINDOWS[i]
-    return f"{a % 12 or 12}–{b % 12 or 12} {'pm' if b >= 12 else 'am'}"
+    last = b - 1  # 12 is noon, so 10–12 is morning
+    suffix = "am" if last < 12 else "pm"
+    return f"{a % 12 or 12}–{b % 12 or 12} {suffix}"
 
 
 async def _cooling(session: AsyncSession, family_id: str, subject_id: str, key: str, now) -> bool:
@@ -82,28 +93,31 @@ async def timing(session: AsyncSession, family_id: str, person: str, *, now=None
 
     now = now or clock.now()
     since = now - timedelta(days=LEARN_DAYS)
-    rows = (await session.execute(select(ReplyLog.thread_id, ReplyLog.sent_hour, ReplyLog.replied).where(
-        ReplyLog.kind == "proactive", ReplyLog.replied.is_not(None), ReplyLog.at >= since))).all()
-    allc = [0, 0]
+    rows = (await session.execute(select(ReplyLog.sent_hour, ReplyLog.replied, ReplyLog.reply_delay_s).where(
+        ReplyLog.family_id == family_id, ReplyLog.thread_id == person, ReplyLog.kind == "proactive",
+        ReplyLog.replied.is_not(None), ReplyLog.at >= since))).all()
     own: dict[int, list[int]] = defaultdict(lambda: [0, 0])
-    for thread, hour, replied in rows:
-        allc[0] += 1
-        allc[1] += 1 if replied else 0
+    for hour, replied, delay in rows:
         w = _window(hour)
-        if thread == person and w is not None:
-            own[w][0] += 1
-            own[w][1] += 1 if replied else 0
-    prior = (allc[1] / allc[0]) if allc[0] else 0.5
-    rate = {w: (yes + PRIOR_WEIGHT * prior) / (n + PRIOR_WEIGHT) for w, (n, yes) in own.items() if n >= MIN_TRIES}
+        if w is None:
+            continue
+        own[w][0] += 1
+        own[w][1] += 1 if answered_soon(replied, delay) else 0
+    rate = {w: yes / n for w, (n, yes) in own.items() if n >= MIN_TRIES}
     bad = sorted((w for w, r in rate.items() if r <= LOW), key=lambda w: rate[w])
     good = sorted((w for w, r in rate.items() if r >= HIGH), key=lambda w: -rate[w])
-    if not bad or not good:
+    if not bad:
         return None
     avoid = [h for w in bad for h in range(*WINDOWS[w])]
-    prefer = [h for h in range(*WINDOWS[good[0]])]
-    b, g = bad[0], good[0]
-    text = (f"Rarely answers messages around {_label(b)} ({own[b][1]} of {own[b][0]}); Saheli now writes around {_label(g)} "
-            f"instead ({own[g][1]} of {own[g][0]} answered).")
+    prefer = [h for h in range(*WINDOWS[good[0]])] if good else []
+    b = bad[0]
+    if good:
+        g = good[0]
+        text = (f"Rarely answers messages around {_label(b)} ({own[b][1]} of {own[b][0]}); Saheli now writes around {_label(g)} "
+                f"instead ({own[g][1]} of {own[g][0]} answered).")
+    else:
+        text = (f"Rarely answers messages around {_label(b)} ({own[b][1]} of {own[b][0]}); "
+                "Saheli stops starting a conversation then.")
     return {"key": TIMING_KEY, "text": text, "value": {
         "avoid_hours": avoid, "prefer_hours": prefer, "learned_on": clock.ist_day(now),
         "evidence": {_label(w): {"sent": n, "answered": yes} for w, (n, yes) in sorted(own.items())}}}

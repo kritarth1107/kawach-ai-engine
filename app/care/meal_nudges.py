@@ -588,16 +588,33 @@ async def learn_rhythms(session: AsyncSession, family_id: str, person: str) -> d
     return out
 
 
+def _hour_span(hours: list[int]) -> str:
+    """10 and 11 become 10:00–12:00. Hours are the ones she stops using."""
+    parts: list[str] = []
+    start = prev = hours[0]
+    for h in hours[1:]:
+        if h == prev + 1:
+            prev = h
+            continue
+        parts.append(f"{start}:00–{prev + 1}:00")
+        start = prev = h
+    parts.append(f"{start}:00–{prev + 1}:00")
+    return " and ".join(parts)
+
+
 async def learn_reply_hours(session: AsyncSession, family_id: str, person: str) -> str | None:
-    """An hour with five habit asks and no answer is dropped. An hour they answer within half an hour, at least three
-    times, is where those asks move. The fact is visible and undoable."""
+    """A two-hour window with at least four asks and almost no answer within 45 minutes is dropped. A later message
+    the same afternoon is not an answer to that ask. An hour they answer within half an hour, at least three times,
+    is where those asks move. The fact is visible and undoable, and says when not to message them."""
     from app.care import outcomes_learn
 
+    soon = outcomes_learn.ANSWER_WITHIN_S / 60
     since = clock.now() - timedelta(days=14)
     rows = (await session.execute(select(NudgeLedger).where(
-        NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.kind.in_(HABIT_KINDS),
+        NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.kind != "reminder_followup",
         NudgeLedger.status == "sent", NudgeLedger.sent_at.is_not(None), NudgeLedger.sent_at >= since))).scalars()
     by: dict[int, list[float | None]] = {}
+    windows: dict[int, list[float | None]] = {}
     for r in rows:
         sent_at = r.sent_at
         if sent_at is None:
@@ -605,20 +622,27 @@ async def learn_reply_hours(session: AsyncSession, family_id: str, person: str) 
         hour = clock.ist(sent_at).hour
         delay = ((r.replied_at - sent_at).total_seconds() / 60) if r.replied_at else None
         by.setdefault(hour, []).append(delay)
-    avoid = sorted(h for h, delays in by.items() if len(delays) >= 5 and all(d is None for d in delays))
+        w = outcomes_learn._window(hour)
+        if w is not None:
+            windows.setdefault(w, []).append(delay)
+    quiet = [w for w, delays in windows.items()
+             if len(delays) >= outcomes_learn.MIN_TRIES
+             and sum(1 for d in delays if d is not None and d <= soon) / len(delays) <= outcomes_learn.LOW]
+    avoid = sorted(h for w in quiet for h in range(*outcomes_learn.WINDOWS[w]))
     fast: list[tuple[float, int]] = []
     for hour, delays in by.items():
         got = [d for d in delays if d is not None and d <= 30]
-        if len(got) >= 3:
+        if len(got) >= 3 and hour not in avoid:
             fast.append((float(median(got)), hour))
     prefer = sorted(fast)[0][1] if fast else None
     if not avoid:
         return None
     value = {"avoid_hours": avoid, "prefer_hour": prefer}
+    span = _hour_span(avoid)
     if prefer is None:
-        text = f"Doesn't answer around {avoid[0]}:00; Saheli stops starting a conversation then."
+        text = f"Doesn't answer from {span}; Saheli stops starting a conversation then."
     else:
-        text = f"Doesn't answer around {avoid[0]}:00; Saheli asks around {prefer}:00 instead, where replies come quickly."
+        text = f"Doesn't answer from {span}; Saheli asks around {prefer}:00 instead, where replies come quickly."
     prev = await store.active_fact(session, family_id, person, ASK_HOURS_KEY)
     if prev and (prev.value or {}) == value:
         return None
