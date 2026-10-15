@@ -38,6 +38,9 @@ DOMAINS = {
     "apollo": ["apollopharmacy.in", "*.apollopharmacy.in", "*.apollo247.com"], "1mg": ["1mg.com", "*.1mg.com"],
     "pharmeasy": ["pharmeasy.in", "*.pharmeasy.in"], "uber": ["uber.com", "*.uber.com"], "ola": ["olacabs.com", "*.olacabs.com"],
     "rapido": ["rapido.bike", "*.rapido.bike"],
+    "indigo": ["goindigo.in", "*.goindigo.in"], "airindia": ["airindia.com", "*.airindia.com"],
+    "airindiaexpress": ["airindiaexpress.com", "*.airindiaexpress.com"], "akasa": ["akasaair.com", "*.akasaair.com"],
+    "spicejet": ["spicejet.com", "*.spicejet.com"],
 }
 
 

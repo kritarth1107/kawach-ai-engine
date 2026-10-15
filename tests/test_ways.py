@@ -45,6 +45,8 @@ def test_a_fare_the_page_did_not_write_is_dropped_and_one_option_is_marked():
     assert len(marked) == 1 and marked[0]["kind"] == "own_app" and marked[0]["why"] == "lowest door-to-door fare at that hour"
     bus = next(o for o in options if o["kind"] == "airport_bus")
     assert bus["safety"] == "An onward ride is needed at that hour."
+    assert bus["door_line"] == "Not door to door"
+    assert next(o for o in options if o["kind"] == "airport_taxi")["door_line"] == "Door to door"
     said = ways.messages(options)
     assert len(said) == 4 and said[-1] == "Which feels right?"
     assert "₹50" not in " ".join(said) and "MADE-UP" not in " ".join(said)
@@ -133,6 +135,25 @@ async def test_a_forwarded_flight_is_a_trip_and_the_cab_follows_the_page(db, at,
                                      "departs": "2026-10-16T22:00", "arrives": "2026-10-16T00:30", "pnr": "TESTPN", "about": ELDER})
     assert out["landing_moved"] is True and out["arrives"].startswith("2026-10-16T00:45")
     assert out["cab_at"].startswith("2026-10-16T01:30") and out["reminder"]
-    assert "start_task" in out["next"] and "TESTPN" not in out["saved"]
+    assert "start_task" not in out["next"] and "Do not book" in out["next"] and "TESTPN" not in out["saved"]
+    assert await runtime.shown_tasks(db, FAM) == []
     saved = await store.facts(db, FAM, ELDER, domains=["trip"])
     assert saved and saved[0].value["pnr"] == "TESTPN" and saved[0].value["flight"] == "6E-204"
+    from sqlalchemy import select
+
+    from app.care.models import OpenLoop
+
+    titles = " ".join((await db.execute(select(OpenLoop.title).where(OpenLoop.family_id == FAM))).scalars())
+    assert "offer check-in" in titles and "offer a cab" in titles and "Do not book" in titles and "Do not say it is done" in titles
+    ctx.message_ref = "m2"
+    cab = await tools.accept_trip(ctx, {"offer": "cab", "about": ELDER})
+    assert cab["ask_location"] == "pickup" and "Nothing is booked" in cab["note"]
+    assert await runtime.shown_tasks(db, FAM) == []
+    missing = await tools.accept_trip(ctx, {"offer": "checkin", "about": ELDER})
+    assert missing["started"] is False and await runtime.shown_tasks(db, FAM) == []
+    ctx.message_ref = "m3"
+    got = await tools.accept_trip(ctx, {"offer": "checkin", "about": ELDER, "last_name": "Devi"})
+    assert got["started"] is True
+    task = (await runtime.shown_tasks(db, FAM))[0]
+    assert task.service == "indigo" and task.kind == "checkin" and "Never pay" in task.goal and "free seat" in task.goal
+    assert task.details["pnr"] == "TESTPN" and "TESTPN" not in got["next"]

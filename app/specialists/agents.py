@@ -98,7 +98,7 @@ class Specialist:
         return text
 
     def schema(self, task: Task) -> dict:
-        s = schema_for("ride" if task.kind == "ride" else "order", task.phase)
+        s = schema_for(task.kind if task.kind in ("ride", "checkin") else "order", task.phase)
         if task.phase == "place":
             s["properties"]["price_changed"] = {"type": "boolean"}
             s["properties"]["new_total"] = {"type": "string"}
@@ -109,6 +109,9 @@ class Specialist:
     def goal(self, task: Task) -> str:
         d = task.details or {}
         label = SKILLS[task.service]["label"]
+        if task.kind == "checkin":
+            return (task.goal + " Never pay. Never press a card, UPI or wallet button. A paid seat or add-on is a stop: "
+                    "report free_seat=false, paid=false and checked_in=false.")
         if task.kind == "ride":
             pick, drop = ride_end(d, "pickup"), ride_end(d, "drop")
             what = f"from '{pick}' to '{drop}'" + (f", vehicle {d['vehicle']}" if d.get("vehicle") else "")
@@ -217,8 +220,11 @@ PHARMACY = Specialist("pharmacy", ("apollo", "1mg", "pharmeasy"), PHARMACY_RULES
                       {"prepare": 60, "otp": 40, "place": 30, "cancel": 30, "check": 12})
 RIDES = Specialist("rides", ("uber", "ola", "rapido"), RIDES_AGENT_RULES, "RIDES_AGENT_LLM",
                    {"prepare": 45, "otp": 40, "place": 30, "cancel": 30, "check": 12})
+CHECKIN = Specialist("checkin", ("indigo", "airindia", "airindiaexpress", "akasa", "spicejet"),
+                     "Web check-in only. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass.",
+                     "CHECKIN_AGENT_LLM", {"prepare": 40, "otp": 20, "place": 20, "check": 12})
 
-SPECIALISTS = {s.name: s for s in (SHOPPING, PHARMACY, RIDES)}
+SPECIALISTS = {s.name: s for s in (SHOPPING, PHARMACY, RIDES, CHECKIN)}
 
 
 def specialist_for(service: str) -> Specialist:

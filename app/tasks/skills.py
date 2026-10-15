@@ -83,6 +83,26 @@ SKILLS: dict[str, dict] = {
         "start_url": "https://www.rapido.bike/",
         "hints": "Bike taxi, auto and cab on rapido.bike. Enter pickup and drop to see fare ranges for Bike, Auto, Cab Economy and Cab Premium without a login; booking needs a login (phone + OTP). If booking is not possible on the web, stop and report web_booking_unavailable=true.",
     },
+    "indigo": {
+        "label": "IndiGo", "kind": "checkin", "start_url": "https://www.goindigo.in/",
+        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+    },
+    "airindia": {
+        "label": "Air India", "kind": "checkin", "start_url": "https://www.airindia.com/",
+        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+    },
+    "airindiaexpress": {
+        "label": "Air India Express", "kind": "checkin", "start_url": "https://www.airindiaexpress.com/",
+        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+    },
+    "akasa": {
+        "label": "Akasa Air", "kind": "checkin", "start_url": "https://www.akasaair.com/",
+        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+    },
+    "spicejet": {
+        "label": "SpiceJet", "kind": "checkin", "start_url": "https://www.spicejet.com/",
+        "hints": "Web check-in. Open Web Check-in. Booking reference and last name are in the task. Never pay. A free seat only. Skip every paid add-on. Save the boarding pass when it finishes.",
+    },
 }
 
 SERVICES = sorted(SKILLS)
@@ -97,6 +117,11 @@ def schema_for(kind: str, phase: str) -> dict:
         "blocked": {"type": "boolean"},
         "problem": {"type": "string", "description": "What stopped you, in one sentence; empty if nothing"},
     }
+    if kind == "checkin":
+        return {"type": "object", "properties": {**base, "checked_in": {"type": "boolean"}, "free_seat": {"type": "boolean"},
+                "seat": {"type": "string"}, "paid": {"type": "boolean"}, "pnr_found": {"type": "boolean"},
+                "not_open": {"type": "boolean"}, "boarding_pass": {"type": "boolean"}},
+                "required": ["logged_in", "needs_otp", "blocked", "problem", "checked_in", "paid"]}
     if kind == "ride":
         extra = {
             "options": {"type": "array", "items": {"type": "object", "properties": {"type": {"type": "string"}, "fare": {"type": "string"}, "eta": {"type": "string"}}}},

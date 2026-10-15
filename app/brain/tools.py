@@ -3411,8 +3411,8 @@ async def ways_there(ctx: TurnCtx, a: dict) -> dict:
     "note_trip",
     "Save a journey from a forwarded airline message or from what they said: airline, flight number, from, to, and the "
     "landing time. A public flight-status page can move the landing time only when that time is written on the page. "
-    "Then offer the cab (start_task with landing), offer once to tell the family, and say check-in can be done when it "
-    "opens. Ask only for a field this refuses.",
+    "Then say what was saved and the one next useful step. Do not book a cab and do not check in from this message. "
+    "Ask only for a field this refuses.",
     {
         "airline": {"type": "string"},
         "flight": {"type": "string", "description": "The flight number as written, such as 6E-204"},
@@ -3446,29 +3446,129 @@ async def note_trip(ctx: TurnCtx, a: dict) -> dict:
         arrives = ways.retimed(arrives, moved)
     subject = ctx.subject(a.get("about"))
     cab = ways.pickup_after_landing(arrives)
-    value = {"airline": str(a.get("airline") or "").strip(), "flight": flight,
-             "origin": str(a.get("origin") or "").strip(), "destination": str(a.get("destination") or "").strip(),
-             "arrives": arrives.isoformat(), "cab_at": cab.isoformat(),
-             **({"departs": later.parse_at(a["departs"]).isoformat()} if a.get("departs") and later.parse_at(a.get("departs")) else {}),
+    departs = later.parse_at(a.get("departs")) if a.get("departs") else None
+    origin, destination = str(a.get("origin") or "").strip(), str(a.get("destination") or "").strip()
+    airline = str(a.get("airline") or "").strip()
+    value = {"airline": airline, "carrier": airline, "flight": flight, "number": flight,
+             "origin": origin, "from": origin, "destination": destination, "to": destination,
+             "arrives": arrives.isoformat(), "arrive": arrives.isoformat(), "cab_at": cab.isoformat(),
+             **({"departs": departs.isoformat(), "depart": departs.isoformat()} if departs else {}),
              **({"pnr": str(a["pnr"]).strip()} if str(a.get("pnr") or "").strip() else {})}
-    sentence = f"{value['airline']} {flight} from {value['origin']} to {value['destination']}, lands {later.hm(arrives)}".strip()
+    sentence = f"{airline} {flight} from {origin} to {destination}, lands {later.hm(arrives)}".strip()
     w = await store.write_fact(
         ctx.session, family_id=ctx.family_id, subject_id=subject, domain="trip", key=fact_key("trip", flight),
         value=value, text=sentence, source_kind=ctx.source_kind, source_ref=ctx.message_ref,
         stated_by=ctx.speaker.get("id"), confidence=1.0)
-    wake = arrives - timedelta(hours=3)
-    loop_id = None
-    if wake > clock.now():
-        loop = await store.open_loop(
-            ctx.session, family_id=ctx.family_id, subject_id=subject, kind="followup",
-            title=f"Flight {flight} lands {later.hm(arrives)}: offer the cab and ask if the family has been told",
-            detail={"key": w.fact.key, "arrives": arrives.isoformat(), "max_wakes": 1},
-            owner_id=ctx.speaker.get("id"), wake_at=wake, alert_rule="dashboard", dedupe_key=f"trip:{subject}:{w.fact.key}")
-        loop_id = str(loop.id)
+    from app.care import features
+
+    reminders = await features.trip_loops(ctx.session, family_id=ctx.family_id, subject_id=subject, f=w.fact, owner_id=ctx.speaker.get("id"))
+    if not reminders:
+        wake = arrives - timedelta(hours=3)
+        if wake > clock.now():
+            loop = await store.open_loop(
+                ctx.session, family_id=ctx.family_id, subject_id=subject, kind="trip",
+                title=f"{airline} {flight} lands {later.hm(arrives)}: offer a cab from the airport. Do not book it.",
+                detail={"key": w.fact.key, "when": arrives.isoformat(), "max_wakes": 1, "stage": "cab"},
+                owner_id=ctx.speaker.get("id"), wake_at=wake, alert_rule="dashboard", dedupe_key=f"trip:{subject}:{w.fact.key}:cab")
+            reminders = [str(loop.id)]
     return {"saved": sentence, "key": w.fact.key, "arrives": arrives.isoformat(), "cab_at": cab.isoformat(),
-            "landing_moved": bool(moved), "reminder": loop_id,
-            "next": "Offer the cab now: start_task kind ride with landing set to arrives, and ask only what is still missing. "
-                    "Offer once to tell the family. Say check-in can be done when it opens. Do not message anyone until they say yes."}
+            "landing_moved": bool(moved), "reminder": reminders[0] if reminders else None, "reminders": reminders,
+            "next": "One short message: what you saved, then the one next useful step (a cab, check-in, or telling the family). "
+                    "The reminder is already set. Do not book the cab, do not check in, and do not say either is done. "
+                    "When they say yes to that offer, call accept_trip. Do not message anyone until they say yes."}
+
+
+_AIRLINES = {
+    "indigo": "indigo", "airindia": "airindia", "air india": "airindia",
+    "airindiaexpress": "airindiaexpress", "air india express": "airindiaexpress",
+    "akasa": "akasa", "akasa air": "akasa", "spicejet": "spicejet",
+}
+
+
+def _airline_service(name: str) -> str | None:
+    key = " ".join((name or "").lower().split())
+    return _AIRLINES.get(key) or _AIRLINES.get(key.replace(" ", ""))
+
+
+@tool(
+    "accept_trip",
+    "They said yes to an offer on a journey already saved. offer is cab or checkin. Call this only after that yes, "
+    "never from the message that shared the booking. A cab is looked up and still needs their fare confirm. "
+    "Check-in never pays: a free seat only, and it stops if the seat or an add-on costs money.",
+    {
+        "offer": {"type": "string", "enum": ["cab", "checkin"]},
+        "flight": {"type": "string", "description": "The flight number, when more than one journey is saved"},
+        "last_name": {"type": "string", "description": "Check-in only: the last name on the ticket"},
+        "pnr": {"type": "string", "description": "Check-in only, when it was not on the saved journey"},
+        "service": {"type": "string", "description": "Cab only, when they named one app: uber, ola or rapido"},
+        "about": ABOUT,
+    },
+    ["offer"],
+)
+async def accept_trip(ctx: TurnCtx, a: dict) -> dict:
+    from app.tasks import later, runtime
+    from app.tasks.skills import SKILLS
+
+    offer = a.get("offer")
+    if offer not in ("cab", "checkin"):
+        raise ToolRefused("offer is cab or checkin, and only after they said yes to that offer.")
+    subject = ctx.subject(a.get("about"))
+    rows = [f for f in await store.facts(ctx.session, ctx.family_id, subject, domains=["trip"], statuses=("active",)) if f.status == "active"]
+    flight = str(a.get("flight") or "").strip()
+    if flight:
+        rows = [f for f in rows if str((f.value or {}).get("flight") or (f.value or {}).get("number") or "") == flight]
+    if not rows:
+        raise ToolRefused("No journey is saved for them. Ask them to share the booking. Do not book and do not check in.")
+    fact = rows[0]
+    v = fact.value or {}
+    origin = str(v.get("origin") or v.get("from") or "").strip()
+    destination = str(v.get("destination") or v.get("to") or "").strip()
+    number = str(v.get("flight") or v.get("number") or "").strip()
+    if offer == "cab":
+        depart = later.parse_at(v.get("depart") or v.get("departs"))
+        arrives = later.parse_at(v.get("arrive") or v.get("arrives"))
+        ride: dict = {"kind": "ride", "for_whom": subject, "goal": f"Cab for {number or 'the journey'}"}
+        if a.get("service"):
+            ride["service"] = a["service"]
+        if depart and origin:
+            ride["pickup"], ride["drop"] = "home", origin
+            ride["at"] = (depart - timedelta(hours=2)).isoformat()
+            ride["at_means"] = "arrive"
+        elif arrives and destination:
+            ride["pickup"], ride["drop"] = destination, "home"
+            ride["landing"] = arrives.isoformat()
+        else:
+            raise ToolRefused("The journey has no place and no time. Ask where and when. Do not book.")
+        out = await start_task(ctx, ride)
+        out["note"] = "Nothing is booked until they confirm a fare."
+        return out
+    service = _airline_service(str(v.get("airline") or v.get("carrier") or ""))
+    if service not in SKILLS:
+        raise ToolRefused("Ask which airline: IndiGo, Air India, Air India Express, Akasa or SpiceJet. Do not open a site until they say.")
+    pnr = str(a.get("pnr") or v.get("pnr") or "").strip()
+    last = str(a.get("last_name") or "").strip()
+    if not pnr or not last:
+        return {"started": False, "next": "Ask for the booking reference and the last name on the ticket. "
+                                           "Do not open the airline until both are here. Nothing is checked in."}
+    label = SKILLS[service]["label"]
+    goal = (f"Web check-in on {label} for flight {number}. Booking reference {pnr}, last name {last}. Open web check-in. "
+            "Never pay, and never press a card, UPI or wallet button. Take only a free seat, aisle or window, nearer the front. "
+            "If there is no free seat, stop and report free_seat=false and checked_in=false. Skip every paid seat, meal and bag. "
+            "If check-in is not open, stop and report not_open=true. If the booking is not found, stop and report pnr_found=false. "
+            "When it finishes, save the boarding pass and report checked_in=true, seat, paid=false and boarding_pass=true. "
+            "Do not say it is done unless checked_in is true.")
+    from app.specialists.agents import specialist_for
+    from app.specialists.contract import build_limits
+
+    who = subject
+    limits = await build_limits(ctx.session, family_id=ctx.family_id, subject_id=who, kind="checkin", agent=specialist_for(service).name,
+                                requester_is_elder=False, place=None)
+    task = await runtime.create(
+        ctx.session, family_id=ctx.family_id, subject_id=who, requested_by=ctx.speaker.get("id") or ctx.elder_id,
+        service=service, kind="checkin", goal=goal,
+        details={"pnr": pnr, "last_name": last, "flight": number, "for_set": True}, limits=limits)
+    return {"started": True, "task_id": str(task.id), "update_coming": True,
+            "next": f"One short line: check-in on {label} is started. Do not say it is done. A task update brings the seat or why it stopped. Nothing is paid."}
 
 
 def websearch_limit() -> int:

@@ -250,6 +250,34 @@ async def appointment_loops(session: AsyncSession, *, family_id: str, subject_id
     return out
 
 
+async def trip_loops(session: AsyncSession, *, family_id: str, subject_id: str, f: CareFact, owner_id: str | None) -> list[str]:
+    """Remind before a journey they shared. The cab and the check-in are offers, not bookings."""
+    v = f.value or {}
+    depart = parse_when(v.get("depart") or v.get("departs") or v.get("when"))
+    if not depart or depart <= clock.now():
+        return []
+    route = " to ".join(p for p in (str(v.get("from") or v.get("origin") or "").strip(), str(v.get("to") or v.get("destination") or "").strip()) if p) or "the journey"
+    label = " ".join(p for p in (str(v.get("carrier") or v.get("airline") or "").strip(), str(v.get("number") or v.get("flight") or "").strip()) if p)
+    what = f"{label} {route}".strip() if label else route
+    at = clock.ist(depart).strftime("%d %b %H:%M")
+    out = []
+    eve = clock.ist(depart).replace(hour=19, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    cab_at = depart - timedelta(hours=3)
+    for tag, wake, title in (
+        ("eve", eve, f"{what} on {at}: offer check-in. Do not say it is done."),
+        ("cab", cab_at, f"{what} on {at}: offer a cab to the departure. Do not book it."),
+    ):
+        if wake <= clock.now():
+            continue
+        loop = await store.open_loop(
+            session, family_id=family_id, subject_id=subject_id, kind="trip",
+            title=title, detail={"key": f.key, "when": depart.isoformat(), "max_wakes": 1, "stage": tag},
+            owner_id=owner_id, wake_at=wake, alert_rule="dashboard", dedupe_key=f"trip:{subject_id}:{f.key}:{tag}",
+        )
+        out.append(str(loop.id))
+    return out
+
+
 _PLACE_FIELDS = ("address", "address_line", "pincode", "pin_code", "latitude", "longitude", "landmark")
 
 

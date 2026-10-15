@@ -73,7 +73,7 @@ def options_from(proposed: str, raw: str, *, at: datetime | None, elder: bool) -
         kept.append({
             "kind": kind, "title": title, "fare": fare, "door": door, "route": None if route == "none" else route,
             "pay": pay or None, "steps": steps or None, "safety": safety or None,
-            "door_line": {True: "Door to door", False: "Not door to door"}.get(door, "Whether it is door to door was not in the look-up"),
+            "door_line": "Door to door" if door is True else "Not door to door" if door is False else "Whether it is door to door was not in the look-up",
         })
     _mark(kept, elder=elder, night=night)
     return kept
