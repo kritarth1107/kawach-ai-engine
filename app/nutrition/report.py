@@ -18,7 +18,7 @@ from app.nutrition import nutrients as N
 from app.nutrition import portions as P
 from app.nutrition.models import NutritionEntry
 
-SLOT_SHOWN = ("breakfast", "lunch", "snack", "dinner", "other")
+SLOT_SHOWN = ("breakfast", "lunch", "snack", "dinner", "after_dinner", "late_night", "other")
 CONF = ("label", "said", "photo", "estimate", "unquantified")
 SLOT_END = {"breakfast": 11 * 60, "lunch": 15 * 60 + 30, "snack": 19 * 60, "dinner": 23 * 60}
 

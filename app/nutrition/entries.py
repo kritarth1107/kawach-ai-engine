@@ -26,7 +26,8 @@ from app.nutrition.models import NutritionEntry, NutritionFood, NutritionJob, Nu
 
 FIELDS = ("meal_id", "meal", "kind", "eaten_at", "day", "food_id", "name", "name_said", "quantity", "unit", "grams", "nutrients",
           "confidence", "source", "source_ref", "photo_ref", "consumed", "portion_eaten", "status", "flags", "note", "subject_id")
-MEAL_LABEL = {"breakfast": "Breakfast", "lunch": "Lunch", "snack": "Snack", "dinner": "Dinner", "other": "Food"}
+MEAL_LABEL = {"breakfast": "Breakfast", "lunch": "Lunch", "snack": "Snack", "dinner": "Dinner",
+              "after_dinner": "After dinner", "late_night": "Late night", "other": "Food"}
 
 
 @dataclass
@@ -164,9 +165,30 @@ async def sync_meal_event(session: AsyncSession, family_id: str, meal_id: uuid.U
 # ── writing ──────────────────────────────────────────────────────────────────
 
 
+async def dinner_saved(session: AsyncSession, family_id: str, subject_id: str, day: str) -> bool:
+    """That diary day already has a dinner (eaten or skipped). Water and a late-night snack do not count."""
+    row = (await session.execute(select(NutritionEntry.id).where(
+        NutritionEntry.family_id == family_id, NutritionEntry.subject_id == subject_id, NutritionEntry.day == day,
+        NutritionEntry.meal == "dinner", NutritionEntry.status == "active").limit(1))).first()
+    return row is not None
+
+
+async def assign_slot(session: AsyncSession, family_id: str, subject_id: str, at: datetime, *, named: str | None = None,
+                      only_water: bool = False) -> P.Slot:
+    """The diary slot for this time, using whether dinner is already on the food-day."""
+    local = clock.ist(at)
+    minute = local.hour * 60 + local.minute
+    saved = False
+    if minute < P.DAY_START or minute >= P.DINNER_FROM:
+        food_day = local.date() - (timedelta(days=1) if minute < P.DAY_START else timedelta())
+        saved = await dinner_saved(session, family_id, subject_id, food_day.isoformat())
+    return P.resolve(at, dinner_saved=saved, only_water=only_water, named=named)
+
+
 async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, logged_by: str, items: list[Item], meal: str, eaten_at: datetime,
                     source: str, source_ref: str | None = None, job_id: uuid.UUID | None = None, photo_ref: str | None = None,
-                    consumed: str = "yes", portion: str | None = None, sizes: dict | None = None, reason: str = "") -> list[NutritionEntry]:
+                    consumed: str = "yes", portion: str | None = None, sizes: dict | None = None, reason: str = "",
+                    day: str | None = None) -> list[NutritionEntry]:
     now = clock.now()
     meal_id = uuid.uuid4()
     rows: list[NutritionEntry] = []
@@ -197,7 +219,7 @@ async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, l
             flags["facts"] = facts
         e = NutritionEntry(
             id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, logged_by=logged_by[:64], meal_id=meal_id, meal=meal, kind="food",
-            eaten_at=eaten_at, day=clock.ist_day(eaten_at), food_id=it.food.id if it.food else None,
+            eaten_at=eaten_at, day=day or clock.ist_day(eaten_at), food_id=it.food.id if it.food else None,
             name=(it.food.name if it.food else it.name)[:200], name_said=(it.name_said or it.name)[:200], quantity=it.quantity,
             unit=it.unit, grams=grams, nutrients=vals, confidence=conf, source=source, source_ref=source_ref, photo_ref=photo_ref,
             consumed=consumed if consumed in ("yes", "part") else "yes", portion_eaten=portion if consumed == "part" else None,
@@ -212,11 +234,11 @@ async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, l
 
 
 async def save_skipped(session: AsyncSession, *, family_id: str, subject_id: str, logged_by: str, meal: str, eaten_at: datetime, source: str,
-                       source_ref: str | None = None, job_id: uuid.UUID | None = None) -> NutritionEntry:
+                       source_ref: str | None = None, job_id: uuid.UUID | None = None, day: str | None = None) -> NutritionEntry:
     """They said they skipped this meal: a marker (no food), so the meal is accounted for and the pattern can count it."""
     now = clock.now()
     e = NutritionEntry(id=uuid.uuid4(), family_id=family_id, subject_id=subject_id, logged_by=logged_by[:64], meal_id=uuid.uuid4(), meal=meal,
-                       kind="skipped", eaten_at=eaten_at, day=clock.ist_day(eaten_at), name=f"{meal} skipped", name_said="", nutrients={},
+                       kind="skipped", eaten_at=eaten_at, day=day or clock.ist_day(eaten_at), name=f"{meal} skipped", name_said="", nutrients={},
                        confidence="said", source=source, source_ref=source_ref, status="active", job_id=job_id, flags={}, version=1,
                        created_at=now, updated_at=now)
     session.add(e)

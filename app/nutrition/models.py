@@ -59,7 +59,7 @@ class NutritionEntry(Base):
     subject_id: Mapped[str] = mapped_column(String(64))  # who ate
     logged_by: Mapped[str] = mapped_column(String(64))  # the speaker id, or "saheli"
     meal_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))  # groups one meal (one log)
-    meal: Mapped[str] = mapped_column(String(12))  # breakfast | lunch | snack | dinner | other
+    meal: Mapped[str] = mapped_column(String(12))  # breakfast | lunch | snack | dinner | after_dinner | late_night | other
     kind: Mapped[str] = mapped_column(String(10), default="food")  # food | skipped (they said they skipped this meal)
     eaten_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     day: Mapped[str] = mapped_column(String(10))  # IST day of eaten_at

@@ -40,6 +40,38 @@ async def active(db, subject=MAA["id"]):
 EGG_D = {"countable": True, "default_unit": "piece", "tags": ["egg"]}
 
 
+async def test_a_night_after_dinner_is_late_night_and_breakfast_stays_open(db, at, nfake):
+    """02:36 and 04:58 after a saved dinner are late night on that clock date, not dinner or breakfast."""
+    at("2026-10-15 05:10")
+    water, _ = await call(db, "log_food", {"eaten_at": "2026-10-12T03:00:00+05:30", "items": [{"name": "water", "quantity": 1, "unit": "glass"}]})
+    assert water["result"] == "saved", water
+    late_dinner, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-10-13T01:20:00+05:30",
+                                                 "items": [{"name": "roti", "quantity": 2, "unit": "piece"}]})
+    assert late_dinner["result"] == "saved", late_dinner
+    dinner, _ = await call(db, "log_food", {"eaten_at": "2026-10-14T21:10:00+05:30",
+                                            "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert dinner["result"] == "saved", dinner
+    after, _ = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-10-14T23:40:00+05:30",
+                                           "items": [{"name": "boiled egg", "quantity": 1, "unit": "piece"}]})
+    assert after["result"] == "saved", after
+    eggs, _ = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-10-15T02:36:00+05:30",
+                                          "items": [{"name": "boiled egg", "quantity": 3, "unit": "piece"}]})
+    assert eggs["result"] == "saved", eggs
+    cream, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-10-15T04:58:00+05:30",
+                                           "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
+    assert cream["result"] == "saved", cream
+    rows = await active(db)
+    by = {(e.day, e.eaten_at.astimezone(clock.IST).strftime("%H:%M")): e.meal for e in rows}
+    assert by[("2026-10-12", "03:00")] == "late_night"
+    assert by[("2026-10-12", "01:20")] == "dinner"  # eaten after midnight, filed on the previous day
+    assert by[("2026-10-14", "21:10")] == "dinner"
+    assert by[("2026-10-14", "23:40")] == "after_dinner"
+    assert by[("2026-10-15", "02:36")] == "late_night"
+    assert by[("2026-10-15", "04:58")] == "late_night"
+    assert not await nudge_hooks.meal_logged(db, FAM, MAA["id"], "breakfast", "2026-10-15")
+    assert await nudge_hooks.meal_logged(db, FAM, MAA["id"], "dinner", "2026-10-14")
+
+
 async def test_unclear_count_is_asked_once_then_saved_with_the_plans_numbers(db, at, nfake):
     at("2026-10-14 09:00")
     nfake.decisions["boiled egg"] = EGG_D

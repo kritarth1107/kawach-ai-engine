@@ -351,9 +351,10 @@ class NutritionAgent:
 
         if ask.get("skipped") and not items:
             at = parse_at(ask.get("eaten_at")) or clock.now()
-            meal = meal_of(ask, at)
+            slot = await entries.assign_slot(s, who.family_id, job.subject_id, at, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)
+            meal = slot.meal
             e = await entries.save_skipped(s, family_id=who.family_id, subject_id=job.subject_id, logged_by=who.speaker_id, meal=meal, eaten_at=at,
-                                           source=self._source(job, ask), source_ref=job.source_ref, job_id=job.id)
+                                           source=self._source(job, ask), source_ref=job.source_ref, job_id=job.id, day=slot.day)
             jobs.finish(job, "saved", {"entries": [str(e.id)], "skipped": meal})
             return {"result": "saved", "job_id": str(job.id), "saved": [], "skipped": meal, "say": f"Noted: {meal} skipped."}
 
@@ -407,7 +408,8 @@ class NutritionAgent:
 
         learned = await self._usuals(job.subject_id)
         at_guess = parse_at(ask.get("eaten_at")) or clock.now()
-        meal_guess = meal_of(ask, at_guess)
+        meal_guess = (await entries.assign_slot(
+            s, who.family_id, job.subject_id, at_guess, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)).meal
         if ask.get("usual") and not items and not ask.get("from_photo"):
             rows = nudge_hooks.usual_for_meal(learned, meal_guess)
             if not rows:
@@ -490,7 +492,10 @@ class NutritionAgent:
         if at < clock.now() - timedelta(days=30):
             jobs.finish(job, "dropped", {"why": "too old"})
             return {"result": "dropped", "job_id": str(job.id), "why": "That is more than 30 days ago; the food log keeps the last 30 days from chat."}
-        meal = meal_of(ask, at)
+        only_water = bool(keep) and all(r.food is not None and "water" in (r.food.tags or []) for _, r in keep)
+        slot = await entries.assign_slot(s, who.family_id, job.subject_id, at,
+                                         named=ask.get("meal") if isinstance(ask.get("meal"), str) else None, only_water=only_water)
+        meal = slot.meal
         conf_base = "photo" if ask.get("from_photo") and draft.get("photo") and not any(not i.get("_photo") for i in items) else (
             "label" if draft.get("label_food") else ("estimate" if ask.get("confidence") == "guess" else "said"))
         to_save: list[entries.Item] = []
@@ -514,12 +519,12 @@ class NutritionAgent:
             x.flags.update(f)
         replaced = []
         if job.subject_id == who.speaker_id:
-            replaced = await entries.replace_caregiver_estimate(s, who.family_id, job.subject_id, clock.ist_day(at), meal, by=who.speaker_id)
+            replaced = await entries.replace_caregiver_estimate(s, who.family_id, job.subject_id, slot.day, meal, by=who.speaker_id)
         consumed = ask.get("consumed") if task is not None else "yes"
         rows = await entries.save_meal(
             s, family_id=who.family_id, subject_id=job.subject_id, logged_by=who.speaker_id, items=to_save, meal=meal, eaten_at=at,
             source=self._source(job, ask, task=task), source_ref=str(task.id) if task is not None else job.source_ref, job_id=job.id,
-            photo_ref=draft.get("photo_ref"), consumed=consumed or "yes", portion=ask.get("portion_eaten"), sizes=sizes)
+            photo_ref=draft.get("photo_ref"), consumed=consumed or "yes", portion=ask.get("portion_eaten"), sizes=sizes, day=slot.day)
         for x in to_save:
             if x.pantry is not None:
                 await pantry.use(s, x.pantry, float(x.quantity or 1) if x.unit in (None, "piece", x.pantry.unit) else 1.0)
@@ -816,12 +821,13 @@ async def expire(session: AsyncSession, job: NutritionJob) -> dict:
         jobs.finish(job, "dropped", {"why": f"no answer ({reason})"})
         return {"result": "dropped"}
     at = parse_at(ask.get("eaten_at")) or job.created_at
-    meal = meal_of(ask, at)
+    slot = await entries.assign_slot(session, job.family_id, job.subject_id, at, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)
+    meal = slot.meal
     rows = await entries.save_meal(
         session, family_id=job.family_id, subject_id=job.subject_id, logged_by=job.requested_by,
         items=[entries.Item(name=i["name"], food=None, quantity=i.get("quantity"), unit=i.get("unit"), name_said=i.get("said") or i["name"],
                             confidence="unquantified") for i in items],
-        meal=meal, eaten_at=at, source="dashboard" if job.channel == "dashboard" else ("caregiver" if job.requested_by != job.subject_id else "chat"),
+        meal=meal, eaten_at=at, day=slot.day, source="dashboard" if job.channel == "dashboard" else ("caregiver" if job.requested_by != job.subject_id else "chat"),
         source_ref=job.source_ref, job_id=job.id, reason="no answer in 2 hours: kept without numbers")
     jobs.finish(job, "saved", {"entries": [str(r.id) for r in rows], "unquantified": True})
     return {"result": "saved", "unquantified": True}

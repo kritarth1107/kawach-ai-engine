@@ -6,7 +6,7 @@ here reads people's words.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.core import clock
 
@@ -26,8 +26,12 @@ BOUNDS = {"piece": (1.0, 1200.0), "katori": (80.0, 300.0), "katori_small": (50.0
           "tbsp": (5.0, 25.0), "slice": (5.0, 120.0), "handful": (8.0, 80.0), "scoop": (10.0, 70.0), "pack": (2.0, 5000.0),
           "serving": (2.0, 2000.0), "ml": (0.9, 1.2), "g": (1.0, 1.0)}
 PORTION = {"all": 1.0, "most": 0.75, "half": 0.5, "little": 0.25}
-MEALS = ("breakfast", "lunch", "snack", "dinner", "other")
+MEALS = ("breakfast", "lunch", "snack", "dinner", "after_dinner", "late_night", "other")
 MAIN_MEALS = ("breakfast", "lunch", "dinner")
+# The morning starts at 06:00. From 19:00 until midnight is dinner, or after dinner once dinner is saved.
+# From midnight until 06:00 is still last night: late night once dinner is saved, otherwise that previous day's dinner.
+DAY_START = 6 * 60
+DINNER_FROM = 19 * 60
 
 
 def ok_unit_g(unit: str, grams: float | None) -> bool:
@@ -90,16 +94,54 @@ def grams_for(food, quantity: float | None, unit: str | None, sizes: dict | None
     return Portion(None, True, "none")
 
 
+@dataclass(frozen=True)
+class Slot:
+    """Where a log belongs: the meal name, and the diary day (which can be the previous date)."""
+
+    meal: str
+    day: str
+
+
+def place(at: datetime, *, dinner_saved: bool = False, only_water: bool = False) -> Slot:
+    """The slot for a clock time. A named meal does not decide this; dinner_saved is whether that food-day already has a dinner.
+
+    Water never becomes a dinner. Before 06:00 it is late night. After 19:00, with no dinner yet, it is not called dinner.
+    """
+    local = clock.ist(at)
+    minute = local.hour * 60 + local.minute
+    day = local.date()
+    if minute < DAY_START:
+        if dinner_saved or only_water:
+            return Slot("late_night", day.isoformat())
+        return Slot("dinner", (day - timedelta(days=1)).isoformat())
+    if minute >= DINNER_FROM:
+        if only_water and not dinner_saved:
+            return Slot("other", day.isoformat())
+        if dinner_saved:
+            return Slot("after_dinner", day.isoformat())
+        return Slot("dinner", day.isoformat())
+    if minute < 11 * 60:
+        return Slot("breakfast", day.isoformat())
+    if minute < 15 * 60 + 30:
+        return Slot("lunch", day.isoformat())
+    return Slot("snack", day.isoformat())
+
+
+def resolve(at: datetime, *, dinner_saved: bool = False, only_water: bool = False, named: str | None = None) -> Slot:
+    """Night and late evening follow the clock. In the daytime a meal the brain named is kept."""
+    placed = place(at, dinner_saved=dinner_saved, only_water=only_water)
+    local = clock.ist(at)
+    minute = local.hour * 60 + local.minute
+    if minute < DAY_START or minute >= DINNER_FROM:
+        return placed
+    if named in ("breakfast", "lunch", "snack", "dinner", "other"):
+        return Slot(named, placed.day)
+    return placed
+
+
 def meal_for(at: datetime) -> str:
-    """The meal slot a time falls in (IST), when the brain gave none: a time, not words."""
-    m = clock.ist(at).hour * 60 + clock.ist(at).minute
-    if 4 * 60 <= m < 11 * 60:
-        return "breakfast"
-    if 11 * 60 <= m < 15 * 60 + 30:
-        return "lunch"
-    if 15 * 60 + 30 <= m < 19 * 60:
-        return "snack"
-    return "dinner"
+    """The meal slot a time falls in (IST) when nothing is known about dinner yet: a time, not words."""
+    return place(at).meal
 
 
 def qty_label(quantity: float | None, unit: str | None) -> str:

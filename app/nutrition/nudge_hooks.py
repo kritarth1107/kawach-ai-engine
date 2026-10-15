@@ -44,14 +44,16 @@ async def meal_logged(session: AsyncSession, family_id: str, person_id: str, slo
             at = parse_at(ask.get("eaten_at")) or j.created_at
         except Exception:  # noqa: BLE001
             at = j.created_at
-        if clock.ist_day(at) == day and (ask.get("meal") or P.meal_for(at)) == slot:
+        named = ask.get("meal") if isinstance(ask.get("meal"), str) else None
+        placed = await entries.assign_slot(session, family_id, person_id, at, named=named)
+        if placed.day == day and placed.meal == slot:
             return True
     events = await store.events(session, family_id, person_id, day=day, kinds=["meal"])
     for e in events:
         p = e.payload or {}
         if p.get("nutrition"):
             continue  # the entries above already answered for food-log meals (a removed one does not count)
-        if P.meal_for(e.at) == slot:
+        if (await entries.assign_slot(session, family_id, person_id, e.at)).meal == slot:
             return True
     return False
 
