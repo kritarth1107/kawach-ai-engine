@@ -925,6 +925,20 @@ _OFF_THREAD = re.compile(
     r"शुरू|सेटअप|दिनचर्या|क्या बुला|कैसे संबोध",
     re.I,
 )
+_SLEEP_Q = {
+    "english": "{topic}. What's keeping you up?",
+    "indic": "{topic}. Neend mein kya khalal daal raha hai?",
+    "devanagari": "{topic}। नींद में क्या खलल डाल रहा है?",
+    "mr": "{topic}. झोपेला नेमकं काय अडथळा आहे?",
+    "bengali": "{topic}। ঘুমের মধ্যে কী বাধা দিচ্ছে?",
+    "tamil": "{topic}. தூக்கத்துக்கு என்ன இடையூறு?",
+    "telugu": "{topic}. నిద్రకు ఏమి ఆటంకం?",
+    "kannada": "{topic}. ನಿದ್ದೆಗೆ ಏನು ಅಡ್ಡಿ?",
+    "malayalam": "{topic}. ഉറക്കത്തിന് എന്താണ് തടസ്സം?",
+    "gujarati": "{topic}. ઊંઘમાં શું અડચણ છે?",
+    "gurmukhi": "{topic}. ਨੀਂਦ ਵਿੱਚ ਕੀ ਰੁਕਾਵਟ ਹੈ?",
+    "odia": "{topic}. ନିଦ୍ରାରେ କଣ ଅଡ଼ଚଣ?",
+}
 _THREAD = {
     "english": "{topic}. What's the one thing behind it?",
     "indic": "{topic}. Uske peeche kaun si ek baat hai?",
@@ -995,8 +1009,15 @@ def off_thread(reply: str, actions: list | None) -> bool:
     return bool(_OFF_THREAD.search(reply or ""))
 
 
+def shares_topic(reply: str, topic: str) -> bool:
+    """Her reply uses a word from the question she had just asked."""
+    tw = {w for w in words(topic) if len(w) >= 4}
+    return bool(tw and tw & set(words(reply)))
+
+
 def thread_reply(profile: dict | None, topic: str) -> str:
-    return canned(profile, _THREAD).format(topic=topic)
+    table = _SLEEP_Q if any(w.startswith("sleep") for w in words(topic)) else _THREAD
+    return canned(profile, table).format(topic=topic)
 
 
 def settle_reply(text: str, profile: dict | None, *, situation: str, needs_framing: bool, force_light: bool, held_topic_text: str,
@@ -1008,7 +1029,7 @@ def settle_reply(text: str, profile: dict | None, *, situation: str, needs_frami
         out = with_framing(profile, out)
     if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"):
         out = light_reply(profile)
-    if held_topic_text and off_thread(out, actions):
+    if held_topic_text and (off_thread(out, actions) or not shares_topic(out, held_topic_text)):
         out = thread_reply(profile, held_topic_text)
     return out
 

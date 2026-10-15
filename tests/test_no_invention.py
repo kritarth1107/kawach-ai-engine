@@ -252,11 +252,12 @@ def test_a_short_answer_stays_on_her_question():
     assert guards.blocks_held_thread("setup_progress", {}, "Trouble sleeping")
     assert not guards.blocks_held_thread("log_food", {}, "Trouble sleeping")
     setup = "To get started, what does the family call Meera ji, and how should I address her?"
-    out = guards.settle_reply(setup, {"saved": {"language": "en"}}, situation="chit_chat", needs_framing=False, force_light=False,
-                              held_topic_text="Trouble sleeping", actions=[], prior_assistant=True, naming=False)
-    assert "Trouble sleeping" in out and "?" in out
-    assert "call" not in out.lower()
-    on_topic = "What's keeping you up?"
+    drifted = "Yes. What is on your mind today?"
+    for reply in (setup, drifted):
+        out = guards.settle_reply(reply, {"saved": {"language": "en"}}, situation="chit_chat", needs_framing=False, force_light=False,
+                                  held_topic_text="Trouble sleeping", actions=[], prior_assistant=True, naming=False)
+        assert out == "Trouble sleeping. What's keeping you up?"
+    on_topic = "Trouble sleeping, what woke you?"
     assert guards.settle_reply(on_topic, {"saved": {"language": "en"}}, situation="chit_chat", needs_framing=False,
                                force_light=False, held_topic_text="Trouble sleeping", actions=[], prior_assistant=True,
                                naming=False) == on_topic
@@ -269,9 +270,10 @@ def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
     curious = [c for c in live if c["kind"].startswith("curious_")]
     assert len(curious) == 10
     still_open = {c["id"] for c in live if c["status"] == "open"}
-    assert {"live-advice-medicine-en", "live-advice-medicine-hi", "live-tease-hi"} <= still_open
+    assert "live-tease-hi" not in still_open and "live-advice-medicine-en" not in still_open
     assert all(c["status"] == "fixed" for c in live if c["id"] in {
         "live-advice-sleep-en", "live-friends-en", "live-trip-en", "live-tease-en", "live-tease-hinglish",
+        "live-tease-hi", "live-advice-medicine-en", "live-advice-medicine-hi",
         "live-question-quiet-en", "live-question-quiet-hi"})
     from eval.replay_cases import REASON
     reason = [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
