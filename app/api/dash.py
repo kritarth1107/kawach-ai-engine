@@ -133,6 +133,14 @@ async def overview(family_id: str, elder_id: str, session: DB, day: str | None =
     }
 
 
+@router.get("/{family_id}/{elder_id}/conversations")
+async def conversations(family_id: str, elder_id: str, session: DB, day: str | None = None) -> dict:
+    """What Saheli started for this person on this day: ledger, window, open follow-ups. Theirs only."""
+    from app.care.conversations import view
+
+    return await view(session, make_host(), family_id, elder_id, day)
+
+
 @router.get("/{family_id}/{elder_id}/history")
 async def history(family_id: str, elder_id: str, key: str, session: DB) -> dict:
     return {"key": key, "versions": [fact_json(f) for f in await store.fact_history(session, family_id, elder_id, key)]}
