@@ -146,7 +146,7 @@ def _use_rate(entries: list[NutritionEntry], key: str, unit: str) -> float | Non
         return None
     rows.sort(key=lambda e: e.eaten_at)
     span = (rows[-1].eaten_at - rows[0].eaten_at).total_seconds() / 86400
-    return sum(float(e.quantity) for e in rows) / max(span, 1.0)
+    return sum(float(e.quantity or 0) for e in rows) / max(span, 1.0)
 
 
 async def _groceries(session: AsyncSession) -> list[dict]:

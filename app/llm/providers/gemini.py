@@ -13,7 +13,14 @@ from app.llm.router import LLMReply, ModelUnavailable, Route, ToolCall, ToolSpec
 
 FOREIGN_SIGNATURE = b"skip_thought_signature_validator"
 
-_LEVEL = {"minimal": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH", "xhigh": "HIGH", "max": "HIGH"}
+_LEVEL: dict[str, types.ThinkingLevel] = {
+    "minimal": types.ThinkingLevel.MINIMAL,
+    "low": types.ThinkingLevel.LOW,
+    "medium": types.ThinkingLevel.MEDIUM,
+    "high": types.ThinkingLevel.HIGH,
+    "xhigh": types.ThinkingLevel.HIGH,
+    "max": types.ThinkingLevel.HIGH,
+}
 
 
 class GeminiProvider:
@@ -42,7 +49,7 @@ class GeminiProvider:
         config = types.GenerateContentConfig(
             system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
             max_output_tokens=max_tokens,
-            thinking_config=types.ThinkingConfig(thinking_level=_LEVEL.get(effort, "MEDIUM")),
+            thinking_config=types.ThinkingConfig(thinking_level=_LEVEL.get(effort, types.ThinkingLevel.MEDIUM)),
             # We run tools ourselves; never let the SDK try to call them.
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         )

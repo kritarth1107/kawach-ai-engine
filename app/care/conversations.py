@@ -69,6 +69,12 @@ def _clip(text: str | None) -> str:
     return " ".join((text or "").split())[:240]
 
 
+def _not_after(row_sent: datetime | None, turn_at: datetime | None) -> bool:
+    sent_at = _aware(row_sent)
+    at = _aware(turn_at)
+    return sent_at is not None and at is not None and sent_at <= at
+
+
 async def _gate(host, family_id: str, person: str) -> dict:
     if host is None:
         return {}
@@ -124,8 +130,7 @@ async def view(session: AsyncSession, host, family_id: str, person: str, day: st
             "_sent": row.sent_at,
         })
     for turn in turns:
-        sent = _aware(turn.at)
-        prior = [r for r in started if _aware(r["_sent"]) is not None and sent is not None and _aware(r["_sent"]) <= sent]
+        prior = [r for r in started if _not_after(r["_sent"], turn.at)]
         if not prior or prior[-1]["reply"]:
             continue
         prior[-1]["reply"] = _clip(turn.text)
