@@ -217,7 +217,8 @@ async def test_a_tasks_call_ends_inside_its_minute_and_hands_over_while_orders_m
     kicked = []
     monkeypatch.setattr(brain_api, "kick_tasks", lambda: kicked.append(True))
     monkeypatch.setattr(brain_api, "TASKS_FAST_EVERY", 0.05)
-    monkeypatch.setattr(brain_api, "TASKS_FAST_WINDOW", 0.3)
+    # 0.3s closed after one tick on CI (the first look took ~0.8s). 3s still ends inside the 5s bound and looks again.
+    monkeypatch.setattr(brain_api, "TASKS_FAST_WINDOW", 3)
     began = time.monotonic()
     stats = (await api.post("/v2/jobs/tasks")).json()
     assert time.monotonic() - began < 5 and stats["polled"] >= 2, "it kept looking every few seconds inside its window"
