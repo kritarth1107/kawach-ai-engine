@@ -326,3 +326,21 @@ async def test_no_doctor_line_asked_when_nothing_was_looked_up(db, fake):
     f = fake(["Your Metformin is at 8 in the morning."], ['{"claims": []}'])
     await turn(db, "when is my metformin?", "g9")
     assert f.judge_inputs  # the check ran without the doctor-note rule (see _system)
+
+
+def test_an_answer_a_tool_used_is_not_pulled_back_to_her_question():
+    """Live 16 Oct 2026: "Plain maggie" answered her food question, log_food used it, and the reply was replaced with
+    the question again plus "What's the one thing behind it?". A used answer keeps the reply; a drifted question is
+    asked again as she asked it, with no canned tail."""
+    from app.brain import guards
+
+    en = {"saved": {"language": "en"}}
+    saved = "Saved: 1 plate Maggi, 310 kcal, 9 g fat."
+    used = [{"tool": "log_food", "ok": True, "args": {"items": [{"name": "Maggi"}]}}]
+    assert guards.settle_reply(saved, en, situation="food", needs_framing=False, force_light=False,
+                               held_topic_text="What's in the cooked instant noodles, roughly", actions=used,
+                               prior_assistant=True, naming=False) == saved
+    drifted = guards.settle_reply("Yes. What is on your mind today?", en, situation="chit_chat", needs_framing=False,
+                                  force_light=False, held_topic_text="Did you go for the walk", actions=[],
+                                  prior_assistant=True, naming=False)
+    assert drifted == "Did you go for the walk?" and "one thing behind" not in drifted

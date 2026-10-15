@@ -939,20 +939,7 @@ _SLEEP_Q = {
     "gurmukhi": "{topic}. ਨੀਂਦ ਵਿੱਚ ਕੀ ਰੁਕਾਵਟ ਹੈ?",
     "odia": "{topic}. ନିଦ୍ରାରେ କଣ ଅଡ଼ଚଣ?",
 }
-_THREAD = {
-    "english": "{topic}. What's the one thing behind it?",
-    "indic": "{topic}. Uske peeche kaun si ek baat hai?",
-    "devanagari": "{topic}। इसके पीछे कौन सी एक बात है?",
-    "mr": "{topic}. याच्या मागे नेमकं काय आहे?",
-    "bengali": "{topic}। এর পেছনে কোন একটি কথা?",
-    "tamil": "{topic}. அதற்குப் பின்னால் இருக்கும் ஒரு காரணம் என்ன?",
-    "telugu": "{topic}. దాని వెనుక ఉన్న ఒక్క విషయం ఏమిటి?",
-    "kannada": "{topic}. ಅದರ ಹಿಂದೆ ಇರುವ ಒಂದು ವಿಷಯ ಯಾವುದು?",
-    "malayalam": "{topic}. അതിന് പിന്നിലെ ഒരു കാര്യം എന്താണ്?",
-    "gujarati": "{topic}. તેની પાછળ એક વાત શું છે?",
-    "gurmukhi": "{topic}. ਇਸ ਦੇ ਪਿੱਛੇ ਇੱਕ ਗੱਲ ਕੀ ਹੈ?",
-    "odia": "{topic}. ଏହା ପଛରେ ଗୋଟିଏ କଥା କ'ଣ?",
-}
+_THREAD = {k: "{topic}?" for k in _SLEEP_Q}  # her own question again, as she asked it (no canned tail)
 
 
 def has_framing(reply: str) -> bool:
@@ -1024,6 +1011,14 @@ def shares_topic(reply: str, topic: str) -> bool:
     return bool(tw and tw & set(words(reply)))
 
 
+def answer_used(actions: list | None) -> bool:
+    """A tool did something with their answer this turn (saved a food, a dose, a reading, a fact, a reminder): the
+    reply is about that, so it is not pulled back to her question (live 16 Oct 2026: "Plain maggie" answered a food
+    question, log_food used it, and the reply was replaced with the question again plus a canned tail)."""
+    return any(a.get("ok") and a.get("tool") not in ("setup_progress", "offer_buttons", "recall", "whats_pending")
+               for a in (actions or []))
+
+
 def thread_reply(profile: dict | None, topic: str) -> str:
     table = _SLEEP_Q if any(w.startswith("sleep") for w in words(topic)) else _THREAD
     return canned(profile, table).format(topic=topic)
@@ -1039,7 +1034,7 @@ def settle_reply(text: str, profile: dict | None, *, situation: str, needs_frami
     if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"
                        and not _cannot_do(out)):
         out = light_reply(profile)
-    if held_topic_text and (off_thread(out, actions) or not shares_topic(out, held_topic_text)):
+    if held_topic_text and not answer_used(actions) and (off_thread(out, actions) or not shares_topic(out, held_topic_text)):
         out = thread_reply(profile, held_topic_text)
     return out
 

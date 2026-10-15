@@ -1210,7 +1210,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 reply.text = guards.with_framing(profile, text_now)
                 ctx.needs_framing = True
                 break
-            if ctx.held_topic and any(c.source == "followup_missing" for c in claims):
+            if ctx.held_topic and not guards.answer_used(ctx.actions) and any(c.source == "followup_missing" for c in claims):
                 reply.text = guards.thread_reply(profile, ctx.held_topic)
                 break
             strippable = [c for c in claims if c.source not in (
