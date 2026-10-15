@@ -776,6 +776,12 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
             problems += guards.length_problems(final, cap=2 if ctx.speaker_is_elder else 3)
     problems += guards.food_line_problems(final, ctx.known)
     problems += guards.logged_nutrient_problems(final, ctx.known)
+    problems += guards.medicine_order_problems(final, ctx.known)
+    if getattr(ctx, "pending_gap", "") and not any(a.get("ok") and a["tool"] == "gap_asked" for a in ctx.actions):
+        problems.append("a meal was saved and water is not logged today: ask one short question about water and call "
+                        "gap_asked with key water. No other question")
+    if any(a.get("ok") and a["tool"] == "gap_asked" for a in ctx.actions) and "?" not in (final or "") and "？" not in (final or ""):
+        problems.append("you called gap_asked: the reply asks that one question, after the save line")
     if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
         problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
@@ -1214,7 +1220,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
 
             note = gaps.refresh_note(await gaps.block(session, req.family_id, req.speaker["id"], req.speaker.get("name") or "them"))
             if note:
+                ctx.pending_gap = "water"
                 msgs.append({"role": "user", "content": [{"type": "text", "text": note}]})
+        if (not is_system and any(c.name == "open_loop" and (c.args or {}).get("kind") == "followup" and (c.args or {}).get("at")
+                                  for c in reply.tool_calls)
+                and not any(a.get("ok") and a["tool"] == "web_search" for a in ctx.actions)):
+            msgs.append({"role": "user", "content": [{"type": "text", "text":
+                "They named what it is and when it ends. Call web_search for it in this turn, then one question about that thing. "
+                "The follow-up is already set."}]})
         if any(c.name == "remember" and (c.args or {}).get("domain") == "naming" for c in reply.tool_calls) and any(
                 r["name"] == "remember" and not r["is_error"] for r in results):
             msgs.append({"role": "user", "content": [{"type": "text", "text":
@@ -1254,9 +1267,17 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
     if not is_system and guards.food_line_problems(final, ctx.known):
-        # The rewrite still dropped the saved numbers (a water question, or praise). Send the line the tool already gave.
-        final = guards.saved_food_line(ctx.known)
+        # The rewrite still dropped the saved numbers. Send the tool's line, in their script, and keep a question
+        # already in the reply (the water ask). Never replace a Bengali reply with the English "Saved:" line.
+        say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
+        asked = [s for s in guards.sentences(final) if "?" in s or "？" in s]
+        final = (say + " " + " ".join(asked)).strip() if say else final
         guarded = True
+    elif not is_system and guards.language_problems(final, ctx.profiles.get(req.speaker["id"])):
+        say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
+        if say and say != final:
+            final = say
+            guarded = True
     elif not is_system and guards.logged_nutrient_problems(final, ctx.known):
         final = guards.logged_nutrient_line(ctx.known)
         guarded = True

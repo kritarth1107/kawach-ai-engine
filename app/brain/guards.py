@@ -856,6 +856,48 @@ def strip_tool_chrome(text: str) -> str:
     return TOOL_CHROME.sub("", text or "").strip()
 
 
+_SAVED_LEAD = {
+    "english": "Saved: {body}",
+    "indic": "Likh liya: {body}",
+    "devanagari": "लिख लिया: {body}",
+    "mr": "नोंद केली: {body}",
+    "bengali": "লিখে নিয়েছি: {body}",
+    "tamil": "குறித்துவிட்டேன்: {body}",
+    "telugu": "రాసుకున్నాను: {body}",
+    "kannada": "ಬರೆದುಕೊಂಡಿದ್ದೇನೆ: {body}",
+    "malayalam": "കുറിച്ചുവെച്ചു: {body}",
+    "gujarati": "લખી લીધું: {body}",
+    "gurmukhi": "ਨੋਟ ਕਰ ਲਿਆ: {body}",
+    "odia": "ଲେଖି ରାଖିଛି: {body}",
+}
+
+
+def saved_line_for(profile: dict | None, say: str) -> str:
+    """The tool's save line in their script. The numbers stay. The English 'Saved:' frame does not, when they write
+    an Indian script (a Bengali meal was going out as the English line, so the reply failed the script check)."""
+    if not say:
+        return ""
+    if not language_problems(say, profile):
+        return say
+    body = say.split(":", 1)[1].strip() if ":" in say else say
+    for cut in (" — ", " - tell", " tell me"):
+        if cut in body:
+            body = body.split(cut, 1)[0].strip()
+    return canned(profile, _SAVED_LEAD).format(body=body)
+
+
+def medicine_order_problems(reply: str, known: Iterable[str]) -> list[str]:
+    """A new medicine order confirms the address and asks what happened. Two questions, in two messages."""
+    if not any(d.get("ask_what_happened") for d in _tool_json(known)):
+        return []
+    parts = whatsapp_messages(reply) or [reply or ""]
+    n = sum(len(QUESTION_MARKS.findall(p)) for p in parts)
+    if n < 2:
+        return ["a medicine order: the first message asks what happened, the next confirms the address, with a line that "
+                "is only --- between them. One question in each"]
+    return []
+
+
 def saved_food_line(known: Iterable[str]) -> str:
     """The save line a log_food result already gave, when it names calories. Empty otherwise."""
     import json

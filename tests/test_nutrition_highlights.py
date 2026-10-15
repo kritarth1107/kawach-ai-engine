@@ -88,6 +88,27 @@ def test_a_reply_that_drops_the_saved_numbers_is_sent_back():
     assert guards.food_line_problems("Looks like 2 boiled egg, about 215 kcal. Right?", [confirm]) == []
 
 
+def test_a_bengali_save_is_not_sent_as_the_english_line():
+    from app.brain import guards
+
+    say = "Saved: 1 Red Bull (250 ml), 113 kcal, 28 g sugar — tell me if it was more."
+    profile = {"saved": {"language": "bn"}, "now": "bengali"}
+    line = guards.saved_line_for(profile, say)
+    assert guards.script_of(line) == "bengali"
+    assert "113" in line
+    assert guards.saved_line_for({"saved": {"language": "en"}}, say) == say
+
+
+def test_a_new_medicine_order_asks_what_happened_and_confirms_the_address():
+    from app.brain import guards
+
+    known = ['start_task: {"status": "not started yet", "ask_what_happened": true, "confirm_address": "Home"}']
+    assert guards.medicine_order_problems("Should I deliver this to Home?", known)
+    split = "Did something hurt?\n---\nShould I deliver this to Home?"
+    assert guards.medicine_order_problems(split, known) == []
+    assert guards.medicine_order_problems("Should I deliver this to Home?", ["start_task: {\"confirm_address\": \"Home\"}"]) == []
+
+
 def test_high_fibre_is_named_from_the_grams():
     line = N.highlight_phrase({"energy_kcal": 180, "protein_g": 6, "carbs_g": 28, "fat_g": 3, "fibre_g": 12, "sodium_mg": 80})
     assert "fibre" in line and line.index("fibre") < line.index("carbs")

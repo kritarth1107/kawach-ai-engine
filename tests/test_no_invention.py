@@ -220,8 +220,14 @@ def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
     curious = [c for c in live if c["kind"].startswith("curious_")]
     assert len(curious) == 10
     still_open = {c["id"] for c in live if c["status"] == "open"}
-    assert {"live-advice-medicine-en", "live-tease-en", "live-question-quiet-en"} <= still_open
-    assert all(c["status"] == "fixed" for c in live if c["id"] in {"live-advice-sleep-en", "live-friends-en", "live-trip-en"})
+    assert {"live-advice-medicine-en", "live-advice-medicine-hi", "live-tease-hi"} <= still_open
+    assert all(c["status"] == "fixed" for c in live if c["id"] in {
+        "live-advice-sleep-en", "live-friends-en", "live-trip-en", "live-tease-en", "live-tease-hinglish",
+        "live-question-quiet-en", "live-question-quiet-hi"})
+    from eval.replay_cases import REASON
+    reason = [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
+    assert next(c["status"] for c in reason if c["id"] == "reason-consent-pending") == "fixed"
+    assert next(c["status"] for c in reason if c["id"] == "reason-yes-sleep") == "open"
     seeds = [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
     protein = next(c for c in seeds if c["id"] == "seed-promise-protein-tracking")
     assert protein["status"] == "open"

@@ -102,7 +102,8 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    message stated. followup_missing = true when their latest message shares something personal (an outing, a friend, a film,
    a meal they loved, a worry, the gym, a trip, trouble sleeping) or is a short yes to her previous question about one of
    those, and the REPLY does not ask one question about that thing and no TOOL RESULT shows remember saved it. An
-   acknowledgement ("I'll wait", "noted", "okay") is not that question. False on a health problem, a medicine, an order, or
+   acknowledgement ("I'll wait", "noted", "okay") is not that question. A film they have not named yet: the one question is
+   which film. Asking about dinner, or what kind they like, is still followup_missing. False on a health problem, a medicine, an order, or
    when they said they are busy or will tell you later. framing_missing = true when the REPLY explains what a medicine does
    or a side effect, or gives a health fact of her own, and does not say both that this is general information and to check
    with a doctor or pharmacist. False when she only repeats their schedule, dose or record, or the reply already says both.

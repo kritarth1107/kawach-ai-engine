@@ -74,6 +74,8 @@ class TurnCtx:
     # The media attached to this message ([{"mime", "data"}] base64), for tools that read a photo themselves (log_food:
     # a meal or a nutrition label)
     images: list[dict] = field(default_factory=list)
+    # Set when a meal was just saved and water is still an open gap, so the reply asks it.
+    pending_gap: str = ""
 
     @property
     def elder_id(self) -> str:
@@ -2639,9 +2641,13 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     if elsewhere:
         for_line = (f" {place.get('nickname') or 'This place'} is the home of {_and(owners, names)}, not {names.get(who) or 'their'}'s: "
                     f"ask in the same line whether the order is for {names.get(who) or 'them'} or for {_and(owners, names)}.")
+    medicine = a.get("category") == "medicine" or a.get("service") in ("apollo", "1mg", "pharmeasy")
+    happened = (" The first message asks what happened (pain, a cough, the stomach), one short question, in their language. "
+                "The address question is the next message, with a line that is only --- between them." if medicine else "")
     return {"status": "not started yet", "confirm_address": where, "for_whom": names.get(who) or who or "not known yet: ask",
-            "next": "Nothing is searched yet. In one short line, ask them to confirm this delivery address (say the place name "
-                    f"and the area, not the full line).{for_line} When they say yes, call start_task again with the same order{same}; if "
+            "ask_what_happened": medicine,
+            "next": "Nothing is searched yet. Ask them to confirm this delivery address (say the place name "
+                    f"and the area, not the full line).{for_line}{happened} When they say yes, call start_task again with the same order{same}; if "
                     "they name another saved place, pass it as area; if it is for someone else, pass that person as for_whom."}
 
 
