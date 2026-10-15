@@ -144,7 +144,9 @@ def _day_meals(rows: list[NutritionEntry]) -> dict:
     """What a day had in each meal, for the week cards and the calendar's meal dots: {meals, skipped, logged}."""
     meals = []
     for slot in SLOT_SHOWN:
-        food = sorted((r for r in rows if r.meal == slot and r.kind == "food" and r.status == "active"), key=lambda r: r.eaten_at)
+        # items of one log share eaten_at and created_at: the name breaks the tie, so the same day reads the same every time
+        food = sorted((r for r in rows if r.meal == slot and r.kind == "food" and r.status == "active"),
+                      key=lambda r: (r.eaten_at, r.created_at, r.name))
         if food:
             t = entries.totals(food)
             meals.append({"meal": slot, "at": food[0].eaten_at.isoformat(), "names": [r.name for r in food][:12], "kcal": N.kcal(t),
