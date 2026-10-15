@@ -33,7 +33,7 @@ from app.core import clock, trace
 from app.specialists import channels, guard, metrics
 from app.specialists.agents import BEFORE_CONFIRM_RULE, specialist_for
 from app.specialists.contract import CONTRACT_VERSION, Limits
-from app.tasks.browser_use import AgentRun, BrowserAgent
+from app.tasks.browser_use import AgentRun, BrowserAgent, api_version
 from app.tasks import fastpath, later, practice, sandbox, tracking
 from app.tasks.models import SkillNote, Task, TaskTold
 from app.tasks.skills import SKILLS
@@ -1180,6 +1180,10 @@ CODE_BY_HAND = ("Enter this login code where the site asks for it: {code}. Click
                 "time (the site moves to the next box itself); never paste it or set it with a script. Then carry on with the "
                 "task. Never ask for a new code and never restart the login yourself: if the boxes do not take it, stop and report "
                 "needs_otp=false and problem='code not accepted'.")
+CODE_BY_SECRET = ("Enter the login code where the site asks for it. The code is the secret named login_code: ask for that secret "
+                  "and type the digits one key at a time, never paste them. Then carry on with the task. Never ask for a new code "
+                  "and never restart the login yourself: if the boxes do not take it, stop and report needs_otp=false and "
+                  "problem='code not accepted'.")
 CODE_TRIES = 2  # login codes that did not go in before it stops and says so (each one is a code the person had to send)
 
 
@@ -1214,18 +1218,27 @@ async def _drop_session(agent: BrowserAgent, task: Task, why: str) -> None:
             logger.warning("stop session failed task=%s", task.id)
 
 
-async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for: Callable[[Task], Awaitable[str | None]], extra: str = "") -> None:
+async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, profile_for: Callable[[Task], Awaitable[str | None]], extra: str = "",
+                     secret: str = "") -> None:
     spec = specialist_for(task.service)
-    goal = _goal(task) + (f"\n{extra}" if extra else "")
+    follow = bool((task.details or {}).get("json_followup"))
+    if follow:
+        task.details = {**(task.details or {}), "json_followup": False}
+        goal = ("Reply with only one JSON object for the report you already have. Do not click, do not pay, and do not leave the page.\n"
+                + json.dumps(spec.schema(task)))
+    else:
+        goal = _goal(task) + (f"\n{extra}" if extra else "")
     d0 = task.details or {}
-    if task.phase in guard.BEFORE_CONFIRM:
+    if not follow and task.phase in guard.BEFORE_CONFIRM:
         goal += "\n" + BEFORE_CONFIRM_RULE + (f"\n{d0['guard_extra']}" if d0.get("guard_extra") else "")
     learned, skill_ids = await _skills_and_notes(session, task.service, task.phase)
     task.details = {**(task.details or {}), "skills_used": skill_ids}
     profile_id = None
     got = None
     guest = task.phase == "browse"
-    if guest and task.agent_session and not _guest_run(task):
+    if follow:
+        pass  # the same browser, so the page it already has is where the JSON is asked
+    elif guest and task.agent_session and not _guest_run(task):
         # A look-up never runs where the family is logged in (founder 2026-10-12: a look-up with a live login can book):
         # the fast look-up's browser is on the family's profile, so the agent looks in a browser of its own.
         await _drop_session(agent, task, "the look-up runs in a browser without the family's login")
@@ -1255,11 +1268,11 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             "logged_in=false, needs_otp=false and problem='login needed'."
         )
 
-    if task.phase == "prepare" and not extra:  # with a code to enter (extra), it must not ask for a new one
+    if not follow and task.phase == "prepare" and not extra:  # with a code to enter (extra), it must not ask for a new one
         if got is None:
             got = await profile_for(task)
         goal += login_line(got)
-    if (task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only")
+    if (not follow and task.phase == "prepare" and (task.details or {}).get("browsed") and task.kind == "order" and not (task.details or {}).get("login_only")
             and not (task.details or {}).get("total_only") and not (task.details or {}).get("address_fix_pending")):
         # The products picked at the go-ahead (one per item asked); older tasks: everything the look-up found.
         seen = (task.details or {}).get("chosen") or [i for i in ((task.result or {}).get("items") or []) if i.get("name")]
@@ -1287,6 +1300,8 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
         phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
         task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
+    task.details = {**(task.details or {}), "browser_api": api_version(task.service, task.phase)}
+
     async def start(session_id: str | None, profile: str | None) -> AgentRun:
         return await agent.run(
             goal=goal,
@@ -1298,7 +1313,8 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             start_url=None if session_id and not (task.details or {}).get("fast_session") else SKILLS[task.service]["start_url"],
             # a practice place also opens the payment step and empties the cart afterwards
             max_steps=spec.steps.get(task.phase, 40) + (15 if task.phase == "place" and practice.on(task) else 0),
-            metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name},
+            metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name,
+                      **({"login_code": secret} if secret else {})},
             llm=spec.model,
             flash=task.phase in flash_phases(),
         )
@@ -4208,13 +4224,22 @@ async def tick(
                             # types it, told how. The code is handed over once and not kept on the task.
                             code = str((task.details or {}).get("otp") or "")
                             typed = await _type_code(agent, task, code)
-                            extra = CODE_TYPED if typed else CODE_BY_HAND.format(code=code)
+                            if typed:
+                                extra, secret = CODE_TYPED, ""
+                            elif api_version(task.service, "prepare") == "v4":
+                                extra, secret = CODE_BY_SECRET, code
+                            else:
+                                extra, secret = CODE_BY_HAND.format(code=code), ""
                             task.phase = "prepare"
                             task.details = {**{k: v for k, v in (task.details or {}).items() if k != "otp"}, "otp_entered": True, "code_typed": typed}
                             note(task, "the login code was typed into the code boxes" if typed else "the agent types the login code")
-                        await _start_run(session, agent, task, profile_for, extra)
+                        else:
+                            secret = ""
+                        await _start_run(session, agent, task, profile_for, extra, secret)
                         stats["started"] += 1
                 elif task.status == "running":
+                    if (task.details or {}).get("browser_api") == "v4" and hasattr(agent, "_v4"):
+                        agent._v4.add(task.agent_task)
                     run: AgentRun = await agent.poll(task.agent_task)
                     stats["polled"] += 1
                     hit = (guard.past_confirm(task.service, run.path)
@@ -4229,6 +4254,12 @@ async def tick(
                             logger.warning("guard stop failed task=%s", task.id)
                         note(task, f"stopped by the guard on {hit[1]} ({hit[0]})")
                         run = dataclasses.replace(run, status="stopped")
+                    if run.error == "bad json" and not (task.details or {}).get("json_followed"):
+                        task.details = {**(task.details or {}), "json_followed": True, "json_followup": True}
+                        task.status = "queued"
+                        note(task, "the report was not JSON; asking again in the same browser")
+                        await session.commit()
+                        return None
                     if run.status in ("finished", "failed", "stopped"):
                         before = float(((task.details or {}).get("metrics") or {}).get("cost_inr", 0))
                         metrics.on_browser_run(task, run.steps)
@@ -4242,7 +4273,12 @@ async def tick(
                             out = {**out, "problem": re.sub(r"\b\d{4,8}\b", "••••", str(out["problem"]))}  # never store a login code
                         retries = int((task.details or {}).get("retries", 0))
                         if run.status == "failed" and not out and retries < MAX_RETRIES and task.phase in ("browse", "prepare", "otp", "check"):
-                            # A crash or timeout of the browser run, not an answer from the store: try once more.
+                            # A crash or a timeout does not mean the run stopped. Cancel it before another start. A place
+                            # step is not in this list: it may already have booked, so it is not run again.
+                            try:
+                                await agent.stop(task.agent_task)
+                            except Exception:  # noqa: BLE001
+                                logger.warning("cancel before retry failed task=%s", task.id)
                             task.details = {**(task.details or {}), "retries": retries + 1}
                             task.status = "queued"
                             note(task, f"run failed ({run.error or 'no report'}); retrying once")

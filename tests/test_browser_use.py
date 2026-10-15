@@ -162,3 +162,76 @@ async def test_cloud_client_retries_without_domains_if_rejected():
     run = await bu.run(goal="g", hints="h", schema={}, session_id=None, profile_id=None, start_url=None, max_steps=5, metadata={"service": "uber"})
     assert run.task_id == "t2" and len(calls) == 3 and "allowedDomains" not in calls[2]
     await bu.close()
+
+
+def test_login_and_place_think_harder_than_a_look_up(monkeypatch):
+    monkeypatch.delenv("BROWSER_THINKING", raising=False)
+    monkeypatch.delenv("BROWSER_THINKING_BLINKIT", raising=False)
+    monkeypatch.delenv("BROWSER_THINKING_BLINKIT_PLACE", raising=False)
+    assert browser_use.thinking_level("uber", "browse") == "medium"
+    assert browser_use.thinking_level("uber", "prepare") == "high"
+    assert browser_use.thinking_level("uber", "place") == "high"
+    monkeypatch.setenv("BROWSER_THINKING_BLINKIT_PLACE", "medium")
+    assert browser_use.thinking_level("blinkit", "place") == "medium"
+    assert browser_use.thinking_level("uber", "place") == "high"
+    assert browser_use.model_params("gemini-3.5-flash", "high", None) == {"thinkingConfig": {"thinkingLevel": "high"}}
+    assert browser_use.model_params("claude-sonnet-5", "medium", None)["output_config"] == {"effort": "medium"}
+    assert browser_use.model_params("gpt-6-luna", "high", None) == {"reasoning": {"effort": "high"}}
+
+
+async def test_v2_sends_the_thinking_level_for_the_phase():
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.method == "POST" and req.url.path.endswith("/tasks"):
+            seen.append(json.loads(req.content))
+        return httpx.Response(200, json={"id": "t1", "sessionId": "s1"})
+
+    import asyncio
+
+    bu = browser_use.BrowserUseCloud(api_key="k")
+    bu._client = httpx.AsyncClient(base_url=browser_use.API, transport=httpx.MockTransport(handler))
+    bu._loop = asyncio.get_running_loop()
+    await bu.run(goal="g", hints="h", schema={}, session_id="s1", profile_id=None, start_url=None, max_steps=5,
+                 metadata={"service": "ola", "phase": "place"})
+    assert seen[0]["thinkingLevel"] == "high"
+    await bu.close()
+
+
+async def test_v4_keeps_the_code_off_the_task_and_the_proxy_in_india(monkeypatch):
+    monkeypatch.setenv("BROWSER_API", "v4")
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path, json.loads(req.content or b"{}")))
+        if req.method == "GET":
+            return httpx.Response(200, json={"id": "r1", "sessionId": "s1", "status": "completed", "output": {"fare": "400"}})
+        return httpx.Response(200, json={"id": "r1", "sessionId": "s1", "status": "queued"})
+
+    import asyncio
+
+    bu = browser_use.BrowserUseCloud(api_key="k")
+    bu._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(handler))
+    bu._loop = asyncio.get_running_loop()
+    run = await bu.run(goal="Look up the fare", hints="h", schema={"type": "object", "required": ["fare"]}, session_id="s1",
+                       profile_id=None, start_url="https://m.uber.com/", max_steps=5,
+                       metadata={"service": "uber", "phase": "prepare", "login_code": "4821"})
+    body = seen[0][2]
+    assert seen[0][1] == "/api/v4/runs"
+    assert body["browserSettings"]["proxyCountryCode"] == "in"
+    assert "4821" not in body["task"] and "login_code" in body["task"]
+    assert body["secretBindings"][0]["allowedDomains"] == ["uber.com"]
+    assert body["modelParams"]["reasoning"]["effort"] == "high"
+    assert body["outputSchema"]["required"] == ["fare"] and body["judge"]["context"]
+    assert "Stay only on uber.com" in body["task"]
+    got = await bu.poll(run.task_id)
+    assert got.output == {"fare": "400"} and got.status == "finished"
+    await bu._client_v4.aclose()
+
+    def bad(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "r1", "sessionId": "s1", "status": "completed", "result": "I looked"})
+
+    bu._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(bad))
+    again = await bu.poll(run.task_id)
+    assert again.error == "bad json" and again.output is None
+    await bu.close()
