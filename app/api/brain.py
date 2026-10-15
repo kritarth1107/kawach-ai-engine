@@ -700,33 +700,13 @@ async def learn_block(version: int, body: PlaybookAction) -> dict:
 
 @router.post("/jobs/daily")
 async def daily_job() -> dict:
-    """Cloud Scheduler, 10:00 IST: medicines running low become a refill loop that wakes Saheli to ask about a reorder."""
-    from app.care import features
+    """Cloud Scheduler, 10:00 IST: stock that runs out within 3 days becomes one reorder offer."""
+    from app.care import reorder
     from app.core import clock
     from app.db.session import SessionLocal
 
-    opened = 0
     async with SessionLocal() as session:
-        from sqlalchemy import select as sql_select
-
-        from app.care.models import OpenLoop
-
-        for fid, sid, row in await features.refill_candidates(session):
-            dedupe = f"refill:{sid}:{row['key']}"
-            already = (
-                await session.execute(
-                    sql_select(OpenLoop.id).where(OpenLoop.family_id == fid, OpenLoop.dedupe_key == dedupe, OpenLoop.status == "open")
-                )
-            ).first()
-            if already:
-                continue  # asked once already; it stays on the dashboard until someone acts
-            await store.open_loop(
-                session, family_id=fid, subject_id=sid, kind="refill",
-                title=f"Refill {row['name']}: about {row['daysLeft']} days left ({row['stock']} left) for person {sid}",
-                detail={"key": row["key"], "days_left": row["daysLeft"], "stock": row["stock"], "max_wakes": 1},
-                wake_at=clock.now(), alert_rule="dashboard", dedupe_key=dedupe,
-            )
-            opened += 1
+        opened = await reorder.open_offers(session)
         await session.commit()
     ended = 0
     try:

@@ -3247,7 +3247,14 @@ async def family_tastes(session: AsyncSession, task: Task) -> list[str]:
     try:
         facts = await store.facts(session, task.family_id, task.subject_id, domains=["preference", "diet", "no_order", "allergy", "dish"],
                                   statuses=("active",))
-        out += [f"{f.domain}: {f.text}" for f in facts if f.text][:20]
+        # What they said after an order (liked, usual, not again) is how the next pick is chosen. It stays ahead of
+        # other notes, so a long care record cannot push it out of the list the matcher sees.
+        def _from_order(f) -> int:
+            v = f.value or {}
+            return 0 if f.domain in ("preference", "no_order") and any(v.get(k) for k in ("liked", "usual", "again", "item")) else 1
+
+        ranked = sorted((f for f in facts if f.text), key=_from_order)
+        out += [f"{f.domain}: {f.text}" for f in ranked][:20]
     except Exception:  # noqa: BLE001 — tastes are a hint, never a blocker
         logger.warning("family tastes unavailable task=%s", task.id)
     return out[:40]

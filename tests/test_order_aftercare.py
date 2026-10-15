@@ -179,6 +179,22 @@ async def test_what_they_did_not_like_is_never_ordered_again_and_the_picker_know
     assert any("Did not like Modern Kitchens Butter Muruku; do not order it again (too oily)" in x for x in tastes)
 
 
+async def test_a_usual_answer_is_what_the_next_pick_sees(db, at):
+    """What they said after it came (liked, usual, get it again) is a preference the picker is given, ahead of other notes."""
+    at("2026-10-11 10:00")
+    t = await _placed(db, items=[{"name": "Amul Taaza Toned Milk", "qty": 1}])
+    await _say(db, {"task_id": str(t.id), "arrived": "yes", "items": [{"item": 1, "liked": "yes", "usual": "usual", "again": "yes"}]})
+    for i in range(25):
+        await store.write_fact(
+            db, family_id=FAM, subject_id=ELDER, domain="preference", key=f"preference:chatter_{i}",
+            value={"topics": "chat"}, text=f"Likes talking about topic {i}", source_kind="inferred", stated_by=ELDER,
+        )
+    nxt = await runtime.create(db, family_id=FAM, subject_id=ELDER, requested_by=ELDER, service="blinkit", kind="order",
+                               goal="milk", details={"items": [{"name": "milk"}]})
+    tastes = await runtime.family_tastes(db, nxt)
+    assert any("Likes Amul Taaza Toned Milk; usually has it; get it again" in x for x in tastes)
+
+
 async def test_not_come_yet_is_answered_from_the_store_and_checked_again_when_late(db, at):
     at("2026-10-11 10:00")
     t = await _placed(db)

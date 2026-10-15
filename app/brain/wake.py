@@ -120,10 +120,14 @@ KIND_PROMPTS = {
         "confirm_change). Then close_loop {id} and reply none."
     ),
     "refill": (
-        "[Scheduled wake-up] {title}. Ask one caregiver from HOUSEHOLD with send_message whether to reorder it, and from which "
-        "pharmacy (Apollo, 1mg or PharmEasy), unless the medicine belongs to that caregiver's own self care, then ask them. "
-        "If the CARE RECORD marks the medicine \"check it is still right\", first ask whether it is still being taken. "
-        "If they already answered, act on it: start_task (order) after a yes, close_loop {id} after a no. Then reply none."
+        "[Scheduled wake-up] {title}. Offer once, in the language they use with you, to reorder it the usual way. "
+        "What: {item}. Where: {where}. How many: {qty}. Cash on delivery only. Ask person {owner} (their own self care, "
+        "or a caregiver when it is for the elder). One short question. Only after a yes, call start_task (kind order, "
+        "for_whom the person the stock is for, this item and quantity, service {service} when it names a store, otherwise "
+        "category {category}). Do not place it: they still get what every store found and one confirm with the amount, and "
+        "an elder's order still waits for the caregiver's approval. If the CARE RECORD marks it \"check it is still right\", "
+        "first ask whether it is still being taken. If they say no, close_loop {id}. If they already answered, do that and "
+        "do not ask again. Then reply none."
     ),
 }
 
@@ -173,8 +177,13 @@ async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> s
         return await aftercare.wake_prompt(session, loop)
     if loop.kind in KIND_PROMPTS:
         d = loop.detail or {}
-        return KIND_PROMPTS[loop.kind].format(id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver",
-                                              set=d.get("set", "outcome"), key=d.get("key", f"loop:{loop.id}"), skill=d.get("skill_id", ""))
+        return KIND_PROMPTS[loop.kind].format(
+            id=loop.id, title=loop.title, owner=loop.owner_id or "the caregiver",
+            set=d.get("set", "outcome"), key=d.get("key", f"loop:{loop.id}"), skill=d.get("skill_id", ""),
+            item=d.get("item") or "it", where=d.get("where") or "no usual store yet",
+            qty=d.get("qty") if d.get("qty") not in (None, "") else "their usual amount",
+            service=d.get("service") or "none", category=d.get("category") or "grocery",
+        )
     last = (
         await session.execute(
             select(Turn)

@@ -90,6 +90,34 @@ async def test_shadow_turn_uses_separate_family(api, at, db):
     assert await store.recent_turns(db, "shadow:" + FAM, ELDER["id"]) and not await store.recent_turns(db, FAM, ELDER["id"])
 
 
+async def test_a_reorder_offer_goes_out_on_a_fake_reply(api, at, db):
+    """The due offer is one question. A fake reply is delivered; no paid model is called."""
+    at("2026-10-02 10:00")
+    from app.brain.wake import wake_due
+    from app.care import reorder
+
+    c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=CG, members=[ELDER, CG])
+    await store.save_roster(db, FAM, ELDER, [ELDER, CG])
+    await tools.run(c, "remember", {"domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]},
+                                    "sentence": "Amlodipine 5 mg twice"})
+    await tools.run(c, "set_stock", {"medicine": "Amlodipine", "count": 6})
+    await db.commit()
+    assert await reorder.open_offers(db) == 1
+    await db.commit()
+
+    async def complete(route, *, messages, **kw):
+        if "Cash on delivery only" in str(messages):
+            return LLMReply(text="", tool_calls=[ToolCall(
+                "c1", "send_message", {"to": CG["id"], "text": "Amlodipine, 3 din. Apollo se 10, cash on delivery. Mangwaun?"},
+            )], model="fake")
+        return LLMReply(text="none", tool_calls=[], model="fake")
+
+    api.model.complete = complete
+    stats = await wake_due(api.sessions, lambda _fid: api.host)
+    assert stats["ran"] == 1
+    assert any(str(m.get("text", "")).startswith("Amlodipine") for m in api.host.world.sent)
+
+
 async def test_daily_job_opens_refill_once(api, at, db):
     at("2026-10-01 08:00")
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=CG, members=[ELDER, CG])
