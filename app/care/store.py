@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +19,64 @@ from app.care.redact import scrub_secrets
 from app.core import clock, trace
 
 logger = logging.getLogger(__name__)
+
+_RECORD_LOCKS = "record_locks"
+
+
+def _release_record_now(session: AsyncSession) -> bool:
+    """A tool's savepoint, or a system turn's family lock, commits later. Anyone else commits with the write."""
+    if session.in_nested_transaction():
+        return False
+    return not session.sync_session.info.get("family_xact_lock")
+
+
+async def hold_record(session: AsyncSession, family_id: str, subject_id: str) -> None:
+    """One writer at a time for this person's care record. Released when that write commits, not for the model call."""
+    key = f"record:{family_id}:{subject_id}"
+    await session.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
+    locks: dict[str, int] = session.sync_session.info.setdefault(_RECORD_LOCKS, {})
+    locks[key] = locks.get(key, 0) + 1
+
+
+def record_locks_held(session: AsyncSession) -> bool:
+    return bool(session.sync_session.info.get(_RECORD_LOCKS))
+
+
+async def release_record_locks(session: AsyncSession, *, commit: bool) -> None:
+    locks: dict[str, int] = session.sync_session.info.get(_RECORD_LOCKS) or {}
+    if not locks:
+        return
+    if commit and session.sync_session.info.get("family_xact_lock"):
+        commit = False
+    if commit:
+        await session.commit()
+        session.sync_session.info.pop("family_xact_lock", None)
+
+    async def _unlock() -> None:
+        for key, n in list(locks.items()):
+            for _ in range(n):
+                await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
+
+    try:
+        await _unlock()
+    except Exception:  # noqa: BLE001 — a failed statement aborts the transaction; the lock still has to drop
+        await session.rollback()
+        await _unlock()
+    locks.clear()
+
+
+@asynccontextmanager
+async def record_write(session: AsyncSession, family_id: str, subject_id: str):
+    await hold_record(session, family_id, subject_id)
+    try:
+        yield
+    except BaseException:
+        if _release_record_now(session):
+            await session.rollback()
+            await release_record_locks(session, commit=False)
+        raise
+    if _release_record_now(session):
+        await release_record_locks(session, commit=True)
 
 
 async def _keep_index(session: AsyncSession, family_id: str, subject_id: str, *, note: str | None = None) -> None:
@@ -108,75 +167,76 @@ async def write_fact(
     replace: the value is the whole new value (an undo or restore), not fields merged into the old one.
     force_confirm: wait for a caregiver even where the source alone would not (an undo that restarts or changes a health fact).
     """
-    now = clock.now()
-    old = await active_fact(session, family_id, subject_id, key)
-    if old and old.pinned_at and source_kind not in PERSON_SOURCES and domain not in HEALTH_DOMAINS:
-        # A person said or corrected this; an inference, import or learning never changes it (trust plan A3). A health fact
-        # is not dropped: the change waits as pending for a caregiver (needs_confirmation below).
-        logger.info("kept pinned fact family=%s key=%s against %s", family_id, old.key, source_kind)
-        return FactWrite("kept_pinned", old)
-    if old:
-        key = old.key
-        if not replace:
-            value = merged_value(old.value, value)
-    if domain == "naming" and not replace:  # an undo or restore carries the exact value a person chose
-        value = naming_value(old.value if old else None, value)
-    if old and _same(old.value, value):
-        if source_kind in ("caregiver_said", "dashboard", "prescription") and stated_by and not old.confirmed_by:
-            old.confirmed_by = stated_by
-        return FactWrite("unchanged", old)
+    async with record_write(session, family_id, subject_id):
+        now = clock.now()
+        old = await active_fact(session, family_id, subject_id, key)
+        if old and old.pinned_at and source_kind not in PERSON_SOURCES and domain not in HEALTH_DOMAINS:
+            # A person said or corrected this; an inference, import or learning never changes it (trust plan A3). A health fact
+            # is not dropped: the change waits as pending for a caregiver (needs_confirmation below).
+            logger.info("kept pinned fact family=%s key=%s against %s", family_id, old.key, source_kind)
+            return FactWrite("kept_pinned", old)
+        if old:
+            key = old.key
+            if not replace:
+                value = merged_value(old.value, value)
+        if domain == "naming" and not replace:  # an undo or restore carries the exact value a person chose
+            value = naming_value(old.value if old else None, value)
+        if old and _same(old.value, value):
+            if source_kind in ("caregiver_said", "dashboard", "prescription") and stated_by and not old.confirmed_by:
+                old.confirmed_by = stated_by
+            return FactWrite("unchanged", old)
 
-    row = CareFact(
-        id=uuid.uuid4(),
-        family_id=family_id,
-        subject_id=subject_id,
-        domain=domain,
-        key=key,
-        value=value,
-        text=text,
-        source_kind=source_kind,
-        source_ref=source_ref,
-        stated_by=stated_by,
-        confirmed_by=stated_by if source_kind in ("caregiver_said", "dashboard", "prescription") else None,
-        confidence=confidence,
-        valid_from=now,
-        recorded_at=now,
-        supersedes=old.id if old else None,
-        note=note,
-    )
-    if source_kind in PERSON_SOURCES:
-        row.pinned_at, row.pinned_by = now, (stated_by or source_kind)[:64]
-    if force_confirm or (old and needs_confirmation(domain, source_kind, old.source_kind, changes_existing=True)):
-        row.status = "pending"
-        if force_confirm:
-            row.confidence = min(confidence, 0.7)
-        session.add(row)
-        await session.flush()
-        await open_loop(
-            session,
+        row = CareFact(
+            id=uuid.uuid4(),
             family_id=family_id,
             subject_id=subject_id,
-            kind="confirm_fact",
-            title=f"Confirm change: {old.text} → {text}" if old else f"Confirm: {text}",
-            detail={"fact_id": str(row.id), "key": key, "old": old.value if old else None, "new": value},
-            dedupe_key=f"confirm:{subject_id}:{key}",
+            domain=domain,
+            key=key,
+            value=value,
+            text=text,
+            source_kind=source_kind,
+            source_ref=source_ref,
+            stated_by=stated_by,
+            confirmed_by=stated_by if source_kind in ("caregiver_said", "dashboard", "prescription") else None,
+            confidence=confidence,
+            valid_from=now,
+            recorded_at=now,
+            supersedes=old.id if old else None,
+            note=note,
         )
-        await versions.record_fact(session, row, "pending")
-        return FactWrite("pending", row, old)
+        if source_kind in PERSON_SOURCES:
+            row.pinned_at, row.pinned_by = now, (stated_by or source_kind)[:64]
+        if force_confirm or (old and needs_confirmation(domain, source_kind, old.source_kind, changes_existing=True)):
+            row.status = "pending"
+            if force_confirm:
+                row.confidence = min(confidence, 0.7)
+            session.add(row)
+            await session.flush()
+            await open_loop(
+                session,
+                family_id=family_id,
+                subject_id=subject_id,
+                kind="confirm_fact",
+                title=f"Confirm change: {old.text} → {text}" if old else f"Confirm: {text}",
+                detail={"fact_id": str(row.id), "key": key, "old": old.value if old else None, "new": value},
+                dedupe_key=f"confirm:{subject_id}:{key}",
+            )
+            await versions.record_fact(session, row, "pending")
+            return FactWrite("pending", row, old)
 
-    if old:
-        old.status = "superseded"
-        old.valid_to = now
+        if old:
+            old.status = "superseded"
+            old.valid_to = now
+            await session.flush()
+        row.status = "active"
+        session.add(row)
         await session.flush()
-    row.status = "active"
-    session.add(row)
-    await session.flush()
-    await versions.record_fact(session, row, "write")
-    if old:
-        await _keep_index(session, family_id, subject_id)
-    await end_none(session, row)
-    _person_changed(session, row)
-    return FactWrite("superseded" if old else "created", row, old)
+        await versions.record_fact(session, row, "write")
+        if old:
+            await _keep_index(session, family_id, subject_id)
+        await end_none(session, row)
+        _person_changed(session, row)
+        return FactWrite("superseded" if old else "created", row, old)
 
 
 def _person_changed(session: AsyncSession, row: CareFact) -> None:
@@ -213,98 +273,103 @@ async def stop_fact(
 ) -> FactWrite | None:
     """End a fact (a stopped medicine, a lifted diet rule). A weak source only proposes the stop (and so does
     force_confirm: an undo that would end a health fact waits for a caregiver)."""
-    old = await active_fact(session, family_id, subject_id, key)
-    if not old:
-        return None
-    if old.pinned_at and source_kind not in PERSON_SOURCES and old.domain not in HEALTH_DOMAINS:
-        logger.info("kept pinned fact family=%s key=%s against a stop by %s", family_id, old.key, source_kind)
-        return FactWrite("kept_pinned", old)
-    key = old.key
-    now = clock.now()
-    if force_confirm or needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
-        row = CareFact(
-            id=uuid.uuid4(),
-            family_id=family_id,
-            subject_id=subject_id,
-            domain=old.domain,
-            key=key,
-            value={**old.value, "stopped": True},
-            text=f"Stopped: {old.text}",
-            status="pending",
-            source_kind=source_kind,
-            source_ref=source_ref,
-            stated_by=stated_by,
-            confidence=0.7,
-            valid_from=now,
-            recorded_at=now,
-            supersedes=old.id,
-            note=reason,
-        )
-        session.add(row)
+    async with record_write(session, family_id, subject_id):
+        old = await active_fact(session, family_id, subject_id, key)
+        if not old:
+            return None
+        if old.pinned_at and source_kind not in PERSON_SOURCES and old.domain not in HEALTH_DOMAINS:
+            logger.info("kept pinned fact family=%s key=%s against a stop by %s", family_id, old.key, source_kind)
+            return FactWrite("kept_pinned", old)
+        key = old.key
+        now = clock.now()
+        if force_confirm or needs_confirmation(old.domain, source_kind, old.source_kind, changes_existing=True):
+            row = CareFact(
+                id=uuid.uuid4(),
+                family_id=family_id,
+                subject_id=subject_id,
+                domain=old.domain,
+                key=key,
+                value={**old.value, "stopped": True},
+                text=f"Stopped: {old.text}",
+                status="pending",
+                source_kind=source_kind,
+                source_ref=source_ref,
+                stated_by=stated_by,
+                confidence=0.7,
+                valid_from=now,
+                recorded_at=now,
+                supersedes=old.id,
+                note=reason,
+            )
+            session.add(row)
+            await session.flush()
+            await open_loop(
+                session,
+                family_id=family_id,
+                subject_id=subject_id,
+                kind="confirm_fact",
+                title=f"Confirm stop: {old.text} ({reason})",
+                detail={"fact_id": str(row.id), "key": key, "old": old.value, "stop": True},
+                dedupe_key=f"confirm:{subject_id}:{key}",
+            )
+            await versions.record_fact(session, row, "pending")
+            return FactWrite("pending", row, old)
+        old.status = "stopped"
+        old.valid_to = now
+        old.note = reason
         await session.flush()
-        await open_loop(
-            session,
-            family_id=family_id,
-            subject_id=subject_id,
-            kind="confirm_fact",
-            title=f"Confirm stop: {old.text} ({reason})",
-            detail={"fact_id": str(row.id), "key": key, "old": old.value, "stop": True},
-            dedupe_key=f"confirm:{subject_id}:{key}",
-        )
-        await versions.record_fact(session, row, "pending")
-        return FactWrite("pending", row, old)
-    old.status = "stopped"
-    old.valid_to = now
-    old.note = reason
-    await session.flush()
-    await versions.record_fact(session, old, "stop")
-    await _keep_index(session, family_id, subject_id)
-    _person_changed(session, old)
-    return FactWrite("stopped", old)
+        await versions.record_fact(session, old, "stop")
+        await _keep_index(session, family_id, subject_id)
+        _person_changed(session, old)
+        return FactWrite("stopped", old)
 
 
 async def resolve_pending(session: AsyncSession, *, fact_id: uuid.UUID, approve: bool, by: str) -> CareFact | None:
-    row = await session.get(CareFact, fact_id, with_for_update=True)
+    row = await session.get(CareFact, fact_id)
     if not row or row.status != "pending":
         return None
-    now = clock.now()
-    if approve:
-        old = await active_fact(session, row.family_id, row.subject_id, row.key)
-        if old and not row.value.get("stopped"):
-            # Approving a change keeps what it did not mention (times, dose) from the current record,
-            # except an undo or restore, which carries the whole value it goes back to.
-            if not (row.source_ref or "").startswith("undo:"):
-                row.value = merged_value(old.value, row.value)
-            row.key = old.key
-        if old:
-            old.status = "superseded"
-            old.valid_to = now
-            await session.flush()
-        row.status = "stopped" if row.value.get("stopped") else "active"
-        if row.status == "stopped":
+    async with record_write(session, row.family_id, row.subject_id):
+        row = await session.get(CareFact, fact_id, with_for_update=True)
+        if not row or row.status != "pending":
+            return None
+        now = clock.now()
+        if approve:
+            old = await active_fact(session, row.family_id, row.subject_id, row.key)
+            if old and not row.value.get("stopped"):
+                # Approving a change keeps what it did not mention (times, dose) from the current record,
+                # except an undo or restore, which carries the whole value it goes back to.
+                if not (row.source_ref or "").startswith("undo:"):
+                    row.value = merged_value(old.value, row.value)
+                row.key = old.key
+            if old:
+                old.status = "superseded"
+                old.valid_to = now
+                await session.flush()
+            row.status = "stopped" if row.value.get("stopped") else "active"
+            if row.status == "stopped":
+                row.valid_to = now
+            row.confirmed_by = by
+            row.pinned_at, row.pinned_by = now, by[:64]  # a caregiver decided it: pinned (trust plan A3)
+        else:
+            row.status = "retracted"
             row.valid_to = now
-        row.confirmed_by = by
-        row.pinned_at, row.pinned_by = now, by[:64]  # a caregiver decided it: pinned (trust plan A3)
-    else:
-        row.status = "retracted"
-        row.valid_to = now
-        row.confirmed_by = by
-    await session.execute(
-        update(OpenLoop)
-        .where(OpenLoop.family_id == row.family_id, OpenLoop.kind == "confirm_fact", OpenLoop.status == "open")
-        .where(OpenLoop.detail["fact_id"].astext == str(row.id))
-        .values(status="done", updated_at=now, closed_note="approved" if approve else "rejected")
-    )
-    await session.flush()
-    await versions.record_fact(session, row, "approve" if approve else "reject")
-    await _keep_index(session, row.family_id, row.subject_id)
-    await end_none(session, row)
-    if approve:
-        _person_changed(session, row)
-    from app.care import links
+            row.confirmed_by = by
+        await session.execute(
+            update(OpenLoop)
+            .where(OpenLoop.family_id == row.family_id, OpenLoop.kind == "confirm_fact", OpenLoop.status == "open")
+            .where(OpenLoop.detail["fact_id"].astext == str(row.id))
+            .values(status="done", updated_at=now, closed_note="approved" if approve else "rejected")
+        )
+        await session.flush()
+        await versions.record_fact(session, row, "approve" if approve else "reject")
+        await _keep_index(session, row.family_id, row.subject_id)
+        await end_none(session, row)
+        if approve:
+            _person_changed(session, row)
+        from app.care import links
 
-    await links.resolve_with_fact(session, row, approve=approve, by=by)  # links proposed with it go the same way
-    return row
+        await links.resolve_with_fact(session, row, approve=approve, by=by)  # links proposed with it go the same way
+        return row
 
 
 async def facts(

@@ -113,10 +113,11 @@ class FamilyBusy(router.AllModelsFailed):
 
 
 async def _lock_family(session: AsyncSession, family_id: str, wait_s: float | None = None) -> None:
-    """One turn at a time per family, across instances; released at commit. wait_s bounds the wait (the queue keeps
-    its order: Postgres hands the lock to waiters first come, first served)."""
+    """Scheduled turns, one at a time per family, released at commit. A person's message does not take this: their
+    own messages share a speaker lock, and another person in the family does not wait (app.brain.batch)."""
     if not wait_s:
         await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:f))"), {"f": family_id})
+        session.sync_session.info["family_xact_lock"] = family_id
         return
     before = (await session.execute(text("SELECT current_setting('lock_timeout')"))).scalar_one()
     await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": f"{int(wait_s * 1000)}ms"})
@@ -130,6 +131,7 @@ async def _lock_family(session: AsyncSession, family_id: str, wait_s: float | No
             raise FamilyBusy(f"family busy for {wait_s:.0f}s") from exc
         raise
     await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": before})
+    session.sync_session.info["family_xact_lock"] = family_id
 
 
 class TurnData:
@@ -910,7 +912,12 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
 
     with (trace.use(tid, task_id=trace.task_id(), via=via or trace.via(), family_id=req.family_id), trace.collect_spend() as calls,
           trace.collect_timing() as timing):
-        result = await _run_turn(session, host, req)
+        try:
+            from app.brain import batch
+
+            result = await batch.run(session, host, req)
+        finally:
+            await store.release_record_locks(session, commit=False)
         result.trace_id = tid
         if not result.duplicate and not req.family_id.startswith("shadow:"):
             await why.record_turn_safely(
@@ -922,11 +929,12 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     return result
 
 
-async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
+async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, take_lock: bool = True) -> TurnResult:
     started = time.monotonic()
     kind = "system" if req.speaker.get("role") == "system" else "message"
-    await _lock_family(session, req.family_id, wait_s=LOCK_WAIT_S[kind])
-    trace.note_step("lock", (time.monotonic() - started) * 1000)
+    if take_lock:
+        await _lock_family(session, req.family_id, wait_s=LOCK_WAIT_S[kind])
+        trace.note_step("lock", (time.monotonic() - started) * 1000)
     context_at = time.monotonic()
     if req.still_true is not None and not await req.still_true(session):
         # The task this update is about moved on while it waited for the family's turn (the person answered, changed or
@@ -1113,6 +1121,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     tool_text_retried = False
     reply: router.LLMReply | None = None
     trace.note_step("context", (time.monotonic() - context_at) * 1000)
+    if not is_system and not session.sync_session.info.get("family_xact_lock"):
+        # The roster row and the saved line stay locked until commit. Commit before the model call so another
+        # person in the family is not stuck behind this one for the whole reply.
+        await session.commit()
     for step in range(MAX_STEPS):
         last = step == MAX_STEPS - 1
         # The turn's time budget: a model call never runs past it (the person has stopped waiting, and the family stays
@@ -1243,6 +1255,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 ctx.actions.append({"tool": call.name, "args": call.args, "ok": False, "refused": "held thread"})
             else:
                 out, is_error = await tools.run(ctx, call.name, call.args)
+                if not is_system and store.record_locks_held(session):
+                    # The write is committed here, so the other person's model call is not waiting on it.
+                    await store.release_record_locks(session, commit=True)
             trace.note_timed("tool", call.name, (time.monotonic() - ran_at) * 1000)
             tool_texts.append(f"{call.name}{' (failed)' if is_error else ''}: {out}")
             ctx.known.append(out)

@@ -216,9 +216,11 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
         ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400]})
         return blob, False
     except ToolRefused as exc:
+        await store.release_record_locks(ctx.session, commit=False)
         ctx.actions.append({"tool": name, "args": args, "ok": False, "refused": str(exc)})
         return json.dumps({"refused": str(exc)}), True
     except Exception as exc:  # noqa: BLE001 — the model decides what to tell the person
+        await store.release_record_locks(ctx.session, commit=False)
         # A call outside the tool's schema (a model that ignores enums): the model gets the allowed values, not a crash.
         # Tools that refuse a bad call themselves keep their own, more specific answer (it is a ToolRefused above).
         problems = arg_problems(_TOOLS[name][0].schema, args)

@@ -208,6 +208,28 @@ class Turn(Base):
     )
 
 
+class TurnInbox(Base):
+    """Messages from one person that arrived while their turn was running. One follow-up reads them together."""
+
+    __tablename__ = "turn_inbox"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    family_id: Mapped[str] = mapped_column(String(64))
+    speaker_id: Mapped[str] = mapped_column(String(64))
+    message_ref: Mapped[str] = mapped_column(String(160))
+    text: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), default="waiting")  # waiting | running | answered
+    lead: Mapped[bool] = mapped_column(Boolean, default=False)
+    reply: Mapped[str] = mapped_column(Text, default="")
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)  # images and pins; cleared once answered
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        Index("uq_turn_inbox_ref", "family_id", "message_ref", unique=True),
+        Index("ix_turn_inbox_speaker", "family_id", "speaker_id", "status", "id"),
+    )
+
+
 class ThreadSummary(Base):
     __tablename__ = "thread_summaries"
 
