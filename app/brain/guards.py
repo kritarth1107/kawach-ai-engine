@@ -776,6 +776,37 @@ def strip_tool_chrome(text: str) -> str:
     return TOOL_CHROME.sub("", text or "").strip()
 
 
+def saved_food_line(known: Iterable[str]) -> str:
+    """The save line a log_food result already gave, when it names calories. Empty otherwise."""
+    import json
+
+    for text in known:
+        raw = str(text or "")
+        start = raw.find("{")
+        if start < 0 or "kcal" not in raw:
+            continue
+        try:
+            data = json.loads(raw[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict) and data.get("result") in ("saved", "needs_input") and "kcal" in str(data.get("say") or ""):
+            return str(data["say"])
+    return ""
+
+
+def food_line_problems(final: str, known: Iterable[str]) -> list[str]:
+    """A saved meal's calorie number has to be in the reply. A water question follows that sentence."""
+    say = saved_food_line(known)
+    if not say:
+        return []
+    head = say[:say.find("kcal")].rstrip()
+    token = head.split()[-1].rstrip(",") if head.split() else ""
+    if token and token.replace(",", "") not in (final or "").replace(",", ""):
+        return [f"the reply must include this line's numbers ({say}), in their language; a water question comes after "
+                "that sentence, never instead of it"]
+    return []
+
+
 def leaked_tool_call(text: str, tool_names: Iterable[str] = ()) -> bool:
     """A tool call written into the reply as text ("default_api:remember{...}", "remember{"domain": ...}"): nothing was done,
     and the person would see code (world probe run 2026-10-13, a Marwari naming request)."""

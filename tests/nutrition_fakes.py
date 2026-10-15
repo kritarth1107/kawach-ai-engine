@@ -149,5 +149,9 @@ def nfake(monkeypatch):
     monkeypatch.setattr(lookup, "off_search", off_search)
     f.web, f.off = web, offs  # type: ignore[attr-defined]
     yield f
+    from app.nutrition import jobs
+
+    if jobs._refine is not None and not jobs._refine.done():
+        jobs._refine.cancel()
     router._providers.pop("fake", None)
     router.reset_breakers()

@@ -155,6 +155,7 @@ def context_block(jobs: list[NutritionJob], names: dict) -> str:
 # ── background ───────────────────────────────────────────────────────────────
 
 _kicked: asyncio.Task | None = None
+_refine: asyncio.Task | None = None
 
 
 def kick_nutrition() -> None:
@@ -172,6 +173,28 @@ def kick_nutrition() -> None:
         _kicked = asyncio.get_running_loop().create_task(sweep(SessionLocal, None), context=ctx)
     except RuntimeError:
         logger.warning("no running loop for the nutrition sweep; the wake job picks it up")
+
+
+def kick_refine(job_id) -> None:
+    """A web look-up replaces an estimate after the person has already been told the first numbers. No second message."""
+    global _refine
+    if _refine is not None and not _refine.done():
+        return
+
+    from app.db.session import SessionLocal
+
+    async def _run() -> None:
+        from app.nutrition import agent
+
+        try:
+            await agent.refine_saved(SessionLocal, job_id)
+        except Exception:  # noqa: BLE001 — the estimate they were told stays until the next sweep
+            logger.exception("nutrition refine failed id=%s", job_id)
+
+    try:
+        _refine = asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        logger.warning("no running loop for the nutrition refine")
 
 
 async def sweep(sessions, host_for=None) -> dict:

@@ -97,19 +97,15 @@ async def test_a_repeat_while_it_is_still_saving_does_not_start_another(db, at, 
                                            "units": {"plate": 150}, "default_unit": "plate", "typical_qty": 1}
     args = {"meal": "snack", "items": [{"name": "hara bhara kebab", "quantity": 1, "unit": "plate"}]}
     r, err = await call(db, "log_food", args)
-    assert not err and r["result"] == "looking_up", r
-    assert await active(db) == []
+    assert not err and r["result"] == "saved" and "kcal" in r["say"], r
+    assert len(await active(db)) == 1
     again, _ = await call(db, "log_food", args)
-    assert again.get("already") and again["say"] == "" and again["result"] == "looking_up"
-    assert await active(db) == []
-    nfake.web.slow = False
-    nfake.web.foods["hara bhara kebab"] = nfake.estimates["hara bhara kebab"] | {"source_kind": "web", "tags": ["snack"]}
-    job = await jobs.get(db, FAM, r["job_id"])
-    out = await agent.run_background(db, job)
-    assert out["result"] == "saved", out
-    assert "fried" in out["say"] and "high fat" in out["say"] and "high sodium" in out["say"]
-    rows = await active(db)
-    assert len(rows) == 1 and rows[0].flags.get("facts") == ["fried", "high fat", "high sodium"]
+    assert again.get("already") and again["say"] == "" and again["result"] == "saved"
+    assert len(await active(db)) == 1
+    if jobs._refine is not None and not jobs._refine.done():
+        jobs._refine.cancel()
+    row = (await active(db))[0]
+    assert row.flags.get("facts") == ["fried", "high fat", "high sodium"]
     if jobs._kicked is not None and not jobs._kicked.done():
         jobs._kicked.cancel()
 
@@ -175,14 +171,35 @@ async def test_a_food_found_once_needs_no_model_or_web_next_time(db, at, nfake):
     assert r["result"] == "saved" and nfake.calls == [] and nfake.web.asked == ["boiled egg"]
 
 
+async def test_a_counted_food_beside_a_stated_amount_does_not_hold_the_meal(db, at, nfake):
+    at("2026-10-14 16:00")
+    nfake.decisions["boiled egg"] = EGG_D
+    nfake.decisions["dal"] = {"countable": False, "default_unit": "katori", "tags": ["pulse"]}
+    r, _ = await call(db, "log_food", {"items": [{"name": "boiled egg"}, {"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert r["result"] == "saved" and "kcal" in r["say"], r
+    assert "needs" not in r
+
+
+async def test_an_unclear_kind_is_saved_as_the_common_one(db, at, nfake):
+    at("2026-10-14 16:00")
+    nfake.decisions["namkeen"] = {"needs": "which", "options": ["mixture", "bhujia"], "canonical": "mixed namkeen"}
+    nfake.estimates["mixed namkeen"] = {"name": "Mixed namkeen", "per_100g": {"energy_kcal": 530, "protein_g": 10, "carbs_g": 45,
+                                                                              "fat_g": 34, "sodium_mg": 1200},
+                                        "units": {"g": 1}, "default_unit": "g", "typical_qty": 30}
+    r, _ = await call(db, "log_food", {"items": [{"name": "namkeen", "quantity": 30, "unit": "g"}]})
+    assert r["result"] == "saved" and "needs" not in r, r
+    assert "kcal" in r["say"] and "sodium" in r["say"]
+    assert r["say"].endswith("tell me if it was a different one.")
+
+
 async def test_two_questions_at_most_then_an_estimate(db, at, nfake):
     at("2026-10-14 16:00")
-    nfake.decisions["sweet"] = {"needs": "which", "options": ["laddoo", "barfi"]}
+    nfake.decisions["boiled egg"] = {**EGG_D, "countable": True}
     nfake.decisions["thekua"] = {"needs": "label"}
     nfake.estimates["thekua"] = {"name": "Thekua", "per_100g": {"energy_kcal": 450, "protein_g": 6, "carbs_g": 60, "fat_g": 20},
                                  "units": {"piece": 30}, "default_unit": "piece", "typical_qty": 2}
-    r, _ = await call(db, "log_food", {"items": [{"name": "sweet"}]})
-    assert r["needs"][0]["reason"] == "which"
+    r, _ = await call(db, "log_food", {"items": [{"name": "boiled egg"}]})
+    assert r["needs"][0]["reason"] == "quantity"
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "thekua"}]})
     assert r["needs"][0]["reason"] == "label"
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "thekua", "quantity": 2, "unit": "piece"}]})

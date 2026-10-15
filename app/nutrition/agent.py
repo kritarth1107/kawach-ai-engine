@@ -197,8 +197,14 @@ def _say(rows: list[NutritionEntry], tracking: str, relevant: set[str] | None = 
     tot = entries.totals(food)
     nums = "" if tracking == "counts" else N.highlight_phrase(tot, relevant)
     base = f"Saved: {what}, {nums}." if nums else f"Saved: {what}."
-    if any(assumed for _, assumed in parts):
+    more = any(assumed for _, assumed in parts)
+    kind = any((r.flags or {}).get("kind_open") for r in food)
+    if more and kind:
+        return base[:-1] + " — tell me if it was more or a different one."
+    if more:
         return base[:-1] + " — tell me if it was more."
+    if kind:
+        return base[:-1] + " — tell me if it was a different one."
     return base
 
 
@@ -426,9 +432,14 @@ class NutritionAgent:
                                          pantry_rows=stock, deadline=deadline, essential=who.essential, no_questions=not jobs.can_ask(job),
                                          estimates_only=estimates_only)
         except lookup.Slow:
-            if background and not estimates_only:
-                # the search did not fit: save an estimate now (under ~30 s) and refine the numbers after they are told
-                return await self.run(job, deadline=time.monotonic() + 10, background=True, estimates_only=True)
+            if not estimates_only:
+                # The search did not fit. Save the estimate in this same turn so the reply has numbers, then a web
+                # look-up replaces them. Asking them to wait left the meal unlogged when the reply dropped that line.
+                estimated = await self.run(job, deadline=time.monotonic() + 10, background=background, estimates_only=True)
+                if estimated.get("result") == "saved":
+                    return estimated
+                job.needs = None
+                job.questions = 0
             job.state, job.updated_at = "resolving", clock.now()
             return {"result": "looking_up", "job_id": str(job.id),
                     "say": "Tell them once, in a few words, that you are checking its nutrition and will tell them when it is saved "
@@ -440,8 +451,8 @@ class NutritionAgent:
             return {"result": "dropped", "job_id": str(job.id), "medicine": medicines,
                     "why": "These are medicines or supplements, not food: use log_dose for them (never the food log)."}
         for it, r in keep:
-            if r.needs == "which" and jobs.can_ask(job):
-                return self._question(job, "which", f"Which {it['name']}?", r.options, item=it["name"])
+            if r.assumed_kind:
+                it["_kind_open"] = True
             if r.needs == "label" and jobs.can_ask(job):
                 return self._question(job, "label", f"Which {it['name']} was it? Or send a photo of the label (the nutrition table on the back).",
                                       item=it["name"])
@@ -449,6 +460,8 @@ class NutritionAgent:
                 return self._question(job, "photo", f"What's in the {it['name']}, roughly? Or send a photo.", item=it["name"])
         # how much: one pack or one drink is saved; a counted food with no number is asked once
         # (unless they don't know, or a photo showed it). A plate or a katori stays a usual-portion estimate.
+        # A meal that already has an amount is saved; one counted item with no number does not hold the rest back.
+        told = any(i.get("quantity") or i.get("_grams") for i, _r in keep)
         for it, r in keep:
             if it.get("quantity") or it.get("_grams") or ask.get("unsure") or r.food is None:
                 continue
@@ -461,6 +474,9 @@ class NutritionAgent:
                 it["_assumed"] = True
                 continue
             if one_standard_serving(r.food):
+                _fill_one(it, r.food)
+                continue
+            if r.food.countable and told:
                 _fill_one(it, r.food)
                 continue
             if r.food.countable and jobs.can_ask(job) and ask.get("confidence") != "photo":
@@ -488,6 +504,8 @@ class NutritionAgent:
                 conf = "estimate" if r.food is not None else "unquantified"
             assumed = {"usual": True} if it.get("_usual") else (
                 _assumed_flags(r.food) if it.get("_assumed") and r.food is not None else {})
+            if it.get("_kind_open"):
+                assumed = {**assumed, "kind_open": True}
             to_save.append(entries.Item(name=it.get("name") or (r.food.name if r.food else "food"), food=r.food, quantity=it.get("quantity"),
                                         unit=it.get("unit"), name_said=it.get("said") or it.get("name") or "", confidence=conf,
                                         grams=it.get("_grams"), pantry=r.pantry, note=it.get("notes"), flags=assumed))
@@ -773,6 +791,8 @@ async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str
     await session.flush()
     if out.get("result") == "looking_up":
         jobs.kick_nutrition()
+    elif out.get("refine"):
+        jobs.kick_refine(job.id)
     return out
 
 

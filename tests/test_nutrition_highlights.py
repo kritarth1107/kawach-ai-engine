@@ -52,6 +52,19 @@ def test_a_condition_or_a_target_breaks_a_near_tie():
         N.relevant_from(["condition:kidney_disease"], ["potassium_mg"]))
 
 
+def test_a_reply_that_drops_the_saved_numbers_is_sent_back():
+    from app.brain import guards
+
+    say = "Saved: dal (1 katori), rice (1 katori), 369 kcal, 66 g carbs, 14 g protein."
+    known = ['{"result": "saved", "say": "' + say + '"}']
+    assert guards.food_line_problems("Did you have a glass of water with your lunch?", known)
+    assert guards.food_line_problems("Saved: dal and rice, 369 kcal, 66 g carbs. Did you have water?", known) == []
+    assert guards.saved_food_line(known) == say
+    confirm = '{"result": "needs_input", "say": "Looks like 2 boiled egg, about 215 kcal, 14 g protein. Right?"}'
+    assert guards.food_line_problems("Looks like 2 boiled eggs. Is that correct?", [confirm])
+    assert guards.food_line_problems("Looks like 2 boiled egg, about 215 kcal. Right?", [confirm]) == []
+
+
 def test_high_fibre_is_named_from_the_grams():
     line = N.highlight_phrase({"energy_kcal": 180, "protein_g": 6, "carbs_g": 28, "fat_g": 3, "fibre_g": 12, "sodium_mg": 80})
     assert "fibre" in line and line.index("fibre") < line.index("carbs")

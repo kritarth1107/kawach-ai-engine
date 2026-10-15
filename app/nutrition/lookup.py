@@ -99,10 +99,10 @@ For each item decide:
 - kind: generic (a common food or dish), packaged (a branded pack), restaurant (a dish from a named restaurant), recipe (a
   dish made a particular way at home that is named after a person or the family, e.g. "Mummy's dal").
 - medicine: true for a medicine, tablet or supplement capsule (never food). A protein powder or a health drink is food.
-- needs: "which" when the item is too vague to look up and variants differ a lot in nutrition (e.g. "dosa" could be plain
-  or masala is NOT too vague: pick the common one; "sweet" or "snack" alone IS); "label" when it is a packaged product
-  with no brand or product name given and no candidate matches; else null.
-- options: for needs "which", 2-4 short choices in English.
+- needs: "label" when it is a packaged product with no brand or product name given and no candidate matches; else null.
+  Never "which". When several kinds exist, put the common one in canonical (plain dosa, mixed namkeen, a regular laddoo)
+  and leave needs null. The common one is saved, and they can say it was a different one.
+- options: leave empty.
 - countable: true when it is eaten in whole pieces people count (eggs, rotis, idlis, biscuits, bananas, bars).
 - default_unit: one of: piece katori bowl plate cup glass tsp tbsp slice handful scoop pack serving ml g.
 - typical_qty: a usual portion in default_unit for one adult (e.g. 2 for rotis, 1 for a katori of dal).
@@ -412,9 +412,10 @@ class Resolved:
     item: dict
     food: NutritionFood | None = None
     pantry: NutritionPantry | None = None
-    needs: str | None = None  # which | label | photo
+    needs: str | None = None  # label | photo
     options: list[str] = field(default_factory=list)
     medicine: bool = False
+    assumed_kind: bool = False  # several kinds exist; the common one is saved and they can correct it
     decision: dict = field(default_factory=dict)  # the normaliser's answer
 
     @property
@@ -524,8 +525,11 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
                     await add_alias(session, r.food, str(items[i].get("name") or ""))
                     r.pantry = by_food.get(r.food.id)  # the same pack is at home: it is counted down
                     continue
-            if d.get("needs") in ("which", "label") and not no_questions:
-                r.needs = d["needs"]
+            if d.get("needs") == "which":
+                # A vague kind is the common version of what they named, not a question.
+                r.assumed_kind = True
+            elif d.get("needs") == "label" and not no_questions:
+                r.needs = "label"
                 r.options = [str(o)[:60] for o in d.get("options") or []][:4]
                 continue
             slow.append(i)

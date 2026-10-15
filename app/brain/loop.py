@@ -710,6 +710,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         problems += guards.opener_problems(final)
         if not health_turn(ctx.actions):
             problems += guards.length_problems(final, cap=2 if ctx.speaker_is_elder else 3)
+    problems += guards.food_line_problems(final, ctx.known)
     if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
         problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
@@ -1096,6 +1097,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 "Do not use an avoided word."}]})
 
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
+    if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
+        # Before any tidy: joining lines can hide "thought" on its own line. The model's notes never reach a person.
+        logger.error("leaked reasoning blocked family=%s", req.family_id)
+        final = "none" if is_system else ""
+        guarded = True
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
@@ -1115,14 +1121,17 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
         logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line
         final = guards.canned(ctx.profiles.get(req.speaker["id"]), SCOPE)
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
-        # Last line of defence: the model's own notes never reach a person, even when the rewrite leaked again or the
-        # turn was a scheduled one (those skip the rewrite).
+        # A tidy that joined lines can hide a note. Check again.
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
         guarded = True
     if guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(ctx.profiles.get(req.speaker["id"]))
+    if not is_system and guards.food_line_problems(final, ctx.known):
+        # The rewrite still dropped the saved numbers (a water question, or praise). Send the line the tool already gave.
+        final = guards.saved_food_line(ctx.known)
+        guarded = True
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
         name = (req.speaker.get("name") or "").strip()
