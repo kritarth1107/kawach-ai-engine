@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from typing import Annotated
 
@@ -734,7 +735,15 @@ async def daily_job() -> dict:
         stores = await store_health.check(task_agent(), alert)
     except Exception:  # noqa: BLE001
         logger.exception("store health check failed")
-    return {"refills": opened, "courses_ended": ended, "stores": stores}  # patterns and baselines are learned in the nightly dream
+    pages: dict = {}
+    if os.getenv("PYTEST_CURRENT_TEST") is None:
+        try:
+            from app.tasks import checkin_pages
+
+            pages = await checkin_pages.check()
+        except Exception:  # noqa: BLE001 — a page check must not undo the refill offers
+            logger.exception("check-in pages failed")
+    return {"refills": opened, "courses_ended": ended, "stores": stores, "checkin_pages": pages}
 
 
 async def _plan_checkins() -> dict:
