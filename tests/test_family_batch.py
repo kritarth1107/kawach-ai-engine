@@ -76,7 +76,7 @@ async def sessions(db):
         yield maker
     finally:
         async with maker() as session:
-            for table in ("turn_inbox", "turns", "trace_turns", "family_rosters", "care_facts", "open_loops"):
+            for table in ("turn_inbox", "turns", "trace_turns", "family_rosters", "care_facts", "open_loops", "reply_log", "capability_gaps"):
                 await session.execute(text(f"DELETE FROM {table} WHERE family_id = :f"), {"f": FAM})
             await session.commit()
         await engine.dispose()

@@ -44,20 +44,18 @@ def _engine(session: AsyncSession) -> AsyncEngine:
 async def _lock_speaker(conn, key: str, wait_s: float) -> None:
     from app.brain.loop import FamilyBusy
 
-    before = (await conn.execute(text("SELECT current_setting('lock_timeout')"))).scalar_one()
+    # This connection is only the lock, and it closes when the turn finishes. Setting the
+    # timeout needs no read of the old value and no restore.
     await conn.execute(text("SELECT set_config('lock_timeout', :t, false)"), {"t": f"{int(wait_s * 1000)}ms"})
     try:
         await conn.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
     except DBAPIError as exc:
         await conn.rollback()
-        await conn.execute(text("SELECT set_config('lock_timeout', :t, false)"), {"t": before})
-        await conn.commit()
         orig = getattr(exc, "orig", None)
         timed_out = getattr(orig, "sqlstate", None) == "55P03" or getattr(orig, "pgcode", None) == "55P03"
         if timed_out or "lock timeout" in str(exc).lower():
             raise FamilyBusy(f"speaker busy for {wait_s:.0f}s") from exc
         raise
-    await conn.execute(text("SELECT set_config('lock_timeout', :t, false)"), {"t": before})
     await conn.commit()
 
 
@@ -90,8 +88,12 @@ def _answered(row: TurnInbox, message_ref: str):
 
 
 def _joined(rows: list[TurnInbox], req):
+    # One message stays as the person sent it, including an empty text whose media note
+    # the turn places at the end. The together-line is only for a real burst.
+    if len(rows) == 1:
+        return req
     texts = [r.text for r in rows if (r.text or "").strip()]
-    text_out = texts[0] if len(texts) == 1 else _TOGETHER + "\n".join(texts)
+    text_out = _TOGETHER + "\n".join(texts)
     images: list = []
     notes: list[str] = []
     location = None

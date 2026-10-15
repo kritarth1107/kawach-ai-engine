@@ -24,10 +24,15 @@ _RECORD_LOCKS = "record_locks"
 
 
 def _release_record_now(session: AsyncSession) -> bool:
-    """A tool's savepoint, or a system turn's family lock, commits later. Anyone else commits with the write."""
+    """A tool's savepoint, a system turn's family lock, or a transaction the caller already opened
+    commits later. Anyone else commits with the write, so the record lock does not cover the model call."""
     if session.in_nested_transaction():
         return False
-    return not session.sync_session.info.get("family_xact_lock")
+    if session.sync_session.info.get("family_xact_lock"):
+        return False
+    # Joining an open transaction (the test fixture) makes commit() release a savepoint and still
+    # run after_commit. A name change would reach the backend before the caller commits.
+    return not session.sync_session.connection().in_nested_transaction()
 
 
 async def hold_record(session: AsyncSession, family_id: str, subject_id: str) -> None:
