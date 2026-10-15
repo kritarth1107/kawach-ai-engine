@@ -70,7 +70,8 @@ async def test_every_ride_app_asked_reports_its_fares_numbered_and_the_pick_gets
     assert "Looked on Ola, Rapido, Uber, from Home to AIIMS gate 2 without logging in; nothing is booked." in summary
     assert "1. Auto ₹128 (pickup in 5 min) ← suggested" in summary and "2. Mini ₹210" in summary
     assert "3. Uber Go ₹236 (pickup in 6 min)" in summary and "4. Auto ₹142 (pickup in 4 min)" in summary
-    assert "- Rapido: No ride options came up on Rapido" in summary, "the app with no rides is reported with why"
+    assert "- Rapido: Rapido showed no fares (no captains nearby). Nothing was booked and nothing was paid." in summary, \
+        "the app with no rides is reported with why, and that nothing was booked"
     assert summary.index("- Ola [task") < summary.index("- Uber [task"), "the cheapest app first"
     for t in g.values():
         await db.refresh(t)

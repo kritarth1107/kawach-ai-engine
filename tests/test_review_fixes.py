@@ -234,8 +234,8 @@ async def test_crash_after_place_call_never_places_twice(db, at, sessions, monke
     await db.commit()
     real = runtime._start_run
 
-    async def start_then_crash(session, agent_, task, profile_for, extra=""):
-        await real(session, agent_, task, profile_for, extra)
+    async def start_then_crash(session, agent_, task, profile_for, extra="", secret=""):
+        await real(session, agent_, task, profile_for, extra, secret)
         if task.phase == "place":
             raise RuntimeError("database hiccup after the store call")
 
