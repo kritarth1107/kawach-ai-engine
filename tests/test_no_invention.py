@@ -241,12 +241,17 @@ def test_an_apology_with_no_earlier_message_of_hers_is_rewritten():
     kept = guards.settle_reply("Sorry, I had your name wrong.", {"saved": {"language": "en"}}, situation="chit_chat",
                                needs_framing=False, force_light=False, held_topic_text="", actions=[], prior_assistant=True, naming=False)
     assert kept.startswith("Sorry")
+    cannot = "माफ़ कीजिए, मैं ये नहीं कर सकती, बिजली का बिल भरना अभी मेरे पास नहीं है।"
+    assert guards.settle_reply(cannot, {"saved": {"language": "hi"}, "now": "devanagari"}, situation="order",
+                               needs_framing=False, force_light=False, held_topic_text="", actions=[], prior_assistant=False,
+                               naming=False) == cannot
 
 
 def test_a_short_answer_stays_on_her_question():
     from app.brain import guards
 
     assert guards.held_topic("Trouble sleeping?", "Yes") == "Trouble sleeping"
+    assert guards.held_topic("How is your stomach after the ice cream?", "Hi") == ""
     assert guards.held_topic("Trouble sleeping?", "What time is dinner?") == ""
     assert guards.held_topic("Trouble sleeping?", "I went out for a long walk today") == ""
     assert guards.blocks_held_thread("setup_progress", {}, "Trouble sleeping")

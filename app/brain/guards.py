@@ -970,6 +970,13 @@ def with_framing(profile: dict | None, reply: str) -> str:
     return " ".join([*kept, line]).strip()
 
 
+def _cannot_do(reply: str) -> bool:
+    """She said the thing is outside what she can do. That refusal is kept; it is not a tease."""
+    from app.learn.gaps import CANNOT
+
+    return bool(CANNOT.search(reply or ""))
+
+
 def apology_in(reply: str) -> bool:
     """An apology in her own reply. A light 'you caught me' is not one."""
     return bool(_APOLOGY.search(reply or ""))
@@ -987,6 +994,8 @@ def held_topic(last_assistant: str, user_text: str) -> str:
     if not last or ("?" not in last and "？" not in last):
         return ""
     if not msg or "?" in msg or "？" in msg or len(words(msg)) > 3 or len(msg) > 24:
+        return ""
+    if GREETING_OPENER.fullmatch(msg):
         return ""
     return last.replace("？", "?").rstrip("?").strip()[:80]
 
@@ -1027,7 +1036,8 @@ def settle_reply(text: str, profile: dict | None, *, situation: str, needs_frami
     out = text or ""
     if situation == "med_question" or needs_framing:
         out = with_framing(profile, out)
-    if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"):
+    if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"
+                       and not _cannot_do(out)):
         out = light_reply(profile)
     if held_topic_text and (off_thread(out, actions) or not shares_topic(out, held_topic_text)):
         out = thread_reply(profile, held_topic_text)
