@@ -94,6 +94,46 @@ class Same:
     rejected: bool = False  # the family said this is wrong (app.care.rejected): an inference never writes it again
 
 
+MEDICINE_SAME = """You check whether a medicine about to be saved is already on this person's record.
+SAVED are their medicines. NEW is the one just named.
+A brand and the salt it is are the same medicine. A different drug is not the same, even at the same time of day.
+Return only JSON: {"same_as": "<the saved key>" or null, "covered": true when that saved medicine already has this dose and these times}"""
+
+
+def medicine_already(data: dict, saved: list[CareFact]) -> CareFact | None:
+    """The saved medicine NEW repeats, when the judge says it is already fully there. A dose or time change is not this."""
+    if not isinstance(data, dict) or data.get("covered") is not True:
+        return None
+    key = str(data.get("same_as") or "")
+    return next((f for f in saved if f.key == key and not is_none_key(f.key)), None)
+
+
+async def already_saved_medicine(session: AsyncSession, *, family_id: str, subject_id: str, key: str, text: str,
+                                 value: dict | None) -> CareFact | None:
+    """A second name for a medicine already on the record. None when it is a different drug or a real change.
+    Medicines are not merged: a change still writes. Only a covered repeat is refused."""
+    if not check_enabled() or is_none_key(key):
+        return None
+    if await store.active_fact(session, family_id, subject_id, key):
+        return None
+    saved = [f for f in await store.facts(session, family_id, subject_id, domains=["medicine"], statuses=("active",))
+             if not is_none_key(f.key)]
+    if not saved:
+        return None
+    new = f"[{key}] {text} | {json.dumps(value or {}, ensure_ascii=False, sort_keys=True)[:300]}"
+    try:
+        from app.llm import router
+
+        reply = await router.complete(
+            "judge_fast", system_stable=MEDICINE_SAME, effort="low", max_tokens=300, timeout_s=10,
+            messages=[{"role": "user", "content": [{"type": "text", "text":
+                       "SAVED\n" + "\n".join(_line(f) for f in saved[:40]) + f"\n\nNEW\n{new}"}]}])
+    except Exception:  # noqa: BLE001 — a missed check saves it; the nightly report still lists a duplicate
+        logger.warning("medicine duplicate check failed family=%s", family_id)
+        return None
+    return medicine_already(_json(reply.text or ""), saved)
+
+
 async def check(session: AsyncSession, *, family_id: str, subject_id: str, domain: str, key: str, text: str,
                 value: dict | None) -> Same | None:
     """The saved fact that NEW repeats, or None. Never blocks a write: any failure means "new"."""

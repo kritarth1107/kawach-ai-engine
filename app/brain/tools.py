@@ -352,6 +352,13 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     from app.care import dedupe
 
     key, sentence = fact_key(domain, a["name"]), a["sentence"]
+    if domain == "medicine":
+        held = await dedupe.already_saved_medicine(
+            ctx.session, family_id=ctx.family_id, subject_id=subject, key=key, text=sentence, value=details)
+        if held is not None:
+            return {"result": "unchanged", "key": held.key, "saved": False,
+                    "note": (f"Already on the record as {held.text}. It was not added again. "
+                             "Say it is the same one, and do not say a second medicine was saved.")}
     # the same thing said another way goes to the fact already saved (one allergy was saved under four keys)
     same = await dedupe.check(ctx.session, family_id=ctx.family_id, subject_id=subject, domain=domain, key=key, text=sentence, value=details)
     if same and same.rejected:

@@ -45,6 +45,18 @@ def test_a_long_medicine_answer_stays_three_sentences():
     assert guards.with_framing(None, short) == short
 
 
+def test_a_covered_brand_is_not_a_second_medicine():
+    from app.care.dedupe import medicine_already
+    from app.care.models import CareFact
+
+    saved = CareFact(family_id="f", subject_id="m", domain="medicine", key="medicine:telmisartan",
+                     value={"name": "Telmisartan", "dose": "40 mg", "times": ["09:00"]}, text="Telmisartan 40 mg at 09:00",
+                     status="active", source_kind="prescription")
+    assert medicine_already({"same_as": "medicine:telmisartan", "covered": True}, [saved]) is saved
+    assert medicine_already({"same_as": "medicine:telmisartan", "covered": False}, [saved]) is None
+    assert medicine_already({"same_as": "medicine:other", "covered": True}, [saved]) is None
+
+
 def test_forty_first_messages_and_the_photo_exists():
     rows = [json.loads(line) for line in FIXTURE.read_text().splitlines() if line.strip()]
     assert len(rows) == 40
