@@ -206,6 +206,11 @@ def test_a_tease_and_a_missed_followup_are_rewritten_not_stripped():
     assert grounding.strip(text, cs) == text
     notes = " ".join(grounding.problems(cs))
     assert "do not apologise" in notes and "one question" in notes
+    both = grounding._parse(json.dumps({"claims": [], "framing_missing": True, "question_unanswered": True}))
+    assert {c.source for c in both} == {"framing_missing", "question_unanswered"}
+    assert grounding.strip("Metformin helps. Okay, noted.", both) == "Metformin helps. Okay, noted."
+    more = " ".join(grounding.problems(both))
+    assert "general information" in more and "Do not only say noted" in more
 
 
 def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
@@ -214,7 +219,9 @@ def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
     live = [json.loads(line) for line in LIVE.read_text().splitlines() if line.strip()]
     curious = [c for c in live if c["kind"].startswith("curious_")]
     assert len(curious) == 10
-    assert {c["status"] for c in live} == {"open"}
+    still_open = {c["id"] for c in live if c["status"] == "open"}
+    assert {"live-advice-medicine-en", "live-tease-en", "live-question-quiet-en"} <= still_open
+    assert all(c["status"] == "fixed" for c in live if c["id"] in {"live-advice-sleep-en", "live-friends-en", "live-trip-en"})
     seeds = [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
     protein = next(c for c in seeds if c["id"] == "seed-promise-protein-tracking")
     assert protein["status"] == "open"

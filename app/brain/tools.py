@@ -3175,8 +3175,10 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
 
 @tool(
     "whats_pending",
-    "Everything open for the family in one list: orders, rides, approvals, reminders, family chores, questions; for each, "
-    "who must act next and what, and anything stuck. Use for 'kya baaki hai?', 'what's pending?', 'what do I need to do?'. "
+    "Everything open for the family in one list: orders, rides, approvals, reminders, family chores, questions, and a "
+    "medicine or other change still marked pending; for each, who must act next and what, and anything stuck. A pending "
+    "change is listed so you can ask. Do not approve or reject it here. Use for 'kya baaki hai?', 'what's pending?', "
+    "'what do I need to do?', 'anything left today?'. "
     "mine=true lists only what the speaker must do.",
     {"mine": {"type": "boolean"}},
     [],

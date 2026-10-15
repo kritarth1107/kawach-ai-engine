@@ -37,7 +37,7 @@ def test_household_has_no_self_care_line_for_an_elder_or_their_caregiver():
 
 def test_every_health_answer_carries_when_to_see_the_doctor():
     assert "ends with one short line on when to see or call the doctor" in PERSONA
-    assert "says in one short line that it is general information and when to see or call the doctor" in REPLY_FORMAT
+    assert "says in one short line that it is general information and to confirm with their doctor or pharmacist" in REPLY_FORMAT
 
 
 def test_no_dose_decisions_of_her_own_and_no_invented_reason_for_a_missed_reminder():
@@ -99,6 +99,7 @@ def test_extra_rules_and_low_effort_only_on_health_turns():
     health = grounding._system(True, True)
     assert "dose_change" not in base and "doctor_note_missing" not in base  # those two stay on health turns only
     assert "followup_missing" in base and "unwanted_apology" in base
+    assert "framing_missing" in base and "question_unanswered" in base
     assert "6. doctor_note_missing" in health and '7. For each advice claim also add "dose_change"' in health
     assert grounding._system(False, True).count("5. doctor_note_missing") == 1
     assert grounding.effort_for(False) == "minimal" and grounding.effort_for(True) == "low"

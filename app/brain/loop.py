@@ -1155,8 +1155,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                     problems = []
             claims: list = []
             if not problems:
+                asked = "?" in (req.text or "") or "？" in (req.text or "")
                 claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                               tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions))
+                                               tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions),
+                                               always=asked)
                 problems += grounding.problems(claims)
             trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
@@ -1164,7 +1166,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
-            strippable = [c for c in claims if c.source not in ("doctor_note", "unwanted_apology", "followup_missing")]
+            strippable = [c for c in claims if c.source not in (
+                "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered")]
             if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)):
                 # A second draft that still invents, advises, or opens as a note is not sent on for another wording.
                 # A missing "see a doctor" line has nothing to cut, so that one gets one more rewrite.

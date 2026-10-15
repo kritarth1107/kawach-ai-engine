@@ -97,13 +97,19 @@ PROMPT_ACTIONS = PROMPT.replace("what Saheli herself will do, ", "").replace("\n
 
 # Every reply, including ones that are not about health: a tease is not an apology, and something personal gets one question.
 _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR MESSAGES are a joke, a tease, or an accusation of a
-   motive she did not state (she did not call them a liar). A real correction, or a fact she had wrong, still gets one brief
-   sorry. followup_missing = true when their latest message shares something personal (an outing, a friend, a film, a meal
-   they loved, a worry, the gym, a trip, trouble sleeping) and the REPLY does not ask one question about that thing and no
-   TOOL RESULT shows remember saved it. False on a health problem, a medicine, an order, or when they said they are busy or
-   will tell you later. A short yes to the previous question still shares whatever that question was about (trouble
-   sleeping, a film, a meal, a trip): tips instead of one question about that thing is followup_missing. Add
-   "unwanted_apology": true|false and "followup_missing": true|false to the JSON.
+   motive she did not state. She stated that fact only when an earlier message of hers in the sources says it. Them saying
+   she called them a liar is not that fact, and it is not a correction. A brief sorry is only for a fact her own earlier
+   message stated. followup_missing = true when their latest message shares something personal (an outing, a friend, a film,
+   a meal they loved, a worry, the gym, a trip, trouble sleeping) or is a short yes to her previous question about one of
+   those, and the REPLY does not ask one question about that thing and no TOOL RESULT shows remember saved it. An
+   acknowledgement ("I'll wait", "noted", "okay") is not that question. False on a health problem, a medicine, an order, or
+   when they said they are busy or will tell you later. framing_missing = true when the REPLY explains what a medicine does
+   or a side effect, or gives a health fact of her own, and does not say both that this is general information and to check
+   with a doctor or pharmacist. False when she only repeats their schedule, dose or record, or the reply already says both.
+   question_unanswered = true when their latest message asks her for a fact or a time (when not to message, what she has
+   saved, which one) and the REPLY only acknowledges it (noted, okay, sure) without the fact and without one question that
+   asks them for it. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it. Add
+   "unwanted_apology", "followup_missing", "framing_missing" and "question_unanswered" as true|false to the JSON.
 
 """
 
@@ -159,7 +165,7 @@ class Claim:
 
     @property
     def problem(self) -> bool:
-        if self.source in ("doctor_note", "unwanted_apology", "followup_missing"):
+        if self.source in ("doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered"):
             return True
         if self.kind == "advice":
             if self.dose_change:
@@ -192,6 +198,10 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
         out.append(Claim(kind="advice", quote="[apology for a tease]", supported=False, prescriptive=True, source="unwanted_apology"))
     if isinstance(data, dict) and data.get("followup_missing") is True:
         out.append(Claim(kind="advice", quote="[no follow-up]", supported=False, prescriptive=True, source="followup_missing"))
+    if isinstance(data, dict) and data.get("framing_missing") is True:
+        out.append(Claim(kind="advice", quote="[general information]", supported=False, prescriptive=True, source="framing_missing"))
+    if isinstance(data, dict) and data.get("question_unanswered") is True:
+        out.append(Claim(kind="advice", quote="[no answer]", supported=False, prescriptive=True, source="question_unanswered"))
     if isinstance(data, dict) and data.get("doctor_note_missing") is True and doctor_note:
         # Health information always comes with when to see a doctor (persona; founder's health rule). No quote: nothing to
         # strip, only a rewrite that adds the line.
@@ -200,10 +210,11 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
 
 
 async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str], actions: bool = False,
-                doctor_note: bool = False) -> list[Claim]:
+                doctor_note: bool = False, always: bool = False) -> list[Claim]:
     """The claims in the draft that memory, their messages and this turn's tools do not support (or own advice).
-    actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities."""
-    if os.getenv("GROUNDING_CHECK", "on").strip().lower() == "off" or not needs_check(draft):
+    actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities.
+    always=True: their message was a question, so a short acknowledgement is still checked."""
+    if os.getenv("GROUNDING_CHECK", "on").strip().lower() == "off" or not (always or needs_check(draft)):
         return []
     # A health reply keeps the long record. Anything else is checked against the front of it: the care record is
     # first, and a 24k-character memory was a second slow call on almost every turn (live 15 Oct, judge p50 1.1 s).
@@ -249,8 +260,13 @@ def problems(claims: list[Claim]) -> list[str]:
             out.append("they were teasing, or you did not do what they said: reply lightly in their language, and do not apologise. "
                        "One brief sorry only when a fact you stated was wrong")
         elif c.source == "followup_missing":
-            out.append("they shared something personal: ask one question about that thing, or save it with remember. Do not only "
-                       "wish them well, and do not give tips of your own")
+            out.append("they shared something personal, or said yes to your question about it: ask one question about that thing, "
+                       "or save it with remember. Do not only wish them well, wait, or give tips of your own")
+        elif c.source == "framing_missing":
+            out.append("you explained a medicine or a health fact: say in one short line that it is general information and to "
+                       "confirm with their doctor or pharmacist. Do not change a dose")
+        elif c.source == "question_unanswered":
+            out.append("they asked you something: answer it, or ask the one fact you do not have. Do not only say noted or okay")
         elif c.kind == "advice" and c.dose_change:
             out.append(f"'{c.quote}' tells them to skip, delay, double or change a dose: only their doctor decides that. Do not say it; "
                        "ask them to check with their doctor or pharmacist (or that you are checking with the family), and offer to note it")
@@ -273,6 +289,7 @@ _SENT = re.compile(r"(?<=[.!?।])\s+|\n+")
 
 def strip(text: str, claims: list[Claim]) -> str:
     """Remove the sentences that carry an unsupported quote (the last resort after a rewrite still invents)."""
-    quotes = [c.quote.lower() for c in claims if c.quote and c.source not in ("doctor_note", "unwanted_apology", "followup_missing")]
+    quotes = [c.quote.lower() for c in claims if c.quote and c.source not in (
+        "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered")]
     kept = [s for s in _SENT.split(text or "") if s.strip() and not any(q in s.lower() for q in quotes)]
     return " ".join(kept).strip()

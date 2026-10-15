@@ -1,8 +1,9 @@
 """One view of everything the family has handed over: every open job has a state, an owner and a next action.
 
 The jobs live in two stores built for their work: care_tasks (orders, rides, bookings run by the browser agents and fast
-paths) and open_loops (follow-ups, questions, family chores, appointment and refill reminders). This module reads both
-into one shape, so the brain, WhatsApp ("what's pending?"), the dashboard Tasks page and the metrics see the same list:
+paths) and open_loops (follow-ups, questions, family chores, appointment and refill reminders). A care fact still marked
+pending is the same kind of wait: someone must confirm it before it counts. This module reads all of them into one
+shape, so the brain, WhatsApp ("what's pending?"), the dashboard Tasks page and the metrics see the same list:
 
     {id, kind, title, state, owner, waiting_on, next_action, due_at, updated_at, source}
 
@@ -17,7 +18,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.care.models import OpenLoop
+from app.care.models import CareFact, FamilyRoster, OpenLoop
 from app.core import clock
 from app.tasks.models import Task
 
@@ -65,6 +66,16 @@ def from_task(t: Task) -> dict:
         "state": state, "owner": owner, "waiting_on": owner if state == "waiting" else None, "next_action": action,
         "due_at": _iso(t.deadline_at) if state in ("working", "waiting") else None, "updated_at": _iso(t.updated_at),
         "requested_by": t.requested_by, "subject": t.subject_id, "source": "task",
+    }
+
+
+def from_pending(f: CareFact, owner: str) -> dict:
+    """A medicine or other change that is saved but not in effect until someone confirms it."""
+    return {
+        "id": f"fact:{f.id}", "kind": "confirm", "title": (f.text or f.key)[:90], "state": "waiting", "owner": owner,
+        "waiting_on": owner, "next_action": "ask whether to keep this change; do not approve or reject it yourself",
+        "due_at": None, "updated_at": _iso(f.recorded_at), "requested_by": f.stated_by, "subject": f.subject_id,
+        "source": "fact", "key": f.key,
     }
 
 
@@ -127,6 +138,17 @@ async def items(session: AsyncSession, family_id: str, *, open_only: bool = True
         lq = lq.where(or_(OpenLoop.created_at >= since, OpenLoop.status == "open"))
     rows = [from_task(t) for t in (await session.execute(tq.order_by(Task.updated_at.desc()).limit(limit))).scalars()]
     rows += [from_loop(l) for l in (await session.execute(lq.order_by(OpenLoop.updated_at.desc()).limit(limit))).scalars()]
+    roster = await session.get(FamilyRoster, family_id)
+    members = list((roster.members if roster else None) or [])
+    if roster and roster.elder:
+        members = [roster.elder, *members]
+    caregivers = [m.get("id") for m in members if m.get("id") and "caregiver" in (m.get("role") or "")]
+    fq = select(CareFact).where(CareFact.family_id == family_id, CareFact.status == "pending")
+    if subjects is not None:
+        fq = fq.where(CareFact.subject_id.in_(subjects))
+    for f in (await session.execute(fq.limit(limit))).scalars():
+        owner = next((c for c in caregivers if c != f.subject_id), caregivers[0] if caregivers else f.subject_id)
+        rows.append(from_pending(f, owner))
     now = clock.now()
     for r in rows:
         r["stuck"] = stuck(r, now)

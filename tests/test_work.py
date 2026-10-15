@@ -1,10 +1,13 @@
 """Every job the family handed over has a state, an owner and a next action; stuck jobs are flagged (founder's slides)."""
 
 import json
+import uuid
 from datetime import timedelta
 
 from app.brain import tools
 from app.care import store, work
+from app.care.models import CareFact
+from app.core import clock
 from app.sim.world import SimHost
 from app.tasks import runtime
 
@@ -42,6 +45,24 @@ async def test_orders_and_loops_in_one_list_with_owner_and_next_action(db, at):
     # the brain sees who acts next
     text = work.brief(rows, {MAA: "Kamla", SON: "Ravi"})
     assert "→ Kamla: send the login code" in text and "→ Ravi: do it: Fix the geyser" in text
+
+
+async def test_a_pending_medicine_change_is_still_open(db, at):
+    at("2026-10-15 02:00")
+    await store.save_roster(db, FAM, ROSTER[0], ROSTER)
+    db.add(CareFact(
+        id=uuid.uuid4(), family_id=FAM, subject_id=MAA, domain="medicine", key="medicine:magnesium",
+        value={"name": "Magnesium", "dose": "1 tablet"}, text="Magnesium 1 tablet", status="pending",
+        source_kind="elder_said", valid_from=clock.now(), recorded_at=clock.now(),
+    ))
+    await db.commit()
+    rows = await work.items(db, FAM)
+    hit = next(r for r in rows if r["source"] == "fact")
+    assert hit["state"] == "waiting" and hit["owner"] == SON and "Magnesium" in hit["title"]
+    assert "do not approve" in hit["next_action"]
+    listed = json.loads((await tools.run(ctx(db), "whats_pending", {}))[0])
+    assert any("Magnesium" in x["title"] for x in listed["open"])
+    assert "nothing pending" not in work.brief(rows, {MAA: "Kamla", SON: "Ravi"})
 
 
 async def test_a_job_past_its_deadline_is_flagged_stuck(db, at):
