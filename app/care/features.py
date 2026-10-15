@@ -403,9 +403,10 @@ async def report(session: AsyncSession, family_id: str, subject_id: str, days: i
     vitals = [
         {"at": e.at.isoformat(), "kind": (e.payload or {}).get("kind"), "value": (e.payload or {}).get("value"),
          "unit": (e.payload or {}).get("unit") or VITAL_UNITS.get(str((e.payload or {}).get("kind") or "")),
-         "note": (e.payload or {}).get("note"), "redFlag": (e.payload or {}).get("red_flag")}
+         "note": (e.payload or {}).get("note"), "summary": e.summary, "redFlag": (e.payload or {}).get("red_flag")}
         for e in evs if e.kind == "vital"
     ]
+    activities = [{"at": e.at.isoformat(), "text": e.summary} for e in evs if e.kind == "activity" and e.summary]
     from app.tasks.models import Task
     from app.tasks.runtime import rupees
 
@@ -421,6 +422,7 @@ async def report(session: AsyncSession, family_id: str, subject_id: str, days: i
         "from": start_day, "to": clock.ist_day(), "days": days, "generatedAt": end.isoformat(),
         "adherence": {"percent": round(100 * total_taken / total_exp) if total_exp else None, "taken": total_taken, "expected": total_exp, "byDay": adherence, "byMedicine": by_med},
         "vitals": vitals,
+        "activities": activities,
         "symptoms": [{"at": e.at.isoformat(), "text": e.summary, "level": (e.payload or {}).get("severity", "info")} for e in evs if e.kind == "symptom"],
         "mood": [{"at": e.at.isoformat(), "text": e.summary} for e in evs if e.kind in ("mood", "sleep", "meal")],
         "alerts": [{"at": e.at.isoformat(), "text": e.summary, "whatsapp": e.kind == "alert_whatsapp"} for e in evs if e.kind in CONCERN_KINDS],
@@ -440,9 +442,16 @@ def report_facts_text(name: str, r: dict) -> str:
             lines.append(f"- {m['name']}: {m['taken']}/{m['expected']} taken, {m['missed']} missed")
     vit = defaultdict(list)
     for v in r["vitals"]:
-        vit[v["kind"]].append(v["value"])
+        shown = v.get("value")
+        if shown in (None, ""):
+            shown = v.get("summary") or v.get("note")
+        if shown in (None, ""):
+            continue
+        vit[v.get("kind") or "reading"].append(shown)
     for k, vals in vit.items():
         lines.append(f"{(k or 'reading').upper()}: " + ", ".join(str(x) for x in vals[-7:]))
+    if r.get("activities"):
+        lines.append("Activity: " + "; ".join(a["text"] for a in r["activities"][-8:] if a.get("text")))
     if r.get("patterns"):
         from app.care import symptom_patterns
 

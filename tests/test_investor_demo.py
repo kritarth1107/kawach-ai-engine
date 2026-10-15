@@ -54,7 +54,58 @@ def test_a_covered_brand_is_not_a_second_medicine():
                      status="active", source_kind="prescription")
     assert medicine_already({"same_as": "medicine:telmisartan", "covered": True}, [saved]) is saved
     assert medicine_already({"same_as": "medicine:telmisartan", "covered": False}, [saved]) is None
+    assert medicine_already({"same_as": "medicine:telmisartan", "covered": False}, [saved],
+                            {"name": "Telma", "dose": "40 mg", "times": []}) is saved
+    assert medicine_already({"same_as": "medicine:telmisartan", "covered": False}, [saved],
+                            {"name": "Telma", "dose": "40 mg", "times": ["21:00"]}) is None
     assert medicine_already({"same_as": "medicine:other", "covered": True}, [saved]) is None
+
+
+def test_a_message_break_is_not_a_sentence():
+    from app.brain import guards
+
+    reply = "I'm on it. Is she all right?\n---\nShould I place this order?"
+    assert len(guards.sentences(reply)) == 3
+    assert guards.without_bookkeeping("Do not say you are looking it up.\n---\nLagaan is a classic. First time?") == (
+        "Lagaan is a classic. First time?")
+
+
+def test_who_she_is_stays_one_line_and_a_medicine_question_is_answered():
+    from app.brain import guards
+
+    pitch = "Would you like us to finish setting up her profile now?"
+    who = guards.settle_reply(pitch, None, situation="chit_chat", needs_framing=False, force_light=False,
+                              held_topic_text="", actions=[], prior_assistant=False, naming=False, user_text="Who are you?")
+    assert who == "I'm Saheli, from Kavach."
+    med = guards.settle_reply(pitch, None, situation="med_question", needs_framing=False, force_light=False,
+                              held_topic_text="", actions=[], prior_assistant=False, naming=False,
+                              user_text="Hi, can you remind my mom about her medicines?",
+                              medicines=[("Telmisartan", "40 mg", ["09:00"])])
+    assert "Telmisartan 40 mg at 09:00" in med and "check in a flight" not in med
+
+
+def test_a_saved_medicine_does_not_answer_the_price_she_just_gave():
+    from app.brain import guards
+
+    out = guards.settle_reply(
+        "Telmisartan is often cheaper at a Jan Aushadhi store.", None, situation="chit_chat", needs_framing=False,
+        force_light=False, held_topic_text="", actions=[], prior_assistant=True, naming=False,
+        user_text="Anything cheaper?", medicines=[("Telmisartan", "40 mg", ["09:00"])],
+        last_assistant="Milk and bread, to be confirmed, come to 240 rupees.")
+    assert "240" in out and "Telmisartan" not in out
+
+
+def test_a_reading_kept_only_in_the_summary_is_still_in_the_report():
+    from app.care.features import report_facts_text
+
+    text = report_facts_text("Meera", {
+        "from": "2026-10-10", "to": "2026-10-16",
+        "adherence": {"taken": 0, "expected": 7, "percent": 0, "byMedicine": []},
+        "vitals": [{"kind": None, "value": None, "summary": "BP 128/80"}],
+        "activities": [{"text": "Morning walk, 20 minutes"}],
+        "symptoms": [], "mood": [{"text": "Lunch: dal and rice"}], "alerts": [], "changes": [],
+    })
+    assert "BP 128/80" in text and "Morning walk, 20 minutes" in text
 
 
 def test_forty_first_messages_and_the_photo_exists():

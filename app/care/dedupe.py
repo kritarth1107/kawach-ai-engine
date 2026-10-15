@@ -96,16 +96,35 @@ class Same:
 
 MEDICINE_SAME = """You check whether a medicine about to be saved is already on this person's record.
 SAVED are their medicines. NEW is the one just named.
-A brand and the salt it is are the same medicine. A different drug is not the same, even at the same time of day.
-Return only JSON: {"same_as": "<the saved key>" or null, "covered": true when that saved medicine already has this dose and these times}"""
+A brand and the salt it is are the same medicine (Telma is telmisartan, Crocin is paracetamol). A different drug is not the same, even at the same time of day.
+A time of day with no clock (morning, evening, night) is not a new schedule when a clock time is already saved.
+Return only JSON: {"same_as": "<the saved key>" or null, "covered": true when it is that same drug and the dose matches, and NEW gives no different clock time}"""
 
 
-def medicine_already(data: dict, saved: list[CareFact]) -> CareFact | None:
-    """The saved medicine NEW repeats, when the judge says it is already fully there. A dose or time change is not this."""
-    if not isinstance(data, dict) or data.get("covered") is not True:
+def _dose_text(value: dict | None) -> str:
+    return re.sub(r"\s+", "", str((value or {}).get("dose") or "")).lower()
+
+
+def medicine_already(data: dict, saved: list[CareFact], value: dict | None = None) -> CareFact | None:
+    """The saved medicine NEW repeats. A different dose or a different clock time still writes.
+    Naming the same drug again, with the same dose and no new clock time, does not."""
+    if not isinstance(data, dict):
         return None
     key = str(data.get("same_as") or "")
-    return next((f for f in saved if f.key == key and not is_none_key(f.key)), None)
+    fact = next((f for f in saved if f.key == key and not is_none_key(f.key)), None)
+    if fact is None:
+        return None
+    if data.get("covered") is True:
+        return fact
+    if not isinstance(value, dict):
+        return None
+    new_times = [t for t in (value.get("times") or []) if isinstance(t, str) and ":" in t]
+    if new_times:
+        return None
+    new_dose, saved_dose = _dose_text(value), _dose_text(fact.value if isinstance(fact.value, dict) else {})
+    if new_dose and new_dose == saved_dose:
+        return fact
+    return None
 
 
 async def already_saved_medicine(session: AsyncSession, *, family_id: str, subject_id: str, key: str, text: str,
@@ -131,7 +150,7 @@ async def already_saved_medicine(session: AsyncSession, *, family_id: str, subje
     except Exception:  # noqa: BLE001 — a missed check saves it; the nightly report still lists a duplicate
         logger.warning("medicine duplicate check failed family=%s", family_id)
         return None
-    return medicine_already(_json(reply.text or ""), saved)
+    return medicine_already(_json(reply.text or ""), saved, value)
 
 
 async def check(session: AsyncSession, *, family_id: str, subject_id: str, domain: str, key: str, text: str,

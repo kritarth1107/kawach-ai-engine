@@ -37,7 +37,8 @@ def ascii_digits(text: str) -> str:
 
 
 def sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"(?<=[.!?।])\s+|\n+", text or "") if s.strip()]
+    """A line that is only --- splits two WhatsApp messages. It is not a sentence."""
+    return [s.strip() for s in re.split(r"(?<=[.!?।])\s+|\n+", text or "") if s.strip() and not re.fullmatch(r"-{3,}", s.strip())]
 
 
 def words(text: str) -> list[str]:
@@ -502,7 +503,7 @@ def question_problems(text: str) -> list[str]:
 
 
 _BOOKKEEPING = re.compile(
-    r"^\s*(i have (logged|noted|recorded)\b|according to (general )?(health sources|medical guidelines)\b)",
+    r"^\s*(i have (logged|noted|recorded)\b|according to (general )?(health sources|medical guidelines)\b|do not say\b)",
     re.I,
 )
 
@@ -1064,6 +1065,48 @@ _CAN = {
     "gurmukhi": "ਮੈਂ ਦਵਾਈ ਦੀ reminder ਰੱਖਦੀ ਹਾਂ, ਖਾਣੇ ਅਤੇ dose ਦਾ ਹਿਸਾਬ ਰੱਖਦੀ ਹਾਂ, ਅਤੇ grocery, ਦਵਾਈ ਜਾਂ ride ਤੁਹਾਡੇ ਹਾਂ ਤੋਂ ਬਾਅਦ ਮੰਗਵਾਉਂਦੀ ਹਾਂ, ਅਤੇ ਪਰਿਵਾਰ ਨੂੰ ਦਿਨ ਦਾ ਹਾਲ ਦੱਸਦੀ ਹਾਂ। ਫਲਾਈਟ check-in, ਡਾਕਟਰ ਨੂੰ ਫੋਨ, ਜਾਂ ਤੁਹਾਡੇ ਕੋਲ ਰਹਿਣਾ ਮੈਂ ਨਹੀਂ ਕਰ ਸਕਦੀ। ਕਿਸ ਗੱਲ ਤੋਂ ਸ਼ੁਰੂ ਕਰੀਏ?",
     "odia": "ମୁଁ ଔଷଧ reminder ରଖେ, ଖାଦ୍ୟ ଓ dose ହିସାବ ରଖେ, ଆଉ grocery, ଔଷଧ କିମ୍ବା ride ଆପଣଙ୍କ ହଁ ପରେ ଆଣେ, ପରିବାରକୁ ଦିନର ଖବର କହେ। ଫ୍ଲାଇଟ୍ check-in, ଡାକ୍ତରଙ୍କୁ ଫୋନ୍, କିମ୍ବା ଆପଣଙ୍କ ପାଖରେ ରହିବା ମୁଁ ପାରିବି ନାହିଁ। କେଉଁଥିରୁ ଆରମ୍ଭ କରିବା?",
 }
+_WHO = {
+    "english": "I'm Saheli, from Kavach.",
+    "indic": "Main Saheli hoon, Kavach se.",
+    "devanagari": "मैं Saheli हूँ, Kavach से।",
+    "mr": "मी Saheli आहे, Kavach कडून.",
+    "bengali": "আমি Saheli, Kavach-এর থেকে।",
+    "tamil": "நான் Saheli, Kavach-இலிருந்து.",
+    "telugu": "నేను Saheli, Kavach నుండి.",
+    "kannada": "ನಾನು Saheli, Kavach ನಿಂದ.",
+    "malayalam": "ഞാൻ Saheli, Kavach-ൽ നിന്ന്.",
+    "gujarati": "હું Saheli, Kavach તરફથી.",
+    "gurmukhi": "ਮੈਂ Saheli ਹਾਂ, Kavach ਤੋਂ।",
+    "odia": "ମୁଁ Saheli, Kavach ରୁ।",
+}
+_MED_AT = {
+    "english": "{med} is already on the record. What should we start with?",
+    "indic": "{med} pehle se likha hai. Kis baat se shuru karein?",
+    "devanagari": "{med} पहले से लिखा है। किस बात से शुरू करें?",
+    "mr": "{med} आधीच नोंदले आहे. कशापासून सुरू करू?",
+    "bengali": "{med} আগে থেকেই লেখা আছে। কোনটা দিয়ে শুরু করব?",
+    "tamil": "{med} ஏற்கனவே பதிவில் உள்ளது. எதிலிருந்து தொடங்கலாம்?",
+    "telugu": "{med} ఇప్పటికే రికార్డులో ఉంది. దేనితో మొదలుపెడదాం?",
+    "kannada": "{med} ಈಗಾಗಲೇ ದಾಖಲೆಯಲ್ಲಿದೆ. ಯಾವುದರಿಂದ ಶುರು ಮಾಡೋಣ?",
+    "malayalam": "{med} മുമ്പേ രേഖയിലുണ്ട്. എന്തിൽ നിന്ന് തുടങ്ങാം?",
+    "gujarati": "{med} પહેલેથી લખેલું છે. કઈ વાતથી શરૂ કરીએ?",
+    "gurmukhi": "{med} ਪਹਿਲਾਂ ਤੋਂ ਲਿਖਿਆ ਹੈ। ਕਿਸ ਗੱਲ ਤੋਂ ਸ਼ੁਰੂ ਕਰੀਏ?",
+    "odia": "{med} ଆଗରୁ ଲେଖା ଅଛି। କେଉଁଥିରୁ ଆରମ୍ଭ କରିବା?",
+}
+_LOOK = {
+    "english": "{last} Which option should I look at?",
+    "indic": "{last} Kaun sa option dekhoon?",
+    "devanagari": "{last} कौन सा विकल्प देखूँ?",
+    "mr": "{last} कोणता पर्याय बघू?",
+    "bengali": "{last} কোনটা দেখব?",
+    "tamil": "{last} எதைப் பார்க்கட்டும்?",
+    "telugu": "{last} ఏది చూడాలి?",
+    "kannada": "{last} ಯಾವುದನ್ನು ನೋಡಲಿ?",
+    "malayalam": "{last} ഏത് നോക്കട്ടെ?",
+    "gujarati": "{last} કયો વિકલ્પ જોઉં?",
+    "gurmukhi": "{last} ਕਿਹੜਾ ਵਿਕਲਪ ਵੇਖਾਂ?",
+    "odia": "{last} କେଉଁଟି ଦେଖିବି?",
+}
 
 
 def hello_profile(profile: dict | None, user_text: str) -> dict | None:
@@ -1098,12 +1141,44 @@ def setup_instead(reply: str, user_text: str) -> bool:
     return bool(_OFF_THREAD.search(reply or ""))
 
 
+def medicine_line(profile: dict | None, medicines: list[tuple[str, str, list[str]]]) -> str:
+    """The saved medicine, said back, when a setup pitch answered a medicine question."""
+    bits = []
+    for name, dose, times in medicines[:2]:
+        body = name + (f" {dose}" if dose else "")
+        if times:
+            body += " at " + ", ".join(times)
+        bits.append(body)
+    return canned(profile, _MED_AT).format(med="; ".join(bits))
+
+
+def pulled_off_last(reply: str, last: str, user_text: str, medicines: list[tuple[str, str, list[str]]] | None,
+                    actions: list | None) -> bool:
+    """Her last message was about something else, and this short question was answered with a saved medicine instead."""
+    if not last or answer_used(actions):
+        return False
+    text = user_text or ""
+    if ("?" not in text and "？" not in text) or len(words(text)) > 8:
+        return False
+    low_r, low_l = (reply or "").lower(), last.lower()
+    named = [n for n, _dose, _times in medicines or [] if len(n) >= 4 and n.lower() in low_r and n.lower() not in low_l]
+    return bool(named) and not shares_topic(reply, last)
+
+
 def settle_reply(text: str, profile: dict | None, *, situation: str, needs_framing: bool, force_light: bool, held_topic_text: str,
-                 actions: list | None, prior_assistant: bool, naming: bool, user_text: str = "") -> str:
+                 actions: list | None, prior_assistant: bool, naming: bool, user_text: str = "",
+                 medicines: list[tuple[str, str, list[str]]] | None = None, last_assistant: str = "") -> str:
     """The lines the model keeps dropping, written by code. A medicine explanation gets the framing. An apology with no
     earlier message of hers becomes a light reply. A short answer that she turned into setup goes back to her question."""
     out = text or ""
+    if pulled_off_last(out, last_assistant, user_text, medicines, actions):
+        last = sentences(last_assistant)
+        return canned(profile, _LOOK).format(last=last[-1] if last else last_assistant.strip()[:180])
     if setup_instead(out, user_text):
+        if len(words(user_text)) <= 3:
+            return canned(profile, _WHO)
+        if situation == "med_question" and medicines:
+            return medicine_line(profile, medicines)
         return canned(profile, _CAN)
     if situation == "med_question" or needs_framing:
         out = with_framing(profile, out)

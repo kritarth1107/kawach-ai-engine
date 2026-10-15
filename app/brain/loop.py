@@ -1091,6 +1091,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         earlier = await data.turns(req.speaker["id"])
         last_hers = next((t.text for t in reversed(earlier) if t.role == "assistant" and (t.text or "").strip() not in ("", "none")), "")
         ctx.prior_assistant = bool(last_hers)
+        ctx.last_assistant = last_hers
         ctx.held_topic = guards.held_topic(last_hers, req.text)
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
@@ -1360,10 +1361,23 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         naming = any(a.get("ok") and a["tool"] == "remember" and (a.get("args") or {}).get("domain") == "naming" for a in ctx.actions)
         from app.learn import situations
         ctx.situation = situations.tag(text=req.text, role=role, tools=[a["tool"] for a in ctx.actions if a.get("ok")])
+        saved_meds: list[tuple[str, str, list[str]]] = []
+        seen_meds: set[str] = set()
+        for pid in (req.speaker["id"], req.elder["id"]):
+            for fact in await data.facts(pid):
+                if fact.domain != "medicine" or fact.status != "active":
+                    continue
+                name = str((fact.value or {}).get("name") or "").strip()
+                if not name or name.lower() in seen_meds:
+                    continue
+                seen_meds.add(name.lower())
+                value = fact.value or {}
+                saved_meds.append((name, str(value.get("dose") or "").strip(), [str(t) for t in (value.get("times") or [])]))
         settled = guards.settle_reply(
             final, ctx.profiles.get(req.speaker["id"]), situation=ctx.situation, needs_framing=ctx.needs_framing,
             force_light=ctx.force_light, held_topic_text=ctx.held_topic, actions=ctx.actions,
-            prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text)
+            prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text,
+            medicines=saved_meds, last_assistant=ctx.last_assistant)
         if settled != final:
             final = settled
             guarded = True

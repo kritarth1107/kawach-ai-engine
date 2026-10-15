@@ -63,6 +63,7 @@ class TurnCtx:
     voice_unsure: bool = False
     # The message is a voice-note transcript. Its script and the speech engine's language are not a request to switch.
     voice: bool = False
+    last_assistant: str = ""  # her previous message in this chat, for a follow-up that left it
     # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
     messaged: set = field(default_factory=set)
     once: set = field(default_factory=set)  # side effects already done in this turn (a pin saved to a place)
@@ -337,6 +338,10 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         speech = language.merge(current.value if current else {}, {**details, "language": details.get("language") or a["name"]})
         if speech.get("language"):
             return await _save_language(ctx, subject, speech)
+    if domain == "naming":
+        name = str(a.get("name") or "").strip()
+        if name and name.lower() not in (ctx.user_text or "").lower():
+            raise ToolRefused("That name is not in what they just said. Do not save a name they did not use, and do not say it was saved.")
     if domain == "medicine":
         details["name"] = details.get("name") or a["name"]
         times = details.get("times") or []
