@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import json
+import logging
+import os
+import time
 
 from google import genai
 from google.genai import errors, types
 
 from app.core.config import get_settings
 from app.llm.router import LLMReply, ModelUnavailable, Route, ToolCall, ToolSpec, new_call_id, scrub
+
+logger = logging.getLogger(__name__)
+
+# The fixed prefix (persona, or whatever the caller put first, plus the tool schemas) is the same for every family.
+# An explicit cache bills those tokens at the cached rate. Anything after the first block stays on the request.
+_CACHE_TTL_S = 3600
+_CACHE_MIN_CHARS = 8000
+_gate: asyncio.Semaphore | None = None
+_gate_n = 0
 
 FOREIGN_SIGNATURE = b"skip_thought_signature_validator"
 
@@ -23,10 +37,25 @@ _LEVEL: dict[str, types.ThinkingLevel] = {
 }
 
 
+def gemini_limit() -> asyncio.Semaphore:
+    """How many Gemini calls may be in flight. Dream workers and live turns share this."""
+    global _gate, _gate_n
+    n = max(1, int(os.getenv("GEMINI_PARALLEL", "8")))
+    if _gate is None or n != _gate_n:
+        _gate = asyncio.Semaphore(n)
+        _gate_n = n
+    return _gate
+
+
+def _tool_payload(tools: list[ToolSpec]) -> list[dict]:
+    return [{"name": t.name, "description": t.description, "schema": t.schema} for t in tools]
+
+
 class GeminiProvider:
     def __init__(self, credentials=None) -> None:
         self._credentials = credentials
         self._clients: dict[str, genai.Client] = {}
+        self._prefix: dict[str, tuple[str, float]] = {}  # key -> (cache name or "", do not retry before)
 
     def _client(self, location: str) -> genai.Client:
         if location not in self._clients:
@@ -34,6 +63,39 @@ class GeminiProvider:
                 vertexai=True, project=get_settings().gcp_project_id, location=location, credentials=self._credentials
             )
         return self._clients[location]
+
+    async def _prefix_cache(self, route: Route, system: str, tools: list[ToolSpec]) -> str | None:
+        """The explicit cache of the fixed prefix, or None when it is off, too small, or Vertex refused it."""
+        if os.getenv("GEMINI_EXPLICIT_CACHE", "on") != "on" or not system or not tools:
+            return None
+        blob = system + json.dumps(_tool_payload(tools), sort_keys=True, default=str)
+        if len(blob) < _CACHE_MIN_CHARS:
+            return None
+        key = hashlib.sha256(f"{route.location}\n{route.model}\n{blob}".encode()).hexdigest()
+        hit = self._prefix.get(key)
+        now = time.monotonic()
+        if hit and hit[1] > now:
+            return hit[0] or None
+        try:
+            created = await self._client(route.location).aio.caches.create(
+                model=route.model,
+                config=types.CreateCachedContentConfig(
+                    display_name="saheli-prefix",
+                    system_instruction=system,
+                    tools=[types.Tool(function_declarations=[
+                        types.FunctionDeclaration(name=t.name, description=t.description, parameters_json_schema=t.schema)
+                        for t in tools
+                    ])],
+                    ttl=f"{_CACHE_TTL_S}s",
+                ),
+            )
+        except Exception:  # noqa: BLE001 — a cache miss bills the prefix at full price; the reply still goes out
+            logger.warning("gemini prefix cache was not created model=%s", route.model, exc_info=True)
+            self._prefix[key] = ("", now + 600)
+            return None
+        name = getattr(created, "name", None) or ""
+        self._prefix[key] = (name, now + _CACHE_TTL_S - 300)
+        return name or None
 
     async def complete(
         self,
@@ -46,28 +108,47 @@ class GeminiProvider:
         max_tokens: int,
         effort: str,
     ) -> LLMReply:
-        config = types.GenerateContentConfig(
-            system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
-            max_output_tokens=max_tokens,
-            thinking_config=types.ThinkingConfig(thinking_level=_LEVEL.get(effort, types.ThinkingLevel.MEDIUM)),
-            # We run tools ourselves; never let the SDK try to call them.
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        )
-        if tools:
-            config.tools = [
-                types.Tool(
-                    function_declarations=[
-                        types.FunctionDeclaration(name=t.name, description=t.description, parameters_json_schema=t.schema)
-                        for t in tools
-                    ]
-                )
-            ]
+        # The first stable block plus the tool schemas are the cached prefix. The rest (this family's record, this
+        # turn) changes every call and is not cached.
+        prefix = system_stable[0] if system_stable else ""
+        rest = "\n\n".join(p for p in (*system_stable[1:], system_dynamic) if p)
+        cache_name = await self._prefix_cache(route, prefix, tools) if tools else None
+        thinking = types.ThinkingConfig(thinking_level=_LEVEL.get(effort, types.ThinkingLevel.MEDIUM))
+        no_auto = types.AutomaticFunctionCallingConfig(disable=True)
+        if cache_name:
+            config = types.GenerateContentConfig(
+                cached_content=cache_name, max_output_tokens=max_tokens, thinking_config=thinking,
+                automatic_function_calling=no_auto,
+            )
+        else:
+            config = types.GenerateContentConfig(
+                system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
+                max_output_tokens=max_tokens,
+                thinking_config=thinking,
+                automatic_function_calling=no_auto,
+            )
+            if tools:
+                config.tools = [
+                    types.Tool(
+                        function_declarations=[
+                            types.FunctionDeclaration(name=t.name, description=t.description, parameters_json_schema=t.schema)
+                            for t in tools
+                        ]
+                    )
+                ]
         contents = to_gemini_contents(messages, route.model)
+        if cache_name and rest:
+            lead = types.Part(text=scrub("(Context for this turn, not a message from the person)\n" + rest))
+            if contents and contents[0].role == "user" and contents[0].parts is not None:
+                contents[0].parts.insert(0, lead)
+            else:
+                contents.insert(0, types.Content(role="user", parts=[lead]))
         for attempt in range(2):
             try:
-                resp = await self._client(route.location).aio.models.generate_content(
-                    model=route.model, contents=contents, config=config
-                )
+                async with gemini_limit():
+                    resp = await self._client(route.location).aio.models.generate_content(
+                        model=route.model, contents=contents, config=config
+                    )
             except errors.APIError as exc:
                 code = getattr(exc, "code", None)
                 if code in (403, 404, 429) or (code or 500) >= 500:

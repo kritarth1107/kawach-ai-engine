@@ -172,6 +172,22 @@ def specs() -> list[ToolSpec]:
     return [spec for spec, _ in _TOOLS.values()]
 
 
+# Tools that only do something once a task is already running. A cold message can still log a meal, start an
+# order, set up, or ask for the brief: those stay. Never chosen from the words someone typed.
+_WHEN_TASK = {"task_input", "order_feedback", "spending", "done_in_app", "cancel_task", "task_status"}
+_WHEN_SYSTEM = {"weekly_report", "service_status"}
+
+
+def specs_for(*, open_tasks: bool = False, system: bool = False) -> list[ToolSpec]:
+    """The tools for this turn. A running task and a scheduled turn add the tools that only those need."""
+    skip = set(_WHEN_TASK) | set(_WHEN_SYSTEM)
+    if open_tasks:
+        skip -= _WHEN_TASK
+    if system:
+        skip -= _WHEN_SYSTEM
+    return [spec for spec, _ in _TOOLS.values() if spec.name not in skip]
+
+
 def arg_problems(schema: dict, args: Any) -> list[str]:
     """What is wrong with a call against its tool's schema: a missing required field or a value outside an enum (a field the
     tool does not take is left alone). Models other than Gemini do not always hold to the schema (live 2026-10-14: stop with

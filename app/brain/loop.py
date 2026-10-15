@@ -34,6 +34,7 @@ BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
 # paid A/B on the test world shows medium is at least 5 points better at p90 <= 15 s (founder decision D3).
 BRAIN_EFFORT_HARD = os.getenv("BRAIN_EFFORT_HARD", BRAIN_EFFORT)
 HISTORY_TURNS = 40
+PROMPT_TURN_CHARS = 500  # older turns in the prompt; the care record keeps the facts, the stored turn stays whole
 # Small talk and acks, from the situation tagger's existing labels. A greeting does not re-read the whole thread,
 # think hard, or wait on the reply-path judge. A tool call still runs; the reply after it thinks at the normal depth.
 LIGHT_SITUATIONS = frozenset({"thanks", "chit_chat"})
@@ -144,6 +145,7 @@ class TurnData:
         self._turns: dict[str, list] | None = None
         self._tasks: list | None = None
         self.history_full = True  # set by history(): did the thread fill a whole history window?
+        self.open_tasks = False  # an order or ride is already running (its tools come back on)
 
     async def facts(self, subject: str) -> list:
         if subject not in self._facts:
@@ -265,6 +267,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     from app.tasks import runtime as task_runtime
 
     tasks = await data.tasks()
+    data.open_tasks = bool(tasks)
     dose = await dose_answer_block(data, req)
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
@@ -572,10 +575,13 @@ async def history(session: AsyncSession, req: TurnRequest, data: TurnData | None
         if t.role != "user" and (t.meta or {}).get("waiting"):
             continue  # it waited while their chat was closed: the WAITING block gives it now, as it stands
         stamp = clock.ist(t.at).strftime("%d %b %H:%M")
+        said = t.text or ""
+        if len(said) > PROMPT_TURN_CHARS:
+            said = said[:PROMPT_TURN_CHARS].rstrip() + "…"
         if t.role == "user":
-            msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {t.text}"}]})
+            msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {said}"}]})
         else:
-            msgs.append({"role": "assistant", "text": t.text, "tool_calls": []})
+            msgs.append({"role": "assistant", "text": said, "tool_calls": []})
     while msgs and msgs[0]["role"] != "user":
         msgs.pop(0)
     return msgs
@@ -1198,7 +1204,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                     system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
                     messages=msgs,
                     # On the last step there are no tools, so the person always gets a reply.
-                    tools=None if last else tools.specs(),
+                    tools=None if last else tools.specs_for(open_tasks=data.open_tasks, system=is_system),
                     max_tokens=LIGHT_MAX_TOKENS if effort == "minimal" else 6000,
                     effort=effort,
                     essential=not is_system,  # past the hard cap only people's messages get answers
