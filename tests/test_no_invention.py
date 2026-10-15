@@ -278,7 +278,7 @@ def test_todays_slips_are_open_replay_cases_and_protein_stays_open():
     from eval.replay_cases import REASON
     reason = [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
     assert next(c["status"] for c in reason if c["id"] == "reason-consent-pending") == "fixed"
-    assert next(c["status"] for c in reason if c["id"] == "reason-yes-sleep") == "open"
+    assert next(c["status"] for c in reason if c["id"] == "reason-yes-sleep") == "fixed"
     seeds = [json.loads(line) for line in SEEDS.read_text().splitlines() if line.strip()]
     protein = next(c for c in seeds if c["id"] == "seed-promise-protein-tracking")
     assert protein["status"] == "open"
