@@ -3,7 +3,7 @@
 Per family, after the dream's own steps:
 1. the duplicate merge (app.care.dedupe; FACT_MERGE=dryrun lists, on applies), so the memory score sees the record as
    it stands after it (the 02:15 consolidate job then skips the families merged here);
-2. the full-memory judge on every real Saheli message of the day (app.quality.judge);
+2. the full-memory judge on the day's sample of real Saheli messages (app.quality.judge);
 3. checks 2 and 3 and the reply pass rate (app.quality.daily);
 4. the memory score (app.quality.memory_score), with unknown truths asked once and failures filed as replay cases;
 5. replay cases from the judge's failures.

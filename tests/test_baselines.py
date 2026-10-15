@@ -24,7 +24,7 @@ async def med(db):
     clock.set_now(ist(1, "07:00"))
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder={"id": ELDER, "name": "Kamla"},
                       speaker={"id": CG, "name": "Asha", "role": "caregiver"}, members=[{"id": ELDER, "name": "Kamla"}, {"id": CG, "name": "Asha"}])
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00", "21:00"]},
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": {"dose": "500 mg", "times": ["08:00", "21:00"]},
                                     "sentence": "Metformin 500 mg at 08:00 and 21:00"})
 
 

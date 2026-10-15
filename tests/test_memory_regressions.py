@@ -32,8 +32,8 @@ def test_one_key_per_medicine():
 async def test_restating_a_medicine_without_times_keeps_its_times(db, at):
     at("2026-10-05 10:00")
     c = ctx(db)
-    await call(c, "remember", {"domain": "medicine", "name": "Thyronorm 50", "details": {"name": "Thyronorm", "dose": "50 mcg", "times": ["07:00"]}, "sentence": "Thyronorm 50 mcg at 7"})
-    out = await call(c, "remember", {"domain": "medicine", "name": "Thyronorm", "details": {"name": "Thyronorm", "dose": "50 mcg"}, "sentence": "Thyronorm 50 mcg"})
+    await call(c, "remember", {"about": AAI, "domain": "medicine", "name": "Thyronorm 50", "details": {"name": "Thyronorm", "dose": "50 mcg", "times": ["07:00"]}, "sentence": "Thyronorm 50 mcg at 7"})
+    out = await call(c, "remember", {"about": AAI, "domain": "medicine", "name": "Thyronorm", "details": {"name": "Thyronorm", "dose": "50 mcg"}, "sentence": "Thyronorm 50 mcg"})
     assert out["result"] == "unchanged"
     rows = await store.facts(db, FAM, AAI, domains=["medicine"])
     assert [(r.key, r.value["times"], r.status) for r in rows] == [("medicine:thyronorm", ["07:00"], "active")]
@@ -54,9 +54,9 @@ async def test_approving_a_change_never_erases_times(db, at):
 async def test_logging_the_same_dose_twice_is_flagged(db, at):
     at("2026-10-05 08:00")
     e = ctx(db, AAI, "elder")
-    await call(e, "log_dose", {"medicine": "Ultracet", "outcome": "taken"})
+    await call(e, "log_dose", {"about": AAI, "medicine": "Ultracet", "outcome": "taken"})
     at("2026-10-05 08:14")
-    out = await call(e, "log_dose", {"medicine": "Ultracet", "outcome": "taken"})
+    out = await call(e, "log_dose", {"about": AAI, "medicine": "Ultracet", "outcome": "taken"})
     assert "possible_double_dose" in out
 
 

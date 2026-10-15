@@ -204,7 +204,12 @@ async def email(session: AsyncSession, day: str | None = None) -> tuple[str, str
             extra += f"; {det['errors']} not checked (judge error)"
         lines.append(f"{i}. {LABELS[c]}: {_num(row.get('value'))} ({extra})")
     rep = t.get("replies") or {}
-    lines.append(f"Every reply graded by the full-memory judge: {_num(rep.get('value'))} passed ({(rep.get('detail') or {}).get('num', 0)} of {rep.get('n', 0)})")
+    det = rep.get("detail") or {}
+    sent = det.get("sent")
+    sample = f"{det.get('num', 0)} of {rep.get('n', 0)} graded"
+    if sent is not None:
+        sample += f", {sent} sent"
+    lines.append(f"Replies in the day's sample: {_num(rep.get('value'))} passed ({sample})")
     lines.append("")
     if data["memory"]:
         lines.append("Memory score per family (lowest across its people; stored / recalled / used):")

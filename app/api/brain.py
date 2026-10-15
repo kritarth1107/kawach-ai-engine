@@ -219,6 +219,21 @@ async def run_nudges(host_for) -> dict:
     return out
 
 
+class NudgeDueIn(BaseModel):
+    family_id: str = Field(max_length=64)
+    person_id: str = Field(max_length=64)
+
+
+@router.post("/jobs/nudge-due")
+async def nudge_due_job(body: NudgeDueIn, session: AsyncSession = Depends(get_db)) -> dict:
+    """A tap the backend handled (Done, the opener) with no engine turn. The next nudge tick reads this person."""
+    from app.care import nudges
+
+    await nudges.pull_due(session, body.family_id, body.person_id)
+    await session.commit()
+    return {"ok": True}
+
+
 @router.post("/jobs/nudge")
 async def nudge_job() -> dict:
     """Cloud Scheduler, every minute (D5): regular nudges and 5-minute reminder follow-ups. The admin flag nudge.regular

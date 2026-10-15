@@ -34,19 +34,19 @@ async def call(c, name, args):
 async def test_stock_counts_down_and_flags_refill(db, at):
     at("2026-10-01 08:00")
     c = ctx(db)
-    await call(c, "remember", {"domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine 5 mg twice"})
+    await call(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine 5 mg twice"})
     rows = await call(c, "medicine_stock", {})
     assert rows["medicines"][0]["stock"] is None and rows["unknown"] == ["Amlodipine"]
-    await call(c, "set_stock", {"medicine": "amlodipine", "count": 14})
+    await call(c, "set_stock", {"about": ELDER, "medicine": "amlodipine", "count": 14})
     for when in ("2026-10-01 08:10", "2026-10-01 20:10", "2026-10-02 08:10", "2026-10-02 20:10"):  # four doses (the same dose said twice is one)
         at(when)
-        await call(ctx(db, ELDER, "elder"), "log_dose", {"medicine": "Amlodipine", "outcome": "taken"})
+        await call(ctx(db, ELDER, "elder"), "log_dose", {"about": ELDER, "medicine": "Amlodipine", "outcome": "taken"})
     row = (await features.stock(db, FAM, ELDER))[0]
     assert row["stock"] == 10 and row["daysLeft"] == 5 and row["low"]
     low = await features.refill_candidates(db)
     assert [(f, s, r["key"]) for f, s, r in low] == [(FAM, ELDER, fact_key("medicine", "Amlodipine"))]
     # Restocking clears it.
-    await call(c, "set_stock", {"medicine": "Amlodipine", "count": 60})
+    await call(c, "set_stock", {"about": ELDER, "medicine": "Amlodipine", "count": 60})
     assert not (await features.stock(db, FAM, ELDER))[0]["low"]
 
 
@@ -65,9 +65,9 @@ async def test_self_care_logs_on_the_caregiver_not_the_elder(db, at):
 async def test_emergency_card_and_link(db, at):
     at("2026-10-02 09:00")
     c = ctx(db)
-    await call(c, "remember", {"domain": "profile", "name": "blood_group", "details": {"value": "B+"}, "sentence": "Blood group B+"})
-    await call(c, "remember", {"domain": "allergy", "name": "Penicillin", "details": {"allergen": "penicillin", "reaction": "rash"}, "sentence": "Allergic to penicillin"})
-    await call(c, "remember", {"domain": "contact", "name": "Asha", "details": {"name": "Asha", "phone": "+91 90000 00000", "relation": "daughter", "emergency": True}, "sentence": "Call Asha first"})
+    await call(c, "remember", {"about": ELDER, "domain": "profile", "name": "blood_group", "details": {"value": "B+"}, "sentence": "Blood group B+"})
+    await call(c, "remember", {"about": ELDER, "domain": "allergy", "name": "Penicillin", "details": {"allergen": "penicillin", "reaction": "rash"}, "sentence": "Allergic to penicillin"})
+    await call(c, "remember", {"about": ELDER, "domain": "contact", "name": "Asha", "details": {"name": "Asha", "phone": "+91 90000 00000", "relation": "daughter", "emergency": True}, "sentence": "Call Asha first"})
     out = await call(c, "emergency_card", {})
     assert "Blood Group: B+" in out["text"] and "penicillin (rash)" in out["text"] and "Asha (daughter)" in out["text"]
     assert out["link"] == f"https://kavach.test/e/{ELDER}" and out["missing"] == []
@@ -76,11 +76,11 @@ async def test_emergency_card_and_link(db, at):
 async def test_appointment_wakes_evening_before_and_two_hours_before(db, at):
     at("2026-10-02 09:00")
     c = ctx(db)
-    out = await call(c, "remember", {"domain": "appointment", "name": "Dr Iyer", "details": {"doctor": "Dr Iyer", "when": "2026-10-05T11:00", "place": "Apollo"}, "sentence": "Dr Iyer 5 Oct 11:00"})
+    out = await call(c, "remember", {"about": ELDER, "domain": "appointment", "name": "Dr Iyer", "details": {"doctor": "Dr Iyer", "when": "2026-10-05T11:00", "place": "Apollo"}, "sentence": "Dr Iyer 5 Oct 11:00"})
     assert len(out["reminders"]) == 3  # evening before, 2 h before, and the follow-up after the visit
     loops = [l for l in await store.live_loops(db, FAM, [ELDER]) if l.kind == "appointment"]
     assert sorted(clock.ist(l.wake_at).strftime("%d %H:%M") for l in loops) == ["04 19:00", "05 09:00"]
-    q = await call(c, "add_doctor_question", {"appointment": "Dr Iyer", "question": "Can the BP dose be lowered?"})
+    q = await call(c, "add_doctor_question", {"about": ELDER, "appointment": "Dr Iyer", "question": "Can the BP dose be lowered?"})
     assert q["questions"] == ["Can the BP dose be lowered?"]
     team = await call(c, "care_team", {})
     assert team["upcoming"][0]["doctor"] == "Dr Iyer" and team["upcoming"][0]["questions"] == ["Can the BP dose be lowered?"]
@@ -124,14 +124,14 @@ async def test_one_shot_wake_does_not_repeat(db, at, monkeypatch):
 async def test_wellbeing_and_report(db, at):
     at("2026-09-30 09:00")
     c = ctx(db)
-    await call(c, "remember", {"domain": "medicine", "name": "Metformin", "details": {"times": ["08:00"]}, "sentence": "Metformin at 8"})
+    await call(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": {"times": ["08:00"]}, "sentence": "Metformin at 8"})
     e = ctx(db, ELDER, "elder")
     for day in ("2026-09-30", "2026-10-01", "2026-10-02"):
         at(f"{day} 08:30")
         await store.add_turn(db, family_id=FAM, thread_id=ELDER, role="user", text="ho gaya", speaker_id=ELDER)
-        await call(e, "log_dose", {"medicine": "Metformin", "outcome": "taken"})
-    await call(e, "log_event", {"kind": "mood", "summary": "Felt low, missed Ravi", "severity": "watch"})
-    await call(e, "log_vital", {"kind": "bp", "value": "150/95"})
+        await call(e, "log_dose", {"about": ELDER, "medicine": "Metformin", "outcome": "taken"})
+    await call(e, "log_event", {"about": ELDER, "kind": "mood", "summary": "Felt low, missed Ravi", "severity": "watch"})
+    await call(e, "log_vital", {"about": ELDER, "kind": "bp", "value": "150/95"})
     w = await call(c, "wellbeing", {"days": 7})
     assert w["streak"] == 3 and "Felt low" in w["summary"]
     r = await features.report(db, FAM, ELDER, 7)
@@ -157,10 +157,10 @@ async def test_spending_counts_only_placed_orders(db, at):
 async def test_care_team_helpers_are_people_not_the_home_address(db, at):
     at("2026-10-02 09:00")
     c = ctx(db)
-    await call(c, "remember", {"domain": "home", "name": "Sunita", "details": {"name": "Sunita", "role": "cook", "phone": "+91 90000 00011"}, "sentence": "Sunita cooks lunch"})
-    await call(c, "remember", {"domain": "home", "name": "Driver", "details": {"role": "driver"}, "sentence": "A driver comes on weekdays"})
-    await call(c, "remember", {"domain": "home", "name": "home_address", "details": {"address": "12 Park Road", "city": "Pune", "pincode": "411001"}, "sentence": "Lives at 12 Park Road"})
-    await call(c, "remember", {"domain": "home", "name": "lives_with", "details": {"with": "son", "city": "Pune"}, "sentence": "Lives with her son"})
+    await call(c, "remember", {"about": ELDER, "domain": "home", "name": "Sunita", "details": {"name": "Sunita", "role": "cook", "phone": "+91 90000 00011"}, "sentence": "Sunita cooks lunch"})
+    await call(c, "remember", {"about": ELDER, "domain": "home", "name": "Driver", "details": {"role": "driver"}, "sentence": "A driver comes on weekdays"})
+    await call(c, "remember", {"about": ELDER, "domain": "home", "name": "home_address", "details": {"address": "12 Park Road", "city": "Pune", "pincode": "411001"}, "sentence": "Lives at 12 Park Road"})
+    await call(c, "remember", {"about": ELDER, "domain": "home", "name": "lives_with", "details": {"with": "son", "city": "Pune"}, "sentence": "Lives with her son"})
     team = await features.care_team(db, FAM, ELDER)
     assert sorted(h["name"] for h in team["helpers"]) == ["Driver", "Sunita"]
     assert all(h["key"].startswith("home:") for h in team["helpers"])

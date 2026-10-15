@@ -43,6 +43,8 @@ class ReplyLog(Base):
     judge_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     in_corpus: Mapped[bool] = mapped_column(Boolean, default=False)
+    # sample | always | skip: whether today's judge spends on this reply (app.quality.sample)
+    judge_band: Mapped[str | None] = mapped_column(String(12), nullable=True)
     # the turn as the model saw it: what was said, each tool call with its (trimmed) result, the final reply.
     # Raw (kept 90 days with the row); anonymised only when exported for training.
     trace: Mapped[list | None] = mapped_column(JSONB, nullable=True)

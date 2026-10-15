@@ -50,7 +50,7 @@ def model(monkeypatch):
 async def test_said_in_chat_is_logged(db, at, model):
     at("2026-10-02 10:00")
     await store.save_roster(db, FAM, E, [E, C])
-    model([LLMReply(text="", tool_calls=[ToolCall("c1", "log_outcome", {"kind": "fall", "summary": "slipped in the bathroom"})], model="fake"),
+    model([LLMReply(text="", tool_calls=[ToolCall("c1", "log_outcome", {"about": ELDER, "kind": "fall", "summary": "slipped in the bathroom"})], model="fake"),
            LLMReply(text="Oh no. Kya chot lagi hai?", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=E, speaker=E, members=[E, C], text="Main bathroom mein gir gayi", message_ref="o1"))
     got = await outcomes.recent(db, FAM, ELDER)
@@ -89,8 +89,8 @@ async def test_feedback_mutes_a_pattern_for_that_family(db, at):
 async def test_caregiver_medicine_change_is_an_automatic_outcome(db, at):
     at("2026-10-02 10:00")
     c = ctx(db)
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Telma", "details": {"dose": "40 mg", "times": ["09:00"]}, "sentence": "Telma 40 at 9"})
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Telma", "details": {"dose": "80 mg", "times": ["21:00"]}, "sentence": "Telma 80 at 9 pm"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Telma", "details": {"dose": "40 mg", "times": ["09:00"]}, "sentence": "Telma 40 at 9"})
+    await tools.run(c, "remember", {"about": ELDER, "domain": "medicine", "name": "Telma", "details": {"dose": "80 mg", "times": ["21:00"]}, "sentence": "Telma 80 at 9 pm"})
     got = await outcomes.recent(db, FAM, ELDER)
     assert [g["kind"] for g in got] == ["medicine_changed"] and got[0]["source"] == "auto"
 

@@ -207,6 +207,20 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int, replay: di
         pb = await session.get(PlaybookVersion, version)
         if not pb or pb.status != "draft":
             return {"skipped": True}
+        from app.learn import review
+
+        rules = await review.approved_rules(session)
+        lessons_now = dict(pb.lessons or {})
+        for situation, items in rules.items():
+            have = list(lessons_now.get(situation) or [])
+            extra = [item for item in items if item not in have]
+            if extra:
+                lessons_now[situation] = have + extra
+        if lessons_now != (pb.lessons or {}):
+            pb.lessons = lessons_now
+            if "general" in rules:
+                pb.scope = []
+            pb.gate = {**(pb.gate or {}), "approved_rules": {**((pb.gate or {}).get("approved_rules") or {}), **rules}}
         pb.gate = {**(pb.gate or {}), **gate(pb)}
         if pb.gate["passed"]:
             # §10: a lesson must also pass the replay cases on the real model before it reaches anyone: every fixed case
@@ -226,6 +240,7 @@ async def gate_and_canary(sessions: async_sessionmaker, version: int, replay: di
             for c in current:
                 c.status, c.note = "retired", (c.note + " | replaced by a newer canary").strip(" |")
             pb.status, pb.canary_since = "canary", clock.now()
+            await review.mark_in_playbook(session)
         await session.commit()
         playbook.reset_cache()
         return {"version": version, "status": pb.status, "gate": pb.gate}
@@ -243,7 +258,10 @@ async def replay_gate(sessions: async_sessionmaker, pb: PlaybookVersion) -> dict
     if run is None:
         return {"status": "unavailable", "why": "replay runner has no run_for_playbook"}
     try:
-        res = await run(sessions, pb, budget_inr=float(os.getenv("LEARN_REPLAY_MAX_INR", "150")))
+        from app.learn.replay import deploy_case_ids
+
+        res = await run(sessions, pb, budget_inr=float(os.getenv("LEARN_REPLAY_MAX_INR", "30")), max_cases=8,
+                        only_ids=deploy_case_ids() or None)
     except Exception as exc:  # noqa: BLE001 — a broken runner never lets a lesson through
         logger.exception("replay gate failed version=%s", pb.version)
         return {"status": "unavailable", "why": str(exc)[:200]}

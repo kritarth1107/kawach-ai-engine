@@ -55,8 +55,20 @@ async def nightly(sessions: async_sessionmaker, *, with_models: bool = True) -> 
 
 
 async def _auto_rules(sessions: async_sessionmaker) -> dict:
+    from app.learn.models import RuleProposal
+    from app.llm import router
+
     async with sessions() as session:
-        out = await review.auto_approve(session)
+        pending = [r.rule for r in (await session.execute(select(RuleProposal).where(RuleProposal.status == "proposed"))).scalars()]
+    if not pending:
+        return {"approved": 0, "dropped": 0}
+    try:
+        conflicts = await review.judge_tool_conflicts(pending)
+    except router.AllModelsFailed:
+        # No approval without the tool check: a rule that bans a working feature must not go into a draft.
+        return {"approved": 0, "dropped": 0, "waiting": "the tool check did not run"}
+    async with sessions() as session:
+        out = await review.auto_approve(session, conflicts)
         await session.commit()
     return out
 

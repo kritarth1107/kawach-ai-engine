@@ -29,7 +29,7 @@ EXTRACT_PROMPT = f"""You maintain the care memory for a person cared for by Sahe
 
 Nothing they say about their life is lost: a plan, a worry, a person they mention, a place, a preference, a habit, a goal, something they did. If it is not a fact for the record, it is a note or a plan.
 
-Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. A fact about a caregiver's own life (their gym, their medicine, their diet) is about them: give their person id in "about", or their name when only one person in PEOPLE has it. Omit "about" only for the care recipient. Someone who is not in PEOPLE is not given a medicine, dose, reading, plan or reminder, and it is not saved on the care recipient: put a note instead.
+Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. Every item has "about": the id of the person it is about. What someone says about themselves (their sleep, gym, medicine, diet, plans, mood) is about them: their own id, the one in brackets on their line, even when they are a caregiver. Another person's id only when they name or clearly mean that person (or answer Saheli's question about that person). Never file one person's things on another. Someone who is not in PEOPLE is not given a medicine, dose, reading, plan or reminder, and it is not saved on the care recipient: put a note instead.
 
 Domains (put each fact in the one that fits; no_order is only for an item never to buy again):
 {chr(10).join(f"- {d}: {what}" for d, what in sorted(DOMAINS.items()))}
@@ -39,8 +39,8 @@ When they say they have none (no regular medicines, no allergies, no long-term c
 A fact may carry links a family member said: a medicine is "for" a condition or "prescribed_by" a doctor, an appointment is "with_doctor" a doctor, a person is "related_to" another (as: son, neighbour). Give a link only when it was said, even for a fact already in the record (then repeat the fact as it is, with the link).
 
 Return only JSON:
-{{"facts": [{{"domain": "...", "name": "...", "none": false, "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
-  "stops": [{{"domain": "...", "name": "...", "reason": "...", "about": "person id or omit for the care recipient", "evidence": "..."}}],
+{{"facts": [{{"domain": "...", "name": "...", "none": false, "details": {{}}, "sentence": "one plain sentence", "about": "person id", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
+  "stops": [{{"domain": "...", "name": "...", "reason": "...", "about": "person id", "evidence": "..."}}],
   "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}],
   "readings": [{{"about": "person id", "kind": "weight|height|bmi|body_fat|muscle_mass|waist|bp|sugar|pulse|spo2|temperature|other", "name": "for other", "value": "73.5", "unit": "kg", "taken_on": "YYYY-MM-DD"}}],
   "plans": [{{"about": "person id", "what": "what will happen, one line", "when": "YYYY-MM-DDTHH:MM or null", "ask_after": "what to ask afterwards"}}],
@@ -75,12 +75,14 @@ async def families_with_new_turns(session: AsyncSession, limit: int = 50) -> lis
 host_for_readings = None  # tests swap in a sim host
 
 
-def filed_on(about, elder: dict, members: list[dict]) -> str | None:
-    """The member this is about. None means `about` names someone who is not a member: do not file it on the care recipient."""
+def filed_on(about, elder: dict, members: list[dict], default: str | None = None) -> str | None:
+    """The member this is about. None means `about` names someone who is not a member, or is blank when more than one
+    person spoke: do not file it on the care recipient. Blank is `default`, the one person who spoke in this batch (a
+    caregiver's own words are theirs, founder 2026-10-16)."""
     from app.care.members import UnknownMember, resolve_member
 
     if not str(about or "").strip():
-        return elder["id"]
+        return default
     try:
         return resolve_member(str(about), elder=elder, members=members)
     except UnknownMember:
@@ -102,6 +104,8 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     if not pending:
         return {"skipped": "nothing new"}
     names = {m["id"]: m.get("name") or m["id"] for m in roster.members} | {elder["id"]: elder.get("name") or "elder"}
+    spoke = {t.thread_id for t in pending if t.role == "user" and t.thread_id in names}
+    sole = next(iter(spoke)) if len(spoke) == 1 else None  # who an item with no "about" is about
     transcript = "\n".join(
         f"{clock.ist(t.at).strftime('%d %b %H:%M')} {'Saheli' if t.role == 'assistant' else names.get(t.thread_id, t.thread_id)} "
         f"[{t.thread_id}]: {scrub_secrets(t.text)}"
@@ -139,7 +143,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             f = {**f, "name": "none", "details": {"none": True}, "links": []}  # "has none": never a medicine or an item to avoid
         if domain not in DOMAINS or not f.get("name") or not f.get("sentence"):
             continue
-        subject = filed_on(f.get("about"), elder, roster.members)
+        subject = filed_on(f.get("about"), elder, roster.members, sole)
         if subject is None:
             counts["not_member"] = counts.get("not_member", 0) + 1
             continue
@@ -195,7 +199,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
 
     for s in data.get("stops") or []:
         if s.get("domain") in DOMAINS and s.get("name"):
-            subject = filed_on(s.get("about"), elder, roster.members)
+            subject = filed_on(s.get("about"), elder, roster.members, sole)
             if subject is None:
                 counts["not_member"] = counts.get("not_member", 0) + 1
                 continue
@@ -211,7 +215,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         if n.get("about") == "family":
             subject = "family"
         else:
-            subject = filed_on(n.get("about"), elder, roster.members)
+            subject = filed_on(n.get("about"), elder, roster.members, sole)
             if subject is None:
                 subject = "family"  # a note about someone who is not a member: not a medicine, and not the care recipient's fact
         existing = {x.slug: x for x in await store.notes(session, family_id, [subject])}
@@ -226,7 +230,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     from app.care import readings
 
     for r in (data.get("readings") or [])[:12]:
-        who = filed_on(r.get("about"), elder, roster.members) if isinstance(r, dict) else None
+        who = filed_on(r.get("about"), elder, roster.members, sole) if isinstance(r, dict) else None
         if who is None:
             counts["not_member"] = counts.get("not_member", 0) + 1
             continue
@@ -237,7 +241,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     for pl in (data.get("plans") or [])[:8]:
         if not isinstance(pl, dict) or not str(pl.get("what") or "").strip():
             continue
-        subject = filed_on(pl.get("about"), elder, roster.members)
+        subject = filed_on(pl.get("about"), elder, roster.members, sole)
         if subject is None:
             counts["not_member"] = counts.get("not_member", 0) + 1
             continue
@@ -259,7 +263,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         )
         counts["plans"] = counts.get("plans", 0) + 1
 
-    routine_of = {filed_on(f.get("about"), elder, roster.members)
+    routine_of = {filed_on(f.get("about"), elder, roster.members, sole)
                   for f in (data.get("facts") or []) if isinstance(f, dict) and f.get("domain") in ("routine", "activity")}
     routine_of.discard(None)
     if routine_of:
@@ -283,7 +287,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         score = mood.score_of(m.get("score")) if isinstance(m, dict) else None
         if not score:
             continue
-        subject = filed_on(m.get("about"), elder, roster.members)
+        subject = filed_on(m.get("about"), elder, roster.members, sole)
         if subject is None:
             counts["not_member"] = counts.get("not_member", 0) + 1
             continue

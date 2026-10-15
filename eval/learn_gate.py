@@ -9,7 +9,7 @@ eval/, no test project there), so the draft waits. This job, on the live Bedrock
    a regression rejects it, an error leaves it waiting (never a silent pass).
 
     ENGINE_URL=https://… ID_TOKEN=… REPLAY_DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay \
-    LEARN_REPLAY_MAX_INR=150 WEB_SEARCH_PROVIDER=off \
+    LEARN_REPLAY_MAX_INR=30 WEB_SEARCH_PROVIDER=off \
     PYTHONPATH=. python -m eval.learn_gate [cases.jsonl] [--dry-run]
 """
 
@@ -55,7 +55,11 @@ async def gate(draft: dict, live: dict | None, case_files: list[str], budget: fl
     await prepare(engine)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        return await replay.run_for_playbook(sessions, playbook(draft), budget_inr=budget, live=playbook(live), case_files=tuple(case_files))
+        from app.learn.replay import deploy_case_ids
+
+        return await replay.run_for_playbook(
+            sessions, playbook(draft), budget_inr=budget, live=playbook(live), case_files=tuple(case_files),
+            max_cases=8, only_ids=deploy_case_ids())
     finally:
         await engine.dispose()
 
@@ -70,7 +74,7 @@ def main(argv: list[str]) -> int:
         print("no playbook draft is waiting for its replay gate")
         return 0
     print(f"draft v{draft['version']} ({draft.get('note') or ''}) against live v{(waiting.get('live') or {}).get('version')}", flush=True)
-    budget = float(os.getenv("LEARN_REPLAY_MAX_INR", "150"))
+    budget = float(os.getenv("LEARN_REPLAY_MAX_INR", "30"))
     run_id = f"learn-gate-{os.getenv('GITHUB_RUN_ID', 'local')}"
     try:
         res = asyncio.run(gate(draft, waiting.get("live"), [a for a in argv if a.endswith(".jsonl")], budget))

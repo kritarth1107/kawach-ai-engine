@@ -98,9 +98,9 @@ async def test_a_reorder_offer_goes_out_on_a_fake_reply(api, at, db):
 
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=CG, members=[ELDER, CG])
     await store.save_roster(db, FAM, ELDER, [ELDER, CG])
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]},
+    await tools.run(c, "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]},
                                     "sentence": "Amlodipine 5 mg twice"})
-    await tools.run(c, "set_stock", {"medicine": "Amlodipine", "count": 6})
+    await tools.run(c, "set_stock", {"about": ELDER["id"], "medicine": "Amlodipine", "count": 6})
     await db.commit()
     assert await reorder.open_offers(db) == 1
     await db.commit()
@@ -121,8 +121,8 @@ async def test_a_reorder_offer_goes_out_on_a_fake_reply(api, at, db):
 async def test_daily_job_opens_refill_once(api, at, db):
     at("2026-10-01 08:00")
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=CG, members=[ELDER, CG])
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine 5 mg twice"})
-    await tools.run(c, "set_stock", {"medicine": "Amlodipine", "count": 6})
+    await tools.run(c, "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Amlodipine", "details": {"dose": "5 mg", "times": ["08:00", "20:00"]}, "sentence": "Amlodipine 5 mg twice"})
+    await tools.run(c, "set_stock", {"about": ELDER["id"], "medicine": "Amlodipine", "count": 6})
     await db.commit()
     at("2026-10-02 10:00")
     assert (await api.post("/v2/jobs/daily")).json()["refills"] == 1
@@ -192,8 +192,8 @@ async def test_metrics_and_spend_endpoints(api, at):
 async def test_dash_refill_refused_for_allergy_is_422(api, at, db):
     at("2026-10-02 10:00")
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=CG, members=[ELDER, CG])
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Lactulose syrup milk", "details": {"dose": "10 ml", "times": ["21:00"]}, "sentence": "Lactulose 10 ml at night"})
-    await tools.run(c, "remember", {"domain": "allergy", "name": "milk", "details": {"allergen": "milk"}, "sentence": "Allergic to milk"})
+    await tools.run(c, "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Lactulose syrup milk", "details": {"dose": "10 ml", "times": ["21:00"]}, "sentence": "Lactulose 10 ml at night"})
+    await tools.run(c, "remember", {"about": ELDER["id"], "domain": "allergy", "name": "milk", "details": {"allergen": "milk"}, "sentence": "Allergic to milk"})
     await db.commit()
     key = [f.key for f in await store.facts(db, FAM, ELDER["id"]) if f.domain == "medicine"][0]
     r = await api.post(f"/v2/dash/{FAM}/{ELDER['id']}/stock/{key.split(':', 1)[1]}/order", json={"actor": {"id": CG["id"], "name": "Asha"}, "service": "apollo"})

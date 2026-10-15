@@ -23,14 +23,14 @@ async def test_flywheel_numbers(db, at):
     at("2026-10-01 09:00")
     await store.save_roster(db, FAM, ROSTER[0], ROSTER)
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ROSTER[0], speaker=ROSTER[1], members=ROSTER)
-    await tools.run(c, "remember", {"domain": "medicine", "name": "Shelcal", "details": {"times": ["14:00"]}, "sentence": "Shelcal at 2"})
+    await tools.run(c, "remember", {"about": ROSTER[0]["id"], "domain": "medicine", "name": "Shelcal", "details": {"times": ["14:00"]}, "sentence": "Shelcal at 2"})
     db.add(_task(at, "done", placed=True))
     db.add(_task(at, "failed", when="2026-10-08 11:00"))
     db.add(_task(at, "done", placed=True, when="2026-10-08 11:30"))  # asked again after the failure: a reopen
     for d in ("2026-10-07", "2026-10-08"):
         at(f"{d} 14:10")
         await tools.run(tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ROSTER[0], speaker=ROSTER[0], members=ROSTER),
-                        "log_dose", {"medicine": "Shelcal", "outcome": "taken"})
+                        "log_dose", {"about": ROSTER[0]["id"], "medicine": "Shelcal", "outcome": "taken"})
     await db.commit()
     at("2026-10-09 10:00")
     out = await flywheel.compute(db, days=14)

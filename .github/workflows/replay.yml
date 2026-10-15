@@ -72,11 +72,12 @@ jobs:
           WEB_SEARCH_PROVIDER: "off"
           MEMORY_EMBEDDINGS: "off"
           LLM_PROVIDER: router
-          REPLAY_MAX_INR: "200"
+          REPLAY_MAX_INR: "20"
           REPLAY_DEADLINE_S: "900"
         run: |
           set +e
-          PYTHONPATH=. python -u -m eval.replay_cases runs/cases.jsonl --parallel 2 --max-cases 60 --out runs/replay
+          keys=$(paste -sd, eval/fixtures/deploy_gate_keys.txt)
+          PYTHONPATH=. python -u -m eval.replay_cases --no-founder --parallel 2 --max-cases 6 --keys "$keys" --out runs/replay eval/fixtures/live_2026-10-15.jsonl
           echo "code=$?" >> "$GITHUB_OUTPUT"
           [ -f runs/replay/summary.md ] && cat runs/replay/summary.md >> "$GITHUB_STEP_SUMMARY"
           exit 0

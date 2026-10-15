@@ -89,7 +89,7 @@ async def test_unsure_voice_note_from_a_caregiver_cannot_change_a_dose_directly(
                            value={"name": "Metformin", "dose": "500 mg", "times": ["08:00"]}, text="Metformin 500 mg at 08:00",
                            source_kind="caregiver_said", stated_by=SON["id"])
     await db.commit()
-    change = ToolCall("c1", "remember", {"domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "1000 mg"},
+    change = ToolCall("c1", "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "1000 mg"},
                                          "sentence": "Metformin 1000 mg"})
     model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Aapne 1000 mg kaha? Pakka?", tool_calls=[], model="fake")])
     out = await run_turn(db, SimHost(), req("metformin hazaar", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2"))
@@ -102,7 +102,7 @@ async def test_unsure_voice_note_from_a_caregiver_cannot_change_a_dose_directly(
 async def test_sure_voice_note_from_a_caregiver_applies_as_usual(db, at, model):
     at("2026-10-02 10:00")
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])
-    change = ToolCall("c1", "remember", {"domain": "medicine", "name": "Metformin",
+    change = ToolCall("c1", "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Metformin",
                                          "details": {"name": "Metformin", "dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin 500 mg at 08:00"})
     model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Save kar diya.", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("metformin paanch sau subah aath baje", speaker=SON, modality="voice", voice_confidence=0.95, ref="v3"))
@@ -112,7 +112,7 @@ async def test_sure_voice_note_from_a_caregiver_applies_as_usual(db, at, model):
 async def test_unsure_flag_does_not_touch_non_health_facts(db, at):
     at("2026-10-02 10:00")
     c = tools.TurnCtx(session=db, host=SimHost(), family_id=FAM, elder=ELDER, speaker=SON, members=[ELDER, SON], voice_unsure=True)
-    out, err = await tools.run(c, "remember", {"domain": "dish", "name": "poha", "details": {}, "sentence": "Makes poha on Sundays"})
+    out, err = await tools.run(c, "remember", {"about": ELDER["id"], "domain": "dish", "name": "poha", "details": {}, "sentence": "Makes poha on Sundays"})
     assert not err and json.loads(out)["result"] == "created"
 
 

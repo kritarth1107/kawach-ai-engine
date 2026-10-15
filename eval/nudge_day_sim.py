@@ -148,6 +148,7 @@ async def run(days: int, tick: int, url: str, real: bool, max_inr: float) -> dic
     await prepare(engine)
     async with engine.begin() as c:
         await c.execute(text("DELETE FROM nudge_ledger WHERE family_id LIKE 'sim-nudge-%'"))
+        await c.execute(text("DELETE FROM nudge_due WHERE family_id LIKE 'sim-nudge-%'"))
         for t in ("turns", "care_events", "care_facts", "family_rosters"):
             await c.execute(text(f"DELETE FROM {t} WHERE family_id LIKE 'sim-nudge-%'"))
     sessions = async_sessionmaker(engine, expire_on_commit=False)

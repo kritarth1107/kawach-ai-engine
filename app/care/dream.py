@@ -1,7 +1,9 @@
 """Saheli's night: she goes over each family's day and learns, while nobody is writing.
 
 For every family, once a night (Cloud Scheduler calls /v2/jobs/dream every 15 minutes between 01:00 and 05:00;
-each call works through the families not done yet tonight within a time budget):
+each call works through the families not done yet tonight within a time budget). Families run DREAM_PARALLEL at a
+time. Each family is claimed with its own lock, so a second dream task skips a family already being reviewed.
+Anyone left over is first the next night. Model calls still go through the Gemini concurrency gate.
 
 1. catch facts the day's chats left unsaved (the extractor)
 2. write a short diary line per person from what was logged and said (recall finds it later)
@@ -18,12 +20,14 @@ runs once a night.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from datetime import timedelta
 
-from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy import delete, func, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from app.care import baselines, patterns, store
 from app.care.models import FamilyRoster, Turn
@@ -218,34 +222,132 @@ async def upkeep(sessions: async_sessionmaker) -> dict:
     return out
 
 
+def dream_parallel() -> int:
+    """How many families are reviewed at once. Tests share one connection, so they set this to 1."""
+    return max(1, int(os.getenv("DREAM_PARALLEL", "4")))
+
+
+def vertex_batch_fits() -> bool:
+    """The Vertex batch API is about half price and answers later, not in the call.
+
+    A night step reads what the previous step just wrote (extract, then the diary, then the tidy-up), and a tick has
+    to move on inside its budget. A batch that is still running when the tick ends does not fit, so the night stays
+    on ordinary calls behind the Gemini concurrency gate.
+    """
+    return False
+
+
+def _engine(sessions: async_sessionmaker):
+    return sessions.kw.get("bind")
+
+
+async def _try_claim(conn, key: str) -> bool:
+    return bool((await conn.execute(text("SELECT pg_try_advisory_lock(hashtext(:k))"), {"k": key})).scalar())
+
+
+async def _release_claim(conn, key: str) -> None:
+    await conn.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
+
+
+async def _with_claim(sessions: async_sessionmaker, key: str, fn):
+    """Hold this family's night lock on its own connection so a commit inside the night does not drop it.
+
+    A test sessionmaker is bound to one connection. A second connection would not see the test's rows, and the same
+    connection cannot run the night while a lock checkout blocks it. Tests set DREAM_PARALLEL=1 and skip the lock.
+    """
+    bind = _engine(sessions)
+    if not isinstance(bind, AsyncEngine):
+        return await fn()
+    async with bind.connect() as conn:
+        if not await _try_claim(conn, key):
+            return None
+        try:
+            return await fn()
+        finally:
+            await _release_claim(conn, key)
+
+
+async def _pending(session, day: str) -> tuple[list[FamilyRoster], int]:
+    """Families not reviewed tonight, oldest previous night first (someone left over goes first)."""
+    from app.care.models import CareEvent
+
+    last = (
+        select(CareEvent.family_id, func.max(CareEvent.ref).label("last_dream"))
+        .where(CareEvent.kind == "dream")
+        .group_by(CareEvent.family_id)
+        .subquery()
+    )
+    done = select(CareEvent.family_id).where(CareEvent.kind == "dream", CareEvent.ref == f"dream:{day}")
+    real = ~FamilyRoster.family_id.startswith("shadow:")
+    rows = list((await session.execute(
+        select(FamilyRoster)
+        .outerjoin(last, last.c.family_id == FamilyRoster.family_id)
+        .where(real, FamilyRoster.family_id.not_in(done))
+        .order_by(last.c.last_dream.asc().nulls_first(), FamilyRoster.family_id)
+    )).scalars())
+    total = int((await session.execute(select(func.count()).select_from(FamilyRoster).where(real))).scalar_one())
+    return rows, total
+
+
 async def dream_all(sessions: async_sessionmaker, *, budget_s: float = 240.0, with_models: bool = True, host=None) -> dict:
     day = night_of()
     started = time.monotonic()
     async with sessions() as session:
-        rosters = list((await session.execute(select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:")).order_by(FamilyRoster.family_id))).scalars())
-        todo = [r for r in rosters if not await _done(session, r.family_id, day)]
-    stats = {"day": day, "families": len(rosters), "done_now": 0, "left": 0, "patterns": 0, "facts": 0, "errors": 0}
-    for i, r in enumerate(todo):
-        if time.monotonic() - started > budget_s:
-            stats["left"] = len(todo) - i
-            break
-        rep = await dream_family(sessions, r, day, with_models=with_models)
-        stats["done_now"] += 1
-        stats["patterns"] += rep["patterns"]
-        stats["facts"] += rep["facts"]
-        stats["errors"] += len(rep["errors"])
-    if not stats["left"]:
-        stats["upkeep"] = await upkeep(sessions)
-        from app.learn import jobs as learn_jobs
+        todo, families = await _pending(session, day)
+    stats = {"day": day, "families": families, "done_now": 0, "left": 0, "patterns": 0, "facts": 0, "errors": 0,
+             "workers": min(dream_parallel(), max(1, len(todo)))}
+    queue: asyncio.Queue = asyncio.Queue()
+    for roster in todo:
+        queue.put_nowait(roster)
 
-        stats["learn"] = await learn_jobs.nightly(sessions, with_models=with_models)
-        if with_models:
-            from app.quality import nightly as quality
+    async def one(roster: FamilyRoster):
+        async def run():
+            async with sessions() as session:
+                if await _done(session, roster.family_id, day):
+                    return None
+            return await dream_family(sessions, roster, day, with_models=with_models)
 
-            if quality.enabled():
-                try:  # check 1 from the delivery ledger, each family's overall and everyone's (trust plan C1)
-                    stats["quality"] = await quality.finish(sessions, day, host)
-                except Exception:  # noqa: BLE001
-                    logger.exception("daily score finish failed")
+        return await _with_claim(sessions, f"dream:{day}:{roster.family_id}", run)
+
+    async def worker() -> None:
+        while time.monotonic() - started <= budget_s:
+            try:
+                roster = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            try:
+                rep = await one(roster)
+            except Exception:  # noqa: BLE001 — one family must not stop the night
+                logger.exception("dream family failed family=%s", roster.family_id)
+                stats["errors"] += 1
+                continue
+            if not rep:
+                continue
+            stats["done_now"] += 1
+            stats["patterns"] += rep["patterns"]
+            stats["facts"] += rep["facts"]
+            stats["errors"] += len(rep["errors"])
+
+    await asyncio.gather(*(worker() for _ in range(stats["workers"])))
+    async with sessions() as session:
+        still, _ = await _pending(session, day)
+    stats["left"] = len(still)
+    if not still:
+        async def finish():
+            stats["upkeep"] = await upkeep(sessions)
+            from app.learn import jobs as learn_jobs
+
+            stats["learn"] = await learn_jobs.nightly(sessions, with_models=with_models)
+            if with_models:
+                from app.quality import nightly as quality
+
+                if quality.enabled():
+                    try:  # check 1 from the delivery ledger, each family's overall and everyone's (trust plan C1)
+                        stats["quality"] = await quality.finish(sessions, day, host)
+                    except Exception:  # noqa: BLE001
+                        logger.exception("daily score finish failed")
+            return True
+
+        await _with_claim(sessions, f"dream-upkeep:{day}", finish)
     logger.info("dream %s", stats)
     return stats

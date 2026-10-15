@@ -25,12 +25,13 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, or_, select, text as sql, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.care import store
-from app.care.models import CareEvent, FamilyRoster, NudgeLedger, Turn
+from app.care.models import CareEvent, FamilyRoster, NudgeDue, NudgeLedger, Turn
 from app.core import clock
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,8 @@ CARED_EVERY = timedelta(minutes=60)  # people cared for and people caring for th
 CAREGIVER_EVERY = timedelta(hours=3)  # caregivers and family members who wrote in the last 30 days (D2)
 LADDER_MINUTES = {0: 60, 1: 60, 2: 120, 3: 180}  # unanswered in a row → silence before the next (D1)
 STOP_AFTER = 4  # then only the next morning's first nudge, until they write
-MAX_SENDS = 20  # per run
-PARALLEL = 5  # people at a time (NUDGE_PARALLEL; tests share one connection and run one at a time)
+PARALLEL = 5  # people at a time (NUDGE_PARALLEL). One send per person per cadence, not a global cap.
+CLAIM_FOR = timedelta(minutes=3)  # a second engine task skips a person claimed this recently
 REPLY_WINDOW = timedelta(hours=6)  # a reply this soon after a nudge answers it
 SKIP_LOG_EVERY = timedelta(minutes=60)  # the same skip reason is logged at most this often per person
 MAX_LEN = {True: 220, False: 300}  # an elder / anyone else
@@ -1101,6 +1102,163 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     return "sent"
 
 
+# ── who is due this tick ──────────────────────────────────────────────────────────────────────────────────────────
+
+
+def _next_minute(now: datetime, minute: int) -> datetime:
+    """The next time the clock shows this minute of the day, in the same zone as now."""
+    local = clock.ist(now)
+    day = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    target = day + timedelta(minutes=int(minute))
+    if target <= local:
+        target += timedelta(days=1)
+    return target
+
+
+async def _next_look(session: AsyncSession, person: Person, now: datetime, *, early_bird: bool) -> datetime:
+    """The next moment this person might be awake enough for a nudge: their wake, or a late riser's early-bird start."""
+    from app.brain.wake import own_night
+
+    night = await own_night(session, person.family_id, person.id)
+    minute = night[1] if night else 8 * 60 + 30
+    if early_bird and person.cared and night and night[1] > 9 * 60:
+        minute = max(8 * 60 + 30, (night[0] + 5 * 60) % (24 * 60))
+    return _next_minute(now, minute)
+
+
+async def next_check(session: AsyncSession, person: Person, d: Due, now: datetime) -> datetime:
+    """When to read this person again. Sooner is safe (due() still decides); later must not skip a message they would get."""
+    if not d.reason:
+        step = cadence(person.cared, d.clock.run + 1) or timedelta(hours=12)
+        return now + step
+    if d.reason in ("cadence", "talking") and d.clock.last_activity:
+        lr = await learned(session, person.family_id, person.id, now)
+        need = cadence(person.cared, d.clock.run) or (CARED_EVERY if person.cared else CAREGIVER_EVERY)
+        if lr.fewer:
+            need *= 2
+        nxt = d.clock.last_activity + need
+        return nxt if nxt > now else now + timedelta(minutes=5)
+    if d.reason == "asleep":
+        birds = [_when(r) for r in d.clock.rows if r.kind == "early_bird" and r.status in SENT]
+        if len(birds) < 2 and birds:
+            nxt = max(birds) + EARLY_BIRD_GAP
+            if nxt > now:
+                return nxt  # the next soft morning message, still this night
+        return await _next_look(session, person, now, early_bird=len(birds) < 2)
+    if d.reason == "ladder":
+        return await _next_look(session, person, now, early_bird=False)
+    if d.reason == "window_closed":
+        return await _next_look(session, person, now, early_bird=False)  # a tap pulls this forward; until then the next morning
+    if d.reason == "asked_stop":
+        return now + timedelta(minutes=5)  # an undo has no turn either; the fact is read on the next look
+    if d.reason == "learned_hour":
+        local = clock.ist(now).replace(minute=0, second=0, microsecond=0)
+        return local + timedelta(hours=1)
+    if d.reason == "other_family":
+        return now + CARED_EVERY
+    return now + timedelta(minutes=5)
+
+
+async def mark_next(session: AsyncSession, family_id: str, person_id: str, when: datetime, *, at: datetime | None = None) -> None:
+    """Remember the next look, and the moment we decided. A message from them after that is looked at straight away.
+    Does not commit: the caller owns the transaction."""
+    anchor = at or when
+    stmt = pg_insert(NudgeDue).values(
+        family_id=family_id, person_id=person_id, next_due=when, anchored_at=anchor, claimed_until=None,
+    ).on_conflict_do_update(
+        index_elements=["family_id", "person_id"],
+        set_={"next_due": when, "anchored_at": anchor, "claimed_until": None},
+    )
+    await session.execute(stmt)
+
+
+async def claim_person(session: AsyncSession, family_id: str, person_id: str, now: datetime, *, only_due: bool) -> bool:
+    """Take this person until CLAIM_FOR from now. False when another task already holds them, or (only_due) their time
+    has not come. Commits so the other task can see the claim."""
+    until = now + CLAIM_FOR
+    conds = [
+        NudgeDue.family_id == family_id, NudgeDue.person_id == person_id,
+        or_(NudgeDue.claimed_until.is_(None), NudgeDue.claimed_until < now),
+    ]
+    if only_due:
+        spoke = exists(select(Turn.id).where(
+            Turn.family_id == NudgeDue.family_id, Turn.thread_id == NudgeDue.person_id, Turn.role == "user",
+            NudgeDue.anchored_at.is_not(None), Turn.at > NudgeDue.anchored_at,
+        ))
+        conds.append(or_(NudgeDue.next_due <= now, spoke))
+    got = (await session.execute(
+        update(NudgeDue).where(*conds).values(claimed_until=until).returning(NudgeDue.person_id)
+    )).first()
+    if got:
+        await session.commit()
+        return True
+    held = await session.scalar(select(NudgeDue.person_id).where(
+        NudgeDue.family_id == family_id, NudgeDue.person_id == person_id))
+    if held:
+        return False
+    session.add(NudgeDue(family_id=family_id, person_id=person_id, next_due=now, claimed_until=until))
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        return False
+    return True
+
+
+async def load_work(session: AsyncSession, now: datetime, families: set[str] | None) -> list[tuple[FamilyRoster, Person]]:
+    """People whose next look has arrived, plus every person in a family that has never been indexed."""
+    if families is not None and not families:
+        return []
+    spoke = exists(select(Turn.id).where(
+        Turn.family_id == NudgeDue.family_id, Turn.thread_id == NudgeDue.person_id, Turn.role == "user",
+        NudgeDue.anchored_at.is_not(None), Turn.at > NudgeDue.anchored_at,
+    ))
+    q = select(NudgeDue.family_id, NudgeDue.person_id).where(
+        or_(NudgeDue.next_due <= now, spoke),
+        or_(NudgeDue.claimed_until.is_(None), NudgeDue.claimed_until < now),
+        ~NudgeDue.family_id.startswith("shadow:"),
+    )
+    fresh = select(FamilyRoster).where(
+        ~FamilyRoster.family_id.startswith("shadow:"),
+        ~exists(select(NudgeDue.family_id).where(NudgeDue.family_id == FamilyRoster.family_id)),
+    )
+    if families is not None:
+        ids = sorted(families)
+        q = q.where(NudgeDue.family_id.in_(ids))
+        fresh = fresh.where(FamilyRoster.family_id.in_(ids))
+    due_ids = (await session.execute(q)).all()
+    fresh_rosters = list((await session.execute(fresh)).scalars())
+    rosters = {r.family_id: r for r in fresh_rosters}
+    fams = {fid for fid, _ in due_ids} - set(rosters)
+    if fams:
+        for r in (await session.execute(select(FamilyRoster).where(FamilyRoster.family_id.in_(sorted(fams))))).scalars():
+            rosters[r.family_id] = r
+    cached: dict[str, list[Person]] = {}
+
+    async def persons(r: FamilyRoster) -> list[Person]:
+        if r.family_id not in cached:
+            cached[r.family_id] = await people(session, r)
+        return cached[r.family_id]
+
+    work: list[tuple[FamilyRoster, Person]] = []
+    seen: set[tuple[str, str]] = set()
+    for fid, pid in due_ids:
+        r = rosters.get(fid)
+        if r is None:
+            continue
+        match = next((p for p in await persons(r) if p.id == pid), None)
+        if match and (fid, pid) not in seen:
+            seen.add((fid, pid))
+            work.append((r, match))
+    for r in fresh_rosters:
+        for p in await persons(r):
+            key = (r.family_id, p.id)
+            if key not in seen:
+                seen.add(key)
+                work.append((r, p))
+    return work
+
+
 # ── the run ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -1114,20 +1272,21 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
     now = now or clock.now()
     stats: dict = {"people": 0, "due": 0, "sent": 0, "shadow": 0, "skipped": {}, "mode": mode or env_mode() or cached_mode()}
     async with sessions() as session:
-        q = select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:"))
-        if families is not None:
-            q = q.where(FamilyRoster.family_id.in_(sorted(families)))
-        rosters = list((await session.execute(q)).scalars())
-    work: list[tuple[FamilyRoster, Person]] = []
-    for r in rosters:
-        async with sessions() as session:
-            work += [(r, p) for p in await people(session, r)]
+        work = await load_work(session, now, families)
     stats["people"] = len(work)
     if mode is None and not env_mode():
-        known = await ensure_mode(host_for, rosters)  # the old check-ins step aside on this, even when nobody is due
+        sample = [r for r, _ in work]
+        if not sample:
+            async with sessions() as session:
+                q = select(FamilyRoster).where(~FamilyRoster.family_id.startswith("shadow:"))
+                if families is not None:
+                    q = q.where(FamilyRoster.family_id.in_(sorted(families)))
+                sample = list((await session.execute(q.limit(3))).scalars())
+        known = await ensure_mode(host_for, sample)  # even when nobody is due, so the old check-ins stay off
         stats["mode"] = known or stats["mode"]
+        if stats["mode"] == "off":
+            return stats
     sem = asyncio.Semaphore(int(os.getenv("NUDGE_PARALLEL") or PARALLEL))
-    sends = {"n": 0}
     person_locks: dict[str, asyncio.Lock] = {}
 
     async def one(r: FamilyRoster, p: Person) -> None:
@@ -1135,32 +1294,39 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
             lock = person_locks.setdefault(p.id, asyncio.Lock())
             async with lock:  # the same person in two families is one stream, even in one run
                 host = host_for(r.family_id)
+                claimed = False
+                decided: Due | None = None
+                outcome = "error"
                 try:
                     async with sessions() as session:
+                        if not await claim_person(session, r.family_id, p.id, now, only_due=True):
+                            return  # another task already has this person, or their time was moved
+                        claimed = True
                         live = await runtime.live_tasks(session, r.family_id)
                         d = await due(session, host, p, now, mode or env_mode(), busy=checkins.moving_for(live, p.id, now))
+                        decided = d
                         if d.mode:
                             stats["mode"] = d.mode
                         if d.mode == "off":
+                            outcome = "off"
                             return
                         if d.reason:
+                            outcome = d.reason
                             stats["skipped"][d.reason] = stats["skipped"].get(d.reason, 0) + 1
                             if d.mode and d.mode != "off" and d.reason not in ("cadence", "asleep", "talking"):
                                 await log_skip(session, p, now, d.reason, d.clock.rows)
                                 await session.commit()
                             return
                         m = d.mode or "off"
-                        if sends["n"] >= MAX_SENDS:
-                            stats["skipped"]["run_full"] = stats["skipped"].get("run_full", 0) + 1
-                            return
-                        sends["n"] += 1
                         stats["due"] += 1
                         ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird, light=d.light)
                     if not ctx.options:
+                        outcome = "no_option"
                         stats["skipped"]["no_option"] = stats["skipped"].get("no_option", 0) + 1
                         return
                     draft, problems = await write_and_check(ctx)
                     if draft is None:
+                        outcome = "guard"
                         async with sessions() as session:
                             await log_skip(session, p, now, "guard:" + (problems[0][:60] if problems else "?"), d.clock.rows, cost=ctx.cost)
                             await session.commit()
@@ -1176,10 +1342,27 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                     out = await send(sessions, host, p, ctx, draft, kind_default="early_bird" if d.early_bird else "follow_up", mode=m,
                                      now=now, run=d.clock.run, recheck=still_quiet,
                                      meals_mode=str(d.clock.gate.get("meals_mode") or os.getenv("NUDGE_MEALS") or "off").lower())
+                    outcome = out
                     stats[out] = stats.get(out, 0) + 1
                 except Exception:  # noqa: BLE001 — one person's problem never stops the others
                     logger.exception("regular nudge failed family=%s person=%s", r.family_id, p.id)
                     stats["skipped"]["error"] = stats["skipped"].get("error", 0) + 1
+                finally:
+                    if claimed:
+                        try:
+                            async with sessions() as session:
+                                if outcome == "shadow" and (decided is None or decided.mode != "shadow"):
+                                    when = now + timedelta(minutes=5)  # a meals question logged in shadow did not use the hour
+                                elif outcome in ("sent", "shadow", "waiting"):
+                                    when = await next_check(session, p, decided or Due(p, Clock(None, None, 0, False)), now)
+                                elif decided is not None and outcome == decided.reason:
+                                    when = await next_check(session, p, decided, now)
+                                else:
+                                    when = now + timedelta(minutes=5)  # a guard miss or a failed send is tried again next tick
+                                await mark_next(session, r.family_id, p.id, when, at=now)
+                                await session.commit()
+                        except Exception:  # noqa: BLE001 — the claim expires on its own
+                            logger.exception("nudge next-due not saved family=%s person=%s", r.family_id, p.id)
 
     await asyncio.gather(*(one(r, p) for r, p in work))
     return stats
@@ -1212,10 +1395,16 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
             select(CareEvent).where(CareEvent.kind == "reminder_sent", CareEvent.at >= now - FOLLOWUP_AFTER[1], CareEvent.at <= now - FOLLOWUP_AFTER[0],
                                     ~CareEvent.family_id.startswith("shadow:"))
         )).scalars())
-    for ev in evs:
+    sem = asyncio.Semaphore(int(os.getenv("NUDGE_PARALLEL") or PARALLEL))
+
+    async def one_followup(ev):
+        async with sem:
+            await _one_followup(ev)
+
+    async def _one_followup(ev):
         pay = ev.payload or {}
         if not pay.get("custom") or str(pay.get("aboutKey") or "").startswith("medicine:"):
-            continue  # medicine reminders keep their own missed-dose follow-up (D3)
+            return  # medicine reminders keep their own missed-dose follow-up (D3)
         stats["reminders"] += 1
         about = f"reminder:{pay.get('reminderId')}:{pay.get('slot')}:{pay.get('dateKey')}"
         host = host_for(ev.family_id)
@@ -1223,21 +1412,21 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
             async with sessions() as session:
                 roster = await store.roster(session, ev.family_id)
                 if roster is None:
-                    continue
+                    return
                 person = next((p for p in await people(session, roster) if p.id == ev.subject_id), None)
                 if person is None:
-                    continue
+                    return
                 rows = await ledger_rows(session, ev.family_id, person.id)
                 if any(r.kind == "reminder_followup" and r.about_ref == about for r in rows):
-                    continue
+                    return
                 m = mode or env_mode()
                 try:
                     gate = await host.call("nudge_gate", {"to": person.id}, family_id=ev.family_id, subject_id=person.id, actor_id=person.id) or {}
                 except Exception:  # noqa: BLE001
-                    continue
+                    return
                 m = m or _remember_mode(gate)
                 if m == "off":
-                    continue
+                    return
                 reason = ""
                 last_user, last_bot = await engine_times(session, ev.family_id, person.id)
                 inbound = max([t for t in (last_user, _iso(gate.get("last_inbound_at"))) if t], default=None)
@@ -1266,7 +1455,7 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                     if reason in ("ladder", "busy", "window_closed", "asked_stop"):
                         await _log(session, person, now, kind="reminder_followup", status="skipped", reason=reason, about=about)
                         await session.commit()
-                    continue
+                    return
                 act = None
                 key = str(pay.get("aboutKey") or "")
                 if key.startswith("activity:"):
@@ -1281,14 +1470,19 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
                              field=_followup_field(act, pay), score=PRIORITY["reminder_followup"])
                 ck = await read_clock(session, ev.family_id, person.id, gate, now, m)
                 ctx = await build_context(session, host, person, ck, now, only=[opt])
+            async with sessions() as session:
+                if not await claim_person(session, ev.family_id, person.id, now, only_due=False):
+                    return  # the other engine task is already asking about this reminder
             draft, problems = await write_and_check(ctx)
             if draft is None:
                 stats["skipped"]["guard"] = stats["skipped"].get("guard", 0) + 1
                 async with sessions() as session:
                     await _log(session, person, now, kind="reminder_followup", status="skipped", reason="guard:" + (problems[0][:60] if problems else "?"),
                                about=about, cost=ctx.cost)
+                    await session.execute(update(NudgeDue).where(
+                        NudgeDue.family_id == ev.family_id, NudgeDue.person_id == person.id).values(claimed_until=None))
                     await session.commit()
-                continue
+                return
             seen = max([ev.at, *(t for t in outbound if t <= ev.at + timedelta(seconds=90))])
 
             async def still_quiet(session: AsyncSession, seen=seen, fid=ev.family_id, pid=person.id) -> bool:
@@ -1298,9 +1492,18 @@ async def reminder_followups(sessions: async_sessionmaker, host_for, *, now: dat
             out = await send(sessions, host, person, ctx, draft, kind_default="reminder_followup", mode=m, now=now, run=0, about=about,
                              recheck=still_quiet)
             stats[out] = stats.get(out, 0) + 1
+            async with sessions() as session:
+                if out in ("sent", "shadow", "waiting"):
+                    step = CARED_EVERY if person.cared else CAREGIVER_EVERY
+                    await mark_next(session, ev.family_id, person.id, now + step, at=now)
+                else:
+                    await session.execute(update(NudgeDue).where(
+                        NudgeDue.family_id == ev.family_id, NudgeDue.person_id == person.id).values(claimed_until=None))
+                await session.commit()
         except Exception:  # noqa: BLE001
             logger.exception("reminder follow-up failed family=%s", ev.family_id)
             stats["skipped"]["error"] = stats["skipped"].get("error", 0) + 1
+    await asyncio.gather(*(one_followup(ev) for ev in evs))
     return stats
 
 
@@ -1323,12 +1526,34 @@ SAVE_WITH = (("meal:", "log_food"), ("water:", "log_food"), ("goal:", "log_food"
              ("reminder:", "log_activity or remember, whichever fits"))
 
 
+async def pull_due(session: AsyncSession, family_id: str, person_id: str, when: datetime | None = None) -> None:
+    """The backend saw a tap and no turn (a Done button, the opener). Look at this person on the next tick.
+    A claim another task already holds is left alone, so this cannot cause a second send."""
+    when = when or clock.now()
+    stmt = pg_insert(NudgeDue).values(
+        family_id=family_id, person_id=person_id, next_due=when, anchored_at=when, claimed_until=None,
+    ).on_conflict_do_update(
+        index_elements=["family_id", "person_id"],
+        set_={"next_due": when, "anchored_at": when},
+        where=or_(NudgeDue.claimed_until.is_(None), NudgeDue.claimed_until < when),
+    )
+    await session.execute(stmt)
+
+
 async def note_reply(session: AsyncSession, family_id: str, person: str) -> None:
     """They wrote: every nudge sent to them in the last 6 hours with no reply yet is answered (the ladder resets)."""
     now = clock.now()
-    await session.execute(update(NudgeLedger).where(
-        NudgeLedger.family_id == family_id, NudgeLedger.person_id == person, NudgeLedger.status == "sent",
-        NudgeLedger.replied_at.is_(None), NudgeLedger.sent_at >= now - REPLY_WINDOW).values(replied_at=now))
+    # One statement: the reply and the next look. A turn is counted, and this must not add a second round trip.
+    await session.execute(sql(
+        "WITH answered AS ("
+        " UPDATE nudge_ledger SET replied_at = :now"
+        " WHERE family_id = :fid AND person_id = :pid AND status = 'sent'"
+        " AND replied_at IS NULL AND sent_at >= :since"
+        ") INSERT INTO nudge_due (family_id, person_id, next_due, anchored_at, claimed_until)"
+        " VALUES (:fid, :pid, :nxt, :now, NULL)"
+        " ON CONFLICT (family_id, person_id) DO UPDATE SET"
+        " next_due = EXCLUDED.next_due, anchored_at = EXCLUDED.anchored_at, claimed_until = NULL"
+    ), {"now": now, "fid": family_id, "pid": person, "since": now - REPLY_WINDOW, "nxt": now + CARED_EVERY})
 
 
 async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:

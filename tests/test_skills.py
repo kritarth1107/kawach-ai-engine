@@ -102,13 +102,13 @@ async def test_curator(db, at):
 
 async def test_whatsapp_tools(db, at):
     at("2026-10-04 10:00")
-    out, err = await tools.run(ctx(db), "save_family_skill", {"text": "Remind her after puja, not before"})
+    out, err = await tools.run(ctx(db), "save_family_skill", {"about": ELDER_ID, "text": "Remind her after puja, not before"})
     assert not err and json.loads(out)["status"] == "active"
-    out, err = await tools.run(ctx(db), "save_family_skill", {"text": "Give her two tablets at night"})
+    out, err = await tools.run(ctx(db), "save_family_skill", {"about": ELDER_ID, "text": "Give her two tablets at night"})
     assert err and "care record" in json.loads(out)["refused"]
     out, err = await tools.run(ctx(db, ELDER), "save_family_skill", {"text": "Asha likes short messages", "about": CG_ID})
     assert err
-    out, err = await tools.run(ctx(db, {"id": "sys", "role": "system"}), "save_family_skill", {"text": "Short replies"})
+    out, err = await tools.run(ctx(db, {"id": "sys", "role": "system"}), "save_family_skill", {"about": ELDER_ID, "text": "Short replies"})
     assert err
     listed = json.loads((await tools.run(ctx(db, ELDER), "list_skills", {}))[0])["skills"]
     assert [s["text"] for s in listed] == ["Remind her after puja, not before"]

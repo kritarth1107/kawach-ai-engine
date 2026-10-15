@@ -51,7 +51,7 @@ async def history(db, kind=None, target=None):
 
 
 async def med(db, c, dose="500 mg", times=("08:00",), name="Metformin"):
-    return await call(c, "remember", {"domain": "medicine", "name": name, "details": {"name": name, "dose": dose, "times": list(times)},
+    return await call(c, "remember", {"about": ELDER, "domain": "medicine", "name": name, "details": {"name": name, "dose": dose, "times": list(times)},
                                       "sentence": f"{name} {dose} at {', '.join(times)}"})
 
 
@@ -163,7 +163,7 @@ async def test_caregiver_undoes_a_dose_change_and_reminders_follow(db, at):
 async def test_undo_restores_the_exact_old_value_not_a_merge(db, at):
     at("2026-10-02 09:00")
     await med(db, ctx(db))
-    await call(ctx(db), "remember", {"domain": "medicine", "name": "Metformin",
+    await call(ctx(db), "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin",
                                      "details": {"name": "Metformin", "instructions": "after breakfast", "times": ["08:00"]},
                                      "sentence": "Metformin after breakfast"})
     change = (await history(db, "fact", "medicine:metformin"))[-1]
@@ -175,7 +175,7 @@ async def test_elder_undo_of_a_caregiver_dose_waits_for_ok(db, at):
     at("2026-10-02 09:00")
     host = SimHost()
     await med(db, ctx(db, host=host))
-    await call(ctx(db, host=host), "remember", {"domain": "medicine", "name": "Metformin", "sentence": "Metformin 1000 mg after food",
+    await call(ctx(db, host=host), "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "sentence": "Metformin 1000 mg after food",
                                                 "details": {"name": "Metformin", "dose": "1000 mg", "instructions": "after food"}})
     change = (await history(db, "fact", "medicine:metformin"))[-1]
     out, err = await call(ctx(db, E, host=host), "undo_change", {"id": change.id, "reason": "pehle wala sahi tha"})
@@ -226,7 +226,7 @@ async def test_elder_cannot_restart_a_stopped_medicine_by_undo(db, at):
     at("2026-10-02 09:00")
     host = SimHost()
     await med(db, ctx(db, host=host))
-    await call(ctx(db, host=host), "stop", {"domain": "medicine", "name": "Metformin", "reason": "doctor stopped it"})
+    await call(ctx(db, host=host), "stop", {"about": ELDER, "domain": "medicine", "name": "Metformin", "reason": "doctor stopped it"})
     stop = (await history(db, "fact", "medicine:metformin"))[-1]
     assert stop.op == "stop"
     out, err = await call(ctx(db, E, host=host), "undo_change", {"id": stop.id})
@@ -235,8 +235,8 @@ async def test_elder_cannot_restart_a_stopped_medicine_by_undo(db, at):
 
 async def test_non_health_undo_applies_directly_even_for_the_elder(db, at):
     at("2026-10-02 09:00")
-    await call(ctx(db), "remember", {"domain": "naming", "name": "address_as", "details": {"name": "Amma"}, "sentence": "Call her Amma"})
-    await call(ctx(db), "remember", {"domain": "naming", "name": "address_as", "details": {"name": "Kamla ji"}, "sentence": "Call her Kamla ji"})
+    await call(ctx(db), "remember", {"about": ELDER, "domain": "naming", "name": "address_as", "details": {"name": "Amma"}, "sentence": "Call her Amma"})
+    await call(ctx(db), "remember", {"about": ELDER, "domain": "naming", "name": "address_as", "details": {"name": "Kamla ji"}, "sentence": "Call her Kamla ji"})
     change = (await history(db, "fact", "naming:address_as"))[-1]
     out, err = await call(ctx(db, E), "undo_change", {"id": change.id})
     assert not err and (await active(db, "naming:address_as")).value["name"] == "Amma"
@@ -270,7 +270,7 @@ async def test_fact_from_before_history_can_be_undone(db, at):
     await store.write_fact(db, family_id=FAM, subject_id=ELDER, domain="diet", key="diet:low_salt", value={"rule": "low salt"},
                            text="Low salt", source_kind="caregiver_said", stated_by=CG)
     await db.execute(versions.MemoryVersion.__table__.delete().where(versions.MemoryVersion.family_id == FAM))
-    await call(ctx(db), "remember", {"domain": "diet", "name": "low_salt", "details": {"rule": "no salt"}, "sentence": "No salt at all"})
+    await call(ctx(db), "remember", {"about": ELDER, "domain": "diet", "name": "low_salt", "details": {"rule": "no salt"}, "sentence": "No salt at all"})
     change = (await history(db, "fact", "diet:low_salt"))[-1]
     out, err = await call(ctx(db), "undo_change", {"id": change.id})
     assert not err and (await active(db, "diet:low_salt")).value == {"rule": "low salt"}
@@ -534,7 +534,7 @@ async def test_a_rejected_proposal_does_not_block_undo_and_its_rejection_can_be_
     at("2026-10-02 09:00")
     await med(db, ctx(db))
     first = (await history(db, "fact", "medicine:metformin"))[-1]
-    await call(ctx(db, E), "remember", {"domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "250 mg"},
+    await call(ctx(db, E), "remember", {"about": ELDER, "domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "250 mg"},
                                         "sentence": "Metformin 250 mg"})
     await call(ctx(db), "confirm_change", {"key": "medicine:metformin", "approve": False})
     reject = (await history(db, "fact", "medicine:metformin"))[-1]
@@ -554,7 +554,7 @@ async def test_old_dose_in_key_medicine_is_found_and_its_reminders_stop(db, at):
     await host.call("sync_medicine_schedule", {"key": "medicine:thyronorm_50", "name": "Thyronorm", "times": ["07:00"], "active": True},
                     family_id=FAM, subject_id=ELDER, actor_id=CG)
     assert (await store.active_fact(db, FAM, ELDER, "medicine:thyronorm")).key == "medicine:thyronorm_50"
-    out, err = await call(ctx(db, host=host), "stop", {"domain": "medicine", "name": "Thyronorm", "reason": "doctor stopped it"})
+    out, err = await call(ctx(db, host=host), "stop", {"about": ELDER, "domain": "medicine", "name": "Thyronorm", "reason": "doctor stopped it"})
     assert not err and out["key"] == "medicine:thyronorm_50" and sched(host, "medicine:thyronorm_50") == []
 
 
@@ -652,7 +652,7 @@ async def test_saheli_suggestion_is_put_to_the_caregiver_once_and_closes_when_an
     prompt = await wake.wake_prompt(db, loop, ELDER)
     assert f"save_family_skill with id {s.id}" in prompt and f"forget_skill with id {s.id}" in prompt
     # the caregiver says yes on WhatsApp: the suggestion is used and the question is closed
-    out2, err = await call(ctx(db), "save_family_skill", {"id": s.id})
+    out2, err = await call(ctx(db), "save_family_skill", {"about": ELDER, "id": s.id})
     assert not err and out2["skill"]["status"] == "active"
     await db.refresh(loop)
     assert loop.status == "done"

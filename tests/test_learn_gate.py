@@ -63,6 +63,27 @@ async def test_an_error_leaves_it_waiting_and_a_non_draft_is_refused(db, session
     assert e.value.status_code == 409
 
 
+async def test_no_draft_does_not_touch_the_replay_database(db, sessions):
+    await db.execute(delete(PlaybookVersion))
+    await db.commit()
+    from app.jobs import learn_gate
+
+    out = await learn_gate.run(sessions)
+    assert out["draft"] is None and out["why"] == "no draft is waiting"
+
+
+async def test_a_draft_stays_a_draft_when_the_replay_database_is_down(db, sessions, monkeypatch):
+    await _versions(db)
+    monkeypatch.setenv("REPLAY_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@127.0.0.1:1/kawach_replay")
+    monkeypatch.setenv("LEARN_GATE_DB_TRIES", "1")
+    from app.jobs import learn_gate
+
+    with pytest.raises(RuntimeError):
+        await learn_gate.run(sessions)
+    db.expire_all()
+    assert (await db.get(PlaybookVersion, 2)).status == "draft"
+
+
 def test_the_runner_posts_what_the_replay_run_found(monkeypatch):
     from eval import learn_gate
 

@@ -289,3 +289,18 @@ class NudgeLedger(Base):
         Index("uq_nudge_ledger_slot", "family_id", "person_id", "slot_key", unique=True),
         Index("ix_nudge_ledger_person_sent", "family_id", "person_id", "sent_at"),
     )
+
+
+class NudgeDue(Base):
+    """When to look at this person again. A tick reads only rows whose time has come, and claims the row so two engine
+    tasks cannot both send."""
+
+    __tablename__ = "nudge_due"
+
+    family_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    person_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    next_due: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    anchored_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # a later message from them pulls this forward
+    claimed_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_nudge_due_next", "next_due"),)

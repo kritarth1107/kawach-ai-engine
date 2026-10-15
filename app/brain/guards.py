@@ -37,7 +37,8 @@ def ascii_digits(text: str) -> str:
 
 
 def sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"(?<=[.!?।])\s+|\n+", text or "") if s.strip()]
+    """A line that is only --- splits two WhatsApp messages. It is not a sentence."""
+    return [s.strip() for s in re.split(r"(?<=[.!?।])\s+|\n+", text or "") if s.strip() and not re.fullmatch(r"-{3,}", s.strip())]
 
 
 def words(text: str) -> list[str]:
@@ -502,7 +503,7 @@ def question_problems(text: str) -> list[str]:
 
 
 _BOOKKEEPING = re.compile(
-    r"^\s*(i have (logged|noted|recorded)\b|according to (general )?(health sources|medical guidelines)\b)",
+    r"^\s*(i have (logged|noted|recorded)\b|according to (general )?(health sources|medical guidelines)\b|do not say\b)",
     re.I,
 )
 
@@ -1064,6 +1065,48 @@ _CAN = {
     "gurmukhi": "ਮੈਂ ਦਵਾਈ ਦੀ reminder ਰੱਖਦੀ ਹਾਂ, ਖਾਣੇ ਅਤੇ dose ਦਾ ਹਿਸਾਬ ਰੱਖਦੀ ਹਾਂ, ਅਤੇ grocery, ਦਵਾਈ ਜਾਂ ride ਤੁਹਾਡੇ ਹਾਂ ਤੋਂ ਬਾਅਦ ਮੰਗਵਾਉਂਦੀ ਹਾਂ, ਅਤੇ ਪਰਿਵਾਰ ਨੂੰ ਦਿਨ ਦਾ ਹਾਲ ਦੱਸਦੀ ਹਾਂ। ਫਲਾਈਟ check-in, ਡਾਕਟਰ ਨੂੰ ਫੋਨ, ਜਾਂ ਤੁਹਾਡੇ ਕੋਲ ਰਹਿਣਾ ਮੈਂ ਨਹੀਂ ਕਰ ਸਕਦੀ। ਕਿਸ ਗੱਲ ਤੋਂ ਸ਼ੁਰੂ ਕਰੀਏ?",
     "odia": "ମୁଁ ଔଷଧ reminder ରଖେ, ଖାଦ୍ୟ ଓ dose ହିସାବ ରଖେ, ଆଉ grocery, ଔଷଧ କିମ୍ବା ride ଆପଣଙ୍କ ହଁ ପରେ ଆଣେ, ପରିବାରକୁ ଦିନର ଖବର କହେ। ଫ୍ଲାଇଟ୍ check-in, ଡାକ୍ତରଙ୍କୁ ଫୋନ୍, କିମ୍ବା ଆପଣଙ୍କ ପାଖରେ ରହିବା ମୁଁ ପାରିବି ନାହିଁ। କେଉଁଥିରୁ ଆରମ୍ଭ କରିବା?",
 }
+_WHO = {
+    "english": "I'm Saheli, from Kavach.",
+    "indic": "Main Saheli hoon, Kavach se.",
+    "devanagari": "मैं Saheli हूँ, Kavach से।",
+    "mr": "मी Saheli आहे, Kavach कडून.",
+    "bengali": "আমি Saheli, Kavach-এর থেকে।",
+    "tamil": "நான் Saheli, Kavach-இலிருந்து.",
+    "telugu": "నేను Saheli, Kavach నుండి.",
+    "kannada": "ನಾನು Saheli, Kavach ನಿಂದ.",
+    "malayalam": "ഞാൻ Saheli, Kavach-ൽ നിന്ന്.",
+    "gujarati": "હું Saheli, Kavach તરફથી.",
+    "gurmukhi": "ਮੈਂ Saheli ਹਾਂ, Kavach ਤੋਂ।",
+    "odia": "ମୁଁ Saheli, Kavach ରୁ।",
+}
+_MED_AT = {
+    "english": "{med} is already on the record. What should we start with?",
+    "indic": "{med} pehle se likha hai. Kis baat se shuru karein?",
+    "devanagari": "{med} पहले से लिखा है। किस बात से शुरू करें?",
+    "mr": "{med} आधीच नोंदले आहे. कशापासून सुरू करू?",
+    "bengali": "{med} আগে থেকেই লেখা আছে। কোনটা দিয়ে শুরু করব?",
+    "tamil": "{med} ஏற்கனவே பதிவில் உள்ளது. எதிலிருந்து தொடங்கலாம்?",
+    "telugu": "{med} ఇప్పటికే రికార్డులో ఉంది. దేనితో మొదలుపెడదాం?",
+    "kannada": "{med} ಈಗಾಗಲೇ ದಾಖಲೆಯಲ್ಲಿದೆ. ಯಾವುದರಿಂದ ಶುರು ಮಾಡೋಣ?",
+    "malayalam": "{med} മുമ്പേ രേഖയിലുണ്ട്. എന്തിൽ നിന്ന് തുടങ്ങാം?",
+    "gujarati": "{med} પહેલેથી લખેલું છે. કઈ વાતથી શરૂ કરીએ?",
+    "gurmukhi": "{med} ਪਹਿਲਾਂ ਤੋਂ ਲਿਖਿਆ ਹੈ। ਕਿਸ ਗੱਲ ਤੋਂ ਸ਼ੁਰੂ ਕਰੀਏ?",
+    "odia": "{med} ଆଗରୁ ଲେଖା ଅଛି। କେଉଁଥିରୁ ଆରମ୍ଭ କରିବା?",
+}
+_LOOK = {
+    "english": "{last} Which option should I look at?",
+    "indic": "{last} Kaun sa option dekhoon?",
+    "devanagari": "{last} कौन सा विकल्प देखूँ?",
+    "mr": "{last} कोणता पर्याय बघू?",
+    "bengali": "{last} কোনটা দেখব?",
+    "tamil": "{last} எதைப் பார்க்கட்டும்?",
+    "telugu": "{last} ఏది చూడాలి?",
+    "kannada": "{last} ಯಾವುದನ್ನು ನೋಡಲಿ?",
+    "malayalam": "{last} ഏത് നോക്കട്ടെ?",
+    "gujarati": "{last} કયો વિકલ્પ જોઉં?",
+    "gurmukhi": "{last} ਕਿਹੜਾ ਵਿਕਲਪ ਵੇਖਾਂ?",
+    "odia": "{last} କେଉଁଟି ଦେଖିବି?",
+}
 
 
 def hello_profile(profile: dict | None, user_text: str) -> dict | None:
@@ -1098,12 +1141,133 @@ def setup_instead(reply: str, user_text: str) -> bool:
     return bool(_OFF_THREAD.search(reply or ""))
 
 
+_NOTED = {
+    "english": "Noted: {what}.",
+    "indic": "Likh liya: {what}.",
+    "devanagari": "नोट कर लिया: {what}।",
+    "mr": "नोंद केली: {what}.",
+    "bengali": "লিখে নিয়েছি: {what}।",
+    "tamil": "குறித்துவிட்டேன்: {what}.",
+    "telugu": "రాసుకున్నాను: {what}.",
+    "kannada": "ಬರೆದುಕೊಂಡಿದ್ದೇನೆ: {what}.",
+    "malayalam": "കുറിച്ചുവെച്ചു: {what}.",
+    "gujarati": "નોંધ્યું: {what}.",
+    "gurmukhi": "ਨੋਟ ਕਰ ਲਿਆ: {what}।",
+    "odia": "ଲେଖିଲି: {what}।",
+}
+_CALM = {
+    "english": "I've noted that.",
+    "indic": "Maine note kar liya.",
+    "devanagari": "मैंने नोट कर लिया।",
+    "mr": "मी नोंद केली.",
+    "bengali": "আমি লিখে নিয়েছি।",
+    "tamil": "நான் குறித்துவிட்டேன்.",
+    "telugu": "నేను రాసుకున్నాను.",
+    "kannada": "ನಾನು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ.",
+    "malayalam": "ഞാൻ കുറിച്ചുവെച്ചു.",
+    "gujarati": "મેં નોંધી લીધું.",
+    "gurmukhi": "ਮੈਂ ਨੋਟ ਕਰ ਲਿਆ।",
+    "odia": "ମୁଁ ଲେଖିଲି।",
+}
+_SAME = {
+    "english": "{what} is already on the record.",
+    "indic": "{what} pehle se record mein hai.",
+    "devanagari": "{what} पहले से record में है।",
+    "mr": "{what} आधीच record मध्ये आहे.",
+    "bengali": "{what} আগে থেকেই record-এ আছে।",
+    "tamil": "{what} ஏற்கெனவே record-ல் உள்ளது.",
+    "telugu": "{what} ఇప్పటికే record లో ఉంది.",
+    "kannada": "{what} ಈಗಾಗಲೇ record ನಲ್ಲಿದೆ.",
+    "malayalam": "{what} നേരത്തേ record-ൽ ഉണ്ട്.",
+    "gujarati": "{what} પહેલેથી record માં છે.",
+    "gurmukhi": "{what} ਪਹਿਲਾਂ ਤੋਂ record ਵਿੱਚ ਹੈ।",
+    "odia": "{what} ଆଗରୁ record ରେ ଅଛି।",
+}
+
+
+def already_on_record(profile: dict | None, what: str) -> str:
+    return canned(profile, _SAME).format(what=what or "That")
+
+
+_NONE_SENT = {
+    "english": "No reminder went out for that. I will not tell you to skip it or take an extra one.",
+    "indic": "Uske liye koi reminder nahi gaya. Main skip karne ya extra lene ko nahi kahungi.",
+    "devanagari": "उसके लिए कोई reminder नहीं गया। मैं छोड़ने या अतिरिक्त लेने को नहीं कहूँगी।",
+    "mr": "त्यासाठी reminder गेला नाही. मी सोडायला किंवा जास्त घ्यायला सांगणार नाही.",
+    "bengali": "সেটার reminder যায়নি। বাদ দিতে বা বাড়তি খেতে আমি বলব না।",
+    "tamil": "அதற்கு reminder போகவில்லை. தவிர்க்கவோ கூடுதலாக எடுக்கவோ நான் சொல்லமாட்டேன்.",
+    "telugu": "దానికి reminder వెళ్ళలేదు. దాటవేయమని లేదా ఎక్కువ తీసుకోమని నేను చెప్పను.",
+    "kannada": "ಅದಕ್ಕೆ reminder ಹೋಗಿಲ್ಲ. ಬಿಡಲು ಅಥವಾ ಹೆಚ್ಚು ತೆಗೆದುಕೊಳ್ಳಲು ನಾನು ಹೇಳುವುದಿಲ್ಲ.",
+    "malayalam": "അതിന് reminder പോയില്ല. ഒഴിവാക്കാനോ കൂടുതൽ എടുക്കാനോ ഞാൻ പറയില്ല.",
+    "gujarati": "તેના માટે reminder ગયું નહીં. હું છોડવા કે વધારે લેવા કહીશ નહીં.",
+    "gurmukhi": "ਉਸ ਲਈ reminder ਨਹੀਂ ਗਿਆ। ਮੈਂ ਛੱਡਣ ਜਾਂ ਵੱਧ ਲੈਣ ਲਈ ਨਹੀਂ ਕਹਾਂਗੀ।",
+    "odia": "ତାହା ପାଇଁ reminder ଯାଇନି। ଛାଡିବାକୁ କିମ୍ବା ଅଧିକ ନେବାକୁ ମୁଁ କହିବି ନାହିଁ।",
+}
+
+
+def noted_reading(profile: dict | None, what: str, told: str = "") -> str:
+    """One calm line for a reading. Who was told is the alert result, and only when there is one."""
+    line = canned(profile, _NOTED).format(what=what)
+    return f"{line} {told}".strip() if told else line
+
+
+def calm_noted(profile: dict | None, told: str = "") -> str:
+    line = canned(profile, _CALM)
+    return f"{line} {told}".strip() if told else line
+
+
+def missed_reminder_line(profile: dict | None) -> str:
+    return canned(profile, _NONE_SENT)
+
+
+def week_facts(summary: str) -> list[str]:
+    """The walk, the reading and the meal from a week report, in the tool's own lines."""
+    out = []
+    for line in (summary or "").splitlines():
+        s = line.strip()
+        if s.startswith("Activity:") or s.startswith("Mood/") or s.upper().startswith("READING") or s.startswith("BP:"):
+            out.append(s)
+    return out[:3]
+
+
+def medicine_line(profile: dict | None, medicines: list[tuple[str, str, list[str]]]) -> str:
+    """The saved medicine, said back, when a setup pitch answered a medicine question."""
+    bits = []
+    for name, dose, times in medicines[:2]:
+        body = name + (f" {dose}" if dose else "")
+        if times:
+            body += " at " + ", ".join(times)
+        bits.append(body)
+    return canned(profile, _MED_AT).format(med="; ".join(bits))
+
+
+def pulled_off_last(reply: str, last: str, user_text: str, medicines: list[tuple[str, str, list[str]]] | None,
+                    actions: list | None) -> bool:
+    """Her last message was about something else, and this short question was answered with a saved medicine instead."""
+    if not last or answer_used(actions):
+        return False
+    text = user_text or ""
+    if ("?" not in text and "？" not in text) or len(words(text)) > 8:
+        return False
+    low_r, low_l = (reply or "").lower(), last.lower()
+    named = [n for n, _dose, _times in medicines or [] if len(n) >= 4 and n.lower() in low_r and n.lower() not in low_l]
+    return bool(named) and not shares_topic(reply, last)
+
+
 def settle_reply(text: str, profile: dict | None, *, situation: str, needs_framing: bool, force_light: bool, held_topic_text: str,
-                 actions: list | None, prior_assistant: bool, naming: bool, user_text: str = "") -> str:
+                 actions: list | None, prior_assistant: bool, naming: bool, user_text: str = "",
+                 medicines: list[tuple[str, str, list[str]]] | None = None, last_assistant: str = "") -> str:
     """The lines the model keeps dropping, written by code. A medicine explanation gets the framing. An apology with no
     earlier message of hers becomes a light reply. A short answer that she turned into setup goes back to her question."""
     out = text or ""
+    if pulled_off_last(out, last_assistant, user_text, medicines, actions):
+        last = sentences(last_assistant)
+        return canned(profile, _LOOK).format(last=last[-1] if last else last_assistant.strip()[:180])
     if setup_instead(out, user_text):
+        if len(words(user_text)) <= 3:
+            return canned(profile, _WHO)
+        if situation == "med_question" and medicines:
+            return medicine_line(profile, medicines)
         return canned(profile, _CAN)
     if situation == "med_question" or needs_framing:
         out = with_framing(profile, out)

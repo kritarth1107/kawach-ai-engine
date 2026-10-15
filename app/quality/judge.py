@@ -1,4 +1,4 @@
-"""The full-memory judge (trust plan C1.3): every real Saheli message, graded against what she knew when she wrote it.
+"""The full-memory judge (trust plan C1.3): a sample of real Saheli messages, graded against what she knew when she wrote it.
 
 For each message in reply_log (replies, messages she started, relays, regular nudges) the judge gets:
 - the household, and the care record, notes, links, pending facts and "never say" list rebuilt as they stood at that
@@ -255,8 +255,26 @@ def note_of(v: dict) -> str:
     return ("; ".join(bits) + (f" — {v['summary']}" if v.get("summary") else ""))[:300]
 
 
+async def _founder_threads(session, family_id: str, day: str) -> set[str]:
+    """Threads the founder reported that day, or voted down. The reply is graded either way."""
+    from app.care.models import CareEvent
+    from app.quality.models import ReplayCase
+
+    threads = {t for (t,) in (await session.execute(
+        select(ReplayCase.thread_id).where(ReplayCase.family_id == family_id, ReplayCase.day == day, ReplayCase.source == "founder",
+                                           ReplayCase.thread_id.is_not(None))
+    )).all()}
+    for e in (await session.execute(
+            select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.kind == "feedback", CareEvent.day == day))).scalars():
+        if (e.payload or {}).get("vote") == "down" and e.subject_id:
+            threads.add(e.subject_id)
+    return threads
+
+
 async def judge_replies(sessions: async_sessionmaker, family_id: str, day: str, *, limit: int | None = None) -> dict:
-    """Grade every real Saheli message of this family on this IST day that has no verdict yet."""
+    """Grade this family's real messages for the day that are in the sample, or that must always be graded."""
+    from app.quality import sample
+
     start = datetime.fromisoformat(day).replace(tzinfo=clock.IST)
     async with sessions() as s:
         done = select(ReplyVerdict.reply_id).where(ReplyVerdict.family_id == family_id, ReplyVerdict.day == day)
@@ -267,9 +285,27 @@ async def judge_replies(sessions: async_sessionmaker, family_id: str, day: str, 
         if limit:
             rows = rows[:limit]
         if not rows:
-            return {"graded": 0, "failed": 0, "errors": 0}
+            return {"graded": 0, "failed": 0, "errors": 0, "of": 0, "skipped": 0}
+        founders = await _founder_threads(s, family_id, day)
+        must = [r for r in rows if sample.always_logged(r, founders)]
+        ordinary = [r for r in rows if r not in must and r.judge_band != sample.SKIP]
+        end = start + timedelta(days=1)
+        mine = await sample._counts(s, start, end, family_id)
+        total = await sample._counts(s, start, end, None)
+        chosen = sample.pick(ordinary, mine=mine, total=total)
+        if mine == 0 and sample.daily_cap() > 0:
+            from sqlalchemy import func
+
+            n = int((await s.execute(
+                select(func.count(func.distinct(ReplyLog.family_id))).where(ReplyLog.at >= start, ReplyLog.at < end)
+            )).scalar_one() or 0)
+            if not sample.admitted(family_id, day, max(n, 1)):
+                chosen = []
+        picked = must + chosen
+        must_ids = {r.id for r in must}
+        skip_ids = [r.id for r in rows if r not in picked]
         roster = await roster_of(s, family_id)
-        inputs = [await build_input(s, r, roster) for r in rows]
+        inputs = [await build_input(s, r, roster) for r in picked]
     sem = asyncio.Semaphore(parallel())
     results: list[tuple[ReplyInput, tuple[dict, str, float] | None]] = []
 
@@ -284,6 +320,10 @@ async def judge_replies(sessions: async_sessionmaker, family_id: str, day: str, 
     await asyncio.gather(*(one(i) for i in inputs))
     graded = failed = errors = 0
     async with sessions() as s:
+        for rid in skip_ids:
+            row = await s.get(ReplyLog, rid)
+            if row is not None and row.judge_band != sample.SAMPLE:
+                row.judge_band = sample.SKIP
         for inp, res in results:
             if res is None or not res[0]["parsed"]:
                 errors += 1
@@ -295,6 +335,7 @@ async def judge_replies(sessions: async_sessionmaker, family_id: str, day: str, 
                                prompt_version=PROMPT_VERSION, judged_at=clock.now()))
             if r is not None:
                 # the learning loop (scoring, corpus, lessons, drift, tuning) reads the full-memory verdict here
+                r.judge_band = sample.ALWAYS if r.id in must_ids else sample.SAMPLE
                 r.judge_pass = v["passed"]
                 r.judge_note = note_of(v) or None
                 if r.scored_at is not None:
@@ -304,7 +345,7 @@ async def judge_replies(sessions: async_sessionmaker, family_id: str, day: str, 
             graded += 1
             failed += 0 if v["passed"] else 1
         await s.commit()
-    return {"graded": graded, "failed": failed, "errors": errors, "of": len(rows)}
+    return {"graded": graded, "failed": failed, "errors": errors, "of": len(inputs), "skipped": len(skip_ids)}
 
 
 # ── check 2: nothing she was told is missing from memory ───────────────────────
@@ -342,6 +383,16 @@ async def remembered(sessions: async_sessionmaker, family_id: str, day: str) -> 
             select(Turn.thread_id).where(Turn.family_id == family_id, Turn.role == "user", Turn.at >= start, Turn.at < end,
                                          Turn.thread_id != SCHEDULER_THREAD).distinct()
         )).all()]
+        from app.quality import sample
+
+        bands = list((await s.execute(
+            select(ReplyLog.thread_id, ReplyLog.judge_band).where(
+                ReplyLog.family_id == family_id, ReplyLog.at >= start, ReplyLog.at < end, ReplyLog.judge_band.is_not(None))
+        )).all())
+        # A family whose replies were sampled: only those conversations. No band yet (older rows): every conversation.
+        if bands:
+            keep = {t for t, b in bands if b in (sample.SAMPLE, sample.ALWAYS)}
+            threads = [t for t in threads if t in keep]
         jobs = []
         for th in threads:
             turns = list((await s.execute(

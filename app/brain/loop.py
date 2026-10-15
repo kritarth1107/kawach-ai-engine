@@ -34,6 +34,7 @@ BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
 # paid A/B on the test world shows medium is at least 5 points better at p90 <= 15 s (founder decision D3).
 BRAIN_EFFORT_HARD = os.getenv("BRAIN_EFFORT_HARD", BRAIN_EFFORT)
 HISTORY_TURNS = 40
+PROMPT_TURN_CHARS = 500  # older turns in the prompt; the care record keeps the facts, the stored turn stays whole
 # Small talk and acks, from the situation tagger's existing labels. A greeting does not re-read the whole thread,
 # think hard, or wait on the reply-path judge. A tool call still runs; the reply after it thinks at the normal depth.
 LIGHT_SITUATIONS = frozenset({"thanks", "chit_chat"})
@@ -144,6 +145,7 @@ class TurnData:
         self._turns: dict[str, list] | None = None
         self._tasks: list | None = None
         self.history_full = True  # set by history(): did the thread fill a whole history window?
+        self.open_tasks = False  # an order or ride is already running (its tools come back on)
 
     async def facts(self, subject: str) -> list:
         if subject not in self._facts:
@@ -265,6 +267,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     from app.tasks import runtime as task_runtime
 
     tasks = await data.tasks()
+    data.open_tasks = bool(tasks)
     dose = await dose_answer_block(data, req)
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
@@ -572,10 +575,13 @@ async def history(session: AsyncSession, req: TurnRequest, data: TurnData | None
         if t.role != "user" and (t.meta or {}).get("waiting"):
             continue  # it waited while their chat was closed: the WAITING block gives it now, as it stands
         stamp = clock.ist(t.at).strftime("%d %b %H:%M")
+        said = t.text or ""
+        if len(said) > PROMPT_TURN_CHARS:
+            said = said[:PROMPT_TURN_CHARS].rstrip() + "…"
         if t.role == "user":
-            msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {t.text}"}]})
+            msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {said}"}]})
         else:
-            msgs.append({"role": "assistant", "text": t.text, "tool_calls": []})
+            msgs.append({"role": "assistant", "text": said, "tool_calls": []})
     while msgs and msgs[0]["role"] != "user":
         msgs.pop(0)
     return msgs
@@ -885,6 +891,40 @@ def partial_reply(p: dict | None) -> str:
     return guards.canned(p, PARTIAL)
 
 
+def _json_result(action: dict) -> dict:
+    try:
+        data = json.loads(action.get("result") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _told(ctx: tools.TurnCtx) -> str:
+    for action in reversed(ctx.actions):
+        if action.get("ok") and action.get("tool") == "alert_caregiver":
+            told = _json_result(action).get("told")
+            if told:
+                return str(told)
+    return ""
+
+
+async def cover_red_flag(ctx: tools.TurnCtx, situation: str) -> None:
+    """A red-flag reading or a red-flag moment is logged and the caregiver is told, even when the draft skipped it."""
+    alerted = any(a.get("ok") and a.get("tool") == "alert_caregiver" for a in ctx.actions)
+    vital_flag = ""
+    for action in ctx.actions:
+        if action.get("ok") and action.get("tool") == "log_vital" and _json_result(action).get("red_flag"):
+            vital_flag = str(_json_result(action)["red_flag"])
+    logged = any(a.get("ok") and a.get("tool") in ("log_event", "log_vital") for a in ctx.actions)
+    if situation == "emergency" and not logged:
+        await tools.run(ctx, "log_event", {"kind": "symptom", "summary": (ctx.user_text or "symptom")[:160], "severity": "concern"})
+    if (vital_flag or situation == "emergency") and not alerted:
+        await tools.run(ctx, "alert_caregiver", {
+            "reason": "red_flag", "issue": "red-flag",
+            "message": (vital_flag or "A red flag was reported.")[:300], "confidence": 0.9,
+        })
+
+
 async def finish_later(session: AsyncSession, req: TurnRequest) -> None:
     """The model died after something was already saved. A retry of the whole turn would save it again, so a short loop
     wakes in two minutes and answers what is left. Nothing was saved: the caller gets 503 and the backend holds the turn."""
@@ -927,6 +967,26 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
                 actions=result.actions, calls=calls)
             await session.commit()
     return result
+
+
+async def _judge_claims(ctx: tools.TurnCtx, draft: str, *, memory: str, theirs: list[str], tool_texts: list[str], situation: str,
+                        asked: bool = False) -> list:
+    """The live judge, on this family's sample for the day and on every crisis, alert, or unsure voice note."""
+    from app.quality import sample
+
+    used = [a["tool"] for a in ctx.actions if a.get("ok")]
+    force = sample.always_live(voice_unsure=ctx.voice_unsure, alerts=bool(ctx.alerts), health=health_turn(ctx.actions),
+                               tools=used, situation=situation)
+    if force:
+        ctx.judge_band = sample.ALWAYS
+    elif ctx.judge_band == sample.SKIP:
+        return []
+    elif ctx.judge_band not in (sample.SAMPLE, sample.ALWAYS):
+        ctx.judge_band = sample.SAMPLE if await sample.ordinary_room(ctx.session, ctx.family_id) > 0 else sample.SKIP
+    if ctx.judge_band == sample.SKIP:
+        return []
+    return await grounding.check(draft, memory=memory, their_messages=theirs, tool_results=tool_texts, actions=True,
+                                 doctor_note=health_turn(ctx.actions), always=asked)
 
 
 async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, take_lock: bool = True) -> TurnResult:
@@ -1091,6 +1151,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         earlier = await data.turns(req.speaker["id"])
         last_hers = next((t.text for t in reversed(earlier) if t.role == "assistant" and (t.text or "").strip() not in ("", "none")), "")
         ctx.prior_assistant = bool(last_hers)
+        ctx.last_assistant = last_hers
         ctx.held_topic = guards.held_topic(last_hers, req.text)
     ctx.known.append("")  # tool results are appended as they come
     stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
@@ -1143,7 +1204,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                     system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
                     messages=msgs,
                     # On the last step there are no tools, so the person always gets a reply.
-                    tools=None if last else tools.specs(),
+                    tools=None if last else tools.specs_for(open_tasks=data.open_tasks, system=is_system),
                     max_tokens=LIGHT_MAX_TOKENS if effort == "minimal" else 6000,
                     effort=effort,
                     essential=not is_system,  # past the hard cap only people's messages get answers
@@ -1191,9 +1252,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             claims: list = []
             if not problems:
                 asked = "?" in (req.text or "") or "？" in (req.text or "")
-                claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                               tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions),
-                                               always=asked)
+                claims = await _judge_claims(ctx, text_now, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts,
+                                             situation=situation, asked=asked)
                 problems += grounding.problems(claims)
             trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
@@ -1202,7 +1262,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
             profile = ctx.profiles.get(req.speaker["id"])
-            if any(c.source == "unwanted_apology" for c in claims):
+            if any(c.source in ("unwanted_apology", "tease_as_question") for c in claims):
                 reply.text = guards.light_reply(profile)
                 ctx.force_light = True
                 break
@@ -1284,6 +1344,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 "They corrected how they are addressed. Say one brief sorry in their language, then the name they asked for. "
                 "Do not use an avoided word."}]})
 
+    if not is_system:
+        await cover_red_flag(ctx, situation)
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Before any tidy: joining lines can hide "thought" on its own line. The model's notes never reach a person.
@@ -1294,8 +1356,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
         checked_at = time.monotonic()
-        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
-                                      doctor_note=health_turn(ctx.actions))
+        still = await _judge_claims(ctx, final, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts, situation=situation)
         trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
@@ -1328,8 +1389,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         except router.AllModelsFailed:
             final = ""
         if final and final != "none":
-            still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
-                                          doctor_note=health_turn(ctx.actions))
+            still = await _judge_claims(ctx, final, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts, situation=situation)
             if still:
                 final = grounding.strip(final, still) or ""
         if _only_ack(final, profile):
@@ -1360,10 +1420,23 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         naming = any(a.get("ok") and a["tool"] == "remember" and (a.get("args") or {}).get("domain") == "naming" for a in ctx.actions)
         from app.learn import situations
         ctx.situation = situations.tag(text=req.text, role=role, tools=[a["tool"] for a in ctx.actions if a.get("ok")])
+        saved_meds: list[tuple[str, str, list[str]]] = []
+        seen_meds: set[str] = set()
+        for pid in (req.speaker["id"], req.elder["id"]):
+            for fact in await data.facts(pid):
+                if fact.domain != "medicine" or fact.status != "active":
+                    continue
+                name = str((fact.value or {}).get("name") or "").strip()
+                if not name or name.lower() in seen_meds:
+                    continue
+                seen_meds.add(name.lower())
+                value = fact.value or {}
+                saved_meds.append((name, str(value.get("dose") or "").strip(), [str(t) for t in (value.get("times") or [])]))
         settled = guards.settle_reply(
             final, ctx.profiles.get(req.speaker["id"]), situation=ctx.situation, needs_framing=ctx.needs_framing,
             force_light=ctx.force_light, held_topic_text=ctx.held_topic, actions=ctx.actions,
-            prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text)
+            prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text,
+            medicines=saved_meds, last_assistant=ctx.last_assistant)
         if settled != final:
             final = settled
             guarded = True
@@ -1372,6 +1445,47 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             if hello:
                 final = hello
                 guarded = True
+        profile = ctx.profiles.get(req.speaker["id"])
+        told = _told(ctx)
+        vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
+        vital_data = _json_result(vital) if vital else {}
+        if vital and (situation in ("vital_report", "emergency") or vital_data.get("red_flag")) and (
+                vital_data.get("red_flag") or guards.has_framing(final) or len(guards.sentences(final)) > 2):
+            final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
+            guarded = True
+        elif situation == "emergency":
+            if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
+                final = guards.calm_noted(profile, told)
+            elif told and told not in (final or ""):
+                final = f"{final.rstrip()} {told}".strip()
+            guarded = True
+        report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
+        if report:
+            try:
+                summary = str((json.loads(report.split(":", 1)[1]) or {}).get("summary") or "")
+            except json.JSONDecodeError:
+                summary = ""
+            facts = guards.week_facts(summary)
+            bodies = [f.split(":", 1)[-1].strip().rstrip(".") for f in facts]
+            bodies = [b for b in bodies if b]
+            if bodies and any(b[:24] not in (final or "") for b in bodies):
+                final = ". ".join(bodies[:3]) + "."
+                guarded = True
+        same = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "remember" and _json_result(a).get("result") == "unchanged"), None)
+        if same:
+            note = str(_json_result(same).get("note") or "")
+            what = note.split("Already on the record as ", 1)[-1].split(".", 1)[0].strip()
+            final = guards.already_on_record(profile, what)
+            guarded = True
+        reminder = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "reminder_log"), None)
+        if reminder and situation == "med_question":
+            attempts = _json_result(reminder).get("reminder_attempts") or []
+            if not any(isinstance(row, dict) and row.get("delivered") for row in attempts):
+                final = guards.missed_reminder_line(profile)
+                guarded = True
+
+    if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):
+        final = guards.missed_reminder_line(ctx.profiles.get(req.speaker["id"])) if situation == "med_question" else ack_reply(ctx.profiles.get(req.speaker["id"]))
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []
@@ -1381,7 +1495,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
     if not is_system:
-        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final))
+        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final), guarded=guarded)
     # Folding the thread is another model call. A turn that is already slow sends the reply first; the next one folds.
     if data.history_full and (time.monotonic() - started) < 8:
         await maybe_compact(session, req.family_id, req.speaker["id"])
@@ -1451,16 +1565,19 @@ def turn_trace(msgs: list[dict], start: int, final: str) -> list[dict]:
 
 
 async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, turn_id: int | None, role: str, lang: str,
-                           trace: list | None = None) -> None:
+                           trace: list | None = None, guarded: bool = False) -> None:
     """Log the reply for scoring, and note anything asked that Saheli could not do. Never costs the person their reply."""
     from app.learn import gaps, scoring, situations
 
     try:
         used = [a["tool"] for a in ctx.actions if a.get("ok")]
         ctx.situation = situations.tag(text=req.text, role=role, tools=used)
+        band = ctx.judge_band or None
+        if guarded or ctx.voice_unsure or ctx.alerts or ctx.situation == "emergency" or "alert_caregiver" in used:
+            band = "always"
         await scoring.record(session, family_id=req.family_id, thread_id=req.speaker["id"], turn_id=turn_id, kind="reply",
                              situation=ctx.situation, speaker_role=role, lang=lang, user_text=req.text, text=final, tools=used,
-                             playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace)
+                             playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace, judge_band=band)
         how = gaps.detect(user_text=req.text, reply=final, actions=ctx.actions)
         if how:
             names = [req.elder.get("name", "")] + [m.get("name", "") for m in req.members]

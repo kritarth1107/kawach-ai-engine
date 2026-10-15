@@ -544,6 +544,9 @@ async def test_someone_who_never_wrote_or_not_in_24_hours_gets_no_nudge_even_if_
     out = await run(sessions, host)
     assert host.world.sent == [] and out["skipped"].get("window_closed") == 1  # her last message was 25 hours ago
     host.world.inbound[MAA["id"]] = "2026-10-15T09:00:00+05:30"  # a Done tap the backend saw (no engine turn)
+    async with sessions() as s:
+        await nudges.pull_due(s, FAM, MAA["id"])  # the backend tells the engine; a closed chat is not read every tick
+        await s.commit()
     out = await run(sessions, host)
     assert len(sent_to(host, MAA)) == 1
 
