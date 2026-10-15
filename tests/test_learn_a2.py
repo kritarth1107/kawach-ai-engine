@@ -281,6 +281,31 @@ async def test_safe_rules_are_approved_automatically_unsafe_ones_dropped_and_lis
     assert all(r.decided_by == "auto" for r in rows.values() if r.status != "proposed")
 
 
+async def test_a_rule_that_bans_a_tool_is_dropped_and_the_safe_ones_are_approved(db, at, sessions):
+    at("2026-10-11 23:00")
+    await db.execute(delete(RuleProposal))
+    banned = "Never offer or promise to book a cab, schedule a ride, or order a medicine."
+    for rule in (banned, "Give no advice of her own.", "Ask one question in a message."):
+        db.add(RuleProposal(created_at=clock.now(), situation="general", rule=rule, why="judge", status="proposed"))
+    await db.commit()
+    async with sessions() as s:
+        out = await review.auto_approve(s, {banned: ["start_task"]})
+        await s.commit()
+    assert out == {"approved": 2, "dropped": 1}
+    rows = {r.rule: r for r in (await db.execute(select(RuleProposal))).scalars()}
+    assert rows[banned].status == "dropped" and "start_task" in rows[banned].why
+    assert rows["Give no advice of her own."].status == "approved"
+    assert rows["Ask one question in a message."].status == "approved"
+
+
+def test_a_rule_blocks_only_a_tool_that_exists():
+    from app.learn.review import conflicts_from, known_blocks
+
+    assert known_blocks(["start_task", "not_a_tool"], {"start_task"}) == ["start_task"]
+    raw = json.dumps({"conflicts": [{"rule": "Never book a cab.", "tools": ["start_task", "cab"]}]})
+    assert conflicts_from(raw, ["Never book a cab."], {"start_task"}) == {"Never book a cab.": ["start_task"]}
+
+
 async def test_general_rule_is_trialled_on_every_situation(db, at, sessions, monkeypatch):
     at("2026-10-11 23:00")
     await db.execute(delete(PlaybookVersion))

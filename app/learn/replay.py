@@ -19,6 +19,16 @@ import os
 
 REFUSED_PROJECTS = {"kavach-care", "sunny-ship-508214-q1"}
 EVAL_PROJECT = "kavach-eval-1015"
+# The deploy replay and the draft gate run this set only, so a deploy stays near ₹20 and a draft near ₹30.
+_KEYS = os.path.join(os.path.dirname(__file__), "..", "..", "eval", "fixtures", "deploy_gate_keys.txt")
+
+
+def deploy_case_ids() -> set[str]:
+    try:
+        text = open(_KEYS).read()
+    except OSError:
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip() and not line.startswith("#")}
 
 
 class ReplayUnavailable(RuntimeError):
@@ -28,7 +38,8 @@ class ReplayUnavailable(RuntimeError):
 _FROM_DB = object()
 
 
-async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases: int = 40, live=_FROM_DB, case_files: tuple[str, ...] = ()) -> dict:
+async def run_for_playbook(sessions, pb, *, budget_inr: float = 30.0, max_cases: int = 40, live=_FROM_DB, case_files: tuple[str, ...] = (),
+                           only_ids: set[str] | None = None) -> dict:
     """live: the playbook the candidate is compared with (default: the live one in `sessions`; the learn-gate workflow passes
     production's). case_files: exported cases (jsonl) to add to the repo's."""
     project = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT") or ""
@@ -66,6 +77,10 @@ async def run_for_playbook(sessions, pb, *, budget_inr: float = 150.0, max_cases
         cases += [as_row(r) for r in rows if r.anonymised or not r.family_id]
         if live is _FROM_DB:
             live, _canary = await learned.versions(s)
+    if only_ids:
+        scope = set(getattr(pb, "scope", None) or [])
+        scoped = [c for c in cases if scope and (c.get("kind") in scope or c.get("situation") in scope)]
+        cases = scoped or [c for c in cases if c.get("id") in only_ids]
     cases = runner.choose(cases, max_cases)
     down = await runner.preflight()
     if down:  # no case traffic to a provider that refuses the project (KP 14 Oct)

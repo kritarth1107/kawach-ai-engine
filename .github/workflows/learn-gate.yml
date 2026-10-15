@@ -1,8 +1,9 @@
 name: Learn gate (a waiting playbook draft through the replay cases)
 
-# Trust plan §10.2 step 2: the 02:00 night makes a playbook draft but cannot run the replay cases, so the draft waits.
-# When it runs, it calls Gemini in kavach-eval-1015, never kavach-care. GitHub cannot reach the engine (engine.kavach.local), so it
-# does not run cases and does not post: the draft keeps waiting. Leave this workflow disabled until that path exists.
+# Trust plan §10.2 step 2. The 02:00 night makes a draft and cannot run the replay cases (no eval/ in the image).
+# This job runs that draft's cases on Gemini 3.5 Flash in kavach-eval-1015, never kavach-care, capped at ₹30.
+# The world night stays capped at ₹150 in nightly-saheli.yml. A deploy replay is a smaller set, capped at ₹20.
+# GitHub cannot reach engine.kavach.local, so when the engine is not reachable this job spends nothing and the draft waits.
 
 on:
   schedule:
@@ -20,13 +21,62 @@ concurrency:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 20
     permissions:
       contents: read
+      id-token: write
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: kawach_replay
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      GCP_PROJECT_ID: kavach-eval-1015
+      GOOGLE_CLOUD_PROJECT: kavach-eval-1015
+      GOOGLE_CLOUD_LOCATION: asia-south1
+      SENSITIVE_EVALS: pause
+      LEARN_REPLAY_MAX_INR: "30"
     steps:
       - uses: actions/checkout@v4
-      - name: The engine is private, so this job does not call a model
+      - name: The engine is on a private network
+        id: reach
         run: |
-          echo "::warning::Learn gate stays idle. It would call Gemini in kavach-eval-1015, never kavach-care, but GitHub cannot reach engine.kavach.local, so no case runs and nothing is posted. The draft keeps waiting."
-          echo "# Learn gate idle" >> "$GITHUB_STEP_SUMMARY"
-          echo "GitHub cannot reach the engine. No Vertex call, no Bedrock call." >> "$GITHUB_STEP_SUMMARY"
+          if getent hosts engine.kavach.local >/dev/null 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "ENGINE_URL=http://engine.kavach.local" >> "$GITHUB_ENV"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Learn gate spends nothing. GitHub cannot reach engine.kavach.local, so it cannot read the draft or post a canary. The draft keeps waiting."
+            echo "# Learn gate idle" >> "$GITHUB_STEP_SUMMARY"
+            echo "No Vertex call. The draft keeps waiting until this job can reach the engine." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-python@v5
+        if: steps.reach.outputs.ok == 'true'
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt pillow
+        if: steps.reach.outputs.ok == 'true'
+      - uses: google-github-actions/auth@v2
+        if: steps.reach.outputs.ok == 'true'
+        with:
+          workload_identity_provider: projects/834177061652/locations/global/workloadIdentityPools/github/providers/github
+          service_account: gh-gemini@kavach-eval-1015.iam.gserviceaccount.com
+          project_id: kavach-eval-1015
+      - name: Draft cases, capped at ₹30
+        if: steps.reach.outputs.ok == 'true'
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay
+          REPLAY_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/kawach_replay
+          WEB_SEARCH_PROVIDER: "off"
+          MEMORY_EMBEDDINGS: "off"
+          LLM_PROVIDER: router
+        run: |
+          args=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then args="--dry-run"; fi
+          PYTHONPATH=. python -u -m eval.learn_gate $args

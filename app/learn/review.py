@@ -96,8 +96,16 @@ async def drift(sessions: async_sessionmaker) -> dict:
 PROPOSE = """You review a WhatsApp care companion (Saheli) for elderly people in India. Below are replies a quality
 judge FAILED this week, with the judge's note. If a clear, repeated problem would be fixed by a short new rule in her
 instructions, propose it. At most 3 proposals; none if the failures are one-offs. Each rule: one or two sentences,
-general (no names), and never weaker on safety (alerts, doses, privacy). Return only JSON:
-{"proposals": [{"situation": "...", "rule": "...", "why": "...", "examples": [n, n]}]}"""
+general (no names), and never weaker on safety (alerts, doses, privacy).
+A rule may change tone, length, or how many questions she asks. It must not tell her to stop, refuse, or never offer
+something a tool below already does (a ride, an order, a reminder, a log, an alert). If a rule would stop a tool, name
+that tool in blocks_tools; otherwise leave blocks_tools empty. Return only JSON:
+{"proposals": [{"situation": "...", "rule": "...", "why": "...", "examples": [n, n], "blocks_tools": []}]}"""
+
+TOOL_CONFLICT = """These are the tools Saheli already has. A proposed rule conflicts with a tool when following the rule
+would stop her offering, promising, or doing what that tool does. A rule about tone, length, one question, or not giving
+advice of her own conflicts with nothing. Return only JSON:
+{"conflicts": [{"rule": "...", "tools": ["tool_name"]}]}"""
 
 
 async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
@@ -119,23 +127,76 @@ async def propose_rules(sessions: async_sessionmaker) -> list[dict]:
         return []
     items = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(lines))
     fails = lines
+    from app.brain.grounding import abilities
+
     try:
-        out = await router.complete("learn", system_stable=PROPOSE, messages=[{"role": "user", "content": [{"type": "text", "text": items}]}],
-                                    max_tokens=6000, effort="low", essential=False)
+        out = await router.complete(
+            "learn", system_stable=PROPOSE + "\n\nTOOLS SHE HAS:\n" + abilities(),
+            messages=[{"role": "user", "content": [{"type": "text", "text": items}]}],
+            max_tokens=6000, effort="low", essential=False)
     except router.AllModelsFailed:
         return []
+    known = _known_tools()
     got = []
     async with sessions() as s:
         for p in (parse_json(out.text).get("proposals") or [])[:3]:
             rule = str(p.get("rule") or "").strip()
             if not rule or len(rule) > 400:
                 continue
+            blocked = known_blocks(p.get("blocks_tools"), known)
             ev = [items.splitlines()[i - 1][:300] for i in p.get("examples") or [] if isinstance(i, int) and 1 <= i <= len(fails)]
+            why = str(p.get("why") or "")[:500]
+            status = "proposed"
+            if blocked:
+                status = "dropped"
+                why = (why + f" | dropped: contradicts a tool ({', '.join(blocked)})")[:500]
             s.add(RuleProposal(created_at=clock.now(), situation=p.get("situation") if p.get("situation") in SITUATIONS else "general",
-                               rule=rule, why=str(p.get("why") or "")[:500], evidence=ev, status="proposed"))
+                               rule=rule, why=why, evidence=ev, status=status, decided_by="auto" if blocked else None))
             got.append(p)
         await s.commit()
     return got
+
+
+def _known_tools() -> set[str]:
+    from app.brain import tools
+
+    return set(tools.names())
+
+
+def known_blocks(named, known: set[str]) -> list[str]:
+    """Tool names a proposal said it would stop, that are real tools. Any other name is not a tool."""
+    if not isinstance(named, list):
+        return []
+    return sorted({str(n) for n in named if str(n) in known})
+
+
+def conflicts_from(raw: str, rules: list[str], known: set[str]) -> dict[str, list[str]]:
+    """The judge's list of rules that would stop a real tool. A rule it does not name is not blocked."""
+    out: dict[str, list[str]] = {}
+    for item in (parse_json(raw).get("conflicts") or []):
+        if not isinstance(item, dict):
+            continue
+        rule = str(item.get("rule") or "").strip()
+        blocked = known_blocks(item.get("tools"), known)
+        if rule in rules and blocked:
+            out[rule] = blocked
+    return out
+
+
+async def judge_tool_conflicts(rules: list[str]) -> dict[str, list[str]]:
+    """One check of the proposed rules against the live tool list. Raises AllModelsFailed when the check cannot run."""
+    from app.brain.grounding import abilities
+    from app.llm import router
+
+    pending = [r for r in rules if r]
+    if not pending:
+        return {}
+    known = _known_tools()
+    out = await router.complete(
+        "learn", system_stable=TOOL_CONFLICT + "\n\nTOOLS:\n" + abilities(),
+        messages=[{"role": "user", "content": [{"type": "text", "text": "\n".join(f"- {r}" for r in pending)}]}],
+        max_tokens=2000, effort="low", essential=False)
+    return conflicts_from(out.text or "", pending, known)
 
 
 async def decide_rule(sessions: async_sessionmaker, rule_id: int, *, approve: bool, by: str) -> dict:
@@ -151,7 +212,7 @@ async def decide_rule(sessions: async_sessionmaker, rule_id: int, *, approve: bo
 AUTO_RULES_PER_WEEK = 3  # at most 3 new lessons a week go into a trial, so every change stays attributable (§10)
 
 
-async def auto_approve(session) -> dict:
+async def auto_approve(session, conflicts: dict[str, list[str]] | None = None) -> dict:
     """Founder decision Q10 (13 Oct): self-learning goes live automatically behind safety gates. A proposed rule that
     passes the safety gate (no medical content, alerts, privacy or fixed rules: lessons.lesson_problems) is approved for
     the next trial (the replay gate, then the canary, decide whether it stays); one that fails is dropped and listed for
@@ -164,7 +225,10 @@ async def auto_approve(session) -> dict:
     out = {"approved": 0, "dropped": 0}
     for r in (await session.execute(select(RuleProposal).where(RuleProposal.status == "proposed").order_by(RuleProposal.id))).scalars():
         # a proposed rule may be a little longer than a style lesson; everything else is the lessons' safety gate
+        blocked = (conflicts or {}).get(r.rule) or []
         problems = [p for p in lessons.lesson_problems(r.rule) if p != "too long"] + (["too long"] if len(r.rule) > 400 else [])
+        if blocked:
+            problems = [f"contradicts a tool ({', '.join(blocked)})"] + problems
         if problems:
             r.status, r.decided_by = "dropped", "auto"
             r.why = (r.why + f" | dropped by the safety gate: {', '.join(problems)}")[:500]
