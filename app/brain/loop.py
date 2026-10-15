@@ -885,6 +885,40 @@ def partial_reply(p: dict | None) -> str:
     return guards.canned(p, PARTIAL)
 
 
+def _json_result(action: dict) -> dict:
+    try:
+        data = json.loads(action.get("result") or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _told(ctx: tools.TurnCtx) -> str:
+    for action in reversed(ctx.actions):
+        if action.get("ok") and action.get("tool") == "alert_caregiver":
+            told = _json_result(action).get("told")
+            if told:
+                return str(told)
+    return ""
+
+
+async def cover_red_flag(ctx: tools.TurnCtx, situation: str) -> None:
+    """A red-flag reading or a red-flag moment is logged and the caregiver is told, even when the draft skipped it."""
+    alerted = any(a.get("ok") and a.get("tool") == "alert_caregiver" for a in ctx.actions)
+    vital_flag = ""
+    for action in ctx.actions:
+        if action.get("ok") and action.get("tool") == "log_vital" and _json_result(action).get("red_flag"):
+            vital_flag = str(_json_result(action)["red_flag"])
+    logged = any(a.get("ok") and a.get("tool") in ("log_event", "log_vital") for a in ctx.actions)
+    if situation == "emergency" and not logged:
+        await tools.run(ctx, "log_event", {"kind": "symptom", "summary": (ctx.user_text or "symptom")[:160], "severity": "concern"})
+    if (vital_flag or situation == "emergency") and not alerted:
+        await tools.run(ctx, "alert_caregiver", {
+            "reason": "red_flag", "issue": "red-flag",
+            "message": (vital_flag or "A red flag was reported.")[:300], "confidence": 0.9,
+        })
+
+
 async def finish_later(session: AsyncSession, req: TurnRequest) -> None:
     """The model died after something was already saved. A retry of the whole turn would save it again, so a short loop
     wakes in two minutes and answers what is left. Nothing was saved: the caller gets 503 and the backend holds the turn."""
@@ -1285,6 +1319,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 "They corrected how they are addressed. Say one brief sorry in their language, then the name they asked for. "
                 "Do not use an avoided word."}]})
 
+    if not is_system:
+        await cover_red_flag(ctx, situation)
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Before any tidy: joining lines can hide "thought" on its own line. The model's notes never reach a person.
@@ -1386,6 +1422,35 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             if hello:
                 final = hello
                 guarded = True
+        profile = ctx.profiles.get(req.speaker["id"])
+        told = _told(ctx)
+        vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
+        vital_data = _json_result(vital) if vital else {}
+        if vital and (situation in ("vital_report", "emergency") or vital_data.get("red_flag")) and (
+                vital_data.get("red_flag") or guards.has_framing(final) or len(guards.sentences(final)) > 2):
+            final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
+            guarded = True
+        elif situation == "emergency":
+            if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
+                final = guards.calm_noted(profile, told)
+            elif told and told not in (final or ""):
+                final = f"{final.rstrip()} {told}".strip()
+            guarded = True
+        report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
+        if report:
+            try:
+                summary = str((json.loads(report.split(":", 1)[1]) or {}).get("summary") or "")
+            except json.JSONDecodeError:
+                summary = ""
+            facts = guards.week_facts(summary)
+            bodies = [f.split(":", 1)[-1].strip().rstrip(".") for f in facts]
+            bodies = [b for b in bodies if b]
+            if bodies and any(b[:24] not in (final or "") for b in bodies):
+                final = ". ".join(bodies[:3]) + "."
+                guarded = True
+
+    if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):
+        final = guards.missed_reminder_line(ctx.profiles.get(req.speaker["id"])) if situation == "med_question" else ack_reply(ctx.profiles.get(req.speaker["id"]))
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []

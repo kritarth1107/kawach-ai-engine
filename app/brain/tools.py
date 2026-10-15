@@ -338,10 +338,6 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         speech = language.merge(current.value if current else {}, {**details, "language": details.get("language") or a["name"]})
         if speech.get("language"):
             return await _save_language(ctx, subject, speech)
-    if domain == "naming":
-        name = str(a.get("name") or "").strip()
-        if name and name.lower() not in (ctx.user_text or "").lower():
-            raise ToolRefused("That name is not in what they just said. Do not save a name they did not use, and do not say it was saved.")
     if domain == "medicine":
         details["name"] = details.get("name") or a["name"]
         times = details.get("times") or []

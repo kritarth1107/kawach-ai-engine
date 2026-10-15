@@ -95,6 +95,16 @@ def test_a_saved_medicine_does_not_answer_the_price_she_just_gave():
     assert "240" in out and "Telmisartan" not in out
 
 
+def test_a_reading_or_a_red_flag_is_one_calm_line_and_a_week_keeps_its_facts():
+    from app.brain import guards
+
+    assert guards.noted_reading(None, "sugar 280") == "Noted: sugar 280."
+    assert guards.calm_noted(None, "no one else in the family to tell").endswith("no one else in the family to tell")
+    assert "skip" in guards.missed_reminder_line(None)
+    facts = guards.week_facts("Medicines: 0 of 7.\nREADING: BP 128/80\nActivity: Morning walk, 20 minutes\nMood/sleep/meals: Lunch: dal and rice")
+    assert len(facts) == 3
+
+
 def test_a_reading_kept_only_in_the_summary_is_still_in_the_report():
     from app.care.features import report_facts_text
 
