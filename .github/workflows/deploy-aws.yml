@@ -111,14 +111,18 @@ jobs:
         run: |
           aws ecs describe-task-definition --task-definition "$FAMILY" --query taskDefinition \
             | jq --arg IMG "$IMAGE" --arg NAME "kawach-ai-engine" '
+                def setenv($n; $v):
+                  .environment = ((.environment // [])
+                    | map(if .name == $n then .value = $v else . end)
+                    | if any(.[]; .name == $n) then . else . + [{name:$n, value:$v}] end);
                 .containerDefinitions |= map(
                   if ((.image | split("/") | last | split(":")[0]) == $NAME) then
                     .image = $IMG
                     # A one-shot EMBED_DIM_MIGRATE=on must not survive the next image roll.
                     # 15 Oct 02:33 copied the temporary :17 flag onto :18.
-                    | .environment = ((.environment // [])
-                        | map(if .name == "EMBED_DIM_MIGRATE" then .value = "off" else . end)
-                        | if any(.[]; .name == "EMBED_DIM_MIGRATE") then . else . + [{"name":"EMBED_DIM_MIGRATE","value":"off"}] end)
+                    # GEMINI_SG_FALLBACK=on is the founder yes (15 Oct): one Singapore call after a Mumbai 429 or timeout.
+                    | setenv("EMBED_DIM_MIGRATE"; "off")
+                    | setenv("GEMINI_SG_FALLBACK"; "on")
                   else . end)
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
             > /tmp/td.json
@@ -132,8 +136,10 @@ jobs:
                 if .name == "engine" then
                   .command = ["python", "-m", "app.jobs.dream", "--all"]
                   | .environment = ((.environment // [])
-                      | map(if .name == "EMBED_DIM_MIGRATE" then .value = "off" else . end)
-                      | if any(.[]; .name == "EMBED_DIM_MIGRATE") then . else . + [{"name":"EMBED_DIM_MIGRATE","value":"off"}] end)
+                      | map(if .name == "EMBED_DIM_MIGRATE" then .value = "off"
+                           elif .name == "GEMINI_SG_FALLBACK" then .value = "on" else . end)
+                      | if any(.[]; .name == "EMBED_DIM_MIGRATE") then . else . + [{"name":"EMBED_DIM_MIGRATE","value":"off"}] end
+                      | if any(.[]; .name == "GEMINI_SG_FALLBACK") then . else . + [{"name":"GEMINI_SG_FALLBACK","value":"on"}] end)
                 else . end)' /tmp/td.json > /tmp/dream.json
           aws ecs register-task-definition --cli-input-json file:///tmp/dream.json --query taskDefinition.revision --output text
           aws ecs wait services-stable --cluster kavach --service "$SERVICE"

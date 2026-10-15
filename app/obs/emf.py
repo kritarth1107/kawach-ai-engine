@@ -8,7 +8,8 @@ import json
 import time
 
 
-def note(namespace: str, role: str, *, errors: int = 0, throttles: int = 0, refusals: int = 0, latency_ms: float | None = None) -> None:
+def note(namespace: str, role: str, *, errors: int = 0, throttles: int = 0, refusals: int = 0, latency_ms: float | None = None,
+         region: str | None = None) -> None:
     metrics = [
         {"Name": "Calls", "Unit": "Count"},
         {"Name": "Errors", "Unit": "Count"},
@@ -16,6 +17,11 @@ def note(namespace: str, role: str, *, errors: int = 0, throttles: int = 0, refu
         {"Name": "Refusals", "Unit": "Count"},
     ]
     body: dict = {"Role": role, "Calls": 1, "Errors": errors, "Throttles": throttles, "Refusals": refusals}
+    # Region is only set when the call left Mumbai. The Role-only series stays the one dashboards already use.
+    dims: list = [["Role"], []]
+    if region:
+        body["Region"] = region
+        dims = [["Role", "Region"], ["Role"], []]
     if latency_ms is not None:
         metrics.append({"Name": "LatencyMs", "Unit": "Milliseconds"})
         body["LatencyMs"] = round(latency_ms, 1)
@@ -24,7 +30,7 @@ def note(namespace: str, role: str, *, errors: int = 0, throttles: int = 0, refu
             "Timestamp": int(time.time() * 1000),
             "CloudWatchMetrics": [{
                 "Namespace": namespace,
-                "Dimensions": [["Role"], []],
+                "Dimensions": dims,
                 "Metrics": metrics,
             }],
         },

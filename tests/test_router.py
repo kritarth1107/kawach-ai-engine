@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.llm import router
@@ -218,6 +220,30 @@ async def test_a_mumbai_timeout_stays_in_india_unless_the_flag_is_on(monkeypatch
         assert out.text == "from singapore" and seen == ["asia-south1", "asia-southeast1"]
     finally:
         router._providers.pop("gemini", None)
+
+
+async def test_a_mumbai_429_overflows_once_and_is_counted_outside_india(monkeypatch, capsys):
+    monkeypatch.setenv("GEMINI_SG_FALLBACK", "on")
+    seen: list[str] = []
+
+    class Places:
+        async def complete(self, route, **kw):
+            seen.append(route.location)
+            if route.location == "asia-south1":
+                raise ModelUnavailable(429, "RESOURCE_EXHAUSTED")
+            return LLMReply(text="from singapore", tool_calls=[], model=route.model)
+
+    router.register_provider("gemini", Places())
+    try:
+        out = await router.complete(
+            "nutrition", system_stable="s", messages=MSG, timeout_s=1,
+            routes=[Route("gemini", "gemini-3.5-flash", "asia-south1")])
+    finally:
+        router._providers.pop("gemini", None)
+    assert out.text == "from singapore" and seen == ["asia-south1", "asia-southeast1"]
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{") and "Kavach/Gemini" in line]
+    assert any(line.get("Region") == "asia-southeast1" and line.get("Role") == "nutrition" for line in lines)
+    assert all(line.get("Region") != "asia-south1" for line in lines)
 
 
 async def test_a_cancelled_turn_cancels_both_copies(monkeypatch):

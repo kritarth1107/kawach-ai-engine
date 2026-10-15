@@ -260,11 +260,11 @@ async def complete(
                 from app.obs.emf import note
                 status = getattr(exc, "status", None)
                 note("Kavach/Gemini", role, errors=0 if status == 429 else 1, throttles=1 if status == 429 else 0,
-                     latency_ms=(time.monotonic() - t0) * 1000)
+                     latency_ms=(time.monotonic() - t0) * 1000, region=_metric_region(route))
             raise
         if route.provider == "gemini":
             from app.obs.emf import note
-            note("Kavach/Gemini", role, latency_ms=(time.monotonic() - t0) * 1000)
+            note("Kavach/Gemini", role, latency_ms=(time.monotonic() - t0) * 1000, region=_metric_region(route))
         return reply
 
     async def first_of(route: Route) -> LLMReply:
@@ -297,6 +297,16 @@ async def complete(
                     t.cancel()
 
     queue = list(live)
+    tried_sg = False
+
+    async def overflow(failed: Route):
+        """One Singapore call for this request. The next request starts in Mumbai again."""
+        nonlocal tried_sg
+        if tried_sg:
+            return None
+        tried_sg = True
+        return await _singapore(role, failed, call, errors, started)
+
     while queue:
         route = queue.pop(0)
         try:
@@ -313,8 +323,10 @@ async def complete(
                     # Every 429 is logged, also the ones a retry clears (trust plan C5.1: measure before buying capacity).
                     logger.warning("llm_429 role=%s model=%s attempt=%d", role, route.key, attempt)
                     note_throttled()
-                    # Shared capacity usually frees within seconds: back off on the same model (health data stays in
-                    # India, founder D5, so there is often no other region to fall to) rather than give a weaker answer.
+                    # Mumbai first. One overflow call when the founder has allowed it; otherwise back off here.
+                    alt = await overflow(route)
+                    if alt is not None:
+                        return alt
                     if attempt > len(RETRY_429_S):
                         raise
             assert reply is not None
@@ -336,13 +348,13 @@ async def complete(
                     raise AllModelsFailed("; ".join(errors)) from exc
                 continue
             if exc.status == 429:
-                alt = await _singapore(role, route, call, errors, started)
+                alt = await overflow(route)
                 if alt is not None:
                     return alt
         except asyncio.TimeoutError:
             trip(route, None)
             errors.append(f"{route.key}: timeout")
-            alt = await _singapore(role, route, call, errors, started)
+            alt = await overflow(route)
             if alt is not None:
                 return alt
         logger.warning("llm fallback role=%s from=%s reason=%s", role, route.key, errors[-1])
@@ -350,8 +362,14 @@ async def complete(
 
 
 def sg_enabled() -> bool:
-    """One Gemini call in Singapore after Mumbai fails. Off: that call's data stays in India. The founder turns it on."""
+    """One Gemini call in Singapore after this Mumbai call gets a 429 or a timeout. The next call starts in Mumbai.
+    Off unless GEMINI_SG_FALLBACK=on (the live task and Terraform set that; founder 15 Oct)."""
     return os.getenv("GEMINI_SG_FALLBACK", "off").strip().lower() in ("on", "1", "true")
+
+
+def _metric_region(route: Route) -> str | None:
+    """Set only when the call left India, so Kavach/Gemini Role+Region counts those and no others."""
+    return route.location if route.location == "asia-southeast1" else None
 
 
 def _sg_route(route: Route) -> Route | None:
