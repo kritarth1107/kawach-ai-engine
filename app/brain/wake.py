@@ -20,6 +20,7 @@ from app.brain.loop import TurnRequest, run_turn
 from app.care import store
 from app.care.models import OpenLoop, Turn
 from app.core import clock
+from app.core.drain import Draining
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +322,8 @@ async def system_turn(sessions: async_sessionmaker, host: ToolHost, family_id: s
                 return await run_turn(session, host, TurnRequest(
                     family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=text, message_ref=ref_,
                     channel="scheduler", still_true=still_true))
+        except Draining:
+            raise
         except Exception:
             if not must:
                 raise
@@ -520,6 +523,8 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                         ),
                     )
             stats["ran"] += 1
+        except Draining:
+            raise
         except Exception:  # noqa: BLE001 — one family's failure must not stop the others
             logger.exception("wake failed loop=%s family=%s", loop_id, family_id)
             stats["failed"] += 1

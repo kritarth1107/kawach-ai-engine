@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brain.host import LiveHost, ShadowHost
 from app.brain.loop import TurnRequest, result_json, run_turn
+from app.core.drain import Draining
 from app.care import store
 from app.core import clock
 from app.core.security import verify_api_secret
@@ -111,6 +112,8 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
     )
     try:
         result = await run_turn(session, host, req)
+    except Draining as exc:
+        raise HTTPException(status_code=503, detail="draining") from exc
     except AllModelsFailed as exc:
         logger.error("brain down family=%s: %s", body.family_id, exc)
         raise HTTPException(status_code=503, detail="Saheli is unavailable") from exc

@@ -944,6 +944,13 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     """One turn, filed under its trace (D-13): a person's message under its own message id; a turn about a task (an
     update the task runtime asked Saheli to pass on) under the task's trace, with the turn's ref as `via`; anything
     else under a new id. Afterwards one trace_turns row records it (scrubbed), for the admin console's "Why?"."""
+    from app.core.drain import drain
+
+    async with drain.turn(session):
+        return await _run_turn_body(session, host, req)
+
+
+async def _run_turn_body(session: AsyncSession, host: ToolHost, req: TurnRequest) -> TurnResult:
     outer = trace.current()
     tid = outer or req.message_ref or trace.new("turn")
     via = (req.message_ref if req.message_ref != outer else None) if outer else None

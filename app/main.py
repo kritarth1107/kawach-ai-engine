@@ -51,6 +51,9 @@ def warn_google_routes() -> None:
 async def lifespan(app: FastAPI):
     import asyncio
 
+    from app.core.drain import drain, install_sigterm
+
+    install_sigterm()
     await ensure_database_schema()
     indexes = asyncio.create_task(ensure_indexes(engine))  # built concurrently while the engine serves
     from app.db.session import SessionLocal
@@ -59,6 +62,7 @@ async def lifespan(app: FastAPI):
     await cleanup_memory_index(SessionLocal)
     warn_google_routes()
     yield
+    await drain.finish()  # stop new turns, finish the ones already running, roll back what is left
     if not indexes.done():
         indexes.cancel()
     await llm_spend.flush()  # write the last ledger rows before the instance stops
