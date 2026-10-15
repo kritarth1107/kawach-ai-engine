@@ -50,12 +50,23 @@ class FakeNutritionModels:
         self.allergy: dict[str, list[str]] = {}  # food name (lower) → allergens
         self.rule_hits: dict[str, list[str]] = {}  # food name (lower) → rule keys
         self.estimates: dict[str, dict] = {}
+        self.part_of: dict[str, str] = {}  # a flavour's name → the dish it describes, for the parts prompt only
         self.item_ids: list[str] | None = None
         self.notes: dict[int, dict] = {}
 
     async def complete(self, route, *, system_stable, messages, **kw):
         system = " ".join(system_stable) if isinstance(system_stable, list) else system_stable
         text = messages[-1]["content"][0]["text"]
+        if system.startswith(lookup.PARTS_PROMPT[:40]):
+            self.calls.append("parts")
+            body = json.loads(text)
+            items = body["ITEMS"]
+            out = []
+            for it in items:
+                parent = self.part_of.get(str(it.get("name") or "").lower())
+                idx = next((o["i"] for o in items if str(o.get("name") or "").lower() == parent), None) if parent else None
+                out.append({"i": it["i"], "part_of": idx})
+            return LLMReply(text=json.dumps({"items": out}), tool_calls=[], model="fake")
         if system.startswith(lookup.NORMALISE_PROMPT[:40]):
             self.calls.append("normalise")
             body = json.loads(text)

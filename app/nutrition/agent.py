@@ -454,6 +454,13 @@ class NutritionAgent:
             jobs.finish(job, "dropped", {"why": "nothing named"})
             return {"result": "dropped", "job_id": str(job.id), "why": "No food was named; nothing saved."}
 
+        # A flavour, filling, or variety named with a dish is that dish, not a second food. The model says which
+        # item describes another; a photo and an order's dishes are already separate foods.
+        if (len(items) > 1 and not ask.get("from_photo") and not ask.get("from_order_task") and not estimates_only):
+            items = await lookup.fold_descriptions(items, essential=who.essential)
+            ask["items"] = items
+            job.ask = ask
+
         # find each food
         stock = await pantry.in_stock(s, who.family_id, job.subject_id)
         try:

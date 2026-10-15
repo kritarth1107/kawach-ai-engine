@@ -213,6 +213,28 @@ async def test_a_counted_food_beside_a_stated_amount_does_not_hold_the_meal(db, 
     assert "needs" not in r
 
 
+async def test_a_flavour_is_saved_as_one_dish_and_roti_with_dal_stays_two(db, at, nfake):
+    at("2026-10-14 16:00")
+    ice = {"name": "Chocolate ice cream", "per_100g": {"energy_kcal": 210, "sugar_g": 24, "fat_g": 11, "protein_g": 3.5, "carbs_g": 24},
+           "units": {"g": 1}, "default_unit": "g", "typical_qty": 100, "tags": ["sweet", "dairy"], "source_kind": "web"}
+    para = {"name": "Aloo paratha", "per_100g": {"energy_kcal": 240, "protein_g": 6, "carbs_g": 32, "fat_g": 9},
+            "units": {"piece": 80}, "default_unit": "piece", "typical_qty": 2, "countable": True, "tags": ["grain"], "source_kind": "ifct"}
+    nfake.web.foods["chocolate ice cream"] = ice
+    nfake.web.foods["paratha"] = para
+    nfake.part_of = {"chikoo": "chocolate ice cream"}
+    r, _ = await call(db, "log_food", {"items": [{"name": "chikoo"}, {"name": "chocolate ice cream", "quantity": 140, "unit": "g"}]})
+    assert r["result"] == "saved" and len(r["saved"]) == 1, r
+    assert r["saved"][0]["kcal"] == 294  # 140 g of the ice cream, not a fruit added on top
+    assert "sugar" in r["say"]
+    nfake.part_of = {"potato": "paratha"}
+    bread, _ = await call(db, "log_food", {"meal": "breakfast", "items": [{"name": "potato"}, {"name": "paratha", "quantity": 2, "unit": "piece"}]})
+    assert bread["result"] == "saved" and len(bread["saved"]) == 1, bread
+    nfake.part_of = {}
+    two, _ = await call(db, "log_food", {"meal": "lunch", "items": [
+        {"name": "roti", "quantity": 2, "unit": "piece"}, {"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert two["result"] == "saved" and len(two["saved"]) == 2, two
+
+
 async def test_an_unclear_kind_is_saved_as_the_common_one(db, at, nfake):
     at("2026-10-14 16:00")
     nfake.decisions["namkeen"] = {"needs": "which", "options": ["mixture", "bhujia"], "canonical": "mixed namkeen"}

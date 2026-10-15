@@ -52,6 +52,29 @@ def test_a_condition_or_a_target_breaks_a_near_tie():
         N.relevant_from(["condition:kidney_disease"], ["potassium_mg"]))
 
 
+def test_a_flavour_folds_into_the_dish_and_one_amount_stays_one_portion():
+    from app.nutrition.lookup import merge_parts
+
+    items = [{"name": "chikoo"}, {"name": "chocolate ice cream", "quantity": 140, "unit": "g"}]
+    folded = merge_parts(items, [{"i": 0, "part_of": 1}, {"i": 1, "part_of": None}])
+    assert folded == [{"name": "chocolate ice cream, chikoo", "quantity": 140, "unit": "g"}]
+    # the amount was copied onto both names: it is still one portion, not the sum
+    both = [{"name": "vanilla", "quantity": 150, "unit": "g"}, {"name": "chocolate ice cream", "quantity": 150, "unit": "g"}]
+    once = merge_parts(both, [{"i": 0, "part_of": 1}])
+    assert once[0]["quantity"] == 150 and len(once) == 1
+    # the amount sat on the flavour: it moves to the dish, still once
+    moved = merge_parts(
+        [{"name": "ice cream"}, {"name": "mango", "quantity": 200, "unit": "g"}],
+        [{"i": 1, "part_of": 0}])
+    assert moved == [{"name": "ice cream, mango", "quantity": 200, "unit": "g"}]
+    separate = merge_parts(
+        [{"name": "roti", "quantity": 2, "unit": "piece"}, {"name": "dal", "quantity": 1, "unit": "katori"}],
+        [{"i": 0, "part_of": None}, {"i": 1, "part_of": None}])
+    assert len(separate) == 2
+    cycle = merge_parts([{"name": "a", "quantity": 1}, {"name": "b", "quantity": 1}], [{"i": 0, "part_of": 1}, {"i": 1, "part_of": 0}])
+    assert len(cycle) == 2
+
+
 def test_a_reply_that_drops_the_saved_numbers_is_sent_back():
     from app.brain import guards
 

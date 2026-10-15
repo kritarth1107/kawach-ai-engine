@@ -112,6 +112,79 @@ Return only JSON: {"items": [{"i": 0, "match": "id or null", "canonical": "...",
 "needs": null, "options": [], "countable": false, "default_unit": "...", "typical_qty": 1, "tags": []}]}"""
 
 
+PARTS_PROMPT = """You decide whether each item is its own food, or only a flavour, filling, or variety of another item in this same meal.
+
+ITEMS are already in English. A flavour, a filling, or a variety describes the dish; it is not a food of its own. Two foods eaten together stay two foods. One amount stated for a mix belongs to the dish.
+
+For each item, part_of is the index of the dish it describes, or null when it is its own food. Never its own index.
+
+Return only JSON: {"items": [{"i": 0, "part_of": null}]}"""
+
+
+def merge_parts(items: list[dict], rows: list) -> list[dict]:
+    """Drop items the model said only describe another item. One stated amount stays one portion, on the dish."""
+    n = len(items)
+    parent: dict[int, int] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        i, p = row.get("i"), row.get("part_of")
+        if isinstance(i, int) and isinstance(p, int) and i != p and 0 <= i < n and 0 <= p < n:
+            parent[i] = p
+
+    def root(i: int) -> int:
+        seen: set[int] = set()
+        while i in parent:
+            if i in seen:
+                return i
+            seen.add(i)
+            i = parent[i]
+        return i
+
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        r = root(i)
+        if r in parent:  # a cycle: leave every item in it as its own food
+            groups[i] = [i]
+            continue
+        groups.setdefault(r, []).append(i)
+    if len(groups) == n:
+        return items
+    out: list[dict] = []
+    for r, members in groups.items():
+        dish = dict(items[r])
+        parts = [items[i] for i in members if i != r]
+        extra = [str(p.get("name") or "").strip() for p in parts if str(p.get("name") or "").strip()]
+        if extra:
+            dish["name"] = ", ".join([str(dish.get("name") or "").strip(), *extra]).strip(", ")
+        if not dish.get("quantity") and not dish.get("_grams"):
+            stated = next((p for p in parts if p.get("quantity") or p.get("_grams")), None)
+            if stated is not None:
+                if stated.get("quantity"):
+                    dish["quantity"] = stated["quantity"]
+                if stated.get("unit"):
+                    dish["unit"] = stated["unit"]
+                if stated.get("_grams"):
+                    dish["_grams"] = stated["_grams"]
+        out.append(dish)
+    return out
+
+
+async def fold_descriptions(items: list[dict], *, essential: bool = True, timeout_s: float = 6.0) -> list[dict]:
+    """A flavour or a filling named beside a dish becomes part of that dish. The items stay as given when the model fails."""
+    if len(items) < 2:
+        return items
+    body = json.dumps({"ITEMS": [{"i": i, "name": it.get("name"), **({"quantity": it.get("quantity")} if it.get("quantity") else {}),
+                                  **({"unit": it.get("unit")} if it.get("unit") else {})} for i, it in enumerate(items)]},
+                      ensure_ascii=False)
+    try:
+        got = await ask("nutrition", PARTS_PROMPT, body, essential=essential, max_tokens=400, timeout_s=timeout_s)
+    except router.AllModelsFailed:
+        return items
+    rows = got.get("items") if isinstance(got, dict) else got
+    return merge_parts(items, rows if isinstance(rows, list) else [])
+
+
 FOOD_JSON = """{"name": "plain English name with preparation", "kind": "generic|packaged|restaurant|recipe",
  "per_100g": {"energy_kcal": 0, "protein_g": 0, "carbs_g": 0, "sugar_g": 0, "added_sugar_g": 0, "fibre_g": 0, "fat_g": 0,
               "sat_fat_g": 0, "cholesterol_mg": 0, "sodium_mg": 0, "potassium_mg": 0, "calcium_mg": 0, "iron_mg": 0,
