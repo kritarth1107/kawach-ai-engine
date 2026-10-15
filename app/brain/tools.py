@@ -66,6 +66,7 @@ class TurnCtx:
     # People this turn sent a message to, and people the task system is telling about an order in this turn (one message each).
     messaged: set = field(default_factory=set)
     once: set = field(default_factory=set)  # side effects already done in this turn (a pin saved to a place)
+    resolved_subject: str | None = None  # set by subject() for this tool call; the result says who it was for
     told_by_tasks: set = field(default_factory=set)
     # A WhatsApp location pin in this message, and whether the reply asks for one (a "Send location" button)
     location: dict | None = None
@@ -113,9 +114,28 @@ class TurnCtx:
     def actor_id(self) -> str:
         return self.elder_id if self.is_system else (self.speaker.get("id") or self.elder_id)
 
+    def member_name(self, subject_id: str) -> str:
+        for person in [self.elder, *self.members]:
+            if person.get("id") == subject_id:
+                return (person.get("name") or "").strip() or subject_id
+        return subject_id
+
     def subject(self, about: str | None) -> str:
-        ids = {m.get("id") for m in self.members} | {self.elder_id}
-        return about if about in ids else self.elder_id
+        """Who this is about. Blank is the care recipient. A name counts only when one member has it.
+        Someone who is not a member is never saved as the care recipient."""
+        from app.care.members import UnknownMember, resolve_member
+
+        try:
+            found = resolve_member(about, elder=self.elder, members=self.members)
+        except UnknownMember as exc:
+            if exc.matches:
+                raise ToolRefused(f"More than one member is called {exc.about}. Ask which person, and use their id.") from exc
+            raise ToolRefused(
+                f"{exc.about} is not a member; medicines, doses, readings and reminders can be saved only for members. "
+                f"Save a note about {exc.about} under the speaker (no reminder), or ask whether to add {exc.about}."
+            ) from exc
+        self.resolved_subject = found
+        return found
 
 
 Handler = Callable[[TurnCtx, dict], Awaitable[Any]]
@@ -172,10 +192,17 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
     try:
         from app.care import versions
 
+        ctx.resolved_subject = None
         with versions.attribution(actor_id="saheli" if ctx.is_system else (ctx.speaker.get("id") or ""),
                                   source="saheli" if ctx.is_system else ctx.channel):
             async with ctx.session.begin_nested():
                 out = await _TOOLS[name][1](ctx, args)
+        if isinstance(out, dict) and ctx.resolved_subject:
+            out.setdefault("subject_id", ctx.resolved_subject)
+            out.setdefault("for", ctx.member_name(ctx.resolved_subject))
+            addressed = ctx.elder_id if ctx.is_system else (ctx.speaker.get("id") or ctx.elder_id)
+            if ctx.resolved_subject != addressed:
+                out["for_other"] = True
         blob = json.dumps(out, default=str, ensure_ascii=False)
         ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400]})
         return blob, False
@@ -199,7 +226,8 @@ class ToolRefused(Exception):
     pass
 
 
-ABOUT = {"type": "string", "description": "Person id this is about. Leave out for the care recipient."}
+ABOUT = {"type": "string", "description": "Who it is about: their id from HOUSEHOLD, or their name when only one member has that name. "
+         "Leave out for the care recipient. A relative who is not a member is refused: never saved on someone else."}
 
 
 def acts_catalog_line() -> str:
@@ -1273,9 +1301,7 @@ async def _reminder_subject(ctx: TurnCtx, a: dict) -> str:
     ids = {m.get("id") for m in ctx.members if m.get("id")} | {ctx.elder_id}
     about = str(a.get("about") or "").strip()
     if about:
-        if about not in ids:
-            raise ToolRefused("about must be a person id from HOUSEHOLD. " + _WHOSE_REMINDER)
-        return about
+        return ctx.subject(about)
     me = ctx.speaker.get("id") or ""
     if ctx.speaker_is_elder or ctx.self_care:
         return me or ctx.elder_id
@@ -1296,9 +1322,10 @@ async def _reminder_subject(ctx: TurnCtx, a: dict) -> str:
     raise ToolRefused(_WHOSE_REMINDER)
 
 
-REMINDER_ABOUT = {"type": "string", "description": "Whose reminder: a person id from HOUSEHOLD. Leave out only when it is the "
-                  "speaker's own item (the reminder or nudge just sent to them, or item is a care-record key only they have). "
-                  "Otherwise give the id. Never leave it out to mean the care recipient; if it is not clear, ask whose."}
+REMINDER_ABOUT = {"type": "string", "description": "Whose reminder: their id from HOUSEHOLD, or their name when only one member has it. "
+                  "Leave out only when it is the speaker's own item (the reminder or nudge just sent to them, or item is a "
+                  "care-record key only they have). A relative who is not a member is refused. Never leave it out to mean "
+                  "the care recipient; if it is not clear, ask whose."}
 
 
 def _may_manage_reminders(ctx: TurnCtx, subject: str) -> None:

@@ -456,6 +456,29 @@ def brief_mood_claims(text: str, known: str) -> list[str]:
     return sorted({m.group(0).lower() for m in _MOOD.finditer(text or "") if m.group(0).lower() not in k})
 
 
+SAVED_FOR = {"remember", "stop", "log_dose", "log_vital", "log_event", "log_food", "log_activity", "set_reminder", "change_reminder", "activity"}
+
+
+def saved_for_problems(reply: str, actions: list[dict]) -> list[str]:
+    """A save names the person. The reply has to say that name; the tool result carries it as "for"."""
+    import json
+
+    out = []
+    for action in actions:
+        if not action.get("ok") or action.get("tool") not in SAVED_FOR:
+            continue
+        try:
+            data = json.loads(action.get("result") or "{}")
+        except json.JSONDecodeError:
+            continue
+        who = str(data.get("for") or "").strip()
+        # The person being spoken to is already "you". A save for someone else has to name them.
+        if not data.get("for_other") or len(who) < 2 or who.casefold() in (reply or "").casefold():
+            continue
+        out.append(f"say what was saved and for whom: {who}")
+    return out[:3]
+
+
 def whatsapp_messages(text: str) -> list[str]:
     """Separate WhatsApp messages: the model puts a line that is only --- between them. The first is the answer."""
     return [p.strip() for p in re.split(r"(?m)^---\s*$", text or "") if p.strip() and p.strip().lower() != "none"]

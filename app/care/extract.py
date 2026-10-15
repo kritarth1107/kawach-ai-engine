@@ -29,7 +29,7 @@ EXTRACT_PROMPT = f"""You maintain the care memory for a person cared for by Sahe
 
 Nothing they say about their life is lost: a plan, a worry, a person they mention, a place, a preference, a habit, a goal, something they did. If it is not a fact for the record, it is a note or a plan.
 
-Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. A fact about a caregiver's own life (their gym, their medicine, their diet) is about them: give their person id in "about".
+Only include what one of these people actually said or clearly confirmed. Saheli's lines are context only: never take a fact from what Saheli said (her reminders and summaries repeat the record). Do not infer diagnoses, guess doses or times, or record one-off chit-chat. Skip anything already in the care record unless it actually changed; a restatement of the same medicine is not a change. A fact about a caregiver's own life (their gym, their medicine, their diet) is about them: give their person id in "about", or their name when only one person in PEOPLE has it. Omit "about" only for the care recipient. Someone who is not in PEOPLE is not given a medicine, dose, reading, plan or reminder, and it is not saved on the care recipient: put a note instead.
 
 Domains (put each fact in the one that fits; no_order is only for an item never to buy again):
 {chr(10).join(f"- {d}: {what}" for d, what in sorted(DOMAINS.items()))}
@@ -40,7 +40,7 @@ A fact may carry links a family member said: a medicine is "for" a condition or 
 
 Return only JSON:
 {{"facts": [{{"domain": "...", "name": "...", "none": false, "details": {{}}, "sentence": "one plain sentence", "about": "person id or omit for the care recipient", "evidence": "the words that show it", "links": [{{"relation": "for|prescribed_by|with_doctor|related_to", "to_domain": "condition|doctor|contact|family|person", "to_name": "...", "as": "related_to only"}}]}}],
-  "stops": [{{"domain": "...", "name": "...", "reason": "...", "evidence": "..."}}],
+  "stops": [{{"domain": "...", "name": "...", "reason": "...", "about": "person id or omit for the care recipient", "evidence": "..."}}],
   "notes": [{{"about": "person id or family", "topic": "short topic", "text": "what to remember about their life"}}],
   "readings": [{{"about": "person id", "kind": "weight|height|bmi|body_fat|muscle_mass|waist|bp|sugar|pulse|spo2|temperature|other", "name": "for other", "value": "73.5", "unit": "kg", "taken_on": "YYYY-MM-DD"}}],
   "plans": [{{"about": "person id", "what": "what will happen, one line", "when": "YYYY-MM-DDTHH:MM or null", "ask_after": "what to ask afterwards"}}],
@@ -73,6 +73,18 @@ async def families_with_new_turns(session: AsyncSession, limit: int = 50) -> lis
 
 
 host_for_readings = None  # tests swap in a sim host
+
+
+def filed_on(about, elder: dict, members: list[dict]) -> str | None:
+    """The member this is about. None means `about` names someone who is not a member: do not file it on the care recipient."""
+    from app.care.members import UnknownMember, resolve_member
+
+    if not str(about or "").strip():
+        return elder["id"]
+    try:
+        return resolve_member(str(about), elder=elder, members=members)
+    except UnknownMember:
+        return None
 
 
 async def extract_family(session: AsyncSession, family_id: str) -> dict:
@@ -113,7 +125,6 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     )
     data = parse_json(reply.text)
     counts = {"facts": 0, "pending": 0, "stops": 0, "notes": 0}
-    member_ids = set(names)
 
     async def save_links(f: dict, subject: str, key: str, with_fact=None) -> None:
         # what a re-read heard about how it connects: a health link always waits for a caregiver (app.care.links)
@@ -128,7 +139,10 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             f = {**f, "name": "none", "details": {"none": True}, "links": []}  # "has none": never a medicine or an item to avoid
         if domain not in DOMAINS or not f.get("name") or not f.get("sentence"):
             continue
-        subject = str(f.get("about")) if f.get("about") in member_ids else str(elder["id"])
+        subject = filed_on(f.get("about"), elder, roster.members)
+        if subject is None:
+            counts["not_member"] = counts.get("not_member", 0) + 1
+            continue
         if is_none_key(fact_key(domain, f["name"])) and [x for x in await store.facts(session, family_id, subject, domains=[domain], statuses=("active", "pending"))
                                                          if not is_none_key(x.key)]:
             continue  # the record lists real ones: "none" is for an empty list
@@ -181,8 +195,12 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
 
     for s in data.get("stops") or []:
         if s.get("domain") in DOMAINS and s.get("name"):
+            subject = filed_on(s.get("about"), elder, roster.members)
+            if subject is None:
+                counts["not_member"] = counts.get("not_member", 0) + 1
+                continue
             w = await store.stop_fact(
-                session, family_id=family_id, subject_id=elder["id"], key=fact_key(s["domain"], s["name"]),
+                session, family_id=family_id, subject_id=subject, key=fact_key(s["domain"], s["name"]),
                 reason=str(s.get("reason") or "mentioned in conversation"), source_kind="inferred",
             )
             counts["stops"] += bool(w)
@@ -190,7 +208,12 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     for n in data.get("notes") or []:
         if not n.get("topic") or not n.get("text"):
             continue
-        subject = "family" if n.get("about") == "family" else (n.get("about") if n.get("about") in member_ids else elder["id"])
+        if n.get("about") == "family":
+            subject = "family"
+        else:
+            subject = filed_on(n.get("about"), elder, roster.members)
+            if subject is None:
+                subject = "family"  # a note about someone who is not a member: not a medicine, and not the care recipient's fact
         existing = {x.slug: x for x in await store.notes(session, family_id, [subject])}
         s_ = slug(n["topic"])
         line = f"- {clock.ist_day()}: {scrub_secrets(n['text']).strip()}"
@@ -203,14 +226,21 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     from app.care import readings
 
     for r in (data.get("readings") or [])[:12]:
-        if isinstance(r, dict) and await readings.save(session, ShadowHost() if family_id.startswith("shadow:") else host_for_readings, family_id,
-                                                       r.get("about") if r.get("about") in member_ids else elder["id"], r, source="re-read"):
+        who = filed_on(r.get("about"), elder, roster.members) if isinstance(r, dict) else None
+        if who is None:
+            counts["not_member"] = counts.get("not_member", 0) + 1
+            continue
+        if await readings.save(session, ShadowHost() if family_id.startswith("shadow:") else host_for_readings, family_id,
+                               who, r, source="re-read"):
             counts["readings"] = counts.get("readings", 0) + 1
 
     for pl in (data.get("plans") or [])[:8]:
         if not isinstance(pl, dict) or not str(pl.get("what") or "").strip():
             continue
-        subject = pl.get("about") if pl.get("about") in member_ids else elder["id"]
+        subject = filed_on(pl.get("about"), elder, roster.members)
+        if subject is None:
+            counts["not_member"] = counts.get("not_member", 0) + 1
+            continue
         when = None
         try:
             when = datetime.fromisoformat(f"{pl['when']}:00+05:30") if pl.get("when") else None
@@ -229,8 +259,9 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         )
         counts["plans"] = counts.get("plans", 0) + 1
 
-    routine_of = {f.get("about") if f.get("about") in member_ids else elder["id"]
+    routine_of = {filed_on(f.get("about"), elder, roster.members)
                   for f in (data.get("facts") or []) if isinstance(f, dict) and f.get("domain") in ("routine", "activity")}
+    routine_of.discard(None)
     if routine_of:
         # a routine with a time they mentioned becomes an activity with check-ins (founder 2026-10-13)
         try:
@@ -252,7 +283,10 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         score = mood.score_of(m.get("score")) if isinstance(m, dict) else None
         if not score:
             continue
-        subject = m.get("about") if m.get("about") in member_ids else elder["id"]
+        subject = filed_on(m.get("about"), elder, roster.members)
+        if subject is None:
+            counts["not_member"] = counts.get("not_member", 0) + 1
+            continue
         when = said_at.get(subject) or pending[-1].at
         if clock.now() - when > mood.STALE:
             continue  # a backlog read late: yesterday's mood is not today's

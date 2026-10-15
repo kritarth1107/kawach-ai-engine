@@ -703,6 +703,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         final, known=known, fresh=fresh, meds=ctx.meds, now_minutes=now.hour * 60 + now.minute,
         allowed_times={int(v[:2]) * 60 + int(v[3:]) for v in SLOTS.values()},
     )
+    problems += guards.saved_for_problems(final, ctx.actions)
     problems += guards.language_problems(final, ctx.profiles.get(req.speaker["id"]), who="they")
     problems += guards.dialect_problems(final, ctx.profiles.get(req.speaker["id"]))
     if not ctx.is_system and not ctx.buttons:

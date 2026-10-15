@@ -159,7 +159,7 @@ async def test_the_reply_check_knows_her_tools_and_this_turns_results(db, fake, 
 
     f = fake([], [])
     seen: list[str] = []
-    brain = [LLMReply(text="", tool_calls=[ToolCall("c1", "log_event", {"kind": "meal", "summary": "Two rotis and dal"})], model="fake"),
+    brain = [LLMReply(text="", tool_calls=[ToolCall("c1", "log_event", {"kind": "meal", "summary": "Two rotis and dal", "about": SON["id"]})], model="fake"),
              LLMReply(text="Saved your lunch: two rotis and dal.", tool_calls=[], model="fake")]
 
     async def answer(route, **kw):  # a tool call needs the whole reply, so this one answers directly
