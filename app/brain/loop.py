@@ -401,9 +401,9 @@ def onboarding_block(req: TurnRequest) -> str:
         "SETUP NOT FINISHED: this person is new on WhatsApp or never finished setting up. Run the setup as a warm chat: one "
         "short question per message, in their language, saving each answer with its tool before the next question. "
         f"{who}\n"
-        "  1. If they just greeted you: welcome them as Saheli from Kavach in one or two lines (daily check-ins and reminders for "
-        "a parent or for themselves, medicines, orders and rides, always asking first), then ask which language they want to "
-        "talk in, offering their own bhasha or dialect too (language_preference, about their own id).\n"
+        "  1. If they just greeted you: two short lines and stop. Welcome them as Saheli from Kavach (check-ins, medicine "
+        "reminders, orders and rides, always asking first), then ask which language they want, including their own bhasha "
+        "(language_preference, about their own id). Do not ask the rest of setup in this reply.\n"
         "  2. Their name, if you only have 'Friend' or no name (my_name).\n"
         "  3. Is this for themselves, or for someone they look after (a parent or another family member)?\n"
         "  4. For someone else: their name and what the family calls them, how they are related, and their WhatsApp number with "
@@ -1358,13 +1358,20 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         final = guards.dialect_tidy(guards.whatsapp_format(guards.tidy_opening(
             final, greeted_today=greeted, mid_conversation=mid, names=[name, *name.split()[:1]])), ctx.profiles.get(req.speaker["id"]))
         naming = any(a.get("ok") and a["tool"] == "remember" and (a.get("args") or {}).get("domain") == "naming" for a in ctx.actions)
+        from app.learn import situations
+        ctx.situation = situations.tag(text=req.text, role=role, tools=[a["tool"] for a in ctx.actions if a.get("ok")])
         settled = guards.settle_reply(
             final, ctx.profiles.get(req.speaker["id"]), situation=ctx.situation, needs_framing=ctx.needs_framing,
             force_light=ctx.force_light, held_topic_text=ctx.held_topic, actions=ctx.actions,
-            prior_assistant=ctx.prior_assistant, naming=naming)
+            prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text)
         if settled != final:
             final = settled
             guarded = True
+        if req.onboarding:
+            hello = guards.first_hello(ctx.profiles.get(req.speaker["id"]), req.text)
+            if hello:
+                final = hello
+                guarded = True
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []

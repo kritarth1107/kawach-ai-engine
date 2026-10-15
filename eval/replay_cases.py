@@ -260,7 +260,9 @@ async def judge_holds(case: dict, reply: str, tools: list[str], tool_results: li
     from eval.family_sim import parse_json
 
     ctx = case.get("context") or {}
-    memory = ctx.get("rendered") or json.dumps({"facts": ctx.get("facts"), "notes": ctx.get("notes")}, ensure_ascii=False)[:8000]
+    memory = ctx.get("rendered") or json.dumps(
+        {"facts": ctx.get("facts"), "notes": ctx.get("notes"), "events": ctx.get("events"), "turns": ctx.get("turns")},
+        ensure_ascii=False)[:8000]
     household = [{"name": p.get("name"), "role": p.get("role"), "id": p.get("id")} for p in [ctx.get("elder") or {}, *(ctx.get("members") or [])] if p.get("id")]
     user = json.dumps({"MUST HOLD": case.get("rubric") or "", "household (known to her)": household, "memory": memory[:12000], "they said": message_of(case),
                        "OLD BAD REPLY": case.get("bad_reply") or "", "NEW REPLY": reply, "tools": tools,
@@ -294,9 +296,22 @@ async def run_once(sessions: async_sessionmaker, case: dict, n: int) -> dict:
         await s.commit()
     sp = speaker_of(ctx)
     host = SimHost()
+    images: list[dict] = []
+    photo = ctx.get("photo")
+    if photo:
+        import base64
+        raw = (Path(__file__).resolve().parent / "data" / "nutrition_photos" / str(photo)).read_bytes()
+        images = [{"mime": "image/jpeg", "data": base64.b64encode(raw).decode()}]
     async with sessions() as s:
-        res = await run_turn(s, host, TurnRequest(family_id=fid, elder=dict(ctx.get("elder") or {}), speaker=sp, members=[dict(m) for m in ctx.get("members") or []],
-                                                   text=msg, modality=ctx.get("modality") or "text", message_ref=f"replay-{uuid.uuid4().hex[:8]}"))
+        res = await run_turn(
+            s, host, TurnRequest(
+                family_id=fid, elder=dict(ctx.get("elder") or {}), speaker=sp,
+                members=[dict(m) for m in ctx.get("members") or []],
+                text=msg, modality=str(ctx.get("modality") or "text"),
+                voice_confidence=ctx.get("voice_confidence"),
+                onboarding=bool(ctx.get("onboarding")),
+                images=images, media_note=str(ctx.get("media_note") or ""),
+                message_ref=f"replay-{uuid.uuid4().hex[:8]}"))
         await s.commit()
     return await verdict(case, res)
 
@@ -340,7 +355,8 @@ async def verdict(case: dict, res) -> dict:
         ok, why = await judge_holds(case, reply, tools, tool_results)
         if not ok:
             fails.append(f"judge: {why}")
-    return {"passed": not fails, "why": "; ".join(fails)[:300] or why, "reply": reply[:400], "tools": tools}
+    return {"passed": not fails, "why": "; ".join(fails)[:300] or why, "reply": reply[:400], "tools": tools,
+            "ms": int(getattr(res, "ms", 0) or 0)}
 
 
 WORLD: dict[str, dict] = {}

@@ -950,11 +950,24 @@ def has_framing(reply: str) -> bool:
 
 def with_framing(profile: dict | None, reply: str) -> str:
     """A medicine explanation keeps its first sentences and always ends on the framing line. Three sentences at most."""
-    if not reply or has_framing(reply):
-        return reply or ""
+    if not reply:
+        return ""
+    parts = sentences(reply)
+    if has_framing(reply) and len(parts) <= 3:
+        return reply
     line = canned(profile, _FRAMING)
-    kept = sentences(reply)[:2]
-    return " ".join([*kept, line]).strip()
+    body = [s for s in parts if not (any(p in s for p in _FRAMING_INFO) and any(p in s for p in _FRAMING_WHO))]
+    if len(parts) > 3:
+        body = [_drop_cause(s) for s in body]
+    return " ".join([*body[:2], line]).strip()
+
+
+def _drop_cause(sentence: str) -> str:
+    """A long medicine answer keeps the instruction and drops the mechanism clause after it."""
+    for cut in (", as ", ", because ", " because "):
+        if cut in sentence:
+            return sentence.split(cut, 1)[0].rstrip(" ,") + "."
+    return sentence
 
 
 def _cannot_do(reply: str) -> bool:
@@ -1024,11 +1037,74 @@ def thread_reply(profile: dict | None, topic: str) -> str:
     return canned(profile, table).format(topic=topic)
 
 
+_HELLO = {
+    "english": "Hi, I'm Saheli, from Kavach. Which language should we talk in?",
+    "indic": "Hi, main Saheli hoon, Kavach se. Kis bhasha mein baat karein?",
+    "devanagari": "नमस्ते, मैं Saheli हूँ, Kavach से। किस भाषा में बात करें?",
+    "mr": "नमस्कार, मी Saheli आहे, Kavach कडून. कोणत्या भाषेत बोलायचे?",
+    "bengali": "নমস্কার, আমি Saheli, Kavach-এর থেকে। কোন ভাষায় কথা বলব?",
+    "tamil": "வணக்கம், நான் Saheli, Kavach-இலிருந்து. எந்த மொழியில் பேசலாம்?",
+    "telugu": "నమస్తే, నేను Saheli, Kavach నుండి. ఏ భాషలో మాట్లాడదాం?",
+    "kannada": "ನಮಸ್ಕಾರ, ನಾನು Saheli, Kavach ನಿಂದ. ಯಾವ ಭಾಷೆಯಲ್ಲಿ ಮಾತನಾಡೋಣ?",
+    "malayalam": "നമസ്കാരം, ഞാൻ Saheli, Kavach-ൽ നിന്ന്. ഏത് ഭാഷയിൽ സംസാരിക്കാം?",
+    "gujarati": "નમસ્તે, હું Saheli, Kavach તરફથી. કઈ ભાષામાં વાત કરીએ?",
+    "gurmukhi": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ਮੈਂ Saheli ਹਾਂ, Kavach ਤੋਂ। ਕਿਹੜੀ ਭਾਸ਼ਾ ਵਿੱਚ ਗੱਲ ਕਰੀਏ?",
+    "odia": "ନମସ୍କାର, ମୁଁ Saheli, Kavach ରୁ। କେଉଁ ଭାଷାରେ କଥା ହେବ?",
+}
+_CAN = {
+    "english": "I remind you about medicines, log meals and doses, and place grocery, medicine or ride orders after you confirm, and I tell the family how the day went. I can't check in a flight, call a doctor, or be in the room. What should we start with?",
+    "indic": "Main dawai ki reminder rakhti hoon, khane aur dose ka hisaab rakhti hoon, aur grocery, dawai ya ride aapke haan ke baad mangwati hoon, aur parivaar ko din ka haal batati hoon. Flight check-in, doctor ko phone, ya aapke paas aakar rehna main nahi kar sakti. Kis baat se shuru karein?",
+    "devanagari": "मैं दवा की reminder रखती हूँ, खाने और dose का हिसाब रखती हूँ, और grocery, दवा या ride आपके हाँ के बाद मंगवाती हूँ, और परिवार को दिन का हाल बताती हूँ। फ्लाइट check-in, डॉक्टर को फोन, या आपके पास आकर रहना मैं नहीं कर सकती। किस बात से शुरू करें?",
+    "bengali": "আমি ওষুধের reminder রাখি, খাওয়া আর dose-এর হিসাব রাখি, আর grocery, ওষুধ বা ride আপনার হ্যাঁ-এর পরে আনাই, আর পরিবারকে দিনের খবর দিই। ফ্লাইট check-in, ডাক্তারকে ফোন, বা আপনার কাছে গিয়ে থাকা আমি পারি না। কোনটা দিয়ে শুরু করব?",
+    "tamil": "நான் மருந்து reminder வைக்கிறேன், உணவு மற்றும் dose கணக்கு வைக்கிறேன், grocery, மருந்து அல்லது ride உங்கள் சம்மதத்துக்குப் பிறகு ஏற்பாடு செய்கிறேன், குடும்பத்துக்கு நாளின் செய்தி சொல்கிறேன். விமான check-in, மருத்துவருக்கு போன், அல்லது அருகில் இருப்பது என்னால் முடியாது. எதிலிருந்து தொடங்கலாம்?",
+    "telugu": "నేను మందుల reminder పెడతాను, భోజనం మరియు dose లెక్క ఉంచుతాను, grocery, మందు లేదా ride మీ అవును తర్వాత ఏర్పాటు చేస్తాను, కుటుంబానికి రోజు వివరం చెబుతాను. ఫ్లైట్ check-in, డాక్టర్‌కు ఫోన్, లేదా దగ్గర ఉండటం నాకు సాధ్యం కాదు. దేనితో మొదలుపెడదాం?",
+    "kannada": "ನಾನು ಔಷಧದ reminder ಇಡುತ್ತೇನೆ, ಊಟ ಮತ್ತು dose ಲೆಕ್ಕ ಇಡುತ್ತೇನೆ, grocery, ಔಷಧ ಅಥವಾ ride ನಿಮ್ಮ ಹೌದು ಬಳಿಕ ಏರ್ಪಡಿಸುತ್ತೇನೆ, ಕುಟುಂಬಕ್ಕೆ ದಿನದ ಸುದ್ದಿ ಹೇಳುತ್ತೇನೆ. ಫ್ಲೈಟ್ check-in, ವೈದ್ಯರಿಗೆ ಫೋನ್, ಅಥವಾ ಹತ್ತಿರ ಇರುವುದು ನನಗೆ ಆಗದು. ಯಾವುದರಿಂದ ಶುರು ಮಾಡೋಣ?",
+    "malayalam": "ഞാൻ മരുന്നിന്റെ reminder വയ്ക്കുന്നു, ഭക്ഷണവും dose-ഉം കുറിക്കുന്നു, grocery, മരുന്ന് അല്ലെങ്കിൽ ride നിങ്ങളുടെ അതെ കഴിഞ്ഞ് ഏർപ്പാടാക്കുന്നു, കുടുംബത്തിന് ദിവസത്തെ വാർത്ത പറയുന്നു. ഫ്ലൈറ്റ് check-in, ഡോക്ടറെ വിളിക്കുക, അല്ലെങ്കിൽ അടുത്ത് ഉണ്ടാവുക എനിക്ക് കഴിയില്ല. എന്തിൽ നിന്ന് തുടങ്ങാം?",
+    "gujarati": "હું દવાની reminder રાખું છું, જમવાન અને dose નો હિસાબ રાખું છું, અને grocery, દવા અથવા ride તમારા હા પછી મંગાવું છું, અને પરિવારને દિવસનો હાલ કહું છું. ફ્લાઇટ check-in, ડૉક્ટરને ફોન, અથવા તમારી પાસે રહેવું હું નથી કરી શકતી. કઈ વાતથી શરૂ કરીએ?",
+    "gurmukhi": "ਮੈਂ ਦਵਾਈ ਦੀ reminder ਰੱਖਦੀ ਹਾਂ, ਖਾਣੇ ਅਤੇ dose ਦਾ ਹਿਸਾਬ ਰੱਖਦੀ ਹਾਂ, ਅਤੇ grocery, ਦਵਾਈ ਜਾਂ ride ਤੁਹਾਡੇ ਹਾਂ ਤੋਂ ਬਾਅਦ ਮੰਗਵਾਉਂਦੀ ਹਾਂ, ਅਤੇ ਪਰਿਵਾਰ ਨੂੰ ਦਿਨ ਦਾ ਹਾਲ ਦੱਸਦੀ ਹਾਂ। ਫਲਾਈਟ check-in, ਡਾਕਟਰ ਨੂੰ ਫੋਨ, ਜਾਂ ਤੁਹਾਡੇ ਕੋਲ ਰਹਿਣਾ ਮੈਂ ਨਹੀਂ ਕਰ ਸਕਦੀ। ਕਿਸ ਗੱਲ ਤੋਂ ਸ਼ੁਰੂ ਕਰੀਏ?",
+    "odia": "ମୁଁ ଔଷଧ reminder ରଖେ, ଖାଦ୍ୟ ଓ dose ହିସାବ ରଖେ, ଆଉ grocery, ଔଷଧ କିମ୍ବା ride ଆପଣଙ୍କ ହଁ ପରେ ଆଣେ, ପରିବାରକୁ ଦିନର ଖବର କହେ। ଫ୍ଲାଇଟ୍ check-in, ଡାକ୍ତରଙ୍କୁ ଫୋନ୍, କିମ୍ବା ଆପଣଙ୍କ ପାଖରେ ରହିବା ମୁଁ ପାରିବି ନାହିଁ। କେଉଁଥିରୁ ଆରମ୍ଭ କରିବା?",
+}
+
+
+def hello_profile(profile: dict | None, user_text: str) -> dict | None:
+    """A new user's first hello has no saved language yet: answer in the script they just used."""
+    if ((profile or {}).get("saved") or {}).get("language"):
+        return profile
+    script = script_of(user_text)
+    if not script or script == "latin":
+        return profile
+    from app.care import language
+    lang = next((k for k, v in language.LANGUAGES.items() if v[2] == script), None)
+    if not lang:
+        return profile
+    return {"saved": {"language": lang}, "now": script}
+
+
+def first_hello(profile: dict | None, user_text: str) -> str:
+    """A short greeting from someone still setting up. Empty when they asked for something else."""
+    text = user_text or ""
+    if "?" in text or "？" in text or not GREETING_OPENER.match(text) or len(words(text)) > 8:
+        return ""
+    return canned(hello_profile(profile, text), _HELLO)
+
+
+def setup_instead(reply: str, user_text: str) -> bool:
+    """She answered a short question with a setup pitch. Their own setup request is not this."""
+    text = user_text or ""
+    if "?" not in text and "？" not in text:
+        return False
+    if len(words(text)) > 12 or _OFF_THREAD.search(text):
+        return False
+    return bool(_OFF_THREAD.search(reply or ""))
+
+
 def settle_reply(text: str, profile: dict | None, *, situation: str, needs_framing: bool, force_light: bool, held_topic_text: str,
-                 actions: list | None, prior_assistant: bool, naming: bool) -> str:
+                 actions: list | None, prior_assistant: bool, naming: bool, user_text: str = "") -> str:
     """The lines the model keeps dropping, written by code. A medicine explanation gets the framing. An apology with no
     earlier message of hers becomes a light reply. A short answer that she turned into setup goes back to her question."""
     out = text or ""
+    if setup_instead(out, user_text):
+        return canned(profile, _CAN)
     if situation == "med_question" or needs_framing:
         out = with_framing(profile, out)
     if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"
