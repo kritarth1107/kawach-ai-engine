@@ -116,6 +116,12 @@ CORRECT_DAY = 16  # the relative moved
 FIX_DAY = 11  # the breakfast log corrected
 
 
+def meal_ok(err: int | None) -> bool:
+    """A learned meal time is right when it is at most 20 minutes early or 45 late: Saheli asks after the meal, and people
+    tell her after eating, so a learned time a little after the true one is the design, not an error."""
+    return err is not None and -20 <= err <= 45
+
+
 def hm(t: str) -> int:
     h, m = (int(x) for x in t.split(":"))
     return h * 60 + m
@@ -342,7 +348,7 @@ counts as right. An answer that gives an old value that was later corrected is w
 {"score": 0-2, "note": "short"}"""
 
 
-def questions(f, day: int) -> list[dict]:
+def questions(f, day: int, *, final: bool = False) -> list[dict]:
     from eval.month_sim import START
 
     L: Learn = f.learn
@@ -374,18 +380,18 @@ def questions(f, day: int) -> list[dict]:
     }
     picks = [["fav", "dislike", "rel", "hobby", "appt"], ["rel", "med", "lunch", "fix", "busy"], ["rel", "fav", "lunch", "busy", "med"],
              ["fav", "dislike", "rel", "hobby", "med", "lunch", "busy", "fix"]]
-    pick = picks[min(CHECKPOINTS.index(day), 3) if day in CHECKPOINTS else 3]
+    pick = picks[3] if final or day not in CHECKPOINTS else picks[min(CHECKPOINTS.index(day), 3)]
     return [{"key": k, "kind": q[k][0], "q": q[k][1], "answer": q[k][2]} for k in pick if q[k][1]]
 
 
-async def quiz(f, at: datetime, day: int) -> None:
+async def quiz(f, at: datetime, day: int, *, final: bool = False) -> None:
     from eval import month_sim as ms
 
     L: Learn = f.learn
-    for i, item in enumerate(questions(f, day)):
-        reply = await ms.turn(f, L.asker, item["q"], at + timedelta(minutes=4 * i), f"learn quiz day {day}")
+    for i, item in enumerate(questions(f, day, final=final)):
+        reply = await ms.turn(f, L.asker, item["q"], at + timedelta(minutes=4 * i), f"learn quiz day {day}{' (final)' if final else ''}")
         g = ms.parse_json(await ms.llm("judge_fast", QUIZ_JUDGE, f"QUESTION: {item['q']}\nCORRECT ANSWER: {item['answer']}\nSAHELI: {reply.text}", tokens=600))
-        L.quiz.append({"day": day, **item, "saheli": reply.text, "score": int(g.get("score", 0) or 0), "note": g.get("note", "")})
+        L.quiz.append({"day": day, **item, "saheli": reply.text, "score": int(g.get("score", 0) or 0), "note": g.get("note", ""), "final": final})
 
 
 # ── structured readouts ───────────────────────────────────────────────────────────────────────────────────────────
@@ -422,11 +428,11 @@ async def read(f, at: datetime, day: int) -> None:
             for slot, t in life["meals"].items():
                 true = hm(t) + (shift if slot == "breakfast" else shift // 3)
                 got = meal_nudges._learned_hhmm(value, slot, now=when)
-                err[f"{side}:{slot}"] = abs(hm(got) - true) if got and re.fullmatch(r"\d{1,2}:\d{2}", got) else None
+                err[f"{side}:{slot}"] = (hm(got) - true) if got and re.fullmatch(r"\d{1,2}:\d{2}", got) else None
         out["meal_err_min"] = err
-        if all(err.get(f"weekday:{s}") is not None and err[f"weekday:{s}"] <= 30 for s in life["meals"]):
+        if all(meal_ok(err.get(f"weekday:{s}")) for s in life["meals"]):
             L.learned_on.setdefault("meal_times", day)
-        if life["weekend"] and all(err.get(f"weekend:{s}") is not None and err[f"weekend:{s}"] <= 30 for s in life["meals"]):
+        if life["weekend"] and all(meal_ok(err.get(f"weekend:{s}")) for s in life["meals"]):
             L.learned_on.setdefault("meal_times_weekend", day)
         water = await store.active_fact(session, f.family_id, L.who, meal_nudges.WATER_KEY)
         out["water_learned"] = {k: v for k, v in ((water.value or {}) if water else {}).items() if k != "evidence"} or None
@@ -503,17 +509,18 @@ def report(fams: list) -> str:
     by_kind: dict = defaultdict(lambda: [0, 0])
     for f in fams:
         for q in f.learn.quiz:
-            by_cp[q["day"]][0] += q["score"]
-            by_cp[q["day"]][1] += 2
+            cp = f"day {q['day']}" + (" (final)" if q.get("final") else "")
+            by_cp[cp][0] += q["score"]
+            by_cp[cp][1] += 2
             by_kind[q["kind"]][0] += q["score"]
             by_kind[q["kind"]][1] += 2
     tot = [sum(v[0] for v in by_cp.values()), sum(v[1] for v in by_cp.values())]
     out.append(f"**Memory recall: {_pct(*tot)}** ({tot[0]}/{tot[1]} points, {sum(len(f.learn.quiz) for f in fams)} questions)")
-    out += ["", "| Checkpoint | Score |", "| --- | --- |"] + [f"| day {d} | {_pct(*by_cp[d])} |" for d in sorted(by_cp)]
+    out += ["", "| Checkpoint | Score |", "| --- | --- |"] + [f"| {d} | {_pct(*by_cp[d])} |" for d in sorted(by_cp, key=lambda k: (int(k.split()[1]), k))]
     out += ["", "| Kind | Score |", "| --- | --- |"] + [f"| {k} | {_pct(*v)} |" for k, v in sorted(by_kind.items())]
     out += ["", "## Per family", "",
-            "| Family | Recall | Meal times learned (day) | Weekend times (day) | Quiet hour learned: messages / meal asks (day) | Nudges in busy window wk1→wk4 | Food logged / told | Stale old value | Duplicate keys | Learned facts |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+            "| Family | Days | Recall | Meal times learned (day) | Weekend times (day) | Quiet hour learned: messages / meal asks (day) | Nudges in busy window wk1→wk4 | Food logged / told | Stale old value | Duplicate keys | Learned facts |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for f in fams:
         L = f.learn
         r = L.reads[-1] if L.reads else {}
@@ -521,7 +528,14 @@ def report(fams: list) -> str:
         a, b = L.life["busy"]
         wk = [sum(1 for n in L.nudges if n["to"] == L.who and a <= n["hour"] < b and (w * 7 < n["day"] <= (w + 1) * 7)) for w in range(4)]
         cov = r.get("food_coverage") or {}
-        out.append(f"| {f.spec['key']} | {_pct(*sc)} | {L.learned_on.get('meal_times', 'no')} | "
+        days = max((a.get("day", 0) for a in f.audits), default=0)
+        for rd in L.reads:  # the first readout where every weekday (and weekend) meal time was right
+            e = rd.get("meal_err_min") or {}
+            if all(meal_ok(e.get(f"weekday:{s}")) for s in L.life["meals"]):
+                L.learned_on["meal_times"] = min(L.learned_on.get("meal_times", 99), rd["day"])
+            if L.life["weekend"] and all(meal_ok(e.get(f"weekend:{s}")) for s in L.life["meals"]):
+                L.learned_on["meal_times_weekend"] = min(L.learned_on.get("meal_times_weekend", 99), rd["day"])
+        out.append(f"| {f.spec['key']} | {days} | {_pct(*sc)} | {L.learned_on.get('meal_times', 'no')} | "
                    f"{L.learned_on.get('meal_times_weekend', 'no') if L.life['weekend'] else 'n/a'} | "
                    f"{L.learned_on.get('busy_window', 'no')} / {L.learned_on.get('busy_window_asks', 'no')} | "
                    f"{'→'.join(map(str, wk))} | {cov.get('logged_when_told', 0)}/{cov.get('told', 0)} | {len(r.get('stale_mentions') or [])} | "
