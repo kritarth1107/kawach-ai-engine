@@ -198,13 +198,18 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
     actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities."""
     if os.getenv("GROUNDING_CHECK", "on").strip().lower() == "off" or not needs_check(draft):
         return []
-    sources = ("MEMORY\n" + (memory or "")[:24000] + "\n\nTHEIR MESSAGES\n" + "\n".join(f"- {m[:600]}" for m in their_messages[-30:] if m)
+    # A health reply keeps the long record. Anything else is checked against the front of it: the care record is
+    # first, and a 24k-character memory was a second slow call on almost every turn (live 15 Oct, judge p50 1.1 s).
+    mem_cap = 24000 if doctor_note else 8000
+    heard = their_messages[-30:] if doctor_note else their_messages[-8:]
+    sources = ("MEMORY\n" + (memory or "")[:mem_cap] + "\n\nTHEIR MESSAGES\n" + "\n".join(f"- {m[:600]}" for m in heard if m)
                + "\n\nTOOL RESULTS\n" + ("\n".join(t[:2000] for t in tool_results[-12:]) or "- none"))
     try:
         from app.llm import router
 
         system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
-        reply = await router.complete("judge_fast", system_stable=system, effort=effort_for(doctor_note), max_tokens=4000, timeout_s=12,
+        reply = await router.complete("judge_fast", system_stable=system, effort=effort_for(doctor_note),
+                                      max_tokens=2000 if doctor_note else 800, timeout_s=12,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
         logger.warning("grounding check failed")

@@ -168,7 +168,9 @@ def trip(route: Route, status: int | None) -> None:
 
 
 def reset_breakers() -> None:
+    global _hedge_off_until
     _open_until.clear()
+    _hedge_off_until = 0.0
 
 
 # ── router ─────────────────────────────────────────────────────────────────────
@@ -310,6 +312,7 @@ async def complete(
                         raise
                     # Every 429 is logged, also the ones a retry clears (trust plan C5.1: measure before buying capacity).
                     logger.warning("llm_429 role=%s model=%s attempt=%d", role, route.key, attempt)
+                    note_throttled()
                     # Shared capacity usually frees within seconds: back off on the same model (health data stays in
                     # India, founder D5, so there is often no other region to fall to) rather than give a weaker answer.
                     if attempt > len(RETRY_429_S):
@@ -341,17 +344,32 @@ async def complete(
 
 RETRY_429_S: tuple[float, ...] = (1.5, 3.0, 6.0)  # about 10 s in all before the next route or AllModelsFailed
 
+# A duplicate of a call that is merely slow crowds the same shared capacity and comes back as a 429 (live 15 Oct: five
+# hedges in five minutes, then 429s at ~11 calls / 5 min). Hedge only once a single call is clearly stuck, and not at
+# all for a while after a 429.
+HEDGE_DEFAULT_S = 22.0
+HEDGE_PAUSE_S = 120.0
+_hedge_off_until = 0.0
+
+
+def note_throttled() -> None:
+    """A 429 just happened: do not start a second copy of any brain call until the shared capacity has had a moment."""
+    global _hedge_off_until
+    _hedge_off_until = time.monotonic() + HEDGE_PAUSE_S
+
 
 def hedge_after(role: str) -> float:
     """Seconds after which a slow call is sent once more (0: never). Only Saheli's own replies (the brain and brain_hard),
-    where a person is waiting; BRAIN_HEDGE_AFTER_S sets it (10 s: past the p85 of a brain call, so about one call in seven
-    or fewer)."""
+    where a person is waiting. BRAIN_HEDGE_AFTER_S overrides it. The default is past a normal brain call (live 15 Oct:
+    one call is 2.9 s at p50 and 12.5 s at p90), so a copy goes out only when that call is stuck."""
     if role not in ("brain", "brain_hard"):
         return 0.0
+    if time.monotonic() < _hedge_off_until:
+        return 0.0
     try:
-        return max(0.0, float(os.getenv("BRAIN_HEDGE_AFTER_S", "10")))
+        return max(0.0, float(os.getenv("BRAIN_HEDGE_AFTER_S", str(HEDGE_DEFAULT_S))))
     except ValueError:
-        return 10.0
+        return HEDGE_DEFAULT_S
 
 
 def new_call_id() -> str:

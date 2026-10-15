@@ -181,6 +181,14 @@ async def test_both_copies_rate_limited_is_one_rate_limit_backed_off_as_before(m
     assert r.text == "after backoff" and a.calls == 3
 
 
+def test_a_rate_limit_pauses_the_hedge_and_the_default_waits_until_a_call_is_stuck(monkeypatch):
+    monkeypatch.delenv("BRAIN_HEDGE_AFTER_S", raising=False)
+    assert router.hedge_after("brain") == router.HEDGE_DEFAULT_S
+    assert router.hedge_after("judge_fast") == 0
+    router.note_throttled()
+    assert router.hedge_after("brain") == 0
+
+
 async def test_a_cancelled_turn_cancels_both_copies(monkeypatch):
     import asyncio
 

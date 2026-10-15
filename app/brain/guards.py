@@ -534,6 +534,19 @@ def without_bookkeeping(text: str) -> str:
     return "\n---\n".join(out)
 
 
+def clip_reply(text: str, *, cap: int) -> str:
+    """Shorten a reply that is only too long or opens as a note. Which question matters is the model's choice, so a
+    second question is not dropped here. A reply with none of those is returned unchanged when it is already short."""
+    cleaned = without_bookkeeping(text)
+    chunks = whatsapp_messages(cleaned) or ([cleaned] if (cleaned or "").strip() else [])
+    out = []
+    for chunk in chunks:
+        kept = sentences(chunk)[:cap]
+        if kept:
+            out.append(" ".join(kept))
+    return "\n---\n".join(out)
+
+
 def length_problems(text: str, *, cap: int = 3) -> list[str]:
     """Her own reply, one WhatsApp message at a time: more sentences than the cap (an elder is two, anyone else three;
     a health answer is left to the doctor-note check). Sentence breaks in her text only."""

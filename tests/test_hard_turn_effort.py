@@ -46,8 +46,8 @@ def req(text, ref):
 
 async def test_an_ordinary_turn_stays_at_low_effort(db, brain):
     await store.save_roster(db, FAM, ME, [ME])
-    r = brain([LLMReply(text="Good morning!", tool_calls=[], model="fake")])
-    await loop.run_turn(db, SimHost(), req("good morning", "h1"))
+    r = brain([LLMReply(text="I can help with that.", tool_calls=[], model="fake")])
+    await loop.run_turn(db, SimHost(), req("please order milk", "h1"))
     assert r.efforts[0] == "low"
 
 
@@ -65,7 +65,7 @@ async def test_a_health_change_mid_turn_makes_the_reply_think_harder(db, brain):
                                                      "sentence": "Allergic to peanuts"})
     r = brain([LLMReply(text="", tool_calls=[call], model="fake"), LLMReply(text="Noted, no peanuts.", tool_calls=[], model="fake")])
     await loop.run_turn(db, SimHost(), req("I am allergic to peanuts", "h3"))
-    assert r.efforts[:2] == ["low", "medium"]
+    assert r.efforts[:2] == ["minimal", "medium"]
 
 
 async def test_off_until_switched_on(db, brain, monkeypatch):

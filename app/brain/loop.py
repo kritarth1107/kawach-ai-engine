@@ -34,6 +34,11 @@ BRAIN_EFFORT = os.getenv("BRAIN_EFFORT", "low")
 # paid A/B on the test world shows medium is at least 5 points better at p90 <= 15 s (founder decision D3).
 BRAIN_EFFORT_HARD = os.getenv("BRAIN_EFFORT_HARD", BRAIN_EFFORT)
 HISTORY_TURNS = 40
+# Small talk and acks, from the situation tagger's existing labels. A greeting does not re-read the whole thread,
+# think hard, or wait on the reply-path judge. A tool call still runs; the reply after it thinks at the normal depth.
+LIGHT_SITUATIONS = frozenset({"thanks", "chit_chat"})
+LIGHT_HISTORY = 8
+LIGHT_MAX_TOKENS = 1500
 COMPACT_AFTER = 80
 # How long a turn may take (seconds). A person's message: the backend stops waiting at 120 s (aiPostBrainTurn), so past
 # that a reply is wasted while the family stays locked. A scheduled turn: under Cloud Run's 300 s request limit.
@@ -633,6 +638,42 @@ def role_for(situation: str) -> str:
     return base
 
 
+def effort_for(situation: str, *, hard: bool) -> str:
+    """Thinking depth. A hard moment (recent health, a correction) stays on BRAIN_EFFORT_HARD. Small talk and acks
+    think as little as the model allows. Everything else stays on BRAIN_EFFORT."""
+    if hard:
+        return BRAIN_EFFORT_HARD
+    if situation in LIGHT_SITUATIONS:
+        return "minimal"
+    return BRAIN_EFFORT
+
+
+def light_history(msgs: list[dict]) -> list[dict]:
+    """The recent turns only. The care record is already in the prompt; a greeting does not need the whole thread."""
+    if len(msgs) <= LIGHT_HISTORY:
+        return msgs
+    head: list[dict] = []
+    rest = msgs
+    first = msgs[0]
+    if first.get("role") == "user":
+        blob = first.get("content") or []
+        text = blob[0].get("text", "") if blob and isinstance(blob[0], dict) else ""
+        if text.startswith("(Earlier in our conversation"):
+            head, rest = msgs[:2], msgs[2:]
+    tail = rest[-LIGHT_HISTORY:]
+    while tail and tail[0].get("role") != "user":
+        tail = tail[1:]
+    return head + tail
+
+
+def _mechanical(problems: list[str]) -> bool:
+    """True when every problem is one the code can shorten away (too long, or a note as the opener). Which of two
+    questions matters, an invention, the wrong language or a missing name still goes back to the model."""
+    if not problems:
+        return False
+    return all(p.startswith("do not open with bookkeeping") or p.startswith("this message is ") for p in problems)
+
+
 CLAIM_WINDOW = timedelta(hours=3)
 
 # Flood limits: a stuck sender, an echo loop between bots, or a wake-up storm must not run up model spend.
@@ -983,12 +1024,17 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     # A photo or video stills: the vision model looks. The text brain cannot open them and used to say so.
     if req.images and "vision" in router.configured_roles():
         brain_role = "vision"
-    effort = BRAIN_EFFORT
-    if BRAIN_EFFORT_HARD != BRAIN_EFFORT and not is_system:
+    hard = False
+    if not is_system:
         try:
-            effort = BRAIN_EFFORT_HARD if await hard_start(session, req) else BRAIN_EFFORT
+            hard = await hard_start(session, req)
         except Exception:  # noqa: BLE001 — the turn goes on at the usual effort
             logger.exception("hard-turn check failed family=%s", req.family_id)
+    effort = BRAIN_EFFORT if is_system else effort_for(situation, hard=hard)
+    if situation in LIGHT_SITUATIONS and not is_system and turn_start > LIGHT_HISTORY:
+        kept = light_history(msgs[:turn_start])
+        msgs = kept + msgs[turn_start:]
+        turn_start = len(kept)
     guarded = False
     guard_rounds = 0  # a rewrite is checked again (trust plan C4); after two, unsupported sentences are removed by code
     # What a reply may draw on for the no-invention check: memory and this turn's context, what the PEOPLE wrote (never
@@ -1017,7 +1063,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                     messages=msgs,
                     # On the last step there are no tools, so the person always gets a reply.
                     tools=None if last else tools.specs(),
-                    max_tokens=6000,
+                    max_tokens=LIGHT_MAX_TOKENS if effort == "minimal" else 6000,
                     effort=effort,
                     essential=not is_system,  # past the hard cap only people's messages get answers
                 ), timeout=left)
@@ -1055,6 +1101,16 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
             trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
                 break
+            # Another full brain call only to shorten small talk is most of a slow "Hi". An invention, the wrong
+            # language or a missing name still goes back to the model.
+            light_reply = situation in LIGHT_SITUATIONS and not ctx.actions and not is_system
+            if light_reply and _mechanical(problems):
+                # Another full brain call to shorten a greeting is most of a slow "Hi". Cut the extra sentences here.
+                clipped = guards.clip_reply(text_now, cap=2 if ctx.speaker_is_elder else 3)
+                if clipped.strip():
+                    reply.text = clipped
+                    guarded = True
+                    break
             guarded = True
             guard_rounds += 1
             logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
@@ -1078,6 +1134,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
                 "something, do it now with the tool; otherwise drop the claim. Then write only the corrected message to the person.)"
             )}]})
             continue
+        if not is_system and reply.tool_calls and effort == "minimal":
+            effort = BRAIN_EFFORT  # a tool ran: the reply after it is no longer small talk
         if effort != BRAIN_EFFORT_HARD and not is_system and any(hard_call(c) for c in reply.tool_calls):
             effort = BRAIN_EFFORT_HARD  # the rest of this turn (the reply after the health change) thinks harder
             logger.info("hard turn family=%s effort=%s", req.family_id, effort)
