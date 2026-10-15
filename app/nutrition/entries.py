@@ -183,12 +183,21 @@ async def day_start_minute(session: AsyncSession, family_id: str, subject_id: st
     return got
 
 
-async def dinner_saved(session: AsyncSession, family_id: str, subject_id: str, day: str) -> bool:
-    """That diary day already has a dinner (eaten or skipped). Water and a late-night snack do not count."""
-    row = (await session.execute(select(NutritionEntry.id).where(
+async def dinner_saved(session: AsyncSession, family_id: str, subject_id: str, day: str, *,
+                       except_meal: uuid.UUID | None = None, before: datetime | None = None) -> bool:
+    """That diary day already has a dinner (eaten or skipped). Water and a late-night snack do not count.
+
+    except_meal leaves out the meal being placed, so a dinner does not count itself. before counts only an earlier one,
+    so a later evening row is after dinner and the first one stays dinner.
+    """
+    q = select(NutritionEntry.id).where(
         NutritionEntry.family_id == family_id, NutritionEntry.subject_id == subject_id, NutritionEntry.day == day,
-        NutritionEntry.meal == "dinner", NutritionEntry.status == "active").limit(1))).first()
-    return row is not None
+        NutritionEntry.meal == "dinner", NutritionEntry.status == "active")
+    if except_meal is not None:
+        q = q.where(NutritionEntry.meal_id != except_meal)
+    if before is not None:
+        q = q.where(NutritionEntry.eaten_at < before)
+    return (await session.execute(q.limit(1))).first() is not None
 
 
 async def assign_slot(session: AsyncSession, family_id: str, subject_id: str, at: datetime, *, named: str | None = None,
@@ -202,6 +211,86 @@ async def assign_slot(session: AsyncSession, family_id: str, subject_id: str, at
         food_day = local.date() - (timedelta(days=1) if minute < start else timedelta())
         saved = await dinner_saved(session, family_id, subject_id, food_day.isoformat())
     return P.resolve(at, dinner_saved=saved, only_water=only_water, named=named, day_start=start)
+
+
+async def _meals_they_moved(session: AsyncSession, refs: list[str]) -> set[str]:
+    """Entries whose meal was changed after the save, other than by this re-slot. Those stay as the person left them."""
+    from app.care.versions import MemoryVersion
+
+    chosen: set[str] = set()
+    for i in range(0, len(refs), 500):
+        chunk = refs[i:i + 500]
+        got = (await session.execute(select(
+            MemoryVersion.ref, MemoryVersion.op, MemoryVersion.value, MemoryVersion.reason).where(
+            MemoryVersion.kind == "food", MemoryVersion.ref.in_(chunk)))).all()
+        by: dict[str, list[tuple[str, dict, str]]] = {}
+        for ref, op, value, reason in got:
+            if ref:
+                by.setdefault(ref, []).append((op, value or {}, reason or ""))
+        for ref, vs in by.items():
+            origin = next((v.get("meal") for op, v, _ in vs if op == "write" and v.get("meal")), None)
+            for op, v, reason in vs:
+                meal = v.get("meal")
+                if op == "change" and not reason.startswith("night slot") and origin and meal and meal != origin:
+                    chosen.add(ref)
+                    break
+    return chosen
+
+
+async def reslot_nights(session: AsyncSession, *, days: int = 7) -> dict:
+    """Re-slot the last `days` of meals the clock or Saheli filed, using the same rule as a new log.
+
+    After a saved dinner until midnight is after dinner; before their day starts (else 06:00) is late night, or the
+    previous day's dinner when none is saved. A meal the person later moved stays. Through-the-day rows in that window
+    move too. Daytime rows stay. Each move is a memory version (reason starts with "night slot") so it can be undone.
+    Returns counts and ids, never names.
+    """
+    since = clock.now() - timedelta(days=max(1, days))
+    rows = list((await session.execute(select(NutritionEntry).where(
+        NutritionEntry.status == "active", NutritionEntry.eaten_at >= since,
+        NutritionEntry.family_id.notlike("shadow:%"), NutritionEntry.family_id.notlike("sim-%")))).scalars())
+    groups: dict[uuid.UUID, list[NutritionEntry]] = {}
+    for e in rows:
+        groups.setdefault(e.meal_id, []).append(e)
+    chosen = await _meals_they_moved(session, [str(e.id) for e in rows])
+    starts: dict[tuple[str, str], int] = {}
+    seen = changed = kept = 0
+    moves: list[dict] = []
+    ordered = sorted(groups.values(), key=lambda g: min(e.eaten_at for e in g))
+    for group in ordered:
+        at = min(e.eaten_at for e in group)
+        local = clock.ist(at)
+        minute = local.hour * 60 + local.minute
+        key = (group[0].family_id, group[0].subject_id)
+        if key not in starts:
+            starts[key] = await day_start_minute(session, key[0], key[1])
+        start = starts[key]
+        if not (minute < start or minute >= P.DINNER_FROM):
+            continue
+        seen += 1
+        if any(str(e.id) in chosen for e in group):
+            kept += 1
+            continue
+        meal_id = group[0].meal_id
+        if minute < start:
+            food_day = (local.date() - timedelta(days=1)).isoformat()
+            saved = await dinner_saved(session, key[0], key[1], food_day, except_meal=meal_id)
+        else:
+            saved = await dinner_saved(session, key[0], key[1], local.date().isoformat(), except_meal=meal_id, before=at)
+        only_water = all("water" in ((e.flags or {}).get("tags") or []) for e in group)
+        slot = P.place(at, dinner_saved=saved, only_water=only_water, day_start=start)
+        if all(e.meal == slot.meal and e.day == slot.day for e in group):
+            continue
+        now = clock.now()
+        for e in group:
+            old = e.meal
+            e.meal, e.day, e.version, e.updated_at = slot.meal, slot.day, e.version + 1, now
+            await record(session, e, "change", reason=f"night slot: {old} → {slot.meal}")
+            moves.append({"id": str(e.id), "from": old, "to": slot.meal})
+            changed += 1
+        await session.flush()
+        await sync_meal_event(session, key[0], meal_id)
+    return {"seen": seen, "changed": changed, "kept": kept, "moves": moves}
 
 
 async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, logged_by: str, items: list[Item], meal: str, eaten_at: datetime,

@@ -776,3 +776,69 @@ async def test_food_before_their_breakfast_stays_last_night(db, at, nfake):
                                            "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
     assert snack["result"] == "saved" and snack["meal"] == "late_night", snack
     assert not await nudge_hooks.meal_logged(db, FAM, MAA["id"], "breakfast", "2026-10-15")
+
+
+def _at(e) -> str:
+    return clock.ist(e.eaten_at).strftime("%H:%M")
+
+
+async def test_clock_filed_night_meals_move_onto_late_night(db, at, nfake):
+    """Rows the clock filed as dinner, breakfast or through the day, after a saved dinner, become late night.
+    They do not count as one of the three meals. A second run changes nothing."""
+    from app.nutrition import report
+
+    at("2026-10-15 12:00")
+    dinner, _ = await call(db, "log_food", {"eaten_at": "2026-10-14T21:10:00+05:30",
+                                            "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert dinner["meal"] == "dinner"
+    for when in ("2026-10-15T02:36:00+05:30", "2026-10-15T04:30:00+05:30", "2026-10-15T04:58:00+05:30"):
+        saved, _ = await call(db, "log_food", {"eaten_at": when, "items": [{"name": "boiled egg", "quantity": 1, "unit": "piece"}]})
+        assert saved["meal"] == "late_night", saved
+    filed = {"02:36": "dinner", "04:30": "other", "04:58": "breakfast"}
+    for e in await active(db):
+        if _at(e) in filed:
+            e.meal, e.day = filed[_at(e)], "2026-10-15"
+    await db.flush()
+    out = await entries.reslot_nights(db)
+    assert out["changed"] == 3 and out["kept"] == 0, out
+    assert all(set(m) == {"id", "from", "to"} for m in out["moves"])
+    got = {_at(e): e.meal for e in await active(db)}
+    assert got["21:10"] == "dinner" and got["02:36"] == "late_night"
+    assert got["04:30"] == "late_night" and got["04:58"] == "late_night"
+    night = await entries.on_day(db, FAM, MAA["id"], "2026-10-15")
+    assert report._covered(night) == 0
+    block = await report.brief_block(db, FAM, MAA["id"], "2026-10-15")
+    assert "late_night (02:36)" in block
+    assert "not logged: breakfast, lunch, dinner" in block
+    assert "  breakfast (" not in block
+    again = await entries.reslot_nights(db)
+    assert again["changed"] == 0
+
+
+async def test_a_meal_they_moved_stays_and_a_later_evening_is_after_dinner(db, at, nfake):
+    at("2026-10-15 23:50")
+    prior, _ = await call(db, "log_food", {"eaten_at": "2026-10-14T21:00:00+05:30",
+                                           "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert prior["meal"] == "dinner"
+    day, _ = await call(db, "log_food", {"eaten_at": "2026-10-15T08:30:00+05:30",
+                                         "items": [{"name": "chapati", "quantity": 2, "unit": "piece"}]})
+    assert day["meal"] == "breakfast"
+    night, _ = await call(db, "log_food", {"eaten_at": "2026-10-15T04:58:00+05:30",
+                                           "items": [{"name": "boiled egg", "quantity": 1, "unit": "piece"}]})
+    assert night["meal"] == "late_night"
+    stated = next(e for e in await active(db) if _at(e) == "04:58")
+    await entries.change(db, stated, meal="breakfast", reason="they said this was breakfast")
+    eve, _ = await call(db, "log_food", {"eaten_at": "2026-10-15T20:30:00+05:30",
+                                         "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert eve["meal"] == "dinner"
+    later, _ = await call(db, "log_food", {"eaten_at": "2026-10-15T23:40:00+05:30",
+                                           "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
+    assert later["meal"] == "after_dinner", later
+    forced = next(e for e in await active(db) if _at(e) == "23:40")
+    forced.meal = "dinner"
+    await db.flush()
+    out = await entries.reslot_nights(db)
+    got = {_at(e): e.meal for e in await active(db)}
+    assert got["08:30"] == "breakfast" and got["04:58"] == "breakfast"
+    assert got["20:30"] == "dinner" and got["23:40"] == "after_dinner"
+    assert out["kept"] == 1 and not any(m["id"] == str(stated.id) for m in out["moves"])

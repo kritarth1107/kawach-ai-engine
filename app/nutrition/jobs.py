@@ -254,6 +254,17 @@ async def sweep(sessions, host_for=None) -> dict:
             logger.exception("nutrition job failed id=%s", jid)
             stats["failed"] += 1
     await _tell_pending(sessions, host_for)
+    try:
+        from app.nutrition import entries
+
+        async with sessions() as session:
+            moved = await entries.reslot_nights(session)
+            await session.commit()
+        stats["reslot"] = moved["changed"]
+        if moved["changed"]:
+            logger.info("nutrition night slots moved=%s kept=%s", moved["changed"], moved["kept"])
+    except Exception:  # noqa: BLE001 — a re-slot must not stop the rest of the sweep
+        logger.exception("nutrition night reslot failed")
     return stats
 
 
