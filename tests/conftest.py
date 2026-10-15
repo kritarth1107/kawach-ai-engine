@@ -25,6 +25,26 @@ _EVAL_ENV = ("WEB_SEARCH_PROVIDER", "LLM_PROVIDER", "MODEL_ROUTES", "GCP_PROJECT
 
 
 @pytest.fixture(autouse=True)
+def _drain_closes_with_the_process():
+    """Shutdown leaves the process draining. A test starts from a process that is still serving."""
+    import signal
+
+    from app.core.drain import drain
+
+    previous = signal.getsignal(signal.SIGTERM)
+    drain.draining = False
+    drain._open = 0
+    drain._sessions.clear()
+    drain._idle.set()
+    yield
+    drain.draining = False
+    drain._open = 0
+    drain._sessions.clear()
+    drain._idle.set()
+    signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.fixture(autouse=True)
 def _keep_eval_env_inside_the_test():
     saved = {key: os.environ.get(key) for key in _EVAL_ENV}
     yield

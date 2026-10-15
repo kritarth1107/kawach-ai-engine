@@ -52,9 +52,14 @@ async def call_turn(body: CallTurn) -> dict:
         if not speaker:
             raise HTTPException(status_code=403, detail="caller is not in this family")
         text = body.text if body.turn else f"[Phone call started: {body.purpose}] {body.text}".strip()
-        res = await run_turn(session, LiveHost(), TurnRequest(
-            family_id=body.family_id, elder=roster.elder, speaker=speaker, members=roster.members, text=text,
-            message_ref=f"call:{body.call_id}:{body.turn}", channel="call", modality="voice"))
+        from app.core.drain import Draining
+
+        try:
+            res = await run_turn(session, LiveHost(), TurnRequest(
+                family_id=body.family_id, elder=roster.elder, speaker=speaker, members=roster.members, text=text,
+                message_ref=f"call:{body.call_id}:{body.turn}", channel="call", modality="voice"))
+        except Draining as exc:
+            raise HTTPException(status_code=503, detail="draining") from exc
     return {"reply": res.reply, "model": res.model, "ms": res.ms}
 
 
