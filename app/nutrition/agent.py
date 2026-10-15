@@ -208,6 +208,27 @@ def _say(rows: list[NutritionEntry], tracking: str, relevant: set[str] | None = 
     return base
 
 
+def _curiosity(rows: list[NutritionEntry], tracking: str) -> str:
+    """At most one follow-up, and only when it fits. Never advice. A correction already asked is the one question."""
+    food = [r for r in rows if r.kind == "food"]
+    if not food or tracking == "counts":
+        return ""
+    if all("water" in ((r.flags or {}).get("tags") or []) for r in food):
+        return ""
+    facts = {t for r in food for t in ((r.flags or {}).get("facts") or [])}
+    heavy = bool(facts & {"fried", "high fat", "high sodium"}) or N.kcal(entries.totals(food)) >= 600
+    if heavy:
+        return "How are you feeling after that?"
+    if len(food) == 1 and not (food[0].flags or {}).get("usual"):
+        return "Is this a usual one for you?"
+    return ""
+
+
+FOLLOW_HOW = ("Ask this one question after the save line, in their language. Never a second question and never advice. "
+              "If they say it is their usual, call log_food with make_usual true and no new items. "
+              "If they say they liked it or how they feel, call remember with domain preference, in their words. Then stop.")
+
+
 # ── order meals (plan §N6.1): eaten only after a yes ─────────────────────────
 
 
@@ -301,6 +322,9 @@ class NutritionAgent:
         ask = dict(job.ask or {})
         draft = dict(job.draft or {})
         items: list[dict] = list(ask.get("items") or [])
+        if job.state == "saved":
+            return {"result": "saved", "already": True, "job_id": str(job.id), "say": "",
+                    "how": "Already in the food log. Say nothing about it."}
         job.state = "resolving"
         if ask.get("cancel"):
             await self._close_photo(draft)
@@ -353,6 +377,9 @@ class NutritionAgent:
             at = parse_at(ask.get("eaten_at")) or clock.now()
             slot = await entries.assign_slot(s, who.family_id, job.subject_id, at, named=ask.get("meal") if isinstance(ask.get("meal"), str) else None)
             meal = slot.meal
+            if not await jobs.claim(s, job):
+                return {"result": "saved", "already": True, "job_id": str(job.id), "say": "",
+                        "how": "Already in the food log. Say nothing about it."}
             e = await entries.save_skipped(s, family_id=who.family_id, subject_id=job.subject_id, logged_by=who.speaker_id, meal=meal, eaten_at=at,
                                            source=self._source(job, ask), source_ref=job.source_ref, job_id=job.id, day=slot.day)
             jobs.finish(job, "saved", {"entries": [str(e.id)], "skipped": meal})
@@ -492,6 +519,9 @@ class NutritionAgent:
         if at < clock.now() - timedelta(days=30):
             jobs.finish(job, "dropped", {"why": "too old"})
             return {"result": "dropped", "job_id": str(job.id), "why": "That is more than 30 days ago; the food log keeps the last 30 days from chat."}
+        if not await jobs.claim(s, job):
+            return {"result": "saved", "already": True, "job_id": str(job.id), "say": "",
+                    "how": "Already in the food log. Say nothing about it."}
         only_water = bool(keep) and all(r.food is not None and "water" in (r.food.tags or []) for _, r in keep)
         slot = await entries.assign_slot(s, who.family_id, job.subject_id, at,
                                          named=ask.get("meal") if isinstance(ask.get("meal"), str) else None, only_water=only_water)
@@ -531,8 +561,11 @@ class NutritionAgent:
         out = await self._result(job, rows, tracking, replaced=replaced, medicines=medicines)
         if any((r.flags or {}).get("refine") for r in rows):
             out["refine"] = True
+        notice = "pending" if background else "reply"
+        out["notice"] = notice
         jobs.finish(job, "saved", {"entries": [str(r.id) for r in rows], "meal_id": str(rows[0].meal_id) if rows else None,
-                                   "say": out.get("say"), "today": out.get("today"), **({"order_task": str(task.id)} if task else {})})
+                                   "say": out.get("say"), "today": out.get("today") or "", "notice": notice,
+                                   **({"order_task": str(task.id)} if task else {})})
         return out
 
     # ── helpers ──
@@ -648,12 +681,18 @@ class NutritionAgent:
         tot = entries.totals(today_rows)
         tgts, rules = await targets.current(s, who.family_id, job.subject_id)
         prog = targets.progress(tot, tgts)
+        say = _say(rows, tracking, await targets.focus(s, who.family_id, job.subject_id))
         out: dict = {"result": "saved", "job_id": str(job.id), "meal": rows[0].meal if rows else None, "day": day,
                      "saved": [{"id": str(r.id), "name": r.name, "said": r.name_said, "qty": P.qty_label(r.quantity, r.unit), "kcal": N.kcal(r.nutrients),
                                 "protein_g": N.grams_of(r.nutrients, "protein_g"), "confidence": r.confidence} for r in rows],
-                     "say": _say(rows, tracking, await targets.focus(s, who.family_id, job.subject_id)),
+                     "say": say,
                      "totals_today": {k: round(v, 1) for k, v in tot.items() if k in N.MACROS or k == "water_ml"},
                      "undo": "To correct it: change_food with entry_id (or last=true) and set; to remove it: change_food delete=true."}
+        if "tell me if" not in say:
+            question = _curiosity(rows, tracking)
+            if question:
+                out["follow"] = question
+                out["follow_how"] = FOLLOW_HOW
         line = targets.today_line(prog) if tracking == "full" else None
         if line:
             out["today"] = line
@@ -769,6 +808,8 @@ def _attach(job: NutritionJob) -> dict:
 
 async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str) -> dict:
     """log_food: a new meal, or an answer to the agent's question (answer_to)."""
+    if args.get("make_usual") and not any(args.get(k) for k in ("items", "from_photo", "label_photo", "skipped", "from_order_task")):
+        return await nudge_hooks.note_stated_usual(session, who.family_id, subject_id)
     if args.get("answer_to"):
         job = await jobs.get(session, who.family_id, str(args["answer_to"]))
         if job is None or job.state not in jobs.LIVE:
@@ -833,29 +874,62 @@ async def expire(session: AsyncSession, job: NutritionJob) -> dict:
     return {"result": "saved", "unquantified": True}
 
 
-async def tell(sessions, host_for, job: NutritionJob, out: dict) -> None:
-    """Saheli tells the person what a background look-up found (one system turn, like an order update)."""
-    from app.brain.host import LiveHost, ShadowHost
-    from app.brain.wake import system_turn
+async def _mark_notice(sessions, job_id, notice: str) -> None:
+    async with sessions() as session:
+        row = await session.get(NutritionJob, job_id)
+        if row is None:
+            return
+        row.result = {**(row.result or {}), "notice": notice}
+        row.updated_at = clock.now()
+        await session.commit()
 
-    host = host_for(job.family_id) if host_for else (ShadowHost() if job.family_id.startswith("shadow:") else LiveHost())
-    if out.get("result") == "saved":
-        what = f"{out.get('say')} {out.get('today') or ''}".strip()
-        extra = " ".join(str(out[k]) for k in ("allergy", "deviation") if out.get(k))
-        fallback = what
-        prompt = (f"[Nutrition update] The food {job.requested_by} told you about is now saved: {what} {extra} Tell them in one short line with "
-                  f"send_message (to {job.requested_by}), in their language, numbers exactly as given. Then reply none.")
-    else:
+
+async def tell(sessions, host_for, job: NutritionJob, out: dict) -> None:
+    """Tell them what a background look-up found. A save goes out as that one line, once. A question still uses a system turn."""
+    from app.brain.host import LiveHost, ShadowHost
+    from app.brain.wake import _send, in_their_words, system_turn
+    from app.care import store
+
+    if out.get("result") != "saved" or out.get("notice") != "pending":
+        if out.get("result") != "needs_input":
+            return
+        host = host_for(job.family_id) if host_for else (ShadowHost() if str(job.family_id).startswith("shadow:") else LiveHost())
         n = (out.get("needs") or [{}])[0]
-        fallback = str(n.get("question") or "")
         prompt = (f"[Nutrition update] To save the food {job.requested_by} told you about, ask them only this, with send_message (to "
                   f"{job.requested_by}), in their language: \"{n.get('question')}\". Do not read out options or ids. When they answer, "
                   f"call log_food with answer_to=\"{job.id}\". Then reply none.")
+        try:
+            await system_turn(sessions, host, job.family_id, prompt, f"nutrition:{job.id}:needs_input", deliver_to=job.requested_by,
+                              fallback=str(n.get("question") or ""))
+        except Exception:  # noqa: BLE001
+            logger.exception("nutrition question not told family=%s", job.family_id)
+        return
+    line = f"{out.get('say') or ''} {out.get('today') or ''}".strip()
+    if not line:
+        return
+    async with sessions() as session:
+        row = await session.get(NutritionJob, job.id, with_for_update=True)
+        notice = (row.result or {}).get("notice") if row else None
+        if row is None or notice not in ("pending", "sending"):
+            return
+        if notice == "sending" and row.updated_at > clock.now() - timedelta(seconds=60):
+            return
+        family_id, person = row.family_id, row.requested_by
+        row.result = {**(row.result or {}), "notice": "sending"}
+        row.updated_at = clock.now()
+        await session.commit()
+    host = host_for(family_id) if host_for else (ShadowHost() if str(family_id).startswith("shadow:") else LiveHost())
     try:
-        await system_turn(sessions, host, job.family_id, prompt, f"nutrition:{job.id}:{out.get('result')}", deliver_to=job.requested_by,
-                          fallback=fallback)
-    except Exception:  # noqa: BLE001
-        logger.exception("nutrition update not told family=%s", job.family_id)
+        words = await in_their_words(sessions, family_id, person, line)
+        async with sessions() as session:
+            roster = await store.roster(session, family_id)
+        known = {m.get("id") for m in ([roster.elder, *roster.members] if roster else [])}
+        ok = bool(roster) and person in known and await _send(
+            sessions, host, roster, family_id, person, words, f"nutrition:{job.id}:saved")
+    except Exception:  # noqa: BLE001 — the next sweep sends the same line
+        logger.exception("nutrition update not told family=%s", family_id)
+        ok = False
+    await _mark_notice(sessions, job.id, "sent" if ok else "pending")
 
 
 async def refine_saved(sessions, job_id) -> None:

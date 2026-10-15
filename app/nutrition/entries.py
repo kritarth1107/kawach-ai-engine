@@ -165,6 +165,24 @@ async def sync_meal_event(session: AsyncSession, family_id: str, meal_id: uuid.U
 # ── writing ──────────────────────────────────────────────────────────────────
 
 
+async def day_start_minute(session: AsyncSession, family_id: str, subject_id: str) -> int:
+    """When their day starts: the breakfast time learned from their own logs, else 06:00. Not a clock hour on its own."""
+    from app.care import store
+
+    fact = await store.active_fact(session, family_id, subject_id, "learned:nudges_meals_times")
+    raw = (fact.value or {}).get("breakfast") if fact and isinstance(fact.value, dict) else None
+    if not isinstance(raw, str) or ":" not in raw:
+        return P.DAY_START
+    hour, minute = raw.split(":", 1)
+    try:
+        got = int(hour) * 60 + int(minute[:2])
+    except ValueError:
+        return P.DAY_START
+    if got < 0 or got > 18 * 60:
+        return P.DAY_START
+    return got
+
+
 async def dinner_saved(session: AsyncSession, family_id: str, subject_id: str, day: str) -> bool:
     """That diary day already has a dinner (eaten or skipped). Water and a late-night snack do not count."""
     row = (await session.execute(select(NutritionEntry.id).where(
@@ -175,14 +193,15 @@ async def dinner_saved(session: AsyncSession, family_id: str, subject_id: str, d
 
 async def assign_slot(session: AsyncSession, family_id: str, subject_id: str, at: datetime, *, named: str | None = None,
                       only_water: bool = False) -> P.Slot:
-    """The diary slot for this time, using whether dinner is already on the food-day."""
+    """The diary slot for this time: their own breakfast time when we know it, and whether dinner is already saved."""
     local = clock.ist(at)
     minute = local.hour * 60 + local.minute
+    start = await day_start_minute(session, family_id, subject_id)
     saved = False
-    if minute < P.DAY_START or minute >= P.DINNER_FROM:
-        food_day = local.date() - (timedelta(days=1) if minute < P.DAY_START else timedelta())
+    if minute < start or minute >= P.DINNER_FROM:
+        food_day = local.date() - (timedelta(days=1) if minute < start else timedelta())
         saved = await dinner_saved(session, family_id, subject_id, food_day.isoformat())
-    return P.resolve(at, dinner_saved=saved, only_water=only_water, named=named)
+    return P.resolve(at, dinner_saved=saved, only_water=only_water, named=named, day_start=start)
 
 
 async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, logged_by: str, items: list[Item], meal: str, eaten_at: datetime,

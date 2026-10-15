@@ -318,6 +318,37 @@ def _twelve(hhmm: str) -> str:
     return f"{(h % 12) or 12}:{m:02d} {'am' if h < 12 else 'pm'}"
 
 
+async def note_stated_usual(session: AsyncSession, family_id: str, person_id: str) -> dict:
+    """They said the meal just logged is their usual. Visible and undoable, the same learning as the 3-day one."""
+    from app.care import outcomes_learn
+
+    since = (clock.ist() - timedelta(days=1)).date().isoformat()
+    rows = list((await session.execute(select(NutritionEntry).where(
+        NutritionEntry.family_id == family_id, NutritionEntry.subject_id == person_id, NutritionEntry.day >= since,
+        NutritionEntry.status == "active", NutritionEntry.kind == "food").order_by(NutritionEntry.eaten_at.desc()).limit(8))).scalars())
+    if not rows:
+        return {"result": "closed", "why": "Nothing recent to mark as a usual."}
+    meal_rows = [r for r in rows if r.meal_id == rows[0].meal_id]
+    fact = await store.active_fact(session, family_id, person_id, USUAL_KEY)
+    items = [dict(x) for x in ((fact.value or {}).get("items") or []) if isinstance(x, dict)] if fact else []
+    for r in meal_rows:
+        if r.meal not in (*SLOTS, "after_dinner", "late_night") or r.quantity is None:
+            continue
+        items = [x for x in items if not (x.get("meal") == r.meal and norm_food(x.get("name") or "") == norm_food(r.name))]
+        row = {"name": r.name, "meal": r.meal, "quantity": r.quantity, "unit": r.unit, "stated": True}
+        if r.food_id:
+            row["food_id"] = str(r.food_id)
+        items.append(row)
+    if not any(x.get("stated") for x in items):
+        return {"result": "closed", "why": "Nothing recent to mark as a usual."}
+    bits = [f"{x['meal']}: {P.qty_label(x.get('quantity'), x.get('unit'))} {x['name']}".strip() for x in items if x.get("stated")]
+    text = "Usual " + ", ".join(bits)
+    learned = await outcomes_learn.save_learned(session, family_id=family_id, subject_id=person_id, key=USUAL_KEY,
+                                                value={"items": items, "text": text}, text=text)
+    return {"result": "noted", "learned": learned, "say": "",
+            "how": "Noted as their usual for that meal. Say so in a few words. Do not ask another question. No advice."}
+
+
 async def learn_all(sessions) -> dict:
     """Nightly: the habit learnings for everyone who logged food in the last two weeks."""
     since = (clock.ist() - timedelta(days=14)).date().isoformat()

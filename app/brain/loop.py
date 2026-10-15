@@ -753,6 +753,7 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
         if not health_turn(ctx.actions):
             problems += guards.length_problems(final, cap=2 if ctx.speaker_is_elder else 3)
     problems += guards.food_line_problems(final, ctx.known)
+    problems += guards.logged_nutrient_problems(final, ctx.known)
     if guards.asks_language_switch(req.text) and not any(a["tool"] == "language_preference" and a.get("ok") for a in ctx.actions):
         problems.append("they asked you to talk in another language or dialect: call language_preference with it first, then reply in it")
     recent = (await data.turns(req.speaker["id"]))[-20:] if data else await store.recent_turns(session, req.family_id, req.speaker["id"], limit=20)
@@ -1203,6 +1204,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> 
     if not is_system and guards.food_line_problems(final, ctx.known):
         # The rewrite still dropped the saved numbers (a water question, or praise). Send the line the tool already gave.
         final = guards.saved_food_line(ctx.known)
+        guarded = True
+    elif not is_system and guards.logged_nutrient_problems(final, ctx.known):
+        final = guards.logged_nutrient_line(ctx.known)
         guarded = True
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)

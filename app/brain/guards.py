@@ -842,6 +842,61 @@ def saved_food_line(known: Iterable[str]) -> str:
     return ""
 
 
+def _tool_json(known: Iterable[str]) -> list[dict]:
+    import json
+
+    out = []
+    for text in known:
+        raw = str(text or "")
+        start = raw.find("{")
+        if start < 0:
+            continue
+        try:
+            data = json.loads(raw[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            out.append(data)
+    return out
+
+
+def logged_nutrient_line(known: Iterable[str]) -> str:
+    """When a web look-up and the food log both answered, the line is the log's numbers."""
+    log = None
+    web = False
+    for data in _tool_json(known):
+        if data.get("sources") is not None or str(data.get("note") or "").startswith("From the internet"):
+            web = True
+        rows = data.get("entries")
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict) and ("sugar_g" in row or "fat_g" in row):
+                    log = row
+    if not web or not log:
+        return ""
+    bits = []
+    for key, label in (("sugar_g", "g sugar"), ("fat_g", "g fat"), ("kcal", "kcal")):
+        if key in log and log[key] not in (None, ""):
+            bits.append(f"{log[key]} {label}")
+    if not bits:
+        return ""
+    name = str(log.get("what") or "That")
+    return f"{name}: " + ", ".join(bits) + "."
+
+
+def logged_nutrient_problems(final: str, known: Iterable[str]) -> list[str]:
+    """A question about food already logged uses the log's numbers, not a web look-up."""
+    line = logged_nutrient_line(known)
+    if not line:
+        return []
+    plain = (final or "").replace(",", "")
+    for bit in line.replace(",", "").split(": ", 1)[-1].rstrip(".").split(", "):
+        number = bit.split()[0] if bit.split() else ""
+        if number and number not in plain:
+            return [f"the reply must use the food log's numbers ({line}), not a web look-up"]
+    return []
+
+
 def food_line_problems(final: str, known: Iterable[str]) -> list[str]:
     """A saved meal's calorie number has to be in the reply. A water question follows that sentence."""
     say = saved_food_line(known)

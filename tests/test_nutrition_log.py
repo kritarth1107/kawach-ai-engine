@@ -7,8 +7,9 @@ from datetime import timedelta
 
 import pytest
 
-from app.brain import tools
+from app.brain import guards, tools
 from app.care import store
+from app.care.models import FamilyRoster
 from app.core import clock
 from app.nutrition import agent, entries, jobs, lookup, nudge_hooks, pantry
 from app.nutrition.models import NutritionEntry, NutritionFood
@@ -684,3 +685,94 @@ async def test_fourteen_days_teach_the_usual_amount_and_skip_the_lookup(db, at, 
     undone, _ = await call(db, "log_food", {"meal": "dinner", "eaten_at": "2026-09-15T21:30:00+05:30",
                                             "items": [{"name": "roti"}]})
     assert undone["result"] == "needs_input"
+
+
+class _Sessions:
+    """tell() opens its own session. The test's session is that session."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        return self.session
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def test_a_background_save_is_one_line_and_a_reply_is_not_sent_again(db, at, nfake, monkeypatch):
+    """The line goes out once from the background save. A save already in the reply is not sent again."""
+    at("2026-10-14 13:00")
+    sent: list[str] = []
+
+    async def fake_send(sessions, host, roster, family_id, person, text, ref, buttons=None):
+        sent.append(text)
+        return True
+
+    monkeypatch.setattr("app.brain.wake._send", fake_send)
+    db.add(FamilyRoster(family_id=FAM, elder=MAA, members=[MAA, SON], updated_at=clock.now()))
+    await db.flush()
+    job = await jobs.create(db, family_id=FAM, subject_id=MAA["id"], requested_by=MAA["id"],
+                            ask={"items": [{"name": "roti", "quantity": 2, "unit": "piece"}]}, source_ref=None, channel="whatsapp")
+    job.state = "resolving"
+    out = await agent.run_background(db, job)
+    assert out["result"] == "saved" and out["notice"] == "pending" and out["say"].startswith("Saved:"), out
+    maker = _Sessions(db)
+    await agent.tell(maker, lambda fid: SimHost(), job, out)
+    await agent.tell(maker, lambda fid: SimHost(), job, {**out, "notice": "pending"})
+    assert len(sent) == 1 and sent[0].startswith("Saved:")
+    inline, _ = await call(db, "log_food", {"items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert inline["notice"] == "reply" and inline["say"].startswith("Saved:")
+    await agent.tell(maker, lambda fid: SimHost(), job, inline)
+    assert len(sent) == 1
+
+
+async def test_one_follow_up_after_a_save_and_a_stated_usual_is_learned(db, at, nfake):
+    at("2026-10-14 13:00")
+    water, _ = await call(db, "log_food", {"items": [{"name": "water", "quantity": 1, "unit": "glass"}]})
+    assert water["result"] == "saved" and "follow" not in water
+    plate, _ = await call(db, "log_food", {"items": [{"name": "chicken biryani", "quantity": 1, "unit": "plate"}]})
+    assert plate["result"] == "saved" and plate["follow"] == "How are you feeling after that?", plate
+    assert plate["say"].count("?") == 0 and plate["follow"].count("?") == 1
+    assert "never advice" in plate["follow_how"]
+    roti, _ = await call(db, "log_food", {"eaten_at": "2026-10-14T13:01:00+05:30",
+                                          "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
+    assert roti["follow"] == "Is this a usual one for you?"
+    noted, err = await call(db, "log_food", {"make_usual": True})
+    assert not err and noted["result"] == "noted", noted
+    fact = await store.active_fact(db, FAM, MAA["id"], nudge_hooks.USUAL_KEY)
+    assert fact and any(x.get("stated") and "Chapati" in x.get("name", "") for x in fact.value["items"])
+
+
+async def test_a_question_about_a_logged_food_uses_the_log(db, at, nfake):
+    at("2026-10-14 16:00")
+    saved, _ = await call(db, "log_food", {"items": [{"name": "tea", "quantity": 1, "unit": "cup"}]})
+    assert saved["result"] == "saved"
+    log, err = await call(db, "food_log", {"what": "entries"})
+    assert not err
+    tea = next(e for e in log["entries"] if "tea" in e["what"].lower())
+    assert tea["kcal"] and "sugar_g" in tea and "fat_g" in tea
+    assert "kcal" not in (await active(db))[0].nutrients
+    refused, err = await call(db, "web_search", {"question": "sugar and fat in the scoop"})
+    assert err and "food log" in refused["refused"]
+    known = [json.dumps({"entries": [tea]}), json.dumps({"sources": ["https://example.test"], "note": "From the internet. Tell it simply."})]
+    assert guards.logged_nutrient_problems("about 7 g fat, 15 g sugar", known)
+    assert guards.logged_nutrient_problems(guards.logged_nutrient_line(known), known) == []
+
+
+async def test_food_before_their_breakfast_stays_last_night(db, at, nfake):
+    at("2026-10-15 10:00")
+    from app.care import outcomes_learn
+
+    await outcomes_learn.save_learned(db, family_id=FAM, subject_id=MAA["id"], key="learned:nudges_meals_times",
+                                     value={"breakfast": "09:30"}, text="Usually has breakfast around 9:30 am.")
+    dinner, _ = await call(db, "log_food", {"eaten_at": "2026-10-14T21:00:00+05:30",
+                                            "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
+    assert dinner["result"] == "saved" and dinner["meal"] == "dinner"
+    snack, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-10-15T04:58:00+05:30",
+                                           "items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
+    assert snack["result"] == "saved" and snack["meal"] == "late_night", snack
+    assert not await nudge_hooks.meal_logged(db, FAM, MAA["id"], "breakfast", "2026-10-15")

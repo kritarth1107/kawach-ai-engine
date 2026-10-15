@@ -102,15 +102,16 @@ class Slot:
     day: str
 
 
-def place(at: datetime, *, dinner_saved: bool = False, only_water: bool = False) -> Slot:
+def place(at: datetime, *, dinner_saved: bool = False, only_water: bool = False, day_start: int = DAY_START) -> Slot:
     """The slot for a clock time. A named meal does not decide this; dinner_saved is whether that food-day already has a dinner.
 
-    Water never becomes a dinner. Before 06:00 it is late night. After 19:00, with no dinner yet, it is not called dinner.
+    Water never becomes a dinner. Before their day starts (their usual breakfast, else 06:00) it is last night.
+    After 19:00, with no dinner yet, water is not called dinner.
     """
     local = clock.ist(at)
     minute = local.hour * 60 + local.minute
     day = local.date()
-    if minute < DAY_START:
+    if minute < day_start:
         if dinner_saved or only_water:
             return Slot("late_night", day.isoformat())
         return Slot("dinner", (day - timedelta(days=1)).isoformat())
@@ -120,19 +121,22 @@ def place(at: datetime, *, dinner_saved: bool = False, only_water: bool = False)
         if dinner_saved:
             return Slot("after_dinner", day.isoformat())
         return Slot("dinner", day.isoformat())
-    if minute < 11 * 60:
+    # Their breakfast opens the day. When that is later than 11:00, the morning band moves with it.
+    breakfast_until = 11 * 60 if day_start <= 11 * 60 else min(day_start + 90, DINNER_FROM)
+    if minute < breakfast_until:
         return Slot("breakfast", day.isoformat())
     if minute < 15 * 60 + 30:
         return Slot("lunch", day.isoformat())
     return Slot("snack", day.isoformat())
 
 
-def resolve(at: datetime, *, dinner_saved: bool = False, only_water: bool = False, named: str | None = None) -> Slot:
-    """Night and late evening follow the clock. In the daytime a meal the brain named is kept."""
-    placed = place(at, dinner_saved=dinner_saved, only_water=only_water)
+def resolve(at: datetime, *, dinner_saved: bool = False, only_water: bool = False, named: str | None = None,
+            day_start: int = DAY_START) -> Slot:
+    """Before their day starts, and after 19:00, the clock wins. In the daytime a meal the brain named is kept."""
+    placed = place(at, dinner_saved=dinner_saved, only_water=only_water, day_start=day_start)
     local = clock.ist(at)
     minute = local.hour * 60 + local.minute
-    if minute < DAY_START or minute >= DINNER_FROM:
+    if minute < day_start or minute >= DINNER_FROM:
         return placed
     if named in ("breakfast", "lunch", "snack", "dinner", "other"):
         return Slot(named, placed.day)

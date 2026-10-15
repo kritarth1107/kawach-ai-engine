@@ -17,7 +17,7 @@ import os
 import uuid
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock, trace
@@ -138,6 +138,19 @@ def finish(job: NutritionJob, state: str, result: dict) -> None:
     job.state, job.result, job.needs, job.updated_at = state, result, None, clock.now()
 
 
+async def claim(session: AsyncSession, job: NutritionJob) -> bool:
+    """One saver for this meal. The loser does not save again and does not send a second line."""
+    if job.state == "saved":
+        return False
+    res = await session.execute(update(NutritionJob).where(
+        NutritionJob.id == job.id, NutritionJob.state.in_(("queued", "resolving", "needs_input"))
+    ).values(state="saving", updated_at=clock.now()))
+    if not getattr(res, "rowcount", 0):
+        return False
+    job.state = "saving"
+    return True
+
+
 def context_block(jobs: list[NutritionJob], names: dict) -> str:
     """For the brain's turn context: food questions waiting for an answer."""
     rows = [j for j in jobs if j.state == "needs_input" and j.needs]
@@ -203,13 +216,18 @@ async def sweep(sessions, host_for=None) -> dict:
 
     stats = {"resolved": 0, "expired": 0, "failed": 0}
     async with sessions() as session:
-        ids = list((await session.execute(select(NutritionJob.id).where(NutritionJob.state.in_(LIVE)).limit(100))).scalars())
+        ids = list((await session.execute(select(NutritionJob.id).where(or_(
+            NutritionJob.state.in_(LIVE), NutritionJob.state == "saving")).limit(100))).scalars())
     for jid in ids:
         try:
             async with sessions() as session:
                 job = await session.get(NutritionJob, jid, with_for_update=True, populate_existing=True)
-                if job is None or job.state not in LIVE:
+                if job is None or job.state not in (*LIVE, "saving"):
                     continue
+                if job.state == "saving":
+                    if job.updated_at > clock.now() - timedelta(seconds=60):
+                        continue  # a turn is in the middle of saving this meal
+                    job.state = "resolving"
                 if job.state == "needs_input":
                     if job.deadline_at > clock.now():
                         continue
@@ -217,8 +235,6 @@ async def sweep(sessions, host_for=None) -> dict:
                     await session.commit()
                     stats["expired"] += 1
                     continue
-                if job.updated_at > clock.now() - timedelta(seconds=5):
-                    continue  # the turn that made it may still be finishing it
                 if job.created_at < clock.now() - timedelta(hours=2):
                     # a look-up that never finished: kept the way an unanswered question is (never retried forever)
                     out = await agent.expire(session, job)
@@ -229,11 +245,39 @@ async def sweep(sessions, host_for=None) -> dict:
                     out = await agent.run_background(session, job)
                 await session.commit()
             stats["resolved"] += 1
-            if out and out.get("result") in ("saved", "needs_input"):
+            # A save made in the person's turn already has its line in that reply. Only a background save, or a question, is told.
+            if out and (out.get("notice") == "pending" or out.get("result") == "needs_input"):
                 await agent.tell(sessions, host_for, job, out)
             if out and out.get("refine"):
                 await agent.refine_saved(sessions, job.id)
         except Exception:  # noqa: BLE001 — one job must not stop the others
             logger.exception("nutrition job failed id=%s", jid)
             stats["failed"] += 1
+    await _tell_pending(sessions, host_for)
     return stats
+
+
+async def _tell_pending(sessions, host_for) -> None:
+    """A background save whose line did not go out. One more try; a sent line is not sent again."""
+    from app.nutrition import agent
+
+    since = clock.now() - timedelta(hours=2)
+    async with sessions() as session:
+        ids = list((await session.execute(select(NutritionJob.id).where(
+            NutritionJob.state == "saved", NutritionJob.updated_at > since,
+            or_(NutritionJob.result["notice"].astext == "pending",
+                NutritionJob.result["notice"].astext == "sending")).limit(50))).scalars())
+    for jid in ids:
+        try:
+            async with sessions() as session:
+                job = await session.get(NutritionJob, jid)
+                if job is None:
+                    continue
+                result = job.result or {}
+                if result.get("notice") == "sending" and job.updated_at > clock.now() - timedelta(seconds=60):
+                    continue
+                out = {"result": "saved", "notice": "pending", "say": result.get("say") or "", "today": result.get("today") or ""}
+            if out["say"]:
+                await agent.tell(sessions, host_for, job, out)
+        except Exception:  # noqa: BLE001
+            logger.exception("nutrition notice failed id=%s", jid)

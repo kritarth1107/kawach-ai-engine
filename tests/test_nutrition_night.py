@@ -49,6 +49,21 @@ def test_one_hundred_clock_cases_land_on_the_right_diary_slot():
             assert named.meal == meal and named.day == got.day
 
 
+def test_their_breakfast_time_opens_the_day():
+    """A 5 am snack is late night when they breakfast at 9:30. A late riser's first meal is breakfast, not lunch."""
+    early = datetime(2026, 10, 15, 4, 58, tzinfo=clock.IST)
+    start = 9 * 60 + 30
+    got = P.place(early, dinner_saved=True, day_start=start)
+    assert got.meal == "late_night" and got.day == "2026-10-15"
+    named = P.resolve(early, dinner_saved=True, named="breakfast", day_start=start)
+    assert named.meal == "late_night"
+    morning = datetime(2026, 10, 15, 8, 0, tzinfo=clock.IST)
+    assert P.place(morning, dinner_saved=True, day_start=start).meal == "late_night"
+    assert P.place(datetime(2026, 10, 15, 9, 40, tzinfo=clock.IST), dinner_saved=True, day_start=start).meal == "breakfast"
+    late = 13 * 60 + 30
+    assert P.place(datetime(2026, 10, 15, 14, 0, tzinfo=clock.IST), dinner_saved=True, day_start=late).meal == "breakfast"
+
+
 def test_water_at_night_is_not_a_dinner_and_not_breakfast():
     at = datetime(2026, 10, 15, 3, 0, tzinfo=clock.IST)
     got = P.place(at, dinner_saved=False, only_water=True)

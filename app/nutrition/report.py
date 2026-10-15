@@ -73,6 +73,16 @@ async def count_item(rows: list[NutritionEntry], item: str, *, essential: bool =
     return {"item": item, "count": round(count, 1), "entries": [f"{r.day} {entries.line(r)}" for r in hit][:20]}
 
 
+def _entry_numbers(nutrients: dict | None) -> dict:
+    """The numbers a question about a logged food is answered from. kcal is energy_kcal. A missing nutrient is left out, not shown as 0."""
+    n = nutrients or {}
+    out: dict = {"kcal": N.kcal(n), "protein_g": N.grams_of(n, "protein_g")}
+    for key in ("carbs_g", "sugar_g", "fat_g", "fibre_g", "sodium_mg"):
+        if key in n:
+            out[key] = N.grams_of(n, key)
+    return out
+
+
 async def for_brain(session: AsyncSession, family_id: str, subject_id: str, first: str, last: str, *, what: str, item: str | None,
                     name: str, essential: bool = True) -> dict:
     rows = await entries.between(session, family_id, subject_id, first, last)
@@ -81,9 +91,9 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
     days = entries.day_days(last, (datetime.fromisoformat(last) - datetime.fromisoformat(first)).days + 1)
     out: dict = {"who": name, "from": first, "to": last, "tracking": s["tracking"]}
     if what == "entries":
-        out["entries"] = [{"entry_id": str(r.id), "day": r.day, "time": clock.ist(r.eaten_at).strftime("%H:%M"), "meal": r.meal, "what": entries.line(r),
-                           "kcal": N.kcal(r.nutrients), "protein_g": N.grams_of(r.nutrients, "protein_g"), "confidence": r.confidence}
-                          for r in rows][:60]
+        out["entries"] = [{**_entry_numbers(r.nutrients), "entry_id": str(r.id), "day": r.day,
+                           "time": clock.ist(r.eaten_at).strftime("%H:%M"), "meal": r.meal, "what": entries.line(r),
+                           "confidence": r.confidence} for r in rows][:60]
     elif what == "counts":
         out["counts"] = entries.counters(rows, s)
         out["labels"] = {k: f"{v[0]} ({v[1]})" if v[1] else v[0] for k, v in entries.COUNTER_LABELS.items()}

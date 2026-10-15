@@ -853,7 +853,10 @@ def _food_day(v: str | None) -> str | None:
     "drink, and asks only when the amount changes the numbers (counted pieces, a plate, a katori). When their own logs show the "
     "same amount of that food at that meal, it saves that amount, says it is their usual, and does not look the food up again. "
     "usual=true means they want that learned meal, including what they have with it; never set it when they only say a meal is "
-    "done. Do not ask how many yourself "
+    "done. make_usual=true, with no items, means they said the meal just logged is their usual. When the result has follow, "
+    "ask that one question after the save line and nothing more: no second question, no advice. A question about the sugar, "
+    "fat, protein, calories or any other nutrient of food already logged is food_log (what=entries); the numbers there are "
+    "the only numbers. Do not ask how many yourself "
     "before the tool returns. A photo of their plate: from_photo=true (it is confirmed "
     "with them before saving). A photo of a pack's label: label_photo=true. Food that came from an order: from_order_task "
     "with consumed (yes / part / no) as they said; never log an order's food without their answer. Water: one item, unit glass "
@@ -892,6 +895,7 @@ def _food_day(v: str | None) -> str | None:
         "skipped": {"type": "boolean", "description": "They said they skipped this meal (give meal); nothing was eaten"},
         "usual": {"type": "boolean", "description": "They mean the meal or amount their own logs show they usually have. Never set this "
                   "when they only say a meal is done, or when they did not mean their usual."},
+        "make_usual": {"type": "boolean", "description": "They said the meal just logged is their usual. No items. Not for logging a new meal."},
     },
     [],
 )
@@ -906,7 +910,7 @@ async def log_food(ctx: TurnCtx, a: dict) -> dict:
     if not settings.tracked(s) and not a.get("answer_to"):
         raise ToolRefused(f"Food tracking is off for {_name_of(ctx, subject)}. Note the meal with log_event kind meal instead; turn tracking on "
                           "only if they ask (nutrition_settings).")
-    if not any(a.get(k) for k in ("items", "answer_to", "from_photo", "label_photo", "skipped", "consumed", "from_order_task", "usual")):
+    if not any(a.get(k) for k in ("items", "answer_to", "from_photo", "label_photo", "skipped", "consumed", "from_order_task", "usual", "make_usual")):
         raise ToolRefused("Give the items they ate (or from_photo / label_photo for a photo, skipped for a skipped meal).")
     out = await agent.handle(ctx.session, _food_who(ctx), a, subject_id=subject)
     if isinstance(out, dict) and out.get("result") == "saved":
@@ -918,8 +922,10 @@ async def log_food(ctx: TurnCtx, a: dict) -> dict:
 @tool(
     "food_log",
     "Read the food log: what someone ate, their totals against their targets, counts of an item, and their counters. Use it for "
-    "'how much protein today?', 'what did Maa eat?', 'how many eggs this week?', 'cups of tea today?', 'how much water?'. what: "
-    "totals (per day, with targets), entries (each item with its id: use these ids with change_food), counts (eggs, water "
+    "'how much protein today?', 'what did Maa eat?', 'how many eggs this week?', 'cups of tea today?', 'how much water?', and "
+    "for the sugar, fat, protein or calories of something already logged (what=entries: those numbers are the only numbers; "
+    "do not look them up on the web). what: "
+    "totals (per day, with targets), entries (each item with its id and its saved nutrients: use these ids with change_food), counts (eggs, water "
     "glasses, tea/coffee cups, sugar teaspoons, fruit, protein), item (how many of one food: give item).",
     {"for_whom": {"type": "string", "description": "Person id; leave out for the speaker's own"},
      "day": {"type": "string", "description": "today (default), yesterday or YYYY-MM-DD"},
@@ -3198,13 +3204,37 @@ async def find_lab_test(ctx: TurnCtx, a: dict) -> dict:
             "next": "Booking needs the family's login on the chosen lab's site; ask which one they want and tell the caregiver."}
 
 
+_NUTRIENT_WORDS = frozenset({"sugar", "fat", "protein", "calorie", "calories", "kcal", "carb", "carbs", "sodium", "fibre", "fiber"})
+
+
+def _asks_nutrient(question: str) -> bool:
+    """The brain's English question, not the person's words: is it asking for a nutrient number."""
+    return bool(_NUTRIENT_WORDS & {w.strip(".,?!") for w in (question or "").lower().split()})
+
+
+async def _logged_nutrient(ctx: TurnCtx, question: str) -> bool:
+    """True when they already have food logged today and the question asks for a nutrient of it."""
+    if not _asks_nutrient(question):
+        return False
+    from app.nutrition import entries as food_entries
+
+    day = clock.ist_day()
+    people = {p for p in (ctx.speaker.get("id"), ctx.elder_id) if p}
+    for person in people:
+        rows = await food_entries.between(ctx.session, ctx.family_id, person, day, day)
+        if any(r.kind == "food" and r.status == "active" for r in rows):
+            return True
+    return False
+
+
 @tool(
     "web_search",
     "Look something up on the internet when you need facts you do not have and cannot see: what a thing, food, plant or "
     "product is and what it is for; a place's hours or address; weather; festival or holiday dates; train timings; news; "
     "general health information (from reliable sites; never to change a medicine or dose). Ask one clear question in "
     "English. You get a short answer with sources: tell it simply in their language. Not for the family's own information "
-    "(memory and the care record) and not for prices or ordering (start_task).",
+    "(memory and the care record), not for the nutrients of food already in the food log (food_log what=entries), and not for "
+    "prices or ordering (start_task).",
     {"question": {"type": "string", "description": "One clear question in English, with the place when it matters (e.g. 'Raipur weather tomorrow')"}},
     ["question"],
 )
@@ -3214,6 +3244,9 @@ async def web_search(ctx: TurnCtx, a: dict) -> dict:
     q = str(a.get("question") or "").strip()
     if not q:
         raise ToolRefused("Ask one clear question.")
+    if await _logged_nutrient(ctx, q):
+        raise ToolRefused("That nutrient is already in the food log. Call food_log with what=entries and use those numbers. "
+                          "Do not look up nutrients of food already logged.")
     today = await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - timedelta(hours=24), kinds=["web_search"])
     if len(today) >= websearch.daily_limit():
         raise ToolRefused("Today's internet look-ups for this family are used up. Answer from what you know, and say plainly if you are not sure.")
