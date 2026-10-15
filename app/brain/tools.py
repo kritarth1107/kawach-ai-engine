@@ -55,6 +55,7 @@ class TurnCtx:
     situation: str = "chit_chat"  # learning: what kind of moment this is (app.learn.situations)
     playbook_version: int = 0
     arm: str = "live"
+    judge_band: str = ""  # sample | always | skip, set once per turn (app.quality.sample)
     channel: str = "whatsapp"  # whatsapp | dashboard: where a change came from, for memory history
     # Set only by the dashboard, after the caregiver confirmed in a dialog: an undo may then end or restart a medicine
     # at once. Never set from a model's tool arguments.
@@ -1953,7 +1954,18 @@ async def _grounded_send(ctx: TurnCtx, to: str, text: str) -> str:
     turn's tool results, never her own earlier messages. The first time, the message is sent back with the exact items; a
     second attempt to the same person loses those sentences instead, so a brief or an order update still goes."""
     from app.brain import grounding
+    from app.quality import sample
 
+    used = [a["tool"] for a in ctx.actions if a.get("ok")]
+    force = sample.always_live(voice_unsure=ctx.voice_unsure, alerts=bool(ctx.alerts), health=False, tools=used, situation=ctx.situation)
+    if force:
+        ctx.judge_band = sample.ALWAYS
+    elif ctx.judge_band == sample.SKIP:
+        return text
+    elif ctx.judge_band not in (sample.SAMPLE, sample.ALWAYS):
+        ctx.judge_band = sample.SAMPLE if await sample.ordinary_room(ctx.session, ctx.family_id) > 0 else sample.SKIP
+    if ctx.judge_band == sample.SKIP:
+        return text
     theirs = [t.text for t in await store.recent_turns(ctx.session, ctx.family_id, to, limit=20) if t.role == "user" and t.text]
     memory = [p for p in ctx.known[:5] if p]  # family block, record, turn context, dynamic block, this turn's message or prompt
     if ctx.prompt and ctx.prompt not in memory:
@@ -2223,7 +2235,8 @@ async def send_message(ctx: TurnCtx, a: dict) -> dict:
         await scoring.record(ctx.session, family_id=ctx.family_id, thread_id=a["to"], turn_id=turn_id,
                              kind="proactive" if ctx.is_system else "relay", situation=ctx.situation if ctx.is_system else "relay",
                              speaker_role=to_role, lang=situations.lang_of(ctx.profiles.get(a["to"])), user_text=why, text=a["text"],
-                             tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace or None)
+                             tools=["send_message"], playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace or None,
+                             judge_band=ctx.judge_band or None)
     except Exception:  # noqa: BLE001 — learning must never stop a message
         logger.exception("learning log failed (send_message)")
     if payload.get("voice"):

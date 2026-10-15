@@ -11,7 +11,8 @@
   reply after a correction and every message of hers that day, for each correction of the last 7 days. Score = held /
   corrections with messages to check that day.
 The overall number is the minimum of the three that have data (one failing area is never hidden by the others); a check
-with nothing to measure is "no data", never 100. The judge's pass rate on every reply ("replies") is stored beside them.
+with nothing to measure is "no data", never 100. The judge's pass rate on the day's sample of replies ("replies") is stored
+beside them, with how many were graded and how many were sent.
 """
 
 from __future__ import annotations
@@ -20,13 +21,14 @@ import asyncio
 import logging
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.care import naming as care_naming
 from app.care import rejected as care_rejected
 from app.care.models import CareFact, FamilyRoster, Turn
+from app.learn.models import ReplyLog
 from app.core import clock
 from app.quality import corrections, judge
 from app.quality.models import DailyScore, ReplyVerdict
@@ -222,7 +224,12 @@ async def family_checks(sessions: async_sessionmaker, family_id: str, day: str) 
         rfails = [{"family": family_id[:8], "person": names.get(v.thread_id, "")[:40].split(" ")[0], "what": ", ".join(v.issues or [])[:120],
                    "reply": v.reply_id, "words": "; ".join(w for i in (v.issues or []) for w in ((v.verdict or {}).get("issues") or {}).get(i, {}).get("words") or [])[:200]}
                   for v in vs if not v.passed]
-        await put(s, day, family_id, "replies", pct(passed, len(vs)), len(vs), rfails, {"num": passed})
+        sent = int((await s.execute(
+            select(func.count()).select_from(ReplyLog).where(
+                ReplyLog.family_id == family_id, ReplyLog.at >= start, ReplyLog.at < start + timedelta(days=1))
+        )).scalar_one() or 0)
+        await put(s, day, family_id, "replies", pct(passed, len(vs)), len(vs), rfails,
+                  {"num": passed, "sampled": len(vs), "sent": sent})
         await s.commit()
     out["corrections"] = {"num": held["num"], "den": held["den"], "errors": held["errors"]}
     out["replies"] = {"num": passed, "den": len(vs)}
@@ -257,6 +264,9 @@ async def finish(sessions: async_sessionmaker, host, day: str) -> dict:
             den = sum(int(r.n or 0) for r in rs)
             fails = [f for r in rs for f in (r.failures or [])]
             detail: dict = {"num": num, "families": len(rs), "errors": sum(int((r.detail or {}).get("errors") or 0) for r in rs)}
+            if check == "replies":
+                detail["sampled"] = den
+                detail["sent"] = sum(int((r.detail or {}).get("sent") or 0) for r in rs)
             if check == "reminders":
                 detail.update(meta)
                 detail["held"] = {k: sum(int(((r.detail or {}).get("held") or {}).get(k) or 0) for r in rs)

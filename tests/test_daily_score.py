@@ -77,9 +77,9 @@ async def fact(db, key, value, text, source="caregiver_said", by="c-ds", subject
                                       source_kind=source, stated_by=by)
 
 
-async def log_reply(db, text, *, to="e-ds", said="", trace=None, kind="reply"):
-    r = ReplyLog(family_id=FAM, thread_id=to, at=clock.now(), kind=kind, situation="chit_chat", speaker_role="elder", lang="latin-indic",
-                 user_text=said, text=text, text_len=len(text), tools=[], trace=trace or [])
+async def log_reply(db, text, *, to="e-ds", said="", trace=None, kind="reply", situation="chit_chat", tools=None):
+    r = ReplyLog(family_id=FAM, thread_id=to, at=clock.now(), kind=kind, situation=situation, speaker_role="elder", lang="latin-indic",
+                 user_text=said, text=text, text_len=len(text), tools=list(tools or []), trace=trace or [])
     db.add(r)
     await store.add_turn(db, family_id=FAM, thread_id=to, role="assistant", text=text)
     await db.flush()
@@ -136,7 +136,7 @@ async def test_judge_input_has_the_care_record_and_notes(db, at, sessions, fake_
     await db.commit()
     j = fake_judge(lambda s, u: verdict(wrong_name=["Maa"], made_up_fact=["Ishaan ne aaj phone kiya"]))
     out = await judge.judge_replies(sessions, FAM, "2026-10-05")
-    assert out == {"graded": 1, "failed": 1, "errors": 0, "of": 1}
+    assert out["graded"] == 1 and out["failed"] == 1 and out["errors"] == 0 and out["of"] == 1 and out["skipped"] == 0
     p = j.seen[0]
     assert "[medicine:metformin] Metformin 500 mg at 08:00" in p["system"]  # the care record as it stood
     assert "NEVER call them Maa" in p["system"] and "Her grandson Ishaan lives in Pune." in p["system"]  # naming and the notes
@@ -157,6 +157,24 @@ async def test_judge_input_has_the_care_record_and_notes(db, at, sessions, fake_
     assert any(f["key"] == "naming:address_as" and f["value"]["avoid"] == ["Maa"] for f in case.context["facts"])  # structured, to seed a family
     assert case.anonymised and "Kamla" not in ctx and "Ankit" not in ctx and "e-ds" not in ctx and "Ishaan" not in ctx  # real names and ids gone
     assert case.context["speaker"]["id"] == "p1" and case.message == "Subah ki goli le li"
+
+
+async def test_ordinary_replies_are_sampled_and_an_alert_is_always_graded(db, at, sessions, fake_judge, monkeypatch):
+    monkeypatch.setenv("JUDGE_PER_FAMILY", "2")
+    monkeypatch.setenv("JUDGE_DAILY_CAP", "90")
+    at("2026-10-05 10:00")
+    await roster(db)
+    for i in range(4):
+        await log_reply(db, f"Theek hai {i}")
+    await log_reply(db, "Maine unhe bata diya", situation="emergency", tools=["alert_caregiver"])
+    await db.commit()
+    fake_judge(lambda s, u: verdict())
+    out = await judge.judge_replies(sessions, FAM, "2026-10-05")
+    assert out["graded"] == 3 and out["skipped"] == 2 and out["failed"] == 0
+    bands = {r.text: r.judge_band for r in (await db.execute(select(ReplyLog))).scalars()}
+    assert bands["Maine unhe bata diya"] == "always"
+    assert sum(1 for b in bands.values() if b == "sample") == 2
+    assert sum(1 for b in bands.values() if b == "skip") == 2
 
 
 async def test_unparseable_judge_answer_is_not_a_pass(db, at, sessions, fake_judge):

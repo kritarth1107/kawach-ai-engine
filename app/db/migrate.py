@@ -164,6 +164,8 @@ COLUMNS = [  # every one is required: the models select it
     ("care_facts", "pinned_by", "VARCHAR(64)"),
     # reply speed: where a turn's time went (lock wait, context, each model and tool call, checks, after the reply)
     ("trace_turns", "timing", "JSONB"),
+    # which replies the judge spends on (sample | always | skip)
+    ("reply_log", "judge_band", "VARCHAR(12)"),
 ]
 
 INDEXES = [

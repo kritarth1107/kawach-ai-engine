@@ -54,7 +54,7 @@ NO_REPLY_EXPECTED = {"thanks", "emergency", "dose_report", "vital_report"}
 
 async def record(session: AsyncSession, *, family_id: str, thread_id: str, turn_id: int | None, kind: str, situation: str,
                  speaker_role: str, lang: str, user_text: str, text: str, tools: list[str], playbook_version: int = 0, arm: str = "live",
-                 trace: list | None = None) -> None:
+                 trace: list | None = None, judge_band: str | None = None) -> None:
     """Called for every message Saheli sends (reply or proactive). Cheap: one insert, no reads."""
     if not text or text.strip().lower() == "none":
         return
@@ -63,6 +63,7 @@ async def record(session: AsyncSession, *, family_id: str, thread_id: str, turn_
         family_id=family_id, thread_id=thread_id, turn_id=turn_id, at=now, kind=kind, situation=situation, speaker_role=speaker_role,
         lang=lang, user_text=(user_text or "")[:4000], text=text[:2000], text_len=len(text), tools=list(tools or [])[:12],
         playbook_version=playbook_version, arm=arm, sent_hour=clock.ist(now).hour, trace=trace,
+        judge_band=judge_band or None,
     ))
 
 

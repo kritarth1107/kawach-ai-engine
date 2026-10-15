@@ -963,6 +963,26 @@ async def run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest) -> T
     return result
 
 
+async def _judge_claims(ctx: tools.TurnCtx, draft: str, *, memory: str, theirs: list[str], tool_texts: list[str], situation: str,
+                        asked: bool = False) -> list:
+    """The live judge, on this family's sample for the day and on every crisis, alert, or unsure voice note."""
+    from app.quality import sample
+
+    used = [a["tool"] for a in ctx.actions if a.get("ok")]
+    force = sample.always_live(voice_unsure=ctx.voice_unsure, alerts=bool(ctx.alerts), health=health_turn(ctx.actions),
+                               tools=used, situation=situation)
+    if force:
+        ctx.judge_band = sample.ALWAYS
+    elif ctx.judge_band == sample.SKIP:
+        return []
+    elif ctx.judge_band not in (sample.SAMPLE, sample.ALWAYS):
+        ctx.judge_band = sample.SAMPLE if await sample.ordinary_room(ctx.session, ctx.family_id) > 0 else sample.SKIP
+    if ctx.judge_band == sample.SKIP:
+        return []
+    return await grounding.check(draft, memory=memory, their_messages=theirs, tool_results=tool_texts, actions=True,
+                                 doctor_note=health_turn(ctx.actions), always=asked)
+
+
 async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, take_lock: bool = True) -> TurnResult:
     started = time.monotonic()
     kind = "system" if req.speaker.get("role") == "system" else "message"
@@ -1226,9 +1246,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             claims: list = []
             if not problems:
                 asked = "?" in (req.text or "") or "？" in (req.text or "")
-                claims = await grounding.check(text_now, memory=grounding_memory, their_messages=their_msgs,
-                                               tool_results=tool_texts, actions=True, doctor_note=health_turn(ctx.actions),
-                                               always=asked)
+                claims = await _judge_claims(ctx, text_now, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts,
+                                             situation=situation, asked=asked)
                 problems += grounding.problems(claims)
             trace.note_step("check", (time.monotonic() - checked_at) * 1000)
             if not problems:
@@ -1331,8 +1350,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
         # and the tools do not support: those sentences are removed (trust plan C4).
         checked_at = time.monotonic()
-        still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
-                                      doctor_note=health_turn(ctx.actions))
+        still = await _judge_claims(ctx, final, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts, situation=situation)
         trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
@@ -1365,8 +1383,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         except router.AllModelsFailed:
             final = ""
         if final and final != "none":
-            still = await grounding.check(final, memory=grounding_memory, their_messages=their_msgs, tool_results=tool_texts, actions=True,
-                                          doctor_note=health_turn(ctx.actions))
+            still = await _judge_claims(ctx, final, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts, situation=situation)
             if still:
                 final = grounding.strip(final, still) or ""
         if _only_ack(final, profile):
@@ -1472,7 +1489,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
     )
     if not is_system:
-        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final))
+        await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final), guarded=guarded)
     # Folding the thread is another model call. A turn that is already slow sends the reply first; the next one folds.
     if data.history_full and (time.monotonic() - started) < 8:
         await maybe_compact(session, req.family_id, req.speaker["id"])
@@ -1542,16 +1559,19 @@ def turn_trace(msgs: list[dict], start: int, final: str) -> list[dict]:
 
 
 async def _learn_from_turn(session: AsyncSession, req: TurnRequest, ctx: tools.TurnCtx, final: str, turn_id: int | None, role: str, lang: str,
-                           trace: list | None = None) -> None:
+                           trace: list | None = None, guarded: bool = False) -> None:
     """Log the reply for scoring, and note anything asked that Saheli could not do. Never costs the person their reply."""
     from app.learn import gaps, scoring, situations
 
     try:
         used = [a["tool"] for a in ctx.actions if a.get("ok")]
         ctx.situation = situations.tag(text=req.text, role=role, tools=used)
+        band = ctx.judge_band or None
+        if guarded or ctx.voice_unsure or ctx.alerts or ctx.situation == "emergency" or "alert_caregiver" in used:
+            band = "always"
         await scoring.record(session, family_id=req.family_id, thread_id=req.speaker["id"], turn_id=turn_id, kind="reply",
                              situation=ctx.situation, speaker_role=role, lang=lang, user_text=req.text, text=final, tools=used,
-                             playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace)
+                             playbook_version=ctx.playbook_version, arm=ctx.arm, trace=trace, judge_band=band)
         how = gaps.detect(user_text=req.text, reply=final, actions=ctx.actions)
         if how:
             names = [req.elder.get("name", "")] + [m.get("name", "") for m in req.members]
