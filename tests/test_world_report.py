@@ -144,6 +144,10 @@ def test_the_cap_keeps_a_rotating_slice_across_languages():
     assert {fams[int(fid[1:])]["language"] for fid, _qs in ((fid, qs) for fid, qs in thin.items()) for _ in _qs} >= {"hi", "ta"}
     other = probes.fit_to_cap(picked, fams, cap=probes.EST_INR_PER_PROBE * 1.5 * 4, day=date(2026, 10, 16))
     assert {q["id"] for v in thin.values() for q in v} != {q["id"] for v in other.values() for q in v}
+    # a family outside tonight's slice has no probes and is skipped, never a KeyError (nightly 16 Oct)
+    left_out = [f for f in fams if f["id"] not in thin]
+    assert left_out and all(probes.probes_of(thin, f) == [] for f in left_out)
+    assert sum(len(probes.probes_of(thin, f)) for f in fams) == 4
 
 
 def test_tonight_rotates_every_probe_and_samples_crisis_probes(monkeypatch):

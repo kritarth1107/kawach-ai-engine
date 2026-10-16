@@ -91,6 +91,12 @@ def fit_to_cap(picked: dict[str, list[dict]], families: list[dict], cap: float, 
     return dict(out)
 
 
+def probes_of(picked: dict[str, list[dict]], fam: dict) -> list[dict]:
+    """This family's probes tonight. fit_to_cap keeps only the families in the slice it can pay for, so a family may
+    have none (nightly 16 Oct: KeyError 'w0001' failed all four shards)."""
+    return picked.get(fam["id"]) or []
+
+
 def tonight(families: list[dict], every: int, day: date | None = None) -> dict[str, list[dict]]:
     """{family id: tonight's probes}: probes whose rotation bucket is tonight's, crisis probes only as eval.sensitive allows
     (paused, then a nightly sample; KP 14 Oct after Google's 403 on the test project)."""
@@ -335,8 +341,11 @@ async def main_async(ids: list[str], parallel: int, url: str, cap: float, every:
     t0 = time.monotonic()
 
     async def one(f: dict) -> None:
+        mine = probes_of(picked, f)
+        if not mine:
+            return
         async with sem:
-            await run_family(sessions, f, rows, cap, picked[f["id"]])
+            await run_family(sessions, f, rows, cap, mine)
             n = sum(1 for r in rows if "pass" in r)
             if n and n % 50 < len(f["probes"]):
                 print(f"  {n} probes, {sum(r['pass'] for r in rows if 'pass' in r)} passed, ₹{spend.process_spent():.0f}, {time.monotonic() - t0:.0f}s")
