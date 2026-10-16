@@ -32,7 +32,7 @@ def order_subject(ctx: TurnCtx, for_whom: str | None) -> str:
 async def asks_from(ctx: TurnCtx, speaker: str, kinds: list[str], since) -> list:
     """Asks this person was given, on whoever the order is for. They used to sit on the care recipient, so a caregiver's
     own order showed up in the care recipient's daily brief."""
-    people = [p.get("id") for p in [ctx.elder, *ctx.members] if p.get("id")]
+    people = [str(p.get("id")) for p in [ctx.elder, *ctx.members] if p.get("id")]
     found = []
     for pid in dict.fromkeys(people):
         found.extend(await store.events(ctx.session, ctx.family_id, pid, since=since, kinds=kinds))
