@@ -59,7 +59,7 @@ MUTATIONS = [
              "return problems(text, family=True)", ["tests/test_skill_safety.py"]),
     Mutation("skill-render-recheck", "app/care/skillbook.py",
              "if not problems(s.body, family=True) and not conflicts_with(facts, s.body)]", "]", ["tests/test_skill_safety.py"]),
-    Mutation("skills-in-emergencies", "app/brain/loop.py",
+    Mutation("skills-in-emergencies", "app/brain/context.py",
              '(to.get("name") or "").split(" ")[0], safety=safety)', '(to.get("name") or "").split(" ")[0])',
              ["tests/test_skill_safety.py"]),
     Mutation("viewer-sets-skills", "app/brain/tools/base.py",
@@ -83,7 +83,7 @@ MUTATIONS = [
     # voice notes
     Mutation("unsure-voice-changes-dose", "app/brain/tools/memory.py",
              "force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,", "force_confirm=False,", ["tests/test_voice.py"]),
-    Mutation("voice-note-not-flagged", "app/brain/loop.py", "        voice_block(req),\n", "", ["tests/test_voice.py"]),
+    Mutation("voice-note-not-flagged", "app/brain/context.py", "        voice_block(req),\n", "", ["tests/test_voice.py"]),
     # backups
     Mutation("restore-over-data", "backup/backup.py",
              "        if not overwrite and has_data(name, target):", "        if False:", ["tests/test_backup.py"]),
