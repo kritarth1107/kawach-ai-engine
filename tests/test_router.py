@@ -222,6 +222,52 @@ async def test_a_mumbai_timeout_stays_in_india_unless_the_flag_is_on(monkeypatch
         router._providers.pop("gemini", None)
 
 
+async def test_a_slow_mumbai_reply_also_goes_to_singapore_and_the_first_answer_wins(monkeypatch):
+    """Live 16 Oct 16:17-16:45: Mumbai brain calls sat until the 20 s cap before Singapore answered in 4-13 s, and the
+    person got "one moment, still on it". With the flag on, a reply still running after BRAIN_SG_HEDGE_AFTER_S also goes
+    to Singapore once; whichever answers first is the reply. Other roles and a quick Mumbai call never go."""
+    import asyncio
+
+    seen: list[str] = []
+    cancelled: list[str] = []
+
+    class Places:
+        def __init__(self, mumbai_s: float):
+            self.mumbai_s = mumbai_s
+
+        async def complete(self, route, **kw):
+            seen.append(route.location)
+            try:
+                await asyncio.sleep(self.mumbai_s if route.location == "asia-south1" else 0.05)
+            except asyncio.CancelledError:
+                cancelled.append(route.location)
+                raise
+            return LLMReply(text=f"from {route.location}", tool_calls=[], model=route.model)
+
+    route = Route("gemini", "gemini-3.5-flash", "asia-south1")
+    monkeypatch.setenv("GEMINI_SG_FALLBACK", "on")
+    monkeypatch.setenv("BRAIN_SG_HEDGE_AFTER_S", "0.1")
+    try:
+        router.register_provider("gemini", Places(mumbai_s=2.0))
+        out = await router.complete("brain", system_stable="s", messages=MSG, timeout_s=5, routes=[route])
+        await asyncio.sleep(0.01)
+        assert out.text == "from asia-southeast1" and seen == ["asia-south1", "asia-southeast1"] and cancelled == ["asia-south1"]
+        seen.clear()
+        router.register_provider("gemini", Places(mumbai_s=0.01))
+        out = await router.complete("brain", system_stable="s", messages=MSG, timeout_s=5, routes=[route])
+        assert out.text == "from asia-south1" and seen == ["asia-south1"]
+        seen.clear()
+        router.register_provider("gemini", Places(mumbai_s=0.3))
+        out = await router.complete("judge_fast", system_stable="s", messages=MSG, timeout_s=5, routes=[route])
+        assert out.text == "from asia-south1" and seen == ["asia-south1"]
+        seen.clear()
+        monkeypatch.setenv("GEMINI_SG_FALLBACK", "off")
+        out = await router.complete("brain", system_stable="s", messages=MSG, timeout_s=5, routes=[route])
+        assert out.text == "from asia-south1" and seen == ["asia-south1"]
+    finally:
+        router._providers.pop("gemini", None)
+
+
 async def test_a_mumbai_429_overflows_once_and_is_counted_outside_india(monkeypatch, capsys):
     monkeypatch.setenv("GEMINI_SG_FALLBACK", "on")
     seen: list[str] = []

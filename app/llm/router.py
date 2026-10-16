@@ -277,10 +277,14 @@ async def complete(
         return reply
 
     async def first_of(route: Route) -> LLMReply:
-        """The call, and when it is slow the same request once more on the same model: the first answer wins and the other
-        is cancelled. Google's shared capacity has a long tail (live 13 Oct: one brain call is ~4 s at p50 but 12-40 s now
-        and then); the same request is no different an answer, only sooner."""
-        after = hedge_after(role)
+        """The call, and when it is slow the same request once more: the first answer wins and the other is cancelled.
+        Google's shared capacity has a long tail (live 13 Oct: one brain call is ~4 s at p50 but 12-40 s now and then;
+        16 Oct afternoon: Mumbai brain calls sat until the 20 s cap, then Singapore answered in 4-13 s). With the
+        Singapore flag on, the copy goes to Singapore (another capacity pool, so it does not crowd Mumbai) and counts as
+        this request's one Singapore call; otherwise it is the same route, when BRAIN_HEDGE_AFTER_S asks for it."""
+        nonlocal tried_sg
+        sg = _sg_route(route) if not tried_sg else None
+        after = sg_hedge_after(role) if sg is not None else hedge_after(role)
         if not after or after >= timeout_s:
             return await call(route)
         tasks = [asyncio.ensure_future(call(route))]
@@ -288,8 +292,10 @@ async def complete(
             done, _ = await asyncio.wait(tasks, timeout=after)
             if done:
                 return tasks[0].result()
-            logger.warning("llm_hedge role=%s model=%s after=%.1fs", role, route.key, after)
-            tasks.append(asyncio.ensure_future(call(route)))
+            logger.warning("llm_hedge role=%s model=%s to=%s after=%.1fs", role, route.key, (sg or route).key, after)
+            if sg is not None:
+                tried_sg = True
+            tasks.append(asyncio.ensure_future(call(sg or route)))
             pending: set = set(tasks)
             error: BaseException | None = None
             while pending:
@@ -435,6 +441,17 @@ def hedge_after(role: str) -> float:
         return max(0.0, float(os.getenv("BRAIN_HEDGE_AFTER_S", str(HEDGE_DEFAULT_S))))
     except ValueError:
         return HEDGE_DEFAULT_S
+
+
+def sg_hedge_after(role: str) -> float:
+    """Seconds after which a slow Mumbai reply call also goes to Singapore (0: never). Only Saheli's own replies, and only
+    with GEMINI_SG_FALLBACK on. A Mumbai 429 does not pause it: Singapore is a different pool."""
+    if role not in ("brain", "brain_hard") or not sg_enabled():
+        return 0.0
+    try:
+        return max(0.0, float(os.getenv("BRAIN_SG_HEDGE_AFTER_S", "7")))
+    except ValueError:
+        return 7.0
 
 
 def new_call_id() -> str:
