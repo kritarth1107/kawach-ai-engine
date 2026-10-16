@@ -10,6 +10,16 @@ from app.llm.providers import gemini
 from app.llm.router import LLMReply, Route, ToolSpec
 
 
+def test_every_call_starts_with_the_same_tool_prefix():
+    """A running task only adds tools after the ones every call already sends."""
+    cold = [t.name for t in tools.specs_for()]
+    with_task = [t.name for t in tools.specs_for(open_tasks=True)]
+    with_system = [t.name for t in tools.specs_for(system=True)]
+    assert with_task[: len(cold)] == cold
+    assert with_system[: len(cold)] == cold
+    assert with_task[len(cold):] and "task_input" in with_task[len(cold):]
+
+
 def test_a_cold_chat_keeps_care_and_orders_and_leaves_a_running_task(monkeypatch):
     monkeypatch.setenv("LLM_PRICES_INR", '{"gemini-3.5-flash":[64,383]}')
     cold = {t.name for t in tools.specs_for()}
@@ -198,6 +208,33 @@ async def test_a_cache_vertex_no_longer_serves_is_dropped_and_the_call_goes_unca
     assert isinstance(reply, LLMReply)
     assert seen == ["cachedContents/gone", None]
     assert provider._prefix["k"][0] == ""
+
+
+@pytest.mark.asyncio
+async def test_an_uncached_call_keeps_the_family_in_the_system_instruction(monkeypatch):
+    """Moving the family record into the user part dropped replay cases. It stays after the persona."""
+    monkeypatch.delenv("GEMINI_EXPLICIT_CACHE", raising=False)
+    gemini._gate = None
+    provider = gemini.GeminiProvider()
+    seen = {}
+
+    class _Models:
+        async def generate_content(self, *, model, contents, config):
+            seen["config"] = config
+            seen["contents"] = contents
+            return _Resp()
+
+    monkeypatch.setattr(provider, "_client", lambda location: _client_with(_Models()))
+    route = Route(provider="gemini", model="gemini-3.5-flash", location="asia-south1")
+    await provider.complete(
+        route, system_stable=["PERSONA", "FAMILY"], system_dynamic="NOW",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        tools=[ToolSpec("remember", "save", {"type": "object"})], max_tokens=20, effort="low",
+    )
+    text = seen["config"].system_instruction
+    assert text.startswith("PERSONA") and "FAMILY" in text and "NOW" in text
+    assert seen["config"].cached_content is None
+    assert "FAMILY" not in (seen["contents"][0].parts[0].text or "")
 
 
 def test_the_prefix_cache_is_off_unless_turned_on(monkeypatch):

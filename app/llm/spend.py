@@ -185,6 +185,7 @@ async def record(role: str, model: str, usage: dict, *, extra_inr: float = 0.0) 
         total, at = _cache[day]
         _cache[day] = (total + inr, at)
     trace.note_spend(role, model, inr, int(usage.get("in") or 0), tokens_out)
+    trace.note_cache(int(usage.get("cache_read") or 0), int(usage.get("in") or 0))
     if _sessions is not None:
         # Batched: model calls add to a pending row; one write every few seconds carries them all.
         p = _unsaved[(day, role, model)]

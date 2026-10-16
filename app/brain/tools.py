@@ -56,6 +56,8 @@ class TurnCtx:
     playbook_version: int = 0
     arm: str = "live"
     judge_band: str = ""  # sample | always | skip, set once per turn (app.quality.sample)
+    judged_text: str = ""  # the draft already sent to the live judge; the same words are not sent again
+    judged_claims: list = field(default_factory=list)
     channel: str = "whatsapp"  # whatsapp | dashboard: where a change came from, for memory history
     # Set only by the dashboard, after the caregiver confirmed in a dialog: an undo may then end or restart a medicine
     # at once. Never set from a model's tool arguments.
@@ -200,7 +202,12 @@ def specs_for(*, open_tasks: bool = False, system: bool = False) -> list[ToolSpe
         skip -= _WHEN_TASK
     if system:
         skip -= _WHEN_SYSTEM
-    return [spec for spec, _ in _TOOLS.values() if spec.name not in skip]
+    # Always-on tools first, in one order, so every call shares that prefix. A running task or a scheduled turn
+    # only adds tools after it. Gemini's implicit cache is a repeated prefix; a tool inserted in the middle breaks it.
+    later = _WHEN_TASK | _WHEN_SYSTEM
+    rows = [spec for spec, _ in _TOOLS.values() if spec.name not in skip]
+    rows.sort(key=lambda s: (s.name in later, s.name))
+    return rows
 
 
 def arg_problems(schema: dict, args: Any) -> list[str]:
