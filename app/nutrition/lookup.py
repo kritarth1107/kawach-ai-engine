@@ -213,11 +213,14 @@ Return only JSON, nothing else:
 
 ESTIMATE_PROMPT = """You estimate the nutrition of a food eaten in India when no published value was found.
 
-FOODS is every food in the meal that has no published value. Build each from its usual recipe and ingredients (and the
-ingredients given, if any). Give values per 100 g as eaten, and the usual grams of the units people use for it in Indian
-homes. Leave out nutrients you cannot estimate. A medicine or a supplement is not food: for that item return only
-{"i": 0, "medicine": true}. If one of that food's candidates is the same food, return only {"i": 0, "match": "that id"}.
-A pack you cannot identify returns {"i": 0, "needs": "label"}. When several versions are common, return the usual one
+FOODS is every food in the meal that has no published value. Estimate the food they named, as named. Do not turn it into
+a different food or a different preparation: processed is not dried, a named colour or variety stays that one, raw is not
+cooked. Do not add oil, ghee, butter or sugar they did not name. A plain fruit, nut, milk or drink is that food, with no
+cooking fat and no recipe around it. A dish is its usual recipe only when they named a dish. If you know the IFCT 2017
+per 100 g for this exact food, use that. Give values per 100 g as eaten, and the usual grams of the units people use for
+it in Indian homes. Leave out nutrients you cannot estimate. A medicine or a supplement is not food: for that item return
+only {"i": 0, "medicine": true}. If one of that food's candidates is the same food, return only {"i": 0, "match": "that id"}.
+A pack you cannot identify returns {"i": 0, "needs": "label"}. When they did not say which version, return the usual one
 with "assumed": true. A home recipe with no usual amounts returns {"i": 0, "kind": "recipe"}.
 
 Return only JSON: {"items": [{"i": 0}]} and each item has this shape plus its i:
@@ -344,7 +347,9 @@ def _food_from_json(d, *, source: str, urls: list[str] | None = None) -> dict | 
 
 
 def _describe(item: dict, canonical: str | None) -> str:
-    bits = [canonical or item.get("name") or ""]
+    # What they named, not a different food the estimate invented (processed apricot is not dried apricot).
+    said = str(item.get("name") or "").strip()
+    bits = [said or (canonical or "")]
     if item.get("brand"):
         bits.append(f"brand {item['brand']}")
     if item.get("restaurant"):

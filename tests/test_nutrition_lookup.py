@@ -135,3 +135,7 @@ async def test_a_blank_photo_is_read_again(monkeypatch):
     reading = await vision.read_meal([{"mime": "image/jpeg", "data": "AAAA"}])
     assert calls["n"] == 2 and reading["items"][0]["name"] == "jalebi" and reading["items"][0]["also"] == "imarti"
     assert "or it might be imarti" in vision.describe(reading)
+
+
+def test_a_search_uses_the_food_they_named():
+    assert lookup._describe({"name": "Apricot, processed"}, "Dried apricot") == "Apricot, processed"
