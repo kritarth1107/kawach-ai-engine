@@ -61,35 +61,9 @@ jobs:
       - name: Types (errors may only go down; scripts/pyright_baseline.json)
         run: python scripts/pyright_gate.py
 
-  nightly-gate:
-    # founder decision D8: no engine deploy while the latest full nightly failed, except the fix ([fixes-nightly]) or the
-    # founder's override (label nightly-override on its pull request, or override_nightly on a manual run by the founder)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      pull-requests: read
-      issues: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Latest nightly
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          OVERRIDE_NIGHTLY: ${{ github.event.inputs.override_nightly }}
-        run: python3 scripts/nightly_gate.py
-
-  replay:
-    # trust plan C3: every fixed replay case on real Gemini (sunny-ship); one that fails 2 of 3 blocks the deploy
-    needs: [test, lint]
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/replay.yml
-    secrets: inherit
-
   deploy:
-    needs: [test, lint, nightly-gate, replay]
+    # This workflow stays disabled. GitHub no longer runs the nightly gate or the paid replay.
+    needs: [test, lint]
     runs-on: ubuntu-latest
     permissions:
       contents: read

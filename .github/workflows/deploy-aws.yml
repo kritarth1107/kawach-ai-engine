@@ -58,33 +58,8 @@ jobs:
       - run: ruff check app eval tests
       - run: python scripts/pyright_gate.py
 
-  nightly-gate:
-    # A red Bedrock night blocks the deploy. A night that never reached the model exits 0 (unavailable), so it does not.
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-      pull-requests: read
-      issues: read
-    steps:
-      - uses: actions/checkout@v4
-      - name: Latest nightly
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          OVERRIDE_NIGHTLY: ${{ github.event.inputs.override_nightly }}
-        run: python3 scripts/nightly_gate.py
-
-  replay:
-    needs: [test, lint]
-    permissions:
-      contents: read
-      id-token: write
-    uses: ./.github/workflows/replay.yml
-    secrets: inherit
-
   deploy:
-    needs: [test, lint, nightly-gate, replay]
+    needs: [test, lint]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,6 +83,12 @@ jobs:
           printf 'FROM app:build\nUSER root\nCOPY --chmod=644 rds-ca.pem /etc/ssl/certs/rds-global-bundle.pem\nUSER %s\n' "$user" > /tmp/ca-wrap/Dockerfile
           docker build -t "$IMAGE" /tmp/ca-wrap
           docker push "$IMAGE"
+      - name: Saheli check before the service moves
+        env:
+          IMAGE: ${{ env.ECR }}:${{ github.sha }}
+          OVERRIDE: ${{ github.event.inputs.override_nightly }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: bash scripts/saheli_check.sh
       - name: Roll the live service (image only)
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
