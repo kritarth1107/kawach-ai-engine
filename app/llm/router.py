@@ -240,20 +240,29 @@ async def complete(
 
     async def call(route: Route) -> LLMReply:
         t0 = time.monotonic()
-        try:
-            reply = await asyncio.wait_for(
-                _provider(route.provider).complete(
-                    route,
-                    system_stable=[scrub(b) for b in stable if b],
-                    system_dynamic=scrub(system_dynamic),
-                    messages=messages,
-                    tools=tools or [],
-                    max_tokens=max_tokens,
-                    effort=effort,
-                ),
-                timeout=timeout_s,
+        # wait_for waits until a cancelled call actually stops. A Vertex request that never comes back, and does not
+        # notice the cancellation, held the whole caller: recall on 16 Oct sat for the rest of its 120 minutes after
+        # two extract calls and wrote nothing. asyncio.wait returns at the timeout either way. The request may still
+        # be in flight (and may keep one Gemini slot until it ends); this caller does not.
+        work = asyncio.ensure_future(
+            _provider(route.provider).complete(
+                route,
+                system_stable=[scrub(b) for b in stable if b],
+                system_dynamic=scrub(system_dynamic),
+                messages=messages,
+                tools=tools or [],
+                max_tokens=max_tokens,
+                effort=effort,
             )
+        )
+        try:
+            done, _pending = await asyncio.wait({work}, timeout=timeout_s)
+            if work not in done:
+                work.cancel()
+                raise TimeoutError(f"{route.key} still running after {timeout_s:.0f}s")
+            reply = work.result()
         except asyncio.CancelledError:
+            work.cancel()
             raise
         except Exception as exc:
             if route.provider == "gemini":

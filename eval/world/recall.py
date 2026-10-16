@@ -119,7 +119,7 @@ async def seed_history(session, fam: dict) -> int:
     return n
 
 
-async def run_family(sessions: async_sessionmaker, fam: dict, cap: float) -> tuple[list[dict], dict]:
+async def run_family(sessions: async_sessionmaker, fam: dict, cap: float, deadline: float | None = None) -> tuple[list[dict], dict]:
     from app.brain.loop import TurnRequest, run_turn
     from app.care import store
     from app.care.extract import extract_family
@@ -136,6 +136,9 @@ async def run_family(sessions: async_sessionmaker, fam: dict, cap: float) -> tup
         await s.commit()
     clock.set_now(ist(TODAY.isoformat(), "02:00"))
     for _ in range(12):  # the nightly re-read over the chats, in batches
+        if deadline is not None and time.monotonic() >= deadline:
+            print(f"recall {fam['id']}: time budget reached during the re-read", flush=True)
+            break
         if spend.process_spent() >= cap:
             print(f"::error::recall spend cap ₹{cap:.0f} reached during the re-read (spent ₹{spend.process_spent():.0f})", flush=True)
             break
@@ -149,6 +152,9 @@ async def run_family(sessions: async_sessionmaker, fam: dict, cap: float) -> tup
     host = host_for_family(fam)
     asked = []
     for i, z in enumerate(fam["story"]["quiz"]):
+        if deadline is not None and time.monotonic() >= deadline:
+            rows.append({"family": fam["id"], "quiz": z["id"], "skipped": "time"})
+            continue
         if spend.process_spent() >= cap:
             rows.append({"family": fam["id"], "quiz": z["id"], "skipped": "budget"})
             continue
@@ -207,7 +213,9 @@ async def main_async(ids: list[str], n: int, parallel: int, url: str, cap: float
     afford = max(1, int(cap // est)) if cap > 0 and est > 0 else n
     n = min(n, afford)
     fams = tonight_families([f for f in world if f["id"] in set(ids)], n)
-    print(f"recall: {len(fams)} story families tonight, cap ₹{cap:.0f}", flush=True)
+    budget_s = float(os.getenv("RECALL_BUDGET_S", "5400"))  # inside the job's 120 minutes, so the result is written
+    deadline = time.monotonic() + budget_s
+    print(f"recall: {len(fams)} story families tonight, cap ₹{cap:.0f}, budget {budget_s / 60:.0f} min", flush=True)
     rows: list[dict] = []
     fam_meta: list[dict] = []
     sem = asyncio.Semaphore(parallel)
@@ -215,12 +223,19 @@ async def main_async(ids: list[str], n: int, parallel: int, url: str, cap: float
 
     async def one(f: dict) -> None:
         async with sem:
+            if time.monotonic() >= deadline:
+                rows.append({"family": f["id"], "quiz": "extract", "skipped": "time"})
+                fam_meta.append({"family": f["id"], "skipped": "time"})
+                print(f"recall {f['id']}: skipped, time budget already gone", flush=True)
+                return
+            print(f"recall {f['id']}: start", flush=True)
             try:
-                r, m = await run_family(sessions, f, cap)
+                r, m = await run_family(sessions, f, cap, deadline)
             except Exception as exc:  # noqa: BLE001 — one family must not stop the night
                 r, m = [{"family": f["id"], "error": f"{type(exc).__name__}: {exc}"[:200], "correct": None}], {"family": f["id"], "error": str(exc)[:200]}
             rows.extend(r)
             fam_meta.append(m)
+            print(f"recall {f['id']}: {sum(1 for x in r if x.get('correct') is not None)} answered", flush=True)
 
     await asyncio.gather(*(one(f) for f in fams))
     clock.set_now(None)

@@ -246,6 +246,40 @@ async def test_a_mumbai_429_overflows_once_and_is_counted_outside_india(monkeypa
     assert all(line.get("Region") != "asia-south1" for line in lines)
 
 
+async def test_a_call_that_ignores_cancellation_still_ends_at_the_timeout():
+    """16 Oct recall: one Vertex call never returned and did not notice cancellation, so wait_for held the job until
+    GitHub killed it at 120 minutes. The caller stops at the timeout anyway."""
+    import asyncio
+    import time
+
+    release = asyncio.Event()
+
+    class Stuck:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, route, **kw):
+            self.calls += 1
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+            return LLMReply(text="late", tool_calls=[], model=route.model)
+
+    stuck = Stuck()
+    router.register_provider("stuck", stuck)
+    try:
+        started = time.monotonic()
+        with pytest.raises(router.AllModelsFailed, match="timeout"):
+            await router.complete("extract", system_stable="s", messages=MSG, timeout_s=0.2, routes=[Route("stuck", "m1")])
+        assert time.monotonic() - started < 1
+        assert stuck.calls == 1
+    finally:
+        release.set()
+        router._providers.pop("stuck", None)
+        await asyncio.sleep(0)
+
+
 async def test_a_cancelled_turn_cancels_both_copies(monkeypatch):
     import asyncio
 
