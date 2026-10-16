@@ -61,8 +61,8 @@ async def test_a_cached_prefix_is_not_sent_again_as_system_and_tools(monkeypatch
     provider = gemini.GeminiProvider()
     seen = {}
 
-    async def cached(route, system, tools):
-        return "cachedContents/prefix"
+    def cached(route, system, tools):
+        return "cachedContents/prefix", "k"
 
     class _Models:
         async def generate_content(self, *, model, contents, config):
@@ -101,8 +101,8 @@ async def test_gemini_calls_share_one_concurrency_gate(monkeypatch):
     peak = 0
     held = 0
 
-    async def cached(route, system, tools):
-        return None
+    def cached(route, system, tools):
+        return None, ""
 
     class _Models:
         async def generate_content(self, *, model, contents, config):
@@ -130,3 +130,78 @@ async def test_gemini_calls_share_one_concurrency_gate(monkeypatch):
 
     await asyncio.gather(one(), one())
     assert peak == 1
+
+
+def _client_with(models, caches=None):
+    class _Aio:
+        pass
+
+    _Aio.models = models
+    _Aio.caches = caches
+
+    class _Client:
+        aio = _Aio()
+
+    return _Client()
+
+
+@pytest.mark.asyncio
+async def test_a_slow_cache_never_holds_up_a_reply(monkeypatch):
+    """Live replay 16 Oct: caches.create sat past the 20 s call cap and every reply ran out of time."""
+    monkeypatch.setenv("GEMINI_EXPLICIT_CACHE", "on")
+    monkeypatch.setenv("GEMINI_CACHE_CREATE_S", "0.2")
+    gemini._gate = None
+    provider = gemini.GeminiProvider()
+    seen = []
+
+    class _Caches:
+        async def create(self, *, model, config):
+            await asyncio.sleep(5)
+
+    class _Models:
+        async def generate_content(self, *, model, contents, config):
+            seen.append(config.cached_content)
+            return _Resp()
+
+    monkeypatch.setattr(provider, "_client", lambda location: _client_with(_Models(), _Caches()))
+    route = Route(provider="gemini", model="gemini-3.5-flash", location="asia-south1")
+    big = [ToolSpec("remember", "save " * 3000, {"type": "object"})]
+    reply = await asyncio.wait_for(provider.complete(
+        route, system_stable=["PERSONA"], system_dynamic="NOW", messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        tools=big, max_tokens=20, effort="low"), timeout=1)
+    assert isinstance(reply, LLMReply) and seen == [None]
+    await asyncio.sleep(0.4)  # the background create times out and is remembered as refused
+    assert not provider._making and all(v[0] == "" for v in provider._prefix.values())
+
+
+@pytest.mark.asyncio
+async def test_a_cache_vertex_no_longer_serves_is_dropped_and_the_call_goes_uncached(monkeypatch):
+    from google.genai import errors
+
+    gemini._gate = None
+    provider = gemini.GeminiProvider()
+    seen = []
+
+    class _Models:
+        async def generate_content(self, *, model, contents, config):
+            seen.append(config.cached_content)
+            if config.cached_content:
+                raise errors.ClientError(404, {"error": {"code": 404, "message": "cached content not found", "status": "NOT_FOUND"}})
+            return _Resp()
+
+    monkeypatch.setattr(provider, "_prefix_cache", lambda route, system, tools: ("cachedContents/gone", "k"))
+    monkeypatch.setattr(provider, "_client", lambda location: _client_with(_Models()))
+    route = Route(provider="gemini", model="gemini-3.5-flash", location="asia-south1")
+    reply = await provider.complete(
+        route, system_stable=["PERSONA"], system_dynamic="NOW", messages=[{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+        tools=[ToolSpec("remember", "save", {"type": "object"})], max_tokens=20, effort="low")
+    assert isinstance(reply, LLMReply)
+    assert seen == ["cachedContents/gone", None]
+    assert provider._prefix["k"][0] == ""
+
+
+def test_the_prefix_cache_is_off_unless_turned_on(monkeypatch):
+    monkeypatch.delenv("GEMINI_EXPLICIT_CACHE", raising=False)
+    provider = gemini.GeminiProvider()
+    route = Route(provider="gemini", model="gemini-3.5-flash", location="asia-south1")
+    assert provider._prefix_cache(route, "P" * 20000, [ToolSpec("remember", "save", {"type": "object"})]) == (None, "")

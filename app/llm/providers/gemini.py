@@ -56,6 +56,7 @@ class GeminiProvider:
         self._credentials = credentials
         self._clients: dict[str, genai.Client] = {}
         self._prefix: dict[str, tuple[str, float]] = {}  # key -> (cache name or "", do not retry before)
+        self._making: dict[str, asyncio.Task] = {}  # caches being created in the background
 
     def _client(self, location: str) -> genai.Client:
         if location not in self._clients:
@@ -64,20 +65,30 @@ class GeminiProvider:
             )
         return self._clients[location]
 
-    async def _prefix_cache(self, route: Route, system: str, tools: list[ToolSpec]) -> str | None:
-        """The explicit cache of the fixed prefix, or None when it is off, too small, or Vertex refused it."""
-        if os.getenv("GEMINI_EXPLICIT_CACHE", "on") != "on" or not system or not tools:
-            return None
+    def _prefix_cache(self, route: Route, system: str, tools: list[ToolSpec]) -> tuple[str | None, str]:
+        """(cache name, key). The name is None while the cache is off, too small, refused, or still being made.
+
+        Never waits: a missing cache starts its creation in the background and this call goes out uncached (live replay
+        16 Oct: caches.create sat for over 20 s inside the turn and every reply ran out of time)."""
+        if os.getenv("GEMINI_EXPLICIT_CACHE", "off") != "on" or not system or not tools:
+            return None, ""
         blob = system + json.dumps(_tool_payload(tools), sort_keys=True, default=str)
         if len(blob) < _CACHE_MIN_CHARS:
-            return None
+            return None, ""
         key = hashlib.sha256(f"{route.location}\n{route.model}\n{blob}".encode()).hexdigest()
         hit = self._prefix.get(key)
         now = time.monotonic()
         if hit and hit[1] > now:
-            return hit[0] or None
+            return (hit[0] or None), key
+        if key not in self._making:
+            task = asyncio.create_task(self._make_cache(key, route, system, tools))
+            self._making[key] = task
+            task.add_done_callback(lambda _t, k=key: self._making.pop(k, None))
+        return None, key
+
+    async def _make_cache(self, key: str, route: Route, system: str, tools: list[ToolSpec]) -> None:
         try:
-            created = await self._client(route.location).aio.caches.create(
+            created = await asyncio.wait_for(self._client(route.location).aio.caches.create(
                 model=route.model,
                 config=types.CreateCachedContentConfig(
                     display_name="saheli-prefix",
@@ -88,14 +99,18 @@ class GeminiProvider:
                     ])],
                     ttl=f"{_CACHE_TTL_S}s",
                 ),
-            )
-        except Exception:  # noqa: BLE001 — a cache miss bills the prefix at full price; the reply still goes out
+            ), timeout=float(os.getenv("GEMINI_CACHE_CREATE_S", "30")))
+        except (Exception, asyncio.CancelledError):  # noqa: BLE001 — a cache miss bills the prefix at full price; replies still go out
             logger.warning("gemini prefix cache was not created model=%s", route.model, exc_info=True)
-            self._prefix[key] = ("", now + 600)
-            return None
+            self._prefix[key] = ("", time.monotonic() + 600)
+            return
         name = getattr(created, "name", None) or ""
-        self._prefix[key] = (name, now + _CACHE_TTL_S - 300)
-        return name or None
+        self._prefix[key] = (name, time.monotonic() + _CACHE_TTL_S - 300)
+
+    def _drop_cache(self, key: str) -> None:
+        """A cache Vertex no longer serves (expired early, deleted, refused): go uncached for 10 minutes."""
+        if key:
+            self._prefix[key] = ("", time.monotonic() + 600)
 
     async def complete(
         self,
@@ -112,15 +127,24 @@ class GeminiProvider:
         # turn) changes every call and is not cached.
         prefix = system_stable[0] if system_stable else ""
         rest = "\n\n".join(p for p in (*system_stable[1:], system_dynamic) if p)
-        cache_name = await self._prefix_cache(route, prefix, tools) if tools else None
+        cache_name, cache_key = self._prefix_cache(route, prefix, tools) if tools else (None, "")
         thinking = types.ThinkingConfig(thinking_level=_LEVEL.get(effort, types.ThinkingLevel.MEDIUM))
         no_auto = types.AutomaticFunctionCallingConfig(disable=True)
-        if cache_name:
-            config = types.GenerateContentConfig(
-                cached_content=cache_name, max_output_tokens=max_tokens, thinking_config=thinking,
-                automatic_function_calling=no_auto,
-            )
-        else:
+
+        def request(cached: str | None) -> tuple[types.GenerateContentConfig, list[types.Content]]:
+            contents = to_gemini_contents(messages, route.model)
+            if cached:
+                config = types.GenerateContentConfig(
+                    cached_content=cached, max_output_tokens=max_tokens, thinking_config=thinking,
+                    automatic_function_calling=no_auto,
+                )
+                if rest:
+                    lead = types.Part(text=scrub("(Context for this turn, not a message from the person)\n" + rest))
+                    if contents and contents[0].role == "user" and contents[0].parts is not None:
+                        contents[0].parts.insert(0, lead)
+                    else:
+                        contents.insert(0, types.Content(role="user", parts=[lead]))
+                return config, contents
             config = types.GenerateContentConfig(
                 system_instruction="\n\n".join(p for p in (*system_stable, system_dynamic) if p),
                 max_output_tokens=max_tokens,
@@ -136,13 +160,9 @@ class GeminiProvider:
                         ]
                     )
                 ]
-        contents = to_gemini_contents(messages, route.model)
-        if cache_name and rest:
-            lead = types.Part(text=scrub("(Context for this turn, not a message from the person)\n" + rest))
-            if contents and contents[0].role == "user" and contents[0].parts is not None:
-                contents[0].parts.insert(0, lead)
-            else:
-                contents.insert(0, types.Content(role="user", parts=[lead]))
+            return config, contents
+
+        config, contents = request(cache_name)
         for attempt in range(2):
             try:
                 async with gemini_limit():
@@ -151,9 +171,26 @@ class GeminiProvider:
                     )
             except errors.APIError as exc:
                 code = getattr(exc, "code", None)
-                if code in (403, 404, 429) or (code or 500) >= 500:
+                if cache_name and code != 429:
+                    # the cache, not the model: drop it and send the same call uncached once
+                    logger.warning("gemini cached call failed (%s): retrying uncached", code)
+                    self._drop_cache(cache_key)
+                    cache_name = None
+                    config, contents = request(None)
+                    try:
+                        async with gemini_limit():
+                            resp = await self._client(route.location).aio.models.generate_content(
+                                model=route.model, contents=contents, config=config
+                            )
+                    except errors.APIError as exc2:
+                        code2 = getattr(exc2, "code", None)
+                        if code2 in (403, 404, 429) or (code2 or 500) >= 500:
+                            raise ModelUnavailable(code2, str(exc2)) from exc2
+                        raise
+                elif code in (403, 404, 429) or (code or 500) >= 500:
                     raise ModelUnavailable(code, str(exc)) from exc
-                raise
+                else:
+                    raise
             cand = (resp.candidates or [None])[0]
             # A malformed tool call is a one-off generation slip; one retry on the same model usually fixes it.
             if attempt == 0 and "MALFORMED" in str(getattr(cand, "finish_reason", "")):
