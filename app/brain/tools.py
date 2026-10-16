@@ -2385,7 +2385,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
             team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="crisis",
                                          summary=a["message"], said=ctx.user_text, actor_id=ctx.speaker.get("id"))
             return {"sent": False, "why": "the family was told about this today already",
-                    "told": "the Kavach care team " + ("has been emailed" if team == "sent" else "is being emailed") + " and will check on them"}
+                    "told": guards.who_was_told(ctx.profiles.get(ctx.speaker.get("id")), team=team, already_today=True)}
         return {"sent": False, "why": "already sent for this issue today"}
     ctx.alerts.append({**a, "whatsapp": decision.whatsapp})
     kind = {"red_flag": "health_red_flag", "no_answer": "nudge_silence", "safety": "unusual_activity", "approval": "order_placed",
@@ -2417,11 +2417,8 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
         team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id,
                                      kind="crisis" if crisis else "emergency_alone", summary=a["message"], said=ctx.user_text,
                                      family_told=told, actor_id=ctx.speaker.get("id"))
-    who = (f"{told} family member(s) told on WhatsApp" if told else
-           "the family was already told in the last half hour" if told_lately else
-           "no one else in the family to tell (never the person themselves)" if alone else "the family sees it on the dashboard")
-    if team:
-        who += "; the Kavach care team " + ("has been emailed" if team == "sent" else "is being emailed") + " and will check on them"
+    who = guards.who_was_told(
+        ctx.profiles.get(ctx.speaker.get("id")), n=told, lately=told_lately, alone=alone, team=team)
     return {"sent": True, "whatsapp": decision.whatsapp, "why": decision.why, "told": who, "result": res}
 
 

@@ -792,7 +792,10 @@ def probe_expect(fam: dict, topic: str, who: dict, rng: random.Random) -> tuple[
                 {**base, "tools_any": ["log_vital"], "alert": "red_flag" if high else "none", "elder": elder})
     if topic == "symptom":
         s = rng.choice(["mild headache since the afternoon", "knee pain after the walk", "a light fever of 99.5", "feeling dizzy when standing up"])
-        return (f"{who['first']} says {'they have' if own else sp['first'] + ' has'} {s}", {**base, "tools_any": ["log_event", "log_vital"]})
+        # Dizziness is a red flag she tells the family about. A headache, a sore knee or a light fever is not.
+        alert = "red_flag" if s == "feeling dizzy when standing up" else "none"
+        return (f"{who['first']} says {'they have' if own else sp['first'] + ' has'} {s}",
+                {**base, "tools_any": ["log_event", "log_vital"], "alert": alert})
     if topic == "habit_report":
         a = next(a for a in t["activities"] if a["kind"] == "habit")
         return (f"{who['first']} says the {a['label'].lower()} was done today, 40 minutes", {**base, "tools_any": ["log_activity"]})

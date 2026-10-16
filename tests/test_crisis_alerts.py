@@ -109,6 +109,20 @@ async def test_a_red_flag_with_no_one_else_to_tell_goes_to_the_team_and_with_fam
     assert not family.world.team_alerts and "1 family member(s) told" in out["told"]
 
 
+def test_who_was_told_is_already_in_the_persons_language():
+    from app.brain import guards
+
+    hindi = {"saved": {"language": "hi"}, "now": "devanagari"}
+    line = guards.who_was_told(hindi, n=1)
+    assert line == "वॉट्सऐप पर परिवार के 1 सदस्य को बता दिया"
+    assert "family member" not in line
+    assert guards.who_was_told(None, n=1) == "1 family member(s) told on WhatsApp"
+    assert guards.who_was_told(None, team="sent", already_today=True) == (
+        "the Kavach care team has been emailed and will check on them")
+    pa = guards.who_was_told({"saved": {"language": "pa"}, "now": "gurmukhi"}, n=1, team="sent")
+    assert "family member" not in pa and "1" in pa and "Kavach" in pa
+
+
 async def test_a_shadow_family_never_emails_the_team(db, at):
     at("2026-10-13 01:28")
     host = SimHost()

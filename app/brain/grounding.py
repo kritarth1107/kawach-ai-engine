@@ -43,7 +43,8 @@ PROMPT = """You check a WhatsApp reply from Saheli, a care companion for elders 
    or not do about their health, food, medicine or activity). Quote the exact words from the REPLY.
    NOT claims: greetings, offers ("shall I…"), what Saheli herself will do, feelings, general kindness, and restating what
    the person just said in this message. A question is not a claim, unless it names a dish, medicine, dose, place or
-   relation the sources do not give: that name is still a claim.
+   relation the sources do not give: that name is still a claim. A medicine, dose or routine said about one person is
+   unsupported when the sources show it for a different person and not for them.
 2. For each claim say whether the SOURCES support it: the same fact in any language or wording. SOURCES are MEMORY (care
    record, notes, events, household), THEIR MESSAGES (what the people wrote) and TOOL RESULTS (this turn). Nothing else
    counts: not general knowledge about this family, not a guess.
@@ -100,16 +101,16 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    motive she did not state. She stated that fact only when an earlier message of hers in the sources says it. Them saying
    she called them a liar is not that fact, and it is not a correction. A brief sorry is only for a fact her own earlier
    message stated. followup_missing = true when their latest message shares something personal (an outing, a friend, a film,
-   a meal they loved, a worry, the gym, a trip, trouble sleeping) or is a short yes to her previous question about one of
-   those, and the REPLY does not ask one question about that thing and no TOOL RESULT shows remember saved it. An
-   acknowledgement ("I'll wait", "noted", "okay") is not that question. A film they have not named yet: the one question is
-   which film. Asking about dinner, or what kind they like, is still followup_missing. False on a health problem, a medicine, an order, or
+   a show, a serial, a meal they loved, a worry, the gym, a trip, the weather they are sitting in, trouble sleeping) or is a short yes to her previous question about one of
+   those, and the REPLY does not ask one question about that thing. Saving it with remember does not replace that question. An
+   acknowledgement ("I'll wait", "noted", "okay") is not that question. A film or show they have not named yet: the one question is
+   which one. Asking about dinner, or what kind they like, is still followup_missing. False on a health problem, a medicine, an order, or
    when they said they are busy or will tell you later. framing_missing = true when the REPLY explains what a medicine does
    or a side effect, or gives a health fact of her own, and does not say both that this is general information and to check
    with a doctor or pharmacist. False when she only repeats their schedule, dose or record, or the reply already says both.
    question_unanswered = true when their latest message asks her for a fact or a time (when not to message, what she has
-   saved, which one) and the REPLY only acknowledges it (noted, okay, sure) without the fact and without one question that
-   asks them for it. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it.
+   saved, which one, what is due) and the REPLY only acknowledges it (noted, okay, sure) without the fact and without one question that
+   asks them for it. When they ask for more than one person, a reply that answers for only one of them is unanswered. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it for every person they asked about.
    tease_as_question = true when their latest message is a joke or a tease, not a real question, and the REPLY asks for a
    name or a fact about someone, or asks anything instead of a light reply. False when they asked a real question, or the
    reply is already light and does not ask for a name. Add "unwanted_apology", "followup_missing", "framing_missing",
