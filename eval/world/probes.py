@@ -239,9 +239,6 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
             out.append({"probe": q["id"], "family": fam["id"], "skipped": "no_text"})
             continue
         # every probe starts from the family's own state (an earlier probe's chat must not decide this one)
-        async with sessions() as s:
-            await seed_family(s, fam, Seeded())
-            await s.commit()
         host = host_for_family(fam)
         who = people[q["who"]]
         speaker = {"id": who["id"], "name": who["name"], "role": BRAIN_ROLE[who["role"]]}
@@ -253,6 +250,9 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
         row = {"probe": q["id"], "family": fam["id"], "household": fam["household"], "language": q["language"], "topic": q["topic"], "who": who["key"],
                "text": text, "written": bool(q.get("text")), "tier": fam["tier"]}
         try:
+            async with sessions() as s:
+                await seed_family(s, fam, Seeded())
+                await s.commit()
             images = photo_for(q) if q["topic"] == "photo" else []
             async with sessions() as s:
                 res = await run_turn(s, host, TurnRequest(family_id=fam["familyId"], elder=elder, speaker=speaker, members=members, text=text,

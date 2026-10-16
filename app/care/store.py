@@ -53,21 +53,25 @@ async def release_record_locks(session: AsyncSession, *, commit: bool) -> None:
         return
     if commit and session.sync_session.info.get("family_xact_lock"):
         commit = False
-    if commit:
-        await session.commit()
-        session.sync_session.info.pop("family_xact_lock", None)
 
     async def _unlock() -> None:
         for key, n in list(locks.items()):
             for _ in range(n):
                 await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
 
+    # Unlock on this connection, then commit. A commit returns the connection to the pool, and a session lock left on
+    # it is held forever: the next write of the same person waits until the night is killed (recall 16 Oct) or the
+    # leaked lock_timeout cancels it and the probe shard dies.
     try:
         await _unlock()
     except Exception:  # noqa: BLE001 — a failed statement aborts the transaction; the lock still has to drop
         await session.rollback()
         await _unlock()
+        commit = False
     locks.clear()
+    if commit:
+        await session.commit()
+        session.sync_session.info.pop("family_xact_lock", None)
 
 
 @asynccontextmanager
@@ -77,8 +81,8 @@ async def record_write(session: AsyncSession, family_id: str, subject_id: str):
         yield
     except BaseException:
         if _release_record_now(session):
-            await session.rollback()
             await release_record_locks(session, commit=False)
+            await session.rollback()
         raise
     if _release_record_now(session):
         await release_record_locks(session, commit=True)

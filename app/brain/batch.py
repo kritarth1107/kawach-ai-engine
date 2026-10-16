@@ -59,6 +59,13 @@ async def _lock_speaker(conn, key: str, wait_s: float) -> None:
     await conn.commit()
 
 
+async def _reset_lock_timeout(conn) -> None:
+    """The speaker connection goes back to the pool. A session lock_timeout left on it cancels the next borrower's
+    locks (a probe seed, 16 Oct) instead of waiting."""
+    await conn.execute(text("SELECT set_config('lock_timeout', '0', false)"))
+    await conn.commit()
+
+
 async def _unlock_speaker(conn, key: str) -> None:
     try:
         await conn.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
@@ -205,12 +212,15 @@ async def run(session: AsyncSession, host: ToolHost, req):
         key = _speaker_key(req.family_id, speaker_id)
         waited = time.monotonic()
         async with _engine(session).connect() as conn:
-            await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
-            trace.note_step("lock", (time.monotonic() - waited) * 1000)
             try:
-                return await loop._run_turn(session, host, req, take_lock=False)
+                await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
+                trace.note_step("lock", (time.monotonic() - waited) * 1000)
+                try:
+                    return await loop._run_turn(session, host, req, take_lock=False)
+                finally:
+                    await _unlock_speaker(conn, key)
             finally:
-                await _unlock_speaker(conn, key)
+                await _reset_lock_timeout(conn)
 
     await session.execute(
         pg_insert(TurnInbox)
@@ -237,8 +247,11 @@ async def run(session: AsyncSession, host: ToolHost, req):
     key = _speaker_key(req.family_id, speaker_id)
     waited = time.monotonic()
     async with _engine(session).connect() as conn:
-        await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
         try:
-            return await _while_locked(session, host, req, waited)
+            await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
+            try:
+                return await _while_locked(session, host, req, waited)
+            finally:
+                await _unlock_speaker(conn, key)
         finally:
-            await _unlock_speaker(conn, key)
+            await _reset_lock_timeout(conn)

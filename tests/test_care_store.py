@@ -1,6 +1,11 @@
+import asyncio
 from datetime import timedelta
 
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from app.care import store
+from tests.conftest import TEST_DB
 from app.care.domains import fact_key, needs_confirmation, slug
 
 FAM, ELDER, DAUGHTER = "fam-1", "elder-1", "cg-1"
@@ -18,6 +23,23 @@ async def _med(db, dose, source, by=None):
         source_kind=source,
         stated_by=by,
     )
+
+
+async def test_a_committed_record_lock_does_not_stick_to_the_pooled_connection():
+    """A commit used to return the connection before the unlock, so the lock stayed on a pooled connection and the
+    next write of that person waited until the night was killed."""
+    engine = create_async_engine(TEST_DB, pool_size=2, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as first:
+            await store.hold_record(first, "lock-fam", "lock-elder")
+            await store.release_record_locks(first, commit=True)
+        async with sessions() as second:
+            await second.execute(text("SELECT set_config('lock_timeout', '2s', true)"))
+            await asyncio.wait_for(store.hold_record(second, "lock-fam", "lock-elder"), timeout=5)
+            await store.release_record_locks(second, commit=True)
+    finally:
+        await engine.dispose()
 
 
 def test_slug_ignores_strength_and_form():
