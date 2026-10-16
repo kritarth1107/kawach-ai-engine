@@ -1094,7 +1094,9 @@ async def test_a_slow_search_does_not_hold_the_reply_or_start_a_second_wave(db, 
     elapsed = time.monotonic() - started
     assert out["result"] == "saved" and out["say"].startswith("Saved:"), out
     assert nfake.calls.count("estimate") == 1 and nfake.web.asked == [] and "normalise" not in nfake.calls
-    assert elapsed < 1.0, elapsed
+    # the slow search would take half a minute: well under that proves the reply did not wait (1.0 s failed on a loaded
+    # CI runner at 1.03 s, deploy 38924206450)
+    assert elapsed < 5.0, elapsed
 
 
 async def test_unknown_foods_are_estimated_in_one_call(db, at, nfake):
