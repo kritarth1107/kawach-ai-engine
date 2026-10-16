@@ -88,6 +88,8 @@ class TurnCtx:
     force_light: bool = False
     # True when an earlier message of hers is in the thread (an apology can stand only then).
     prior_assistant: bool = False
+    # A scheduled turn's person (TurnRequest.about): a save with no about in that turn is theirs.
+    system_about: str | None = None
 
     @property
     def elder_id(self) -> str:
@@ -154,7 +156,11 @@ class TurnCtx:
     def own(self, about: str | None) -> str:
         """Whose a save is: the person named, else the speaker's own. Nothing is saved on someone the message is not about
         (founder 2026-10-16: his "Good night" was saved as his mother's sleep). Only a scheduled turn and the dashboard,
-        which act on the person on the page, keep the care recipient as the default."""
+        which act on the person on the page, keep the care recipient as the default, unless a scheduled turn is about one
+        person (TurnRequest.about), whose it then is."""
+        if self.is_system and not str(about or "").strip() and self.system_about:
+            self.resolved_subject = self.system_about
+            return self.system_about
         if str(about or "").strip() or self.is_system or self.channel == "dashboard":
             return self.subject(about)
         me = self.speaker.get("id")

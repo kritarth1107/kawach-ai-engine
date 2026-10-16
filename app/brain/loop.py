@@ -70,6 +70,9 @@ class TurnRequest:
     # A system turn about something that can move on while it waits for this family's turn (a task update): checked once
     # the turn is held; False → nothing is said (founder 2026-10-11: one true status).
     still_true: Callable[[AsyncSession], Awaitable[bool]] | None = None
+    # A scheduled turn about one person (a loop's subject: their gym check-in, their order's follow-up): what it saves with
+    # no about is theirs, not the care recipient's (live 16 Oct: a caregiver's gym follow-up was opened on his mother).
+    about: str | None = None
     # reminders due in the next hours for the speaker and the person cared for (from the backend, with the message):
     # [{"id", "person", "text", "day", "time", "repeat", "item"}]
     reminders_soon: list[dict] = field(default_factory=list)
@@ -1246,6 +1249,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         voice=req.voice,
         location=req.location, images=list(req.images or []),
     )
+    ctx.system_about = req.about if is_system and req.about in {m.get("id") for m in [req.elder, *req.members]} else None
     if not is_system and req.speaker.get("id"):
         earlier = await data.turns(req.speaker["id"])
         last_hers = next((t.text for t in reversed(earlier) if t.role == "assistant" and (t.text or "").strip() not in ("", "none")), "")

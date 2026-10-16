@@ -487,6 +487,7 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
             kind = loop.kind
+            loop_subject = loop.subject_id
             if prompt is not None and loop.owner_id:
                 prompt += await saved_language_line(session, family_id, loop.owner_id)  # the one person it is for
             if prompt is None:
@@ -517,6 +518,7 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                         host_for(family_id),
                         TurnRequest(
                             family_id=family_id, elder=roster.elder, speaker=SYSTEM, members=roster.members, text=prompt,
+                            about=loop_subject,
                             # an order's follow-up answers their own order: like a task update, it is not held back as a nudge
                             # (sim 2026-10-11: "has it come?" was blocked because they had not answered "placed")
                             message_ref=f"{'task:' if kind == 'delivery' else 'refill:' if kind == 'refill' else ''}wake:{loop_id}:{runs}", channel="scheduler",

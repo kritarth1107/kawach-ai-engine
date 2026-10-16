@@ -198,3 +198,16 @@ async def test_the_re_read_never_files_an_unnamed_item_on_the_elder_when_two_peo
     counts = await extract.extract_family(db, FAM)
     assert counts.get("not_member") == 1
     assert await store.active_fact(db, FAM, ELDER, "routine:walk") is None
+
+
+async def test_a_scheduled_turn_about_one_person_saves_for_that_person(db, at):
+    """Live 16 Oct 21:15: the scheduled gym check-in for a caregiver opened its follow-up loop on his mother."""
+    at("2026-10-16 21:15")
+    system = {"id": "saheli-scheduler", "role": "system"}
+    ctx_for_him = ctx(db, system)
+    ctx_for_him.system_about = CG
+    out, err = await tools.run(ctx_for_him, "open_loop", {"kind": "watch", "title": "Gym workout follow-up"})
+    assert not err and json.loads(out)["subject_id"] == CG
+    plain = ctx(db, system)  # a scheduled turn with no person stays on the care recipient
+    out, err = await tools.run(plain, "log_event", {"kind": "other", "summary": "check-in sent"})
+    assert not err and json.loads(out)["subject_id"] == ELDER
