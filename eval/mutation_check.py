@@ -37,10 +37,10 @@ MUTATIONS = [
              'if not (row.source_ref or "").startswith("undo:"):', "if True:", ["tests/test_memory_versions.py"]),
     Mutation("undo-other-family-version", "app/care/versions.py",
              "return row if row and row.family_id == family_id else None", "return row", ["tests/test_memory_versions.py"]),
-    Mutation("reject-turns-reminders-off", "app/brain/tools.py",
+    Mutation("reject-turns-reminders-off", "app/brain/tools/memory.py",
              'if row and row.domain == "medicine" and a["approve"] and row.status in ("active", "stopped"):',
              'if row and row.domain == "medicine":', ["tests/test_memory_versions.py"]),
-    Mutation("viewer-confirms-change", "app/brain/tools.py",
+    Mutation("viewer-confirms-change", "app/brain/tools/memory.py",
              'raise ToolRefused("Only a caregiver (primary or co-caregiver) can confirm this change.")', "pass",
              ["tests/test_memory_versions.py"]),
     Mutation("forget-restore-crosses-people", "app/care/memory_upkeep.py",
@@ -62,7 +62,7 @@ MUTATIONS = [
     Mutation("skills-in-emergencies", "app/brain/loop.py",
              '(to.get("name") or "").split(" ")[0], safety=safety)', '(to.get("name") or "").split(" ")[0])',
              ["tests/test_skill_safety.py"]),
-    Mutation("viewer-sets-skills", "app/brain/tools.py",
+    Mutation("viewer-sets-skills", "app/brain/tools/base.py",
              'return not (self.speaker_is_elder or self.is_system) and "caregiver" in str(self.speaker.get("role", "")).lower()',
              "return not (self.speaker_is_elder or self.is_system)", ["tests/test_skill_safety.py"]),
     # store skills and the browser sandbox
@@ -81,7 +81,7 @@ MUTATIONS = [
     Mutation("hinglish-chest-pain", "app/brain/guards.py", r'r"\b(chest|seen[ae]|chh?aa?ti|heart|breath\w*|saans|',
              r'r"\b(chest|breath\w*|saans|', ["tests/test_review_fixes.py"]),
     # voice notes
-    Mutation("unsure-voice-changes-dose", "app/brain/tools.py",
+    Mutation("unsure-voice-changes-dose", "app/brain/tools/memory.py",
              "force_confirm=ctx.voice_unsure and domain in HEALTH_DOMAINS,", "force_confirm=False,", ["tests/test_voice.py"]),
     Mutation("voice-note-not-flagged", "app/brain/loop.py", "        voice_block(req),\n", "", ["tests/test_voice.py"]),
     # backups
