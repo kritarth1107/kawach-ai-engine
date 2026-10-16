@@ -61,7 +61,8 @@ REVIEW_BATCH = 15
 WINDOW = timedelta(hours=24) - timedelta(minutes=10)  # WhatsApp's free-message window, with the backend's margin
 SENT = ("sent", "shadow")  # a shadow nudge counts as sent for the clock and the ladder in shadow mode
 PRIORITY = {"doses": 9, "follow_up": 7, "upcoming": 6, "habit": 6, "collect": 4, "reflect": 4, "know": 3, "delight": 3,
-            "early_bird": 5, "reminder_followup": 8, "meal": 7, "water": 7, "sleep": 7, "goal": 5, "stock": 6}
+            "early_bird": 5, "reminder_followup": 8, "meal": 7, "water": 7, "sleep": 7, "goal": 5, "stock": 6,
+            "checkin": 2, "quiet_note": 2}
 HABIT_SHADOW = ("meal", "goal", "water", "sleep")  # nudge.meals: off sends nothing; shadow logs them and does not hold the hour
 SLOTS = (("morning", 5 * 60, 12 * 60), ("afternoon", 12 * 60, 17 * 60), ("evening", 17 * 60, 24 * 60))
 COLLECT_EVERY = {"feelings": timedelta(days=1), "sleep": timedelta(days=2), "readings": timedelta(days=4),
@@ -125,6 +126,7 @@ class Clock:
     last_out: datetime | None  # Saheli's last message to them of any kind (a shadow nudge counts in shadow mode)
     run: int  # regular nudges in a row with no reply
     nudged_today: bool  # a regular nudge since their morning
+    chat_run: int = 0  # unanswered optional chat (get-to-know, reflect, delight, small talk); medicine and the schedule are not in this
     rows: list = field(default_factory=list)  # their recent ledger rows, newest first
     gate: dict = field(default_factory=dict)
 
@@ -154,6 +156,17 @@ def _iso(v) -> datetime | None:
 
 def _when(r: NudgeLedger) -> datetime:
     return r.sent_at or r.planned_at
+
+
+# Optional chat only. Medicine, stock, meals, water, sleep, habits, appointments and reminder follow-ups are not in this:
+# a quiet person still hears those, however many chats they left unanswered.
+_OPTIONAL_CHAT = frozenset({"know", "reflect", "delight", "follow_up", "collect"})
+
+
+def _optional_chat(r: NudgeLedger) -> bool:
+    if r.kind not in _OPTIONAL_CHAT:
+        return False
+    return not (r.kind == "follow_up" and "appointment" in (r.about_ref or ""))
 
 
 async def people(session: AsyncSession, roster: FamilyRoster) -> list[Person]:
@@ -328,8 +341,10 @@ async def read_clock(session: AsyncSession, family_id: str, person: str, gate: d
                                                                                  and not (r.kind == "meal" and r.status == "shadow" and mode == "on")]
     last_out = max(outs, default=None)
     run = sum(1 for r in cross if not r.replied_at and (last_in is None or _when(r) > last_in))
+    chat_run = sum(1 for r in cross if _optional_chat(r) and not r.replied_at and (last_in is None or _when(r) > last_in))
     morning = await morning_start(session, family_id, person, now)
-    return Clock(last_in=last_in, last_out=last_out, run=run, nudged_today=any(_when(r) >= morning for r in regular), rows=rows, gate=gate)
+    return Clock(last_in=last_in, last_out=last_out, run=run, nudged_today=any(_when(r) >= morning for r in regular),
+                 chat_run=chat_run, rows=rows, gate=gate)
 
 
 async def early_bird_window(session: AsyncSession, family_id: str, person: str, now: datetime, rows: list[NudgeLedger]) -> bool:
@@ -371,6 +386,8 @@ class Due:
     reason: str = ""  # why not, when not due
     mode: str | None = None  # off | shadow | on, once the backend was asked (None: not asked, a cheap skip)
     light: str = ""  # opener | morning | lunch | evening: a reduced line, still due
+    hold_chat: bool = False  # optional chat waits; medicine, the schedule and appointments do not
+    quiet_why: str = ""  # a reason already on the record: no check-in until it passes
 
 
 def light_slot(now: datetime, wake_min: int | None) -> str | None:
@@ -394,6 +411,39 @@ _LIGHT_WHY = {
     "opener": "the good morning that waits behind the notice: warm, from something you know, one easy question, not a dose, not anything already asked today",
     "warm": "a warm line from something they said or you know about them; no question at all, and nothing they have to answer",
 }
+
+
+def _on_trip(value: dict, now: datetime) -> bool:
+    departs = _iso(value.get("departs") or value.get("depart"))
+    arrives = _iso(value.get("arrives") or value.get("arrive"))
+    if departs and arrives:
+        return departs <= now <= arrives
+    if departs and departs <= now <= departs + timedelta(days=2):
+        return True
+    return bool(arrives and now <= arrives and arrives - now <= timedelta(days=1))
+
+
+async def quiet_reason(session: AsyncSession, p: Person, ck: Clock, now: datetime) -> str:
+    """Why they have gone quiet, from the record only. Empty means we do not know, so one easy check-in is allowed."""
+    last = max((r for r in ck.rows if r.status in ("sent", "failed") and _optional_chat(r)), key=_when, default=None)
+    if last is not None:
+        reason = last.reason or ""
+        if last.status == "failed" or reason.startswith(("not_delivered", "waiting:", "unread")):
+            return "not_reached"
+    for f in await store.facts(session, p.family_id, p.id, domains=["trip", "learned"], statuses=("active",)):
+        if f.domain == "trip" and _on_trip(f.value or {}, now):
+            return "travelling"
+        if f.key == "learned:nudges_away" and (_iso((f.value or {}).get("until")) or now) > now:
+            return "travelling"
+        if f.key == "learned:nudges_unwell" and (_iso((f.value or {}).get("until")) or now) > now:
+            return "unwell"
+        if f.key == "learned:nudges_quiet_days" and clock.ist(now).weekday() in ((f.value or {}).get("days") or []):
+            return "quiet_day"
+    from app.care import checkins
+
+    if await checkins._symptoms_since(session, p.family_id, p.id, now - timedelta(hours=24), now):
+        return "unwell"
+    return ""
 
 
 async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str | None, *, busy: bool) -> Due:
@@ -460,35 +510,35 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         return Due(p, ck, reason="window_closed", mode=m)
     if gate.get("reason"):
         return Due(p, ck, reason=str(gate["reason"])[:60], mode=m)
-    hold_questions = False
-    if ck.run >= 2:  # two unanswered questions: no more questions until they write. One warm line a day.
+    hold_chat = False
+    quiet_why = ""
+    if ck.chat_run >= 2:  # two unanswered optional chats: look at the record before another line
         try:
             esc = await host.call("escalation_status", {"to": p.id}, family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id) or {}
         except Exception:  # noqa: BLE001 — the ladder's own rules still hold
             esc = {}
         if esc.get("state") in ("pending", "deferred", "sent") and not p.cared:
-            return Due(p, ck, reason="escalating", mode=m)  # a caregiver hears; they are not also nudged
-        today = await sent_today(session, p.id, now)
-        if any(r.kind == "warm" for r in today):
-            return Due(p, ck, reason="quiet", mode=m)
-        hold_questions = True
+            return Due(p, ck, reason="escalating", mode=m)
+        quiet_why = await quiet_reason(session, p, ck, now)
+        hold_chat = True
     last = ck.last_activity
     if bird:
         if last is not None and now - last < CARED_EVERY:
             return Due(p, ck, reason="talking", mode=m)
         return Due(p, ck, early_bird=True, mode=m)
-    need = cadence(p.cared, ck.run)
+    if hold_chat:
+        need = CARED_EVERY if p.cared else CAREGIVER_EVERY  # quiet chat does not slow medicine or the schedule
+    else:
+        need = cadence(p.cared, ck.run)
     if need is not None and lr.fewer:
-        need *= 2
+        need *= 2  # fewer messages, never more, when they have asked for less
     if need is None:
         if ck.nudged_today:
             return Due(p, ck, reason="ladder", mode=m)
         need = base  # the next morning's first nudge
     if last is not None and now - last < need:
         return Due(p, ck, reason="talking" if ck.last_in and now - ck.last_in < need else "cadence", mode=m)
-    if hold_questions:
-        return Due(p, ck, light="warm", mode=m)
-    return Due(p, ck, mode=m)
+    return Due(p, ck, mode=m, hold_chat=hold_chat, quiet_why=quiet_why)
 
 
 # ── what to say: context and options (structured, no reading of people's words) ───────────────────────────────────
@@ -667,7 +717,8 @@ async def last_messages(session: AsyncSession, family_id: str, person: str, gate
 
 
 async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: datetime, *, early_bird: bool = False,
-                        only: list[Option] | None = None, extra: str = "", light: str = "") -> Context:
+                        only: list[Option] | None = None, extra: str = "", light: str = "",
+                        hold_chat: bool = False, quiet_why: str = "") -> Context:
     from app.brain.loop import writing_profiles
     from app.care import activities, checkins, language, naming
     from app.care import mood as care_mood
@@ -699,7 +750,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
 
     open_fields, today_asks = await asked_open(session, p.id, now)
     options = only if only is not None else await candidates(session, p, ck, now, facts=facts, acts=acts, schedule=schedule, reminders=rems,
-                                                              early_bird=early_bird, open_fields=open_fields, light=light)
+                                                              early_bird=early_bird, open_fields=open_fields, light=light,
+                                                              hold_chat=hold_chat, quiet_why=quiet_why)
     options = sorted(options, key=lambda o: -o.score)[:5]
 
     m_now = local.hour * 60 + local.minute
@@ -765,7 +817,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
 
 
 async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime, *, facts: list, acts: list[dict], schedule: dict,
-                     reminders: list[dict], early_bird: bool = False, open_fields: set[str] | None = None, light: str = "") -> list[Option]:
+                     reminders: list[dict], early_bird: bool = False, open_fields: set[str] | None = None, light: str = "",
+                     hold_chat: bool = False, quiet_why: str = "") -> list[Option]:
     """What is worth writing about now (the plan's §3.4), each scored by how due it is and how much it helps, minus a
     penalty for the same kind among the last two nudges and for a field asked within its cooldown."""
     from app.care import checkins
@@ -897,6 +950,11 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
     ask = await stock_ask(session, p, facts, now)
     if ask and not light and not early_bird:
         add(ask[0], ask[1], about=ask[2], fld=ask[3])
+    if hold_chat:
+        out = [o for o in out if not (o.kind in _OPTIONAL_CHAT and not (o.kind == "follow_up" and "appointment" in (o.about_ref or "")))]
+        already = any(r.kind == "checkin" for r in await sent_today(session, p.id, now))
+        if not quiet_why and not already and not light:
+            add("checkin", "one easy check-in, not a stack of questions: they can answer when they are free", fld="checkin")
     return out
 
 
@@ -1184,6 +1242,37 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
     return "sent"
 
 
+async def caregiver_note_due(session: AsyncSession, p: Person, d: Due, now: datetime) -> bool:
+    """An elder quiet for a day, and we do not already know why: one gentle note to the caregiver."""
+    if not p.elder or d.reason == "asleep":
+        return False
+    ck = d.clock
+    if ck.chat_run < 2 or ck.last_in is None or now - ck.last_in < timedelta(hours=24):
+        return False
+    why = d.quiet_why or await quiet_reason(session, p, ck, now)
+    return not why
+
+
+async def note_caregiver(sessions: async_sessionmaker, host, roster: FamilyRoster, elder: Person, now: datetime) -> None:
+    """One soft line to each caregiver, once a day. Not an alarm, and not a second escalation."""
+    async with sessions() as session:
+        carers = [q for q in await people(session, roster) if q.id != elder.id and "caregiver" in (q.role or "").lower()]
+    for carer in carers:
+        async with sessions() as session:
+            if any(r.kind == "quiet_note" for r in await sent_today(session, carer.id, now)):
+                continue
+            name = elder.name or "they"
+            opt = Option("o1", "quiet_note",
+                         f"not an alarm: one gentle line that {name} has been quiet since yesterday; the caregiver can say why",
+                         about_ref=elder.id, field="quiet_note")
+            ctx = await build_context(session, host, carer, Clock(None, None, 0, False), now, only=[opt],
+                                      extra="This is not an alarm. One short line, and they can tell you why whenever they like.")
+        draft, _problems = await write_and_check(ctx)
+        if draft is None:
+            continue
+        await send(sessions, host, carer, ctx, draft, kind_default="quiet_note", mode="on", now=now, run=0, about=elder.id)
+
+
 # ── who is due this tick ──────────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -1211,7 +1300,10 @@ async def _next_look(session: AsyncSession, person: Person, now: datetime, *, ea
 async def next_check(session: AsyncSession, person: Person, d: Due, now: datetime) -> datetime:
     """When to read this person again. Sooner is safe (due() still decides); later must not skip a message they would get."""
     if not d.reason:
-        step = cadence(person.cared, d.clock.run + 1) or timedelta(hours=12)
+        if d.hold_chat or d.clock.chat_run >= 1:
+            step = CARED_EVERY if person.cared else CAREGIVER_EVERY  # the next look still sees a meal or a dose
+        else:
+            step = cadence(person.cared, d.clock.run + 1) or timedelta(hours=12)
         return now + step
     if d.reason in ("cadence", "talking") and d.clock.last_activity:
         lr = await learned(session, person.family_id, person.id, now)
@@ -1392,6 +1484,8 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                         live = await runtime.live_tasks(session, r.family_id)
                         d = await due(session, host, p, now, mode or env_mode(), busy=checkins.moving_for(live, p.id, now))
                         decided = d
+                        if await caregiver_note_due(session, p, d, now):
+                            await note_caregiver(sessions, host, r, p, now)
                         if d.mode:
                             stats["mode"] = d.mode
                         if d.mode == "off":
@@ -1406,7 +1500,7 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                             return
                         m = d.mode or "off"
                         stats["due"] += 1
-                        ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird, light=d.light)
+                        ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird, light=d.light, hold_chat=d.hold_chat, quiet_why=d.quiet_why)
                     if not ctx.options:
                         outcome = "no_option"
                         stats["skipped"]["no_option"] = stats["skipped"].get("no_option", 0) + 1
@@ -1454,6 +1548,8 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                                         when = now + timedelta(minutes=5)  # a meals question logged in shadow did not use the hour
                                     elif outcome in ("sent", "shadow", "waiting"):
                                         when = await next_check(session, p, decided or Due(p, Clock(None, None, 0, False)), now)
+                                    elif outcome == "no_option" and decided is not None and decided.hold_chat:
+                                        when = now + (CARED_EVERY if p.cared else CAREGIVER_EVERY)
                                     elif decided is not None and outcome == decided.reason:
                                         when = await next_check(session, p, decided, now)
                                     else:
@@ -1837,6 +1933,35 @@ async def save_reaction(session: AsyncSession, row: NudgeLedger, now: datetime) 
     return await outcomes_learn.save_learned(session, family_id=row.family_id, subject_id=row.person_id, key=key, value=value, text=text, now=now)
 
 
+async def save_quiet_why(session: AsyncSession, row: NudgeLedger, why: str, now: datetime) -> str | None:
+    """A reason they gave (read by the model, never by a word list) becomes a fact the next nudge uses."""
+    if why not in ("travelling", "unwell", "busy", "fewer"):
+        return None
+    from app.care import outcomes_learn
+
+    subject = row.about_ref if row.kind == "quiet_note" and row.about_ref else row.person_id
+    day = clock.ist(now)
+    if why == "travelling":
+        until = now + timedelta(days=7)
+        key, value = LEARNED + "away", {"until": until.isoformat(), "from_nudge": str(row.id)}
+        text = f"Away ({day:%d %b}); Saheli will not send a check-in until {clock.ist(until):%d %b}."
+    elif why == "unwell":
+        until = now + timedelta(days=1)
+        key, value = LEARNED + "unwell", {"until": until.isoformat(), "from_nudge": str(row.id)}
+        text = f"Not feeling well ({day:%d %b}); Saheli will not send a check-in until {clock.ist(until):%d %b}."
+    elif why == "busy":
+        old = await store.active_fact(session, row.family_id, subject, LEARNED + "quiet_days")
+        raw = ((old.value or {}).get("days") or []) if old else []
+        days = sorted({int(x) for x in raw if isinstance(x, int) or (isinstance(x, str) and str(x).isdigit())} | {day.weekday()})
+        key, value = LEARNED + "quiet_days", {"days": days, "from_nudge": str(row.id)}
+        text = f"Often busy on {day:%A}; Saheli skips the check-in that day."
+    else:
+        until = now + FEWER_FOR
+        key, value = LEARNED + "fewer", {"until": until.isoformat(), "from_nudge": str(row.id)}
+        text = f"Finds the messages too many ({day:%d %b}); she waits twice as long between them until {clock.ist(until):%d %b}."
+    return await outcomes_learn.save_learned(session, family_id=row.family_id, subject_id=subject, key=key, value=value, text=text, now=now)
+
+
 async def learn_topics(sessions: async_sessionmaker, *, now: datetime | None = None) -> dict:
     """Per person, the kinds of nudge they answer most and least (30 days, smoothed with every family's rate), saved as
     one visible learned fact when it is clear and has changed; the picker weights options from it."""
@@ -1881,12 +2006,14 @@ async def learn_topics(sessions: async_sessionmaker, *, now: datetime | None = N
 
 REACT = """You read how a person took one WhatsApp message that Saheli (a care companion) sent on her own, from what they
 wrote back. Judge the meaning in any language, script or mix; when unsure, say neutral. Return only JSON
-{"reaction": "welcome" | "neutral" | "unwelcome" | "fewer" | "stop"}:
+{"reaction": "welcome" | "neutral" | "unwelcome" | "fewer" | "stop", "why": "travelling" | "fewer" | "unwell" | "busy" | "none"}:
 - welcome: they engaged gladly (answered warmly, shared more, thanked her)
 - neutral: a short answer, or they moved on to something else; no sign of being bothered
 - unwelcome: they did not want THIS question or topic (annoyed by it, asked why she asks, told her not to ask that)
 - fewer: they find her messages too many or too frequent
-- stop: they want her to stop messaging them on her own"""
+- stop: they want her to stop messaging them on her own
+- why: travelling if they are away or with someone else, unwell if they are not feeling well, busy if this sort of day
+  is too full, fewer if the messages themselves are too many, none if they gave no such reason"""
 
 
 async def read_reactions(sessions: async_sessionmaker, *, now: datetime | None = None, limit: int = 20) -> dict:
@@ -1922,12 +2049,15 @@ async def read_reactions(sessions: async_sessionmaker, *, now: datetime | None =
                     {"role": "user", "content": [{"type": "text", "text": f"SAHELI'S MESSAGE:\n{row.text}\n\nTHEIR REPLY:\n{said}"}]}])
             except Exception:  # noqa: BLE001 — read it next time
                 continue
-            got = str(parse(rep.text or "").get("reaction") or "neutral").strip().lower()
+            parsed = parse(rep.text or "")
+            got = str(parsed.get("reaction") or "neutral").strip().lower()
+            why = str(parsed.get("why") or "none").strip().lower()
             row.reaction = got if got in REACTIONS else "neutral"
             row.cost_inr = round((row.cost_inr or 0.0) + _cost(rep), 4)
             stats["read"] += 1
             stats[row.reaction] += 1
             await save_reaction(session, row, now)
+            await save_quiet_why(session, row, why, now)
         await session.commit()
     return stats
 

@@ -58,7 +58,10 @@ class FakeWriter:
         ctx = messages[-1]["content"][0]["text"]
         lang = "hi" if "Devanagari" in ctx.split("NOW:")[0] or "Hindi" in ctx.split("NOW:")[0] else "en"
         self.n += 1
-        if "no question at all" in ctx:
+        if "one easy check-in" in ctx:
+            line = ("सब ठीक? आज busy लग रहा है, फुर्सत में बात करते हैं।", "आप ठीक हैं? जब समय हो तब लिख देना।")[self.n % 2] if lang == "hi" else (
+                "All good? Today looks busy, we can talk when you're free.", "You around? No hurry, talk when you have a minute.")[self.n % 2]
+        elif "no question at all" in ctx:
             line = ("सब ठीक है।", "ठीक हूँ, यही काफी है।")[self.n % 2] if lang == "hi" else ("Glad all is good here.", "All good here, and that is enough.")[self.n % 2]
         else:
             line = LINES[lang][self.n % len(LINES[lang])]
@@ -266,7 +269,7 @@ async def check(sessions, timeline: dict[str, list], rows: list, days: int) -> d
             if any(n > 2 for n in birds.values()):
                 fails.append(f"{key}: more than 2 early-bird messages in a morning")
             if p.replies == "never" and any(n > 3 for n in per_day.values()):
-                fails.append(f"{key}: {dict(per_day)} nudges a day to someone who never answers (2 questions, then one warm line)")
+                fails.append(f"{key}: {dict(per_day)} nudges a day to someone who never answers (2 questions, then one check-in)")
             if p.meals:
                 meal_rows = [r for r in rows if r.person_id == p.person["id"] and r.kind == "meal" and r.status == "sent" and r.sent_at]
                 per_day_meals: dict[str, int] = defaultdict(int)

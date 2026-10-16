@@ -41,7 +41,8 @@ class Writer:
         if head.startswith("You read how a person took"):
             self.reacted = getattr(self, "reacted", 0) + 1
             self.replies_seen = getattr(self, "replies_seen", []) + [kw["messages"][-1]["content"][0]["text"]]
-            return LLMReply(text=json.dumps({"reaction": getattr(self, "reaction", "neutral")}), tool_calls=[], model="fake", usage=self.usage)
+            body = {"reaction": getattr(self, "reaction", "neutral"), "why": getattr(self, "why", "none")}
+            return LLMReply(text=json.dumps(body), tool_calls=[], model="fake", usage=self.usage)
         if head.startswith("You grade one WhatsApp message"):
             self.graded = getattr(self, "graded", 0) + 1
             return LLMReply(text=json.dumps(getattr(self, "grade", {"pass": True, "issues": []})), tool_calls=[], model="fake", usage=self.usage)
@@ -55,6 +56,15 @@ class Writer:
         self.seen.append(kw["messages"][-1]["content"][0]["text"])
         if self.on_call:
             await self.on_call()
+        if "not an alarm" in self.seen[-1]:
+            return LLMReply(text=json.dumps({"option_id": "o1", "text": "Kamla has been quiet since yesterday. Tell me if you know why."}),
+                            tool_calls=[], model="fake", usage=self.usage)
+        if "one easy check-in" in self.seen[-1]:
+            line = ("All good? Today looks busy, we can talk when you're free.",
+                    "You around? No hurry at all, talk when you're free.",
+                    "Sab theek? Whenever you have a minute, I'm here.")[(self.calls - 1) % 3]
+            return LLMReply(text=json.dumps({"option_id": "o1", "text": line, "expects_reply": True}),
+                            tool_calls=[], model="fake", usage=self.usage)
         if "no question at all" in self.seen[-1]:
             line = ("Glad the temple visit felt lovely.", "That temple morning stayed with me.", "Still thinking of the temple visit.")[(self.calls - 1) % 3]
             return LLMReply(text=json.dumps({"option_id": "o1", "text": line, "expects_reply": False}),
@@ -207,12 +217,12 @@ async def test_unanswered_nudges_slow_down_then_stop_until_they_write_or_the_nex
 
     assert await at_("14 11:00") == 1  # an hour after their message
     assert await at_("14 12:00") == 2  # one unanswered: still hourly
-    assert await at_("14 13:00") == 2  # two unanswered: wait out the two hours
-    assert await at_("14 14:00") == 3  # then one warm line, not another question
+    assert await at_("14 13:00") == 3  # two unanswered: one easy check-in, not a stack
+    assert sent_to(host, MAA)[-1].count("?") == 1
     assert await at_("14 16:00") == 3
     assert await at_("14 17:00") == 3
-    assert await at_("14 20:00") == 3  # no more questions until they write
-    assert await at_("15 09:00") == 4  # the next day: one warm line
+    assert await at_("14 20:00") == 3  # no second check-in the same day
+    assert await at_("15 09:00") == 4  # the next day: one check-in again
     assert await at_("15 11:00") == 4
     assert await at_("15 15:00") == 4
     await wrote(db, MAA, "Yes dear, all is fine here")  # 15:00: a reply resets the ladder
@@ -1257,10 +1267,10 @@ async def test_while_the_caregiver_is_being_told_the_ladder_adds_nothing(db, at,
         await run(sessions, host)
     assert len(sent_to(host, MAA)) == 2
     host.world.escalations[MAA["id"]] = "pending"
-    at("2026-10-14 14:00")  # one warm line while the caregiver is told; not another question
+    at("2026-10-14 14:00")  # one easy check-in; the escalation is the caregiver's, and she is the person cared for
     out = await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3 and out.get("sent") == 1 and "escalating" not in out["skipped"]
-    assert "?" not in sent_to(host, MAA)[-1]
+    assert sent_to(host, MAA)[-1].count("?") == 1
     at("2026-10-14 14:05")  # a second line the same day does not go
     await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3
@@ -1625,3 +1635,116 @@ async def test_a_medicine_with_no_count_is_asked_once_away_from_its_dose(db, at)
     await db.commit()
     hint = await nudges.reply_hint(db, FAM, MAA["id"])
     assert "set_stock" in hint and "guess" in hint
+
+
+def _row(who, hour, day=14, kind="know", reason="", wamid="wamid.ok"):
+    from datetime import datetime
+
+    sent = datetime(2026, 10, day, hour, 0, tzinfo=nudges.clock.IST)
+    return NudgeLedger(family_id=FAM, person_id=who["id"], kind=kind, status="sent", field=kind, reason=reason or None,
+                       wamid=wamid or None, slot_key=f"{kind}-{day}-{hour}-{who['id']}", ref=f"nudge:{kind}-{day}-{hour}-{who['id']}",
+                       text="How was the temple visit?", planned_at=sent, sent_at=sent)
+
+
+async def test_a_quiet_elder_gets_one_check_in_then_the_caregiver_hears_after_a_day(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db)
+    await wrote(db, MAA)
+    host = SimHost()
+    for when in ("11:00", "12:00", "13:00"):
+        at(f"2026-10-14 {when}")
+        await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 3 and sent_to(host, MAA)[-1].count("?") == 1
+    assert sent_to(host, SON) == []  # a few quiet hours is not a day
+    at("2026-10-15 13:00")
+    await wrote(db, SON, "I am around")
+    at("2026-10-15 14:00")
+    await run(sessions, host)
+    assert sent_to(host, SON) == ["Kamla has been quiet since yesterday. Tell me if you know why."]
+    assert "alarm" not in sent_to(host, SON)[-1].lower()
+    at("2026-10-15 16:00")
+    await run(sessions, host)
+    assert len(sent_to(host, SON)) == 1  # once a day
+
+
+async def test_a_quiet_caregiver_gets_a_check_in_and_nobody_is_told_about_them(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db)
+    await wrote(db, SON, "Reached home")
+    await wrote(db, MAA)
+    db.add(_row(SON, 11, kind="follow_up"))
+    db.add(_row(SON, 12, kind="delight"))
+    await db.commit()
+    at("2026-10-14 14:30")
+    await wrote(db, MAA, "Having tea")  # she is not quiet, and not due again yet
+    host = SimHost()
+    at("2026-10-14 15:00")
+    await run(sessions, host)
+    assert len(sent_to(host, SON)) == 1 and sent_to(host, SON)[-1].count("?") == 1
+    assert not any(r.kind == "quiet_note" for r in await rows(db, SON))
+    assert not any(r.kind == "quiet_note" for r in await rows(db, MAA))
+
+
+async def test_a_quiet_self_care_user_gets_one_check_in_and_no_second_recipient(db, at, sessions, writer):
+    self_care = {"id": "self-n", "name": "Meera", "role": "member"}
+    at("2026-10-14 10:00")
+    await store.save_roster(db, FAM, self_care, [self_care])
+    await store.add_turn(db, family_id=FAM, thread_id=self_care["id"], role="user", text="I am up", speaker_id=self_care["id"])
+    db.add(_row(self_care, 11))
+    db.add(_row(self_care, 12))
+    await db.commit()
+    host = SimHost()
+    at("2026-10-14 13:00")
+    await run(sessions, host)
+    assert [m["to"] for m in host.world.sent] == [self_care["id"]]
+    assert host.world.sent[-1]["text"].count("?") == 1
+
+
+async def test_travelling_suppresses_the_check_in(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    at("2026-10-14 11:00")
+    await run(sessions, host)
+    at("2026-10-14 12:00")
+    await run(sessions, host)
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="trip", key="trip:6e",
+                           value={"departs": "2026-10-14T09:00:00+05:30", "arrives": "2026-10-14T18:00:00+05:30"},
+                           text="IndiGo 6E to Jaipur, lands at 18:00.", source_kind="told")
+    await db.commit()
+    at("2026-10-14 13:00")
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 2
+    assert not any(r.kind == "checkin" for r in await rows(db))
+
+
+async def test_an_unread_message_is_not_followed_by_a_check_in(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    db.add(_row(MAA, 11, reason="unread", wamid=""))
+    db.add(_row(MAA, 12, reason="not_delivered", wamid=""))
+    await db.commit()
+    host = SimHost()
+    at("2026-10-14 14:00")
+    await run(sessions, host)
+    assert sent_to(host, MAA) == []
+    assert not any(r.kind == "checkin" for r in await rows(db))
+
+
+async def test_a_reason_in_the_reply_is_saved_and_used(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    await family(db, (MAA,))
+    await wrote(db, MAA)
+    host = SimHost()
+    writer.why = "travelling"
+    await answered(db, at, sessions, writer, host, "I am travelling this week", "neutral")
+    fact = await store.active_fact(db, FAM, MAA["id"], "learned:nudges_away")
+    assert fact and "Away" in (fact.text or "")
+    db.add(_row(MAA, 12))
+    db.add(_row(MAA, 13, kind="reflect"))
+    await db.commit()
+    at("2026-10-14 15:00")
+    await run(sessions, host)
+    assert not any(r.kind == "checkin" for r in await rows(db))
