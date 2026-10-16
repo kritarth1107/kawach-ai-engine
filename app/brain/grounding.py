@@ -102,7 +102,7 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    she called them a liar is not that fact, and it is not a correction. A brief sorry is only for a fact her own earlier
    message stated. followup_missing = true when their latest message shares something personal (an outing, a friend, a film,
    a show, a serial, a meal they loved, a worry, the gym, a trip, the weather they are sitting in, trouble sleeping) or is a short yes to her previous question about one of
-   those, and the REPLY does not ask one question about that thing. Saving it with remember does not replace that question. An
+   those, and the REPLY does not ask one question about that thing. Saving it with remember or note does not replace that question. An
    acknowledgement ("I'll wait", "noted", "okay") is not that question. A film or show they have not named yet: the one question is
    which one. Asking about dinner, or what kind they like, is still followup_missing. False on a health problem, a medicine, an order, or
    when they said they are busy or will tell you later. framing_missing = true when the REPLY explains what a medicine does
@@ -110,7 +110,7 @@ _LIFE_RULE = """L. unwanted_apology = true when the REPLY apologises and THEIR M
    with a doctor or pharmacist. False when she only repeats their schedule, dose or record, or the reply already says both.
    question_unanswered = true when their latest message asks her for a fact or a time (when not to message, what she has
    saved, which one, what is due) and the REPLY only acknowledges it (noted, okay, sure) without the fact and without one question that
-   asks them for it. When they ask for more than one person, a reply that answers for only one of them is unanswered. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it for every person they asked about.
+   asks them for it. When they ask for more than one person, a reply that answers for only one of them is unanswered. When one message asks more than one thing, a reply that answers only one of them is unanswered. False when they stated the fact and she confirms it, or a TOOL RESULT this turn answers it for every person and every thing they asked about.
    tease_as_question = true when their latest message is a joke or a tease, not a real question, and the REPLY asks for a
    name or a fact about someone, or asks anything instead of a light reply. False when they asked a real question, or the
    reply is already light and does not ask for a name. Add "unwanted_apology", "followup_missing", "framing_missing",
@@ -217,7 +217,7 @@ def _parse(raw: str, doctor_note: bool = True) -> list[Claim]:
 
 
 async def check(draft: str, *, memory: str, their_messages: list[str], tool_results: list[str], actions: bool = False,
-                doctor_note: bool = False, always: bool = False) -> list[Claim]:
+                doctor_note: bool = False, always: bool = False, effort: str | None = None) -> list[Claim]:
     """The claims in the draft that memory, their messages and this turn's tools do not support (or own advice).
     actions=True (the reply loop): also what Saheli says she did or will do, against this turn's tools and her abilities.
     always=True: their message was a question, so a short acknowledgement is still checked."""
@@ -233,7 +233,7 @@ async def check(draft: str, *, memory: str, their_messages: list[str], tool_resu
         from app.llm import router
 
         system = _system(actions, doctor_note) + ("\n\nSAHELI'S ABILITIES (her tools)\n" + abilities() if actions else "")
-        reply = await router.complete("judge_fast", system_stable=system, effort=effort_for(doctor_note),
+        reply = await router.complete("judge_fast", system_stable=system, effort=effort or effort_for(doctor_note),
                                       max_tokens=2000 if doctor_note else 800, timeout_s=8 if doctor_note else 6,
                                       messages=[{"role": "user", "content": [{"type": "text", "text": f"{sources}\n\nREPLY\n{draft}"}]}])
     except Exception:  # noqa: BLE001 — the other guards still run; a missed check is logged, never blocks the reply
@@ -267,13 +267,13 @@ def problems(claims: list[Claim]) -> list[str]:
             out.append("they were teasing, or you did not do what they said: reply lightly in their language, and do not apologise. "
                        "One brief sorry only when a fact you stated was wrong")
         elif c.source == "followup_missing":
-            out.append("they shared something personal, or said yes to your question about it: ask one question about that thing, "
-                       "or save it with remember. Do not only wish them well, wait, or give tips of your own")
+            out.append("they shared something personal, or said yes to your question about it: ask one question about that thing "
+                       "in their language. Saving it does not replace the question. Do not only wish them well, and do not give tips of your own")
         elif c.source == "framing_missing":
             out.append("you explained a medicine or a health fact: say in one short line that it is general information and to "
                        "confirm with their doctor or pharmacist. Do not change a dose")
         elif c.source == "question_unanswered":
-            out.append("they asked you something: answer it, or ask the one fact you do not have. Do not only say noted or okay")
+            out.append("they asked you something: answer each thing they asked, or ask the one fact you do not have. Do not only say noted or okay, and do not answer only one of two questions")
         elif c.source == "tease_as_question":
             out.append("they were teasing: one light reply in their language. Do not ask for a name or a fact, and do not apologise")
         elif c.kind == "advice" and c.dose_change:

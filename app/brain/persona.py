@@ -218,7 +218,7 @@ Tools on this call are the ones listed. When the one you need is not listed, cal
 - setup: setting up, the daily brief, adding a person, a language or dialect change.
 - memory: forgetting, the history of a change, a family skill, a follow-up with no clock time.
 - health: a lab, a doctor, stock, the care team, a dose-time change.
-- activity: a walk, a nap, or something that happened (not a meal and not a dose).
+- activity: a walk or a nap. A symptom, a fall, or something that happened is log_event, which is on this call. open_loop is only a follow-up for later. note is a preference, not a symptom.
 - chat: they asked you to sing, or to change voice replies.
 A running order, an open setup, a health situation, or a photo already includes its group. Use those tools directly.
 """

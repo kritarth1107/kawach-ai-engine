@@ -28,7 +28,7 @@ def test_a_normal_turn_sends_the_core_and_stays_under_9k(monkeypatch):
 
     from app.brain.persona import REPLY_FORMAT, for_groups
     cold = {t.name for t in tools.specs_for()}
-    assert {"remember", "log_dose", "log_vital", "set_reminder", "send_message", "alert_caregiver", "need_tools"} <= cold
+    assert {"remember", "log_dose", "log_vital", "log_event", "set_reminder", "send_message", "alert_caregiver", "need_tools"} <= cold
     assert "log_food" not in cold and "start_task" not in cold and "nutrition_report" not in cold
     assert "daily_brief" not in cold and "change_reminder" not in cold
     assert "start_task" in {t.name for t in tools.specs_for(situation="order")}
@@ -48,7 +48,8 @@ def test_a_normal_turn_sends_the_core_and_stays_under_9k(monkeypatch):
         {"n": t.name, "d": t.description, "s": t.schema} for t in tools.specs_for()
     ])) // 4
     normal = len(text) // 4 + tool_tok
-    assert normal < 9000
+    # log_event is on every call (a symptom the tagger misses has no other way to be logged). One tool past 9k.
+    assert normal < 10000
     # The family's record stays in the system instruction, after this prefix.
     assert "CARE RECORD" in text
     before = spend.cost_inr("gemini-3.5-flash", {"in": 40000})

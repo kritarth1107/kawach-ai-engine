@@ -1078,7 +1078,8 @@ async def _judge_claims(ctx: tools.TurnCtx, draft: str, *, memory: str, theirs: 
     if ctx.judge_band == sample.SKIP:
         return []
     claims = await grounding.check(draft, memory=memory, their_messages=theirs, tool_results=tool_texts, actions=True,
-                                   doctor_note=health_turn(ctx.actions), always=asked)
+                                   doctor_note=health_turn(ctx.actions), always=asked,
+                                   effort="low" if situation == "chit_chat" else None)
     ctx.judged_text = text
     ctx.judged_claims = list(claims)
     return claims
@@ -1389,9 +1390,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 break
             strippable = [c for c in claims if c.source not in (
                 "doctor_note", "unwanted_apology", "followup_missing", "framing_missing", "question_unanswered")]
-            if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)):
+            if guard_rounds >= 2 and (strippable or guards.opener_problems(text_now)) and not (
+                    any(c.source == "followup_missing" for c in claims) and "?" not in text_now and "？" not in text_now):
                 # A second draft that still invents, advises, or opens as a note is not sent on for another wording.
-                # A missing "see a doctor" line has nothing to cut, so that one gets one more rewrite.
+                # A missing question about something they shared gets one more rewrite: cutting the draft does not ask it.
                 reply.text = guards.without_bookkeeping(grounding.strip(text_now, strippable)) or ""
                 break
             if guard_rounds >= 3:
@@ -1574,8 +1576,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
         vital_data = _json_result(vital) if vital else {}
         asked_name = _asked_name(ctx)
-        if asked_name and (asked_name not in (final or "") or guards.language_problems(final or "", profile)):
-            # The model echoed its own instructions, or wrote them in the wrong language. The name is the one they gave.
+        if asked_name:
+            # The name they gave is the whole reply. A draft that also copies the prompt ("Roman letters", "35 words") is not sent.
             final = guards.call_you(profile, asked_name)
             guarded = True
         if vital:
@@ -1594,6 +1596,19 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 final = guards.calm_noted(profile, told)
             elif told and told not in (final or ""):
                 final = f"{final.rstrip()} {told}".strip()
+            guarded = True
+        sched = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "today_schedule"), None)
+        due = [m for m in (_json_result(sched).get("medicines") or []) if isinstance(m, dict) and m.get("name")] if sched else []
+        if due and any(str(m["name"]).lower() not in (final or "").lower() for m in due):
+            # The list they asked for was cut off. The names and times are the tool's, said in full.
+            final = guards.due_today(profile, due)
+            guarded = True
+        dose = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"), None)
+        dose_data = _json_result(dose) if dose else {}
+        dose_times = [str(t) for t in (dose_data.get("scheduled") or []) if t]
+        if dose_times and not any(t in (final or "") for t in dose_times):
+            # "On time" is only true when the reply names the time the record holds.
+            final = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
             guarded = True
         report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
         if report:

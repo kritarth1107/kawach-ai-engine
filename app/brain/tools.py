@@ -199,7 +199,7 @@ _WHEN_SYSTEM = {"weekly_report", "service_status"}
 # adds a group. need_tools adds one the model asked for. Every tool is in exactly one place.
 _CORE = frozenset({
     "remember", "recall", "search_records", "confirm_change", "whats_pending",
-    "log_dose", "log_vital", "stop", "note",
+    "log_dose", "log_vital", "log_event", "stop", "note",
     "set_reminder", "reminders", "today_schedule",
     "send_message", "alert_caregiver", "web_search",
     "undo_change", "open_loop", "need_tools",
@@ -226,7 +226,7 @@ _GROUPS = {
         "set_stock", "medicine_stock", "emergency_card", "care_team", "log_outcome", "assign_family_task",
         "family_tasks", "patterns", "change_reminder", "reminder_log",
     }),
-    "activity": frozenset({"activity", "log_activity", "log_event"}),
+    "activity": frozenset({"activity", "log_activity"}),
     "chat": frozenset({"sing", "voice_replies", "feedback"}),
     "system": frozenset({"weekly_report", "service_status"}),
 }
@@ -284,7 +284,7 @@ def specs_for(*, open_tasks: bool = False, system: bool = False, situation: str 
     "Call this once when the next step needs a tool that is not listed on this call. "
     "group: order (buy, ride, trip, flight, a place), nutrition (a meal, a food change, a nutrition target or report), "
     "setup (onboarding, the daily brief, a person, a language change), memory (forget, history of a change, a family skill), "
-    "health (a lab, a doctor, stock, the care team, a dose-time change), activity (a walk, a nap, something that happened), "
+    "health (a lab, a doctor, stock, the care team, a dose-time change), activity (a walk or a nap), "
     "chat (they asked you to sing, or to change voice replies). The next step has that group. Then call the tool.",
     {"group": {"type": "string", "enum": ["order", "nutrition", "setup", "memory", "health", "activity", "chat"]}},
     ["group"],
@@ -860,6 +860,7 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         raise ToolRefused("day must be today, yesterday or a date in the last 7 days.")
     today = day == clock.ist_day()
     fact = await doses.medicine_fact(ctx.session, ctx.family_id, subject, name)
+    scheduled = [str(t) for t in ((fact.value or {}).get("times") or []) if isinstance(t, str)] if fact else []
     not_due = bool(fact and not doses.due_on(fact.value, day))
     if not_due and a["outcome"] != "taken":
         # live 2026-10-09: "I took nothing today" logged the weekly Vitamin D3 as skipped on a day it was not due
@@ -876,19 +877,19 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         day=day, time=a.get("time"), actor_id=ctx.speaker.get("id"), ref=ctx.message_ref and f"{ctx.message_ref}:{slug(name)}:{day}",
     )
     if saved is None:
-        return {"logged": summary, "already": True}
+        return {"logged": summary, "already": True, "medicine": name, "scheduled": scheduled}
     if a["outcome"] == "not_taken":
         res = await ctx.host.call(
             "clear_schedule_completion", {"title": name, "dateKey": day, **({"time": a["time"]} if a.get("time") else {})},
             family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
         )
-        return {"unmarked": f"{name} for {day}: not taken yet", "schedule": res}
+        return {"unmarked": f"{name} for {day}: not taken yet", "schedule": res, "medicine": name, "scheduled": scheduled}
     tool_name = "mark_schedule_completed" if a["outcome"] == "taken" else "mark_schedule_missed"
     res = await ctx.host.call(
         tool_name, {"title": name, "dateKey": day, "note": a.get("note") or a["outcome"], **({"time": a["time"]} if a.get("time") else {})},
         family_id=ctx.family_id, subject_id=subject, actor_id=ctx.actor_id,
     )
-    out = {"logged": summary, "schedule": res}
+    out = {"logged": summary, "schedule": res, "medicine": name, "scheduled": scheduled}
     if not_due:
         out["not_due"] = (f"{name} is taken only on {doses.day_label(fact.value.get('days'))}, not on {day}. Ask gently whether "
                           "it was taken early by mistake; if it was, tell the caregivers (alert_caregiver safety) instead of advising.")

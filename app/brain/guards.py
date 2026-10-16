@@ -1372,6 +1372,55 @@ def week_facts(summary: str) -> list[str]:
     return out[:3]
 
 
+_DUE = {
+    "english": "Today: {list}.",
+    "indic": "Aaj: {list}.",
+    "devanagari": "आज: {list}।",
+    "mr": "आज: {list}.",
+    "bengali": "আজ: {list}।",
+    "tamil": "இன்று: {list}.",
+    "telugu": "ఈరోజు: {list}.",
+    "kannada": "ಇಂದು: {list}.",
+    "malayalam": "ഇന്ന്: {list}.",
+    "gujarati": "આજે: {list}.",
+    "gurmukhi": "ਅੱਜ: {list}।",
+    "odia": "ଆଜି: {list}।",
+}
+_DOSE_AT = {
+    "english": "Logged {name} as taken. It is scheduled at {when}.",
+    "indic": "{name} le liya, likh liya. Yeh {when} ko scheduled hai.",
+    "devanagari": "{name} ले ली, लिख लिया। यह {when} पर scheduled है।",
+    "mr": "{name} घेतली, नोंद केली. ही {when} ला scheduled आहे.",
+    "bengali": "{name} নেওয়া লিখে নিয়েছি। এটা {when}-এ scheduled।",
+    "tamil": "{name} எடுத்தது குறித்துவிட்டேன். இது {when}-க்கு scheduled.",
+    "telugu": "{name} తీసుకున్నారు, రాసుకున్నాను. ఇది {when} కు scheduled.",
+    "kannada": "{name} ತೆಗೆದುಕೊಂಡದ್ದು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ. ಇದು {when} ಕ್ಕೆ scheduled.",
+    "malayalam": "{name} കഴിച്ചത് കുറിച്ചു. ഇത് {when}-ന് scheduled.",
+    "gujarati": "{name} લીધી, લખી લીધી. આ {when} એ scheduled છે.",
+    "gurmukhi": "{name} ਲੈ ਲਈ, ਲਿਖ ਲਿਆ। ਇਹ {when} ਤੇ scheduled ਹੈ।",
+    "odia": "{name} ନିଆଯାଇଛି, ଲେଖିଲି। ଏହା {when} ରେ scheduled।",
+}
+
+
+def due_today(profile: dict | None, medicines: list[dict]) -> str:
+    """Every medicine the schedule tool returned, with its time. A cut-off list is not the answer."""
+    bits = []
+    for med in medicines[:8]:
+        bit = str(med.get("name") or "")
+        if med.get("dose"):
+            bit += " " + str(med["dose"])
+        if med.get("time"):
+            bit += " " + str(med["time"])
+        if bit.strip():
+            bits.append(bit.strip())
+    return canned(profile, _DUE).format(list="; ".join(bits))
+
+
+def dose_logged(profile: dict | None, name: str, times: list[str]) -> str:
+    """Taken is logged. The time is the one on the record, not a claim that this taking matched it."""
+    return canned(profile, _DOSE_AT).format(name=name, when=", ".join(times))
+
+
 def medicine_line(profile: dict | None, medicines: list[tuple[str, str, list[str]]]) -> str:
     """The saved medicine, said back, when a setup pitch answered a medicine question."""
     bits = []

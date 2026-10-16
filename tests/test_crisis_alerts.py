@@ -109,6 +109,15 @@ async def test_a_red_flag_with_no_one_else_to_tell_goes_to_the_team_and_with_fam
     assert not family.world.team_alerts and "1 family member(s) told" in out["told"]
 
 
+def test_a_cut_off_list_is_the_schedule_the_tool_returned():
+    from app.brain import guards
+
+    line = guards.due_today({"saved": {"language": "hi", "script": "roman"}}, [{"name": "Metformin", "dose": "500 mg", "time": "08:00"}])
+    assert line == "Aaj: Metformin 500 mg 08:00."
+    logged = guards.dose_logged({"saved": {"language": "pa"}, "now": "gurmukhi"}, "Montelukast", ["21:30"])
+    assert "21:30" in logged and "Montelukast" in logged
+
+
 def test_a_saved_name_is_said_in_their_language():
     from app.brain import guards
 
