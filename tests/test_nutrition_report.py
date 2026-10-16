@@ -229,7 +229,9 @@ async def test_account_deletion_removes_her_food_data(db, at, nfake):
     assert out["nutrition_entries"] == 1 and out["nutrition_jobs"] == 2 and out["nutrition_pantry"] == 1 and out["memory_versions_food"] >= 1
     for model in (NutritionEntry, NutritionJob, NutritionPantry):
         assert (await db.execute(model.__table__.select().where(model.family_id == FAM))).first() is None
-    assert (await db.execute(NutritionFood.__table__.select().where(NutritionFood.family_id.is_(None)))).first() is not None  # generic stays
+    # the reply's estimate belongs to the family; a shared row appears only after the later web look-up
+    assert (await db.execute(NutritionFood.__table__.select().where(NutritionFood.family_id == FAM))).first() is not None
+    assert (await db.execute(NutritionFood.__table__.select().where(NutritionFood.family_id.is_(None)))).first() is None
     ev = await store.events(db, FAM, NANI["id"], kinds=["meal"])
     assert ev == []
 

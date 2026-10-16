@@ -196,12 +196,30 @@ async def test_a_food_found_once_needs_no_model_or_web_next_time(db, at, nfake):
     at("2026-10-14 09:00")
     nfake.decisions["boiled egg"] = EGG_D
     await call(db, "log_food", {"items": [{"name": "boiled egg", "quantity": 2, "unit": "piece"}]})
-    assert nfake.web.asked == ["boiled egg"]
+    assert nfake.web.asked == [] and nfake.calls.count("estimate") == 1 and "normalise" not in nfake.calls
     food = (await db.execute(NutritionFood.__table__.select())).first()
-    assert food.family_id is None and food.source == "usda" and food.source_urls  # generic, shared, cited
+    assert food.family_id == FAM and food.source == "model"  # the reply's estimate; the web search is after they are told
     nfake.calls.clear()
     r, _ = await call(db, "log_food", {"items": [{"name": "Boiled egg", "quantity": 1, "unit": "piece"}]})
-    assert r["result"] == "saved" and nfake.calls == [] and nfake.web.asked == ["boiled egg"]
+    assert r["result"] == "saved" and nfake.calls == [] and nfake.web.asked == []
+
+
+async def test_the_web_search_runs_after_the_reply_and_shares_the_food(db, at, nfake):
+    """The reply does not search. The search after it replaces the estimate and shares a published food."""
+    from contextlib import asynccontextmanager
+
+    at("2026-10-14 09:00")
+    saved, _ = await call(db, "log_food", {"items": [{"name": "boiled egg", "quantity": 2, "unit": "piece"}]})
+    assert saved["result"] == "saved" and nfake.web.asked == []
+
+    @asynccontextmanager
+    async def sessions():
+        yield db
+
+    await agent.refine_saved(sessions, saved["job_id"])
+    assert nfake.web.asked == ["egg"]
+    food = (await db.execute(NutritionFood.__table__.select())).first()
+    assert food.family_id is None and food.source == "usda" and food.source_urls
 
 
 async def test_a_counted_food_beside_a_stated_amount_does_not_hold_the_meal(db, at, nfake):
@@ -221,14 +239,16 @@ async def test_a_flavour_is_saved_as_one_dish_and_roti_with_dal_stays_two(db, at
             "units": {"piece": 80}, "default_unit": "piece", "typical_qty": 2, "countable": True, "tags": ["grain"], "source_kind": "ifct"}
     nfake.web.foods["chocolate ice cream"] = ice
     nfake.web.foods["paratha"] = para
-    nfake.part_of = {"chikoo": "chocolate ice cream"}
+    # Two flavours are one dish in the brain's tool call. The reply does not spend a second call folding them.
     r, _ = await call(db, "log_food", {"items": [{"name": "chikoo"}, {"name": "chocolate ice cream", "quantity": 140, "unit": "g"}]})
-    assert r["result"] == "saved" and len(r["saved"]) == 1, r
-    assert r["saved"][0]["kcal"] == 294  # 140 g of the ice cream, not a fruit added on top
-    assert "sugar" in r["say"]
+    assert r["result"] == "saved" and len(r["saved"]) == 2, r
+    ice_row = next(s for s in r["saved"] if "ice" in s["said"] or "ice" in s.get("name", "").lower())
+    assert ice_row["kcal"] == 294
+    assert "parts" not in nfake.calls
     nfake.part_of = {"potato": "paratha"}
     bread, _ = await call(db, "log_food", {"meal": "breakfast", "items": [{"name": "potato"}, {"name": "paratha", "quantity": 2, "unit": "piece"}]})
-    assert bread["result"] == "saved" and len(bread["saved"]) == 1, bread
+    assert bread["result"] == "saved" and len(bread["saved"]) == 2, bread
+    assert "parts" not in nfake.calls
     nfake.part_of = {}
     two, _ = await call(db, "log_food", {"meal": "lunch", "items": [
         {"name": "roti", "quantity": 2, "unit": "piece"}, {"name": "dal", "quantity": 1, "unit": "katori"}]})
@@ -258,7 +278,7 @@ async def test_two_questions_at_most_then_an_estimate(db, at, nfake):
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "thekua"}]})
     assert r["needs"][0]["reason"] == "label"
     r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "items": [{"name": "thekua", "quantity": 2, "unit": "piece"}]})
-    assert r["result"] == "saved" and r["saved"][0]["confidence"] == "estimate"
+    assert r["result"] == "saved" and r["saved"][0]["confidence"] == "said"
     f = (await db.execute(NutritionFood.__table__.select().where(NutritionFood.name == "Thekua"))).first()
     assert f.family_id == FAM  # an unpublished estimate stays with the family
 
@@ -287,7 +307,7 @@ async def test_a_meal_photo_is_confirmed_before_anything_is_saved(db, at, nfake)
     r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
     assert r["needs"][0]["question"] == (
-        "Looks like 2 boiled egg, 1 cup tea, about 215 kcal, 14 g protein, 12 g fat, 9 g sugar. "
+        "Looks like 2 boiled egg, 1 cup tea. "
         "Did you eat this, or is it for someone else — like Ravi's diary?")
     assert r["needs"][0]["options"] == ["I ate it", "Ravi", "Just sharing"]
     assert await active(db) == []
@@ -305,7 +325,8 @@ async def test_a_photo_is_not_saved_when_the_same_message_says_it_is_confirmed(d
         {"name": "tea", "quantity": 1, "unit": "cup", "grams": 150, "confidence": 0.7}]}
     r, _ = await call(db, "log_food", {"from_photo": True, "confirmed": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
-    assert "215 kcal" in r["needs"][0]["question"] and "Did you eat this" in r["needs"][0]["question"]
+    assert "kcal" not in r["needs"][0]["question"] and "Did you eat this" in r["needs"][0]["question"]
+    assert "estimate" not in nfake.calls and "normalise" not in nfake.calls
     assert await active(db) == []
 
 
@@ -611,12 +632,12 @@ async def test_a_slow_new_food_finishes_in_the_background(db, at, nfake, monkeyp
     monkeypatch.setenv("NUTRITION_INLINE_S", "0.3")
     monkeypatch.setattr(jobs, "kick_nutrition", lambda: None)
     nfake.web.slow = True
+    nfake.calls.clear()
+    nfake.web.asked.clear()
     r, _ = await call(db, "log_food", {"items": [{"name": "chicken biryani", "quantity": 1, "unit": "plate"}]})
-    assert r["result"] == "looking_up" and await active(db) == []
-    nfake.web.slow = False
-    job = await jobs.get(db, FAM, r["job_id"])
-    out = await agent.run_background(db, job)
-    assert out["result"] == "saved" and len(await active(db)) == 1
+    assert r["result"] == "saved" and r["say"].startswith("Saved:"), r
+    assert nfake.web.asked == [] and nfake.calls.count("estimate") == 1
+    assert len(await active(db)) == 1
 
 
 @pytest.mark.parametrize("bad", [{"items": []}, {}])
@@ -736,7 +757,7 @@ async def test_fourteen_days_teach_the_usual_amount_and_skip_the_lookup(db, at, 
                                                  "items": [{"name": "roti"}]})
     tea_before, _ = await call(db, "log_food", {"meal": "breakfast", "eaten_at": "2026-09-16T07:00:00+05:30",
                                                 "items": [{"name": "tea"}]})
-    before_lookups = nfake.calls.count("normalise") + len(nfake.web.asked)
+    before_lookups = nfake.calls.count("estimate") + nfake.calls.count("normalise") + len(nfake.web.asked)
     assert roti_before["result"] == "needs_input"  # counted, and not their amount yet
     assert tea_before["result"] == "saved", tea_before
     tea_saved = next(e for e in await active(db) if "tea" in e.name.lower())
@@ -774,7 +795,7 @@ async def test_fourteen_days_teach_the_usual_amount_and_skip_the_lookup(db, at, 
     assert "your usual" in roti_after["say"]
     saved = [e for e in await active(db) if e.day == "2026-09-15" and e.meal == "dinner"]
     assert [e.quantity for e in saved] == [4]
-    after_lookups = nfake.calls.count("normalise") + len(nfake.web.asked)
+    after_lookups = nfake.calls.count("estimate") + nfake.calls.count("normalise") + len(nfake.web.asked)
     morning, _ = await call(db, "log_food", {"usual": True, "meal": "breakfast", "eaten_at": "2026-09-15T07:00:00+05:30"})
     assert morning["result"] == "saved", morning
     morn = [e for e in await active(db) if e.day == "2026-09-15" and e.meal == "breakfast"]
@@ -1026,8 +1047,8 @@ async def test_a_slow_search_does_not_hold_the_reply_or_start_a_second_wave(db, 
         {"name": "pongal", "quantity": 1, "unit": "katori"},
     ]})
     elapsed = time.monotonic() - started
-    assert out["result"] == "looking_up" and await active(db) == [], out
-    assert nfake.calls.count("estimate") == 1
+    assert out["result"] == "saved" and out["say"].startswith("Saved:"), out
+    assert nfake.calls.count("estimate") == 1 and nfake.web.asked == [] and "normalise" not in nfake.calls
     assert elapsed < 1.0, elapsed
 
 
@@ -1047,7 +1068,7 @@ async def test_unknown_foods_are_estimated_in_one_call(db, at, nfake):
     ]})
     assert not err and saved["result"] == "saved", saved
     assert nfake.calls.count("estimate") == 1
-    assert nfake.calls.count("normalise") == 1
+    assert nfake.calls.count("normalise") == 0 and nfake.web.asked == []
     assert len(saved["saved"]) == 4
 
 

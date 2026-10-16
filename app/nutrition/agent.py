@@ -547,17 +547,19 @@ class NutritionAgent:
         cached = await lookup.resolve(s, who.family_id, clean, pantry_rows=stock, cache_only=True)
         found = cached if all(r.food is not None or r.medicine for r in cached) else None
 
-        # A flavour, filling, or variety named with a dish is that dish, not a second food. Only when the catalogue
-        # did not already know every item. A photo and an order's dishes are already separate foods.
-        if found is None and len(items) > 1 and not ask.get("from_photo") and not ask.get("from_order_task") and not estimates_only:
-            left = (deadline - time.monotonic()) if deadline else 4.0
-            if deadline is None or left >= 1.5 or background:
-                items = await lookup.fold_descriptions(items, essential=who.essential, timeout_s=min(4.0, max(1.5, left)))
-                ask["items"] = items
-                job.ask = ask
-                clean = [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items]
+        # A flavour fold is a second model call. The person's reply does not wait for it: the brain already sends one
+        # item for two flavours. The background look-up still folds before it searches.
+        if found is None and background and len(items) > 1 and not ask.get("from_photo") and not ask.get("from_order_task") and not estimates_only:
+            items = await lookup.fold_descriptions(items, essential=who.essential, timeout_s=4.0)
+            ask["items"] = items
+            job.ask = ask
+            clean = [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items]
 
-        if found is None:
+        if found is None and not background and not estimates_only:
+            # One catalogue hit, or one estimate. The grounded search runs after the reply.
+            found = await lookup.reply_lookup(s, who.family_id, clean, pantry_rows=stock, essential=who.essential,
+                                               no_questions=not jobs.can_ask(job))
+        elif found is None:
             try:
                 found = await lookup.resolve(s, who.family_id, clean, pantry_rows=stock, deadline=deadline,
                                              essential=who.essential, no_questions=not jobs.can_ask(job),
@@ -795,7 +797,7 @@ class NutritionAgent:
         try:
             found = await lookup.resolve(self.session, self.who.family_id,
                                          [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items],
-                                         deadline=time.monotonic() + 8, essential=False, no_questions=True)
+                                         cache_only=True)
         except lookup.Slow:
             return ""
         sizes = (await settings.get(self.session, self.who.family_id, job.subject_id))["sizes"]
@@ -1104,6 +1106,8 @@ async def refine_saved(sessions, job_id) -> None:
             food.per_100g = N.clean(got["per_100g"])
             food.source = str(got.get("source") or "web")[:12]
             food.source_urls = list(got.get("source_urls") or [])[:4]
+            if food.source in ("usda", "ifct", "web", "off") and food.kind != "recipe":
+                food.family_id = None  # a published value is shared; the estimate was only this family's until then
             chk = N.check_per_100g(food.per_100g)
             food.checked = {**chk.to_dict(), "rough": False}
             food.confidence = 0.8
