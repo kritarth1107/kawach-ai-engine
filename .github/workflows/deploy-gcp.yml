@@ -10,9 +10,10 @@ on:
         default: "false"
 
 concurrency:
-  group: deploy-ai-engine-gcp
-  # a running deploy finishes; GitHub keeps only the newest waiting one (so the latest commit still wins). With pushes every
-  # few minutes and a 15-20 minute pipeline (tests, replay cases), cancelling in progress meant no deploy ever landed.
+  # Pushes share one queue. GitHub drops an older pending run when a newer one arrives, even with
+  # cancel-in-progress false, and a running deploy is left to finish. A founder override is its own
+  # group, so a later untagged push cannot cancel that pending override. This workflow stays disabled.
+  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.override_nightly == 'true' && format('deploy-engine-gcp-override-{0}', github.run_id) || 'deploy-ai-engine-gcp' }}
   cancel-in-progress: false
 
 env:

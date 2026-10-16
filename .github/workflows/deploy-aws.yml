@@ -10,7 +10,10 @@ on:
         default: "false"
 
 concurrency:
-  group: deploy-engine-aws
+  # Pushes share one queue. GitHub drops an older pending run when a newer one arrives, even with
+  # cancel-in-progress false, and a running deploy is left to finish. A founder override is its own
+  # group, so a later untagged push cannot cancel that pending override.
+  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.override_nightly == 'true' && format('deploy-engine-aws-override-{0}', github.run_id) || 'deploy-engine-aws' }}
   cancel-in-progress: false
 
 env:
