@@ -1583,8 +1583,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
             guarded = True
         elif ctx.situation == "emergency" and not any(a.get("reason") == "crisis" for a in ctx.alerts):
-            final = guards.calm_noted(profile, told)
-            guarded = True
+            # A non-crisis alert: her own answer stays when it is a short, plain reply. Only an empty, framed or long
+            # draft becomes the calm line (16 Oct: the line replaced good answers, and in Hindi script for someone writing
+            # Roman Hinglish; the language guard above already checked the draft's script).
+            if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
+                final = guards.calm_noted(profile, told)
+                guarded = True
         elif ctx.situation == "emergency":
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
