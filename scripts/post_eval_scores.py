@@ -50,9 +50,22 @@ def email(subject: str, text: str) -> bool:
     try:
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
             return 200 <= r.status < 300
+    except urllib.error.HTTPError as exc:
+        # 403 is this key not being allowed to send as `from` (the domain is not on the key, or the key can only
+        # write to its owner). The body says which. The key itself is not printed.
+        detail = exc.read().decode(errors="replace")[:300]
+        print(f"::warning::the team email failed: HTTP {exc.code} from {body_from(body)}: {detail}")
+        return False
     except Exception as exc:  # noqa: BLE001
         print(f"::warning::the team email failed: {exc}")
         return False
+
+
+def body_from(body: bytes) -> str:
+    try:
+        return str(json.loads(body).get("from") or "")
+    except json.JSONDecodeError:
+        return ""
 
 
 def main(argv: list[str]) -> int:

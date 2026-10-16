@@ -131,6 +131,33 @@ async def test_the_wait_bound_is_only_for_taking_the_turn(db):
     assert (await db.execute(text("SHOW lock_timeout"))).scalar_one() == before  # the rest of the turn is as before
 
 
+async def test_a_draft_already_written_is_sent_when_the_budget_runs_out(db, monkeypatch):
+    """Five night probes died with no reply after the budget. The draft from the first call is the reply."""
+    await store.save_roster(db, FAM, ME, [ME])
+
+    class Two:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, route, **kw):
+            self.calls += 1
+            if self.calls == 1:
+                return LLMReply(text="How is the heat? Are you alright?", tool_calls=[], model="fake")
+            await asyncio.sleep(2)
+            return LLMReply(text="this rewrite never arrives", tool_calls=[], model="fake")
+
+    p = Two()
+    router.register_provider("fake", p)
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"], "classify": ["fake:m"]}')
+    monkeypatch.setenv("BRAIN_HEDGE_AFTER_S", "0")
+    monkeypatch.setitem(loop.TURN_BUDGET_S, "message", 0.6)
+    monkeypatch.setattr(loop, "MIN_CALL_S", 0.05)
+    router.reset_breakers()
+    spend.reset()
+    result = await loop.run_turn(db, SimHost(), req("the heat today", "speed-draft"))
+    assert "heat" in result.reply and "never arrives" not in result.reply
+
+
 async def test_a_turn_never_runs_past_the_time_the_person_waits(db, model, monkeypatch):
     """Nothing done yet when the budget runs out: the same as no model answering (503, the backend's holding line)."""
     await store.save_roster(db, FAM, ME, [ME])

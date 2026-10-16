@@ -1337,6 +1337,27 @@ def calm_noted(profile: dict | None, told: str = "") -> str:
     return f"{line} {told}".strip() if told else line
 
 
+_CALL_YOU = {
+    "english": "I'll call you {name}.",
+    "indic": "Main aapko {name} kahungi.",
+    "devanagari": "मैं आपको {name} कहूँगी।",
+    "mr": "मी तुम्हाला {name} म्हणेन.",
+    "bengali": "আমি আপনাকে {name} বলব।",
+    "tamil": "நான் உங்களை {name} என்று அழைப்பேன்.",
+    "telugu": "నేను మిమ్మల్ని {name} అని పిలుస్తాను.",
+    "kannada": "ನಾನು ನಿಮ್ಮನ್ನು {name} ಎಂದು ಕರೆಯುತ್ತೇನೆ.",
+    "malayalam": "ഞാൻ നിങ്ങളെ {name} എന്ന് വിളിക്കും.",
+    "gujarati": "હું તમને {name} કહીશ.",
+    "gurmukhi": "ਮੈਂ ਤੁਹਾਨੂੰ {name} ਕਹਾਂਗੀ।",
+    "odia": "ମୁଁ ଆପଣଙ୍କୁ {name} କହିବି।",
+}
+
+
+def call_you(profile: dict | None, name: str) -> str:
+    """The name they asked to be called, in their language. The name itself is the one they gave."""
+    return canned(profile, _CALL_YOU).format(name=name)
+
+
 def missed_reminder_line(profile: dict | None) -> str:
     return canned(profile, _NONE_SENT)
 

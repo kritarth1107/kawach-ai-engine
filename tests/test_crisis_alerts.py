@@ -109,6 +109,14 @@ async def test_a_red_flag_with_no_one_else_to_tell_goes_to_the_team_and_with_fam
     assert not family.world.team_alerts and "1 family member(s) told" in out["told"]
 
 
+def test_a_saved_name_is_said_in_their_language():
+    from app.brain import guards
+
+    hindi = {"saved": {"language": "hi", "script": "roman"}}
+    assert guards.call_you(hindi, "Simran") == "Main aapko Simran kahungi."
+    assert "35 words" not in guards.call_you(hindi, "Simran")
+
+
 def test_who_was_told_is_already_in_the_persons_language():
     from app.brain import guards
 

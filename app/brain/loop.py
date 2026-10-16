@@ -910,6 +910,29 @@ def _json_result(action: dict) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _last_draft(msgs: list) -> str:
+    """The last reply already written, when a later model call does not come back."""
+    for message in reversed(msgs):
+        if message.get("role") != "assistant" or message.get("tool_calls"):
+            continue
+        text = str(message.get("text") or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _asked_name(ctx: tools.TurnCtx) -> str:
+    """The name a naming save just stored. Empty when this turn did not change how they are addressed."""
+    for action in reversed(ctx.actions):
+        if not action.get("ok") or action.get("tool") != "remember":
+            continue
+        args = action.get("args") or {}
+        if args.get("domain") != "naming":
+            continue
+        return str((args.get("details") or {}).get("name") or "").strip()
+    return ""
+
+
 def _told(ctx: tools.TurnCtx) -> str:
     for action in reversed(ctx.actions):
         if action.get("ok") and action.get("tool") == "alert_caregiver":
@@ -1297,6 +1320,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 logger.error("turn budget spent family=%s step=%d", req.family_id, step)
                 raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent") from exc
         except router.AllModelsFailed:
+            draft = "" if is_system else _last_draft(msgs)
+            if draft:
+                # A later call ran out of time. The reply already written still goes out (a night of empty replies
+                # was five turns that had a draft and then spent the budget).
+                logger.error("turn budget spent family=%s; sending the draft already written", req.family_id)
+                degraded = draft
+                reply = None
+                break
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
                 raise  # nothing happened yet: the caller may safely try another path (503, then the holding line)
             # Something was already saved or sent: keep it (a retry elsewhere would do it twice). Say we'll finish, and do.
@@ -1542,11 +1573,19 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         told = _told(ctx)
         vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
         vital_data = _json_result(vital) if vital else {}
-        if vital and (situation in ("vital_report", "emergency") or vital_data.get("red_flag")) and (
-                vital_data.get("red_flag") or guards.has_framing(final) or len(guards.sentences(final)) > 2):
+        asked_name = _asked_name(ctx)
+        if asked_name and (asked_name not in (final or "") or guards.language_problems(final or "", profile)):
+            # The model echoed its own instructions, or wrote them in the wrong language. The name is the one they gave.
+            final = guards.call_you(profile, asked_name)
+            guarded = True
+        if vital:
+            # A reading is noted. The number is not called fine, high or low: that judgement is not hers.
             final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
             guarded = True
-        elif situation == "emergency":
+        elif ctx.situation == "emergency" and not any(a.get("reason") == "crisis" for a in ctx.alerts):
+            final = guards.calm_noted(profile, told)
+            guarded = True
+        elif ctx.situation == "emergency":
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
             elif told and told not in (final or ""):
