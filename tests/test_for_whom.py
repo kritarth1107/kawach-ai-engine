@@ -270,3 +270,28 @@ async def test_a_self_care_persons_big_order_is_not_left_waiting_for_an_approver
     await db.commit()
     out = await runtime.provide_input(db, t, kind="confirm", value="yes", by="self-fw", by_is_elder=True)
     assert out.startswith("confirmed; placing it now"), out
+
+
+async def test_a_caregivers_own_order_leaves_nothing_in_the_elders_brief(db, at):
+    """His own snacks and his own cab: the asks are on his care record. Her daily brief is built from her events only, so
+    it does not say she was asked to confirm a delivery, or a pickup, for something that is his."""
+    at("2026-10-16 21:34")
+    await store.save_roster(db, FAM, E, [E, S, D])
+    host = Book()
+    first = await tools.start_task(ctx(db, S, host), {**ORDER, "for_whom": SON, "goal": "evening snacks"})
+    assert first["status"] == "not started yet" and first["confirm_address"]
+    ride = await tools.start_task(ctx(db, S, host, ref="r1"), {
+        "kind": "ride", "goal": "Cab from the cafe", "pickup": "the cafe", "drop": "home", "service": "ola", "for_whom": SON})
+    assert ride.get("ask_location") == "pickup"
+    blocked = await tools.start_task(ctx(db, S, host, ref="x1"), {
+        "kind": "order", "goal": "a tobacco item", "for_whom": SON,
+        "items": [{"name": "a tobacco item", "restricted": "tobacco"}]})
+    assert blocked["status"] == "not started"
+    kinds = ["order_address_asked", "order_for_whom_asked", "order_refused", "ride_pin_asked"]
+    assert await store.events(db, FAM, ELDER, kinds=kinds) == []
+    his = {e.kind for e in await store.events(db, FAM, SON, kinds=kinds)}
+    assert his == {"order_address_asked", "ride_pin_asked", "order_refused"}
+    from app.care.brief import digest
+
+    text = await digest(db, host, FAM, E, "2026-10-16")
+    assert "order_address_asked" not in text and "evening snacks" not in text and "ride_pin_asked" not in text and "order_refused" not in text

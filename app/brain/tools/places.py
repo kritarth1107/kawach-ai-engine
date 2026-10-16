@@ -21,6 +21,26 @@ PIN_KEPT_FOR = timedelta(hours=2)
 PIN_SAVE_WITHIN_KM = 1.5
 
 
+def order_subject(ctx: TurnCtx, for_whom: str | None) -> str:
+    """Who an order or ride event is about: the person it is for, or the person who asked when that is not known yet.
+    Never the care recipient only because the chat is about them."""
+    names = {p.get("id") for p in [ctx.elder, *ctx.members] if p.get("id")}
+    who = str(for_whom or "").strip()
+    return who if who in names else (ctx.speaker.get("id") or ctx.elder_id)
+
+
+async def asks_from(ctx: TurnCtx, speaker: str, kinds: list[str], since) -> list:
+    """Asks this person was given, on whoever the order is for. They used to sit on the care recipient, so a caregiver's
+    own order showed up in the care recipient's daily brief."""
+    people = [p.get("id") for p in [ctx.elder, *ctx.members] if p.get("id")]
+    found = []
+    for pid in dict.fromkeys(people):
+        found.extend(await store.events(ctx.session, ctx.family_id, pid, since=since, kinds=kinds))
+    found = [e for e in found if (e.payload or {}).get("speaker") == speaker]
+    found.sort(key=lambda e: (e.at, e.id or 0))
+    return found
+
+
 async def _shared_pin(ctx: TurnCtx) -> dict | None:
     """The WhatsApp location pin of this message, else the one this person shared in the last two hours."""
     if ctx.location and ctx.location.get("lat") is not None:
@@ -135,8 +155,7 @@ async def _save_pin(ctx: TurnCtx, place: dict, pin: dict, who: str | None = None
 async def _pickup_words_asked(ctx: TurnCtx) -> str:
     """The pickup in their words when the pin was asked for (minutes ago)."""
     speaker = ctx.speaker.get("id") or ctx.elder_id
-    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - RIDE_PIN_ASK_FOR,
-                                           kinds=["ride_pin_asked"]) if (e.payload or {}).get("speaker") == speaker]
+    asked = await asks_from(ctx, speaker, ["ride_pin_asked"], clock.now() - RIDE_PIN_ASK_FOR)
     return str((asked[-1].payload or {}).get("pickup") or "") if asked else ""
 
 
@@ -151,17 +170,16 @@ async def _ride_pin_first(ctx: TurnCtx, a: dict) -> dict | None:
     # per pickup (founder 2026-10-12: the ask for one pickup was taken as answered for the corrected one, his saved home,
     # whose point is only its pincode's)
     key = str((a.get("pickup_place") or {}).get("nickname") or a.get("pickup") or "").strip().lower()
-    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - RIDE_PIN_ASK_FOR,
-                                           kinds=["ride_pin_asked"])
-             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("pickup_key", key) == key]
+    asked = [e for e in await asks_from(ctx, speaker, ["ride_pin_asked"], clock.now() - RIDE_PIN_ASK_FOR)
+             if (e.payload or {}).get("pickup_key", key) == key]
     if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
         return None
     ctx.location_request = True
     if not asked:
-        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="ride_pin_asked",
-                                 summary=f"Asked for the pickup as a location: {a['goal']}", actor_id=speaker,
-                                 payload={"speaker": speaker, "ref": ctx.message_ref, "pickup": str(a.get("pickup") or "")[:200],
-                                          "pickup_key": key})
+        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=order_subject(ctx, a.get("for_whom")),
+                                 kind="ride_pin_asked", summary=f"Asked for the pickup as a location: {a['goal']}", actor_id=speaker,
+                                 payload={"speaker": speaker, "ref": ctx.message_ref, "for_whom": a.get("for_whom"),
+                                          "pickup": str(a.get("pickup") or "")[:200], "pickup_key": key})
     saved = (a.get("pickup_place") or {}).get("nickname")
     why = f" {saved} is saved without its exact point (only its area), so the driver could go to the wrong door." if saved else ""
     return {"status": "not started yet", "ask_location": "pickup",

@@ -13,6 +13,8 @@ from app.brain.tools.places import (
     _pin_place,
     _ride_end_place,
     _ride_pin_first,
+    asks_from,
+    order_subject,
     _save_pin,
     _shared_pin,
     maps_link_pin,
@@ -272,8 +274,7 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     (their answer) goes ahead."""
     speaker = ctx.speaker.get("id") or ctx.elder_id
     since = clock.now() - ADDRESS_OK_FOR
-    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=since, kinds=["order_address_asked"])
-             if (e.payload or {}).get("speaker") == speaker]
+    asked = await asks_from(ctx, speaker, ["order_address_asked"], since)
     earlier = [e.payload or {} for e in asked if (e.payload or {}).get("ref") != ctx.message_ref]
     if asked and not earlier:  # asked in this same turn already: they have not answered yet
         return {"status": "waiting for the address answer", "next": "Ask them to confirm the address; start nothing yet."}
@@ -291,7 +292,7 @@ async def _confirm_address_first(ctx: TurnCtx, a: dict) -> dict | None:
     names = _names(ctx)
     owners = [o for o in place.get("defaultFor") or [] if o and o != who]
     elsewhere = bool(who and owners) and who not in (place.get("defaultFor") or []) and await _own_home_elsewhere(ctx, a, place)
-    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_address_asked",
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=order_subject(ctx, who), kind="order_address_asked",
                              summary=f"Asked to confirm the delivery address for: {a['goal']}", actor_id=speaker,
                              payload={"speaker": speaker, "ref": ctx.message_ref, "where": where, "service": a.get("service"),
                                       "services": a.get("services"), "addressId": place.get("addressId"), "for_whom": who})
@@ -360,9 +361,11 @@ async def _restricted(ctx: TurnCtx, a: dict) -> dict | None:
     kind = next((k for k in [*said, *checked] if k and k in matcher.KINDS), None)
     if not kind:
         return None
-    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_refused",
-                             summary=f"Not ordered ({kind}): {', '.join(n for n in names if n)[:160]}", actor_id=ctx.speaker.get("id"),
-                             payload={"kind": kind, "by_brain": kind in said, "by_check": kind in checked})
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=order_subject(ctx, a.get("for_whom")),
+                             kind="order_refused", summary=f"Not ordered ({kind}): {', '.join(n for n in names if n)[:160]}",
+                             actor_id=ctx.speaker.get("id"),
+                             payload={"kind": kind, "by_brain": kind in said, "by_check": kind in checked,
+                                      "speaker": ctx.speaker.get("id"), "for_whom": a.get("for_whom")})
     return {"status": "not started", **restricted.refusal(kind)}
 
 
@@ -392,14 +395,13 @@ async def _not_their_place(ctx: TurnCtx, a: dict, place: dict) -> dict | None:
     if not place.get("addressId") or not owners or who in owners or not await _own_home_elsewhere(ctx, a, place):
         return None
     speaker = ctx.speaker.get("id") or ctx.elder_id
-    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - ADDRESS_OK_FOR,
-                                           kinds=["order_address_asked", "order_for_whom_asked"])
-             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("addressId") == place["addressId"]]
+    asked = [e for e in await asks_from(ctx, speaker, ["order_address_asked", "order_for_whom_asked"], clock.now() - ADDRESS_OK_FOR)
+             if (e.payload or {}).get("addressId") == place["addressId"]]
     if any((e.payload or {}).get("ref") != ctx.message_ref for e in asked):
         return None  # asked about this place already: this is their answer
     names = _names(ctx)
     if not asked:
-        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="order_for_whom_asked",
+        await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=order_subject(ctx, who), kind="order_for_whom_asked",
                                  summary=f"Asked whom the order is for: {a['goal']}", actor_id=speaker,
                                  payload={"speaker": speaker, "ref": ctx.message_ref, "addressId": place["addressId"], "for_whom": who})
     return {"status": "not started yet", "check_for_whom": True,
@@ -413,9 +415,8 @@ async def _store_named_with_address(ctx: TurnCtx) -> str | list[str] | None:
     """The store (or the stores) given with this person's order when its address was asked (in an earlier turn, minutes
     ago), if any."""
     speaker = ctx.speaker.get("id") or ctx.elder_id
-    asked = [e for e in await store.events(ctx.session, ctx.family_id, ctx.elder_id, since=clock.now() - ADDRESS_OK_FOR,
-                                           kinds=["order_address_asked"])
-             if (e.payload or {}).get("speaker") == speaker and (e.payload or {}).get("ref") != ctx.message_ref]
+    asked = [e for e in await asks_from(ctx, speaker, ["order_address_asked"], clock.now() - ADDRESS_OK_FOR)
+             if (e.payload or {}).get("ref") != ctx.message_ref]
     if not asked:
         return None
     p = asked[-1].payload or {}
@@ -542,7 +543,7 @@ async def task_input(ctx: TurnCtx, a: dict) -> dict:
 
     task = await _task(ctx, a["task_id"])
     if a.get("items") and task.kind == "order":
-        refused = await _restricted(ctx, {"kind": "order", "items": a["items"]})
+        refused = await _restricted(ctx, {"kind": "order", "items": a["items"], "for_whom": task.subject_id})
         if refused:
             return {**refused, "task": runtime.describe(task), "next": "The order goes on without it: nothing was added or changed."}
     outcome = await runtime.provide_input(
