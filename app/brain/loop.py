@@ -1610,8 +1610,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         sched = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "today_schedule"), None)
         due = [m for m in ((sched or {}).get("medicines") or _json_result(sched).get("medicines") or [])
                if isinstance(m, dict) and m.get("name")] if sched else []
-        if due and any(str(m["name"]).lower() not in (final or "").lower() for m in due):
-            # The list they asked for was cut off. The names and times are the tool's, said in full.
+        # The schedule line replaces her reply only when they asked about a medicine. A "?" on a dinner
+        # message is not that question, even if the model also looked the day up (live 16 Oct 22:54).
+        asked_schedule = situations.tag(text=req.text, role=role, tools=[]) == "med_question"
+        if asked_schedule and due and any(str(m["name"]).lower() not in (final or "").lower() for m in due):
             full = guards.due_today(profile, due)
             if full:
                 final = full

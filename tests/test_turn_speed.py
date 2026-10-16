@@ -79,6 +79,67 @@ async def test_a_tool_line_is_sent_without_another_model_call(db, monkeypatch):
     assert "140 kcal" in result.reply and "second draft" not in result.reply
 
 
+async def _schedule_run(ctx, name, args):
+    meds = [{"name": "Zinc tablet", "dose": "1 tablet", "time": "23:30"}]
+    ctx.actions.append({"tool": name, "args": args, "ok": True, "medicines": meds,
+                        "result": json.dumps({"medicines": meds})})
+    return json.dumps({"medicines": meds}), False
+
+
+async def test_a_question_mark_on_a_quote_is_not_answered_with_the_schedule(db, monkeypatch):
+    """They quoted a dinner line and sent ?. Looking up the day does not replace the reply with the medicine list."""
+    person = {"id": "self-quote", "name": "Asha Rao", "role": "primary caregiver"}
+    await store.save_roster(db, "fam-quote", person, [person])
+
+    class Rec:
+        async def complete(self, route, **kw):
+            calls = getattr(self, "n", 0)
+            self.n = calls + 1
+            if calls == 0:
+                return LLMReply(text="", tool_calls=[ToolCall("c1", "today_schedule", {})], model="fake")
+            return LLMReply(text="Hope dinner went well. What did you have?", tool_calls=[], model="fake")
+
+    router.register_provider("fake", Rec())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')
+    monkeypatch.setenv("JUDGE_PER_FAMILY", "0")
+    monkeypatch.setattr(loop.tools, "run", _schedule_run)
+    router.reset_breakers()
+    spend.reset()
+    result = await loop.run_turn(
+        db, SimHost(),
+        loop.TurnRequest(family_id="fam-quote", elder=person, speaker=person, members=[person], text="?",
+                         message_ref="quote-dinner",
+                         media_note="They are replying to your message: Enjoy your dinner. I will ask in an hour what you had."))
+    assert "Zinc tablet" not in result.reply
+    assert "dinner" in result.reply.lower()
+
+
+async def test_a_medicine_question_still_gets_the_full_schedule(db, monkeypatch):
+    """Asked which medicines are due: the tool's list is the reply when the draft left one out."""
+    person = {"id": "self-due", "name": "Asha Rao", "role": "primary caregiver"}
+    await store.save_roster(db, "fam-due", person, [person])
+
+    class Rec:
+        async def complete(self, route, **kw):
+            calls = getattr(self, "n", 0)
+            self.n = calls + 1
+            if calls == 0:
+                return LLMReply(text="", tool_calls=[ToolCall("c1", "today_schedule", {})], model="fake")
+            return LLMReply(text="You seem fine.", tool_calls=[], model="fake")
+
+    router.register_provider("fake", Rec())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')
+    monkeypatch.setenv("JUDGE_PER_FAMILY", "0")
+    monkeypatch.setattr(loop.tools, "run", _schedule_run)
+    router.reset_breakers()
+    spend.reset()
+    result = await loop.run_turn(
+        db, SimHost(),
+        loop.TurnRequest(family_id="fam-due", elder=person, speaker=person, members=[person],
+                         text="which medicines are due?", message_ref="due-ask"))
+    assert "Zinc tablet" in result.reply and "23:30" in result.reply
+
+
 async def test_need_tools_brings_the_group_on_the_next_call(db, monkeypatch):
     """A missing group is one extra call, then those tools are on the next step."""
     await store.save_roster(db, FAM, ME, [ME])

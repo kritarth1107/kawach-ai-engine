@@ -595,6 +595,7 @@ LIVE = Path(__file__).parent / "fixtures" / "live_2026-10-15.jsonl"  # advice, a
 BRIEF = Path(__file__).parent / "fixtures" / "brief_2026-10-15.jsonl"  # a waiting brief stays its own message (open)
 REASON = Path(__file__).parent / "fixtures" / "reasoning_2026-10-15.jsonl"  # promises, consent, reference, repeats (open)
 WHOSE = Path(__file__).parent / "fixtures" / "whose_2026-10-16.jsonl"  # a save is the speaker's own unless the message is about someone else
+QUOTE = Path(__file__).parent / "fixtures" / "quote_2026-10-16.jsonl"  # a quoted "?" is about that message, not the day's medicines
 
 
 def load_cases(argv: list[str]) -> list[dict]:
@@ -615,6 +616,8 @@ def load_cases(argv: list[str]) -> list[dict]:
         cases += [json.loads(line) for line in REASON.read_text().splitlines() if line.strip()]
     if "--no-founder" not in argv and WHOSE.exists():
         cases += [json.loads(line) for line in WHOSE.read_text().splitlines() if line.strip()]
+    if "--no-founder" not in argv and QUOTE.exists():
+        cases += [json.loads(line) for line in QUOTE.read_text().splitlines() if line.strip()]
     for a in argv:
         if a.endswith(".jsonl") and Path(a).exists():
             cases += [json.loads(line) for line in Path(a).read_text().splitlines() if line.strip()]
