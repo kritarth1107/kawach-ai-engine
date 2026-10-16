@@ -300,6 +300,16 @@ async def sweep(sessions, host_for=None) -> dict:
         stats["still"] = filled["still"]
     except Exception:  # noqa: BLE001 — a fill must not stop the rest of the sweep
         logger.exception("nutrition fill failed")
+    try:
+        from app.nutrition import entries
+
+        async with sessions() as session:
+            old = await entries.pending_older_than(session, minutes=5)
+        stats["pending_over_5min"] = old
+        if old:
+            logger.error("NUTRITION ALERT pending_over_5min count=%s", old)
+    except Exception:  # noqa: BLE001 — the alarm must not stop the sweep
+        logger.exception("nutrition pending alarm failed")
     return stats
 
 

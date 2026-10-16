@@ -91,6 +91,29 @@ async def test_someone_else_cannot_read_her_food_log(db, at, nfake):
     assert err and "caregiver" in r["refused"]
 
 
+async def test_the_brief_food_line_matches_the_diary(db, at, nfake):
+    """The nightly FOOD totals are the diary's known kcal, and a row still waiting is not counted as 0."""
+    await log(db, at, "2026-10-14 08:30", EGGS)
+    await log(db, at, "2026-10-14 13:30", LUNCH)
+    from app.nutrition import nutrients as N
+
+    block = await report.brief_block(db, FAM, NANI["id"], "2026-10-14")
+    v = await report.view(db, FAM, NANI["id"], day="2026-10-14")
+    kcal = v["today"]["totals"]["energy_kcal"]
+    assert kcal and f"totals: {N.fmt(N.kcal({'energy_kcal': kcal}))} kcal" in block
+    row = next(e for e in await entries.on_day(db, FAM, NANI["id"], "2026-10-14"))
+    row.confidence = "pending"
+    row.nutrients = {}
+    row.flags = {**(row.flags or {}), "numbers": "pending"}
+    await db.commit()
+    block = await report.brief_block(db, FAM, NANI["id"], "2026-10-14")
+    v = await report.view(db, FAM, NANI["id"], day="2026-10-14")
+    left = v["today"]["totals"].get("energy_kcal") or 0
+    assert left < kcal
+    assert f"totals: {N.fmt(N.kcal({'energy_kcal': left}))} kcal" in block
+    assert "0 kcal" not in block
+
+
 async def test_the_nightly_brief_has_a_food_block_and_section(db, at, nfake):
     await log(db, at, "2026-10-14 08:30", EGGS)
     await log(db, at, "2026-10-14 13:30", LUNCH)

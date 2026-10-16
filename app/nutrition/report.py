@@ -338,18 +338,25 @@ async def brief_block(session: AsyncSession, family_id: str, subject_id: str, da
         if es and all(r.kind == "skipped" for r in es):
             lines.append(f"  {slot}: skipped (they said)")
         elif es:
-            t = entries.totals(es)
+            known = [r for r in es if not entries.numbers_pending(r)]
+            t = entries.totals(known)
             items = "; ".join(f"{entries.line(r)} [{r.confidence}]" for r in es if r.kind == "food")
             phrase = N.highlight_phrase(t, focus)
-            lines.append(f"  {slot} ({clock.ist(es[0].eaten_at).strftime('%H:%M')}): {items}" + (f"; about {phrase}" if phrase else ""))
+            extra = f"; about {phrase}" if phrase else ""
+            if any(entries.numbers_pending(r) for r in es) and not phrase:
+                extra = "; numbers still being added"
+            lines.append(f"  {slot} ({clock.ist(es[0].eaten_at).strftime('%H:%M')}): {items}{extra}")
     missing = [m for m in P.MAIN_MEALS if m not in entries.meals_covered(rows)]
     if missing:
         lines.append(f"  not logged: {', '.join(missing)} (say 'not logged', never 'skipped')")
-    tot = entries.totals(rows)
+    known_rows = [r for r in rows if not entries.numbers_pending(r)]
+    tot = entries.totals(known_rows)
     if rows and s["tracking"] == "full":
         phrase = N.highlight_phrase(tot, focus)
         if phrase:
             lines.append(f"  totals: {phrase}")
+        elif any(entries.numbers_pending(r) for r in rows):
+            lines.append("  totals: numbers still being added")
     glass = float(s["sizes"].get("glass_ml") or 250)
     if tot.get("water_ml"):
         lines.append(f"  water: {round(tot['water_ml'] / glass, 1)} glasses ({N.grams_of(tot, 'water_ml'):.0f} ml)")

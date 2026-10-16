@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.care import store, versions
@@ -546,6 +546,17 @@ def numbers_pending(e: NutritionEntry) -> bool:
     if "energy_kcal" in n:
         return False
     return e.confidence in ("pending", "unquantified") or (e.flags or {}).get("numbers") == "pending"
+
+
+async def pending_older_than(session: AsyncSession, *, minutes: int = 5) -> int:
+    """Food still waiting for numbers, saved more than `minutes` ago. A real zero or a glass of water is not waiting."""
+    cutoff = clock.now() - timedelta(minutes=minutes)
+    rows = list((await session.execute(select(NutritionEntry).where(
+        NutritionEntry.status == "active", NutritionEntry.kind == "food",
+        NutritionEntry.created_at < cutoff,
+        or_(NutritionEntry.confidence == "pending", NutritionEntry.flags["numbers"].astext == "pending"),
+    ))).scalars())
+    return sum(1 for e in rows if numbers_pending(e))
 
 
 def totals(rows: list[NutritionEntry]) -> dict:

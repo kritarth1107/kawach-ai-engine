@@ -1125,3 +1125,17 @@ async def test_a_slow_model_is_waited_for_and_a_timeout_is_not_saved_as_zero(db,
     assert got["filled"] == 1, got
     await db.refresh(row)
     assert row.confidence != "pending" and (row.nutrients or {}).get("energy_kcal")
+
+
+async def test_food_waiting_more_than_five_minutes_is_the_alarm_count(db, at, nfake):
+    at("2026-10-16 18:00")
+    saved, err = await call(db, "log_food", {"items": [{"name": "boiled egg", "quantity": 1, "unit": "piece"}]})
+    assert not err and saved["result"] == "saved"
+    assert await entries.pending_older_than(db, minutes=5) == 0
+    row = (await active(db))[0]
+    row.confidence = "pending"
+    row.nutrients = {}
+    row.flags = {**(row.flags or {}), "numbers": "pending"}
+    row.created_at = clock.now() - timedelta(minutes=6)
+    await db.commit()
+    assert await entries.pending_older_than(db, minutes=5) == 1
