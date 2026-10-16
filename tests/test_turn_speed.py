@@ -79,6 +79,28 @@ async def test_a_tool_line_is_sent_without_another_model_call(db, monkeypatch):
     assert "140 kcal" in result.reply and "second draft" not in result.reply
 
 
+async def test_need_tools_brings_the_group_on_the_next_call(db, monkeypatch):
+    """A missing group is one extra call, then those tools are on the next step."""
+    await store.save_roster(db, FAM, ME, [ME])
+    seen: list[list[str]] = []
+
+    class Rec:
+        async def complete(self, route, **kw):
+            seen.append([t.name for t in (kw.get("tools") or [])])
+            if len(seen) == 1:
+                return LLMReply(text="", tool_calls=[ToolCall("c1", "need_tools", {"group": "order"})], model="fake")
+            return LLMReply(text="Which store?", tool_calls=[], model="fake")
+
+    router.register_provider("fake", Rec())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')
+    monkeypatch.setenv("JUDGE_PER_FAMILY", "3")
+    router.reset_breakers()
+    spend.reset()
+    result = await loop.run_turn(db, SimHost(), req("buy milk", "speed-need"))
+    assert "start_task" not in seen[0] and "start_task" in seen[1]
+    assert "Which store?" in result.reply
+
+
 async def test_the_why_trail_keeps_where_the_time_went(db, model):
     await store.save_roster(db, FAM, ME, [ME])
     model(0.01, "Good morning Asha!")
