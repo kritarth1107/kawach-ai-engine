@@ -26,10 +26,11 @@ Count pieces you can see. confidence 0-1 for each item. If it is not food (a med
 If a pack's nutrition label or a barcode is visible, say so.
 name is the dish you think it is. also is one close dish it could be instead, or null. Chapati and paratha, poori and
 bhatura, samosa and pakora, gulab jamun and lyangcha are the kind of pair that means.
+count_clear is true only when one piece is separate and obvious. A pile, a stack, or a guess is false.
 
 HINTS (what the person or the companion said about it, may be empty): {hints}
 
-Return only JSON: {"food": true, "items": [{"name": "...", "also": null, "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8}],
+Return only JSON: {"food": true, "items": [{"name": "...", "also": null, "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8, "count_clear": false}],
 "description": "one short line of what is on the plate", "label_visible": false, "barcode": null, "unsure": false}"""
 
 # Used only when the full reading comes back empty (a cut-off answer, a refusal, or no JSON).
@@ -77,9 +78,15 @@ async def read_meal(images: list[dict] | None, hints: str = "", *, essential: bo
             continue
         unit = it.get("unit") if it.get("unit") in P.UNITS else None
         also = str(it.get("also") or "").strip()[:80]
-        items.append({"name": str(it["name"]).strip()[:120], **({"also": also} if also and also.lower() != "null" else {}),
-                      "quantity": N.number(it.get("quantity")), "unit": unit,
-                      "grams": N.number(it.get("grams")), "confidence": max(0.0, min(1.0, N.number(it.get("confidence")) or 0.5))})
+        row = {"name": str(it["name"]).strip()[:120], **({"also": also} if also and also.lower() != "null" else {}),
+               "quantity": N.number(it.get("quantity")), "unit": unit,
+               "grams": N.number(it.get("grams")), "confidence": max(0.0, min(1.0, N.number(it.get("confidence")) or 0.5))}
+        clear = it.get("count_clear")
+        if isinstance(clear, str):
+            clear = clear.strip().lower() == "true"
+        if isinstance(clear, bool):
+            row["count_clear"] = clear
+        items.append(row)
     return {"food": bool(d.get("food", True)) and bool(items), "items": items[:12], "description": str(d.get("description") or "")[:300],
             "label_visible": bool(d.get("label_visible")), "barcode": _digits(d.get("barcode")), "unsure": bool(d.get("unsure"))}
 
@@ -135,13 +142,51 @@ def _digits(v) -> str | None:
     return d if 8 <= len(d) <= 14 else None
 
 
+def _other(it: dict) -> str:
+    also = str(it.get("also") or "").strip()
+    name = str(it.get("name") or "").strip()
+    if also and also.lower() not in ("null", "none") and also.lower() != name.lower():
+        return also
+    return ""
+
+
+def open_choice(reading: dict) -> bool:
+    """Two dish names were offered, so a bare yes does not say which one."""
+    return any(_other(it) for it in reading.get("items") or [] if isinstance(it, dict))
+
+
+def _counted(it: dict) -> bool:
+    return it.get("unit") == "piece" or it.get("countable") is True
+
+
+def _one_clear(reading: dict, it: dict) -> bool:
+    """One piece, separate and obvious. A pile still asks how many."""
+    pieces = [x for x in reading.get("items") or [] if isinstance(x, dict) and _counted(x)]
+    if len(pieces) != 1 or pieces[0] is not it or it.get("count_clear") is False:
+        return False
+    try:
+        return it.get("quantity") is not None and float(it["quantity"]) == 1
+    except (TypeError, ValueError):
+        return False
+
+
 def describe(reading: dict) -> str:
-    """'2 boiled eggs, 1 cup tea with milk' from a meal reading (for the confirm question)."""
+    """The confirm line: both names when they differ, and how many when the pieces are not one clear item."""
     parts = []
     for it in reading.get("items") or []:
-        q = P.qty_label(it.get("quantity"), it.get("unit"))
-        bit = f"{q} {it['name']}".strip()
-        if it.get("also"):
-            bit += f", or it might be {it['also']}"
-        parts.append(bit)
-    return ", ".join(parts) or (reading.get("description") or "")
+        if not isinstance(it, dict) or not str(it.get("name") or "").strip():
+            continue
+        other = _other(it)
+        label = f"{it['name']} or {other}" if other else str(it["name"])
+        if _counted(it) and not _one_clear(reading, it):
+            q = P.qty_label(it.get("quantity"), None) or "1"
+            parts.append(f"{label}, how many? {q}?")
+        elif other:
+            parts.append(label)
+        else:
+            q = P.qty_label(it.get("quantity"), it.get("unit"))
+            parts.append(f"{q} {it['name']}".strip())
+    text = ", ".join(parts)
+    if open_choice(reading) and text:
+        text += ", or tell me what it was"
+    return text or (reading.get("description") or "")

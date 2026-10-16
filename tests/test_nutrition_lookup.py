@@ -147,7 +147,7 @@ async def test_a_blank_photo_is_read_again(monkeypatch):
     monkeypatch.setattr(vision, "ask", fake_ask)
     reading = await vision.read_meal([{"mime": "image/jpeg", "data": "AAAA"}])
     assert calls["n"] == 2 and reading["items"][0]["name"] == "jalebi" and reading["items"][0]["also"] == "imarti"
-    assert "or it might be imarti" in vision.describe(reading)
+    assert vision.describe(reading) == "jalebi or imarti, how many? 2?, or tell me what it was"
 
 
 def test_a_search_uses_the_food_they_named():

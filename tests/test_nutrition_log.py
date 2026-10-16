@@ -307,7 +307,7 @@ async def test_a_meal_photo_is_confirmed_before_anything_is_saved(db, at, nfake)
     r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
     assert r["result"] == "needs_input" and r["needs"][0]["reason"] == "confirm"
     assert r["needs"][0]["question"] == (
-        "Looks like 2 boiled egg, 1 cup tea. "
+        "Looks like boiled egg, how many? 2?, 1 cup tea. "
         "Did you eat this, or is it for someone else — like Ravi's diary?")
     assert r["needs"][0]["options"] == ["I ate it", "Ravi", "Just sharing"]
     assert await active(db) == []
@@ -315,6 +315,47 @@ async def test_a_meal_photo_is_confirmed_before_anything_is_saved(db, at, nfake)
     assert r["result"] == "saved"
     rows = await active(db)
     assert {e.confidence for e in rows} == {"photo"} and {e.source for e in rows} == {"photo"}
+
+
+async def test_a_counted_food_asks_how_many_and_their_number_is_what_is_saved(db, at, nfake):
+    at("2026-10-14 08:30")
+    nfake.meal = {"food": True, "items": [{"name": "roti", "quantity": 2, "unit": "piece", "grams": 72, "confidence": 0.6}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    assert "how many? 2?" in r["needs"][0]["question"]
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True,
+                                      "items": [{"name": "roti", "quantity": 3, "unit": "piece"}]})
+    rows = await active(db)
+    assert len(rows) == 1 and rows[0].name == "Chapati/Roti" and rows[0].quantity == 3
+
+
+async def test_one_clear_piece_does_not_ask_how_many(db, at, nfake):
+    at("2026-10-14 08:30")
+    nfake.meal = {"food": True, "items": [{"name": "roti", "quantity": 1, "unit": "piece", "grams": 36, "confidence": 0.9, "count_clear": True}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    assert "1 roti" in r["needs"][0]["question"] and "how many" not in r["needs"][0]["question"]
+
+
+async def test_two_dish_names_are_offered_and_a_yes_without_a_choice_saves_nothing(db, at, nfake):
+    at("2026-10-14 08:30")
+    nfake.meal = {"food": True, "items": [
+        {"name": "chapati", "also": "paratha", "quantity": 2, "unit": "piece", "grams": 70, "confidence": 0.5}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    q = r["needs"][0]["question"]
+    assert "chapati or paratha" in q and "or tell me what it was" in q and "how many? 2?" in q
+    assert r["needs"][0]["options"][:2] == ["chapati", "paratha"]
+    bare, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True})
+    assert bare["result"] == "dropped" and await active(db) == []
+
+
+async def test_the_dish_they_pick_is_the_one_saved(db, at, nfake):
+    at("2026-10-14 08:30")
+    nfake.meal = {"food": True, "items": [
+        {"name": "chapati", "also": "paratha", "quantity": 2, "unit": "piece", "grams": 70, "confidence": 0.5}]}
+    r, _ = await call(db, "log_food", {"from_photo": True, "items": []}, images=IMG)
+    r, _ = await call(db, "log_food", {"answer_to": r["job_id"], "confirmed": True,
+                                      "items": [{"name": "paratha", "quantity": 2, "unit": "piece"}]})
+    rows = await active(db)
+    assert len(rows) == 1 and rows[0].name == "Plain parantha/paratha" and rows[0].quantity == 2
 
 
 async def test_a_photo_is_not_saved_when_the_same_message_says_it_is_confirmed(db, at, nfake):

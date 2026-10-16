@@ -369,6 +369,27 @@ def _note_asked(job: NutritionJob, reason: str, question: str) -> None:
     job.draft = draft
 
 
+def _counts_they_accepted(items: list[dict], reading: dict) -> list[dict]:
+    """They named the dish and did not change the number. That offered number is the count."""
+    photo = [i for i in (reading.get("items") or []) if isinstance(i, dict)]
+    out = []
+    for it in items:
+        row = dict(it)
+        if not row.get("quantity"):
+            src = next((p for p in photo if p.get("name") == row.get("name") or vision._other(p) == row.get("name")), None)
+            if src is None and len(photo) == 1:
+                src = photo[0]
+            if src and src.get("quantity"):
+                row["quantity"] = src["quantity"]
+                if not row.get("unit") and src.get("unit"):
+                    row["unit"] = src["unit"]
+            if src and src.get("grams"):
+                row["_grams"] = src["grams"]
+        row["_photo"] = True
+        out.append(row)
+    return out
+
+
 def _photo_settled(job: NutritionJob, ask: dict) -> bool:
     """They already said this photo was eaten, or whose diary it is. A confirm on the photo's own message is not that."""
     if ask.get("consumed") in ("yes", "part"):
@@ -523,7 +544,17 @@ class NutritionAgent:
                 q = self._photo_question(job, draft["photo"], about)
                 if q:
                     return q
-            if draft.get("photo") and (not items or not any(i.get("quantity") for i in items)):
+            if draft.get("photo") and vision.open_choice(draft["photo"]) and not items:
+                # Two names were offered. A yes that picks neither is not a save.
+                await self._close_photo(draft)
+                jobs.finish(job, "dropped", {"why": "which dish"})
+                return {"result": "dropped", "job_id": str(job.id),
+                        "why": "They did not say which dish; nothing was saved."}
+            if draft.get("photo") and items and not any(i.get("quantity") for i in items):
+                items = _counts_they_accepted(items, draft["photo"])
+                ask["items"] = items
+                job.ask = ask
+            elif draft.get("photo") and not items:
                 items = [{"name": i["name"], **({"quantity": i["quantity"]} if i.get("quantity") else {}), **({"unit": i["unit"]} if i.get("unit") else {}),
                           "_grams": i.get("grams"), "_photo": True} for i in draft["photo"]["items"]]
                 ask["items"] = items
@@ -736,19 +767,26 @@ class NutritionAgent:
                "the amount; cancel=true if they say never mind). If this message already answers it, call log_food now and do not ask.")
         if reason == "confirm":
             how += (" I ate it is confirmed=true and consumed=yes. A person is for_whom that household id and consumed=yes. "
-                    "Just sharing, or they did not eat it, is consumed=no. Do not ask this again.")
+                    "Just sharing, or they did not eat it, is consumed=no. A number they say is the count; if they accept the "
+                    "number in the question, pass that quantity. When two dishes are named, pass the one they choose, and "
+                    "'or tell me what it was' is the food they name. Do not pass a dish they did not choose. Do not ask this again.")
         return {"result": "needs_input", "job_id": str(job.id), "say": question, "needs": [{**n, "job_id": str(job.id)}], "how": how}
 
     def _photo_question(self, job: NutritionJob, reading: dict, about: str) -> dict | None:
         """The reading, and whether it was eaten or is for someone else's diary, in one question."""
         desc = vision.describe(reading)
         others = [n for i, n in self.who.names.items() if n and i != self.who.speaker_id]
+        named = []
+        if vision.open_choice(reading):
+            it = next((x for x in reading.get("items") or [] if vision._other(x)), None)
+            if it:
+                named = [str(it["name"]), vision._other(it)]
         if others:
             text = f"Looks like {desc}{about}. Did you eat this, or is it for someone else — like {others[0]}'s diary?"
-            opts = ["I ate it", *others[:4], "Just sharing"]
+            opts = [*named, "I ate it", *others[:2], "Just sharing"]
         else:
             text = f"Looks like {desc}{about}. Did you eat this, or are you just sharing the photo?"
-            opts = ["I ate it", "Just sharing"]
+            opts = [*named, "I ate it", "Just sharing"]
         return self._question(job, "confirm", text, opts[:6])
 
     async def _quantity_options(self, subject: str, food: NutritionFood) -> list[str]:
