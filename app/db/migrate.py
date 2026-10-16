@@ -373,6 +373,59 @@ async def remember_embed_marker(engine: AsyncEngine, *, force: bool = False) -> 
         await conn.execute(text(sql), {"v": label})
 
 
+async def _one_nudge_stream(engine: AsyncEngine) -> None:
+    """One pending stream per person. Keeps the row for the family they last wrote in, marks a reply that landed in
+    another family, and drops planned rows on the stream that is not theirs. Sent history stays."""
+    if "nudge_due" not in (await _tables(engine)):
+        return
+    dedupe = (
+        "WITH owners AS ("
+        " SELECT DISTINCT ON (thread_id) thread_id AS person_id, family_id AS owner"
+        " FROM turns WHERE role = 'user' AND family_id NOT LIKE 'shadow:%'"
+        " ORDER BY thread_id, at DESC, family_id ASC"
+        "), ranked AS ("
+        " SELECT n.ctid, row_number() OVER (PARTITION BY n.person_id"
+        " ORDER BY (n.family_id IS NOT DISTINCT FROM o.owner) DESC, n.next_due DESC NULLS LAST) AS n"
+        " FROM nudge_due n LEFT JOIN owners o ON o.person_id = n.person_id"
+        " WHERE n.family_id NOT LIKE 'shadow:%'"
+        ") DELETE FROM nudge_due d USING ranked r WHERE d.ctid = r.ctid AND r.n > 1"
+    )
+    answered = (
+        "UPDATE nudge_ledger l SET replied_at = sub.at FROM ("
+        " SELECT l2.id, min(t.at) AS at FROM nudge_ledger l2"
+        " JOIN turns t ON t.thread_id = l2.person_id AND t.role = 'user'"
+        " AND t.family_id NOT LIKE 'shadow:%' AND t.at > l2.sent_at AND t.at <= l2.sent_at + interval '6 hours'"
+        " WHERE l2.status = 'sent' AND l2.replied_at IS NULL AND l2.sent_at IS NOT NULL"
+        " AND l2.family_id NOT LIKE 'shadow:%' GROUP BY l2.id"
+        ") sub WHERE l.id = sub.id"
+    )
+    planned = (
+        "WITH owners AS ("
+        " SELECT DISTINCT ON (thread_id) thread_id AS person_id, family_id AS owner"
+        " FROM turns WHERE role = 'user' AND family_id NOT LIKE 'shadow:%'"
+        " ORDER BY thread_id, at DESC, family_id ASC"
+        ") DELETE FROM nudge_ledger l USING owners o"
+        " WHERE l.person_id = o.person_id AND l.family_id <> o.owner AND l.status = 'planned'"
+        " AND l.family_id NOT LIKE 'shadow:%'"
+    )
+
+    async def run() -> None:
+        async with engine.begin() as conn:
+            await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
+            await conn.execute(text(answered))
+            await conn.execute(text(dedupe))
+            await conn.execute(text(planned))
+
+    err = await _retry("one nudge stream", run)
+    if err is not None:
+        log.warning("schema: one nudge stream was not cleaned: %s", _short(err))
+
+
+async def _tables(engine: AsyncEngine) -> set[str]:
+    async with engine.connect() as conn:
+        return (await read_catalog(conn)).tables
+
+
 async def ensure_schema(engine: AsyncEngine) -> None:
     """The live path (engine start, night and restore jobs): tables, columns and constraints now. Indexes come from
     ensure_indexes(), which the engine runs after it starts serving."""
@@ -404,6 +457,7 @@ async def ensure_schema(engine: AsyncEngine) -> None:
             await remember_embed_marker(engine, force=bool(changed))
         except Exception:  # noqa: BLE001 — a missing marker only makes the next change require the one-time token
             log.exception("schema: embeddings marker was not saved")
+    await _one_nudge_stream(engine)
     for name, table, ddl in INSTINCT_CONSTRAINTS:
         if table in cat.tables and name not in cat.constraints:
             await _alter(engine, f"constraint {name}", f"ALTER TABLE {table} ADD CONSTRAINT {name} {ddl}",

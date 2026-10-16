@@ -58,8 +58,11 @@ class FakeWriter:
         ctx = messages[-1]["content"][0]["text"]
         lang = "hi" if "Devanagari" in ctx.split("NOW:")[0] or "Hindi" in ctx.split("NOW:")[0] else "en"
         self.n += 1
-        line = LINES[lang][self.n % len(LINES[lang])]
-        return LLMReply(text=json.dumps({"option_id": "o1", "text": line, "field": None, "expects_reply": True}), tool_calls=[], model="fake")
+        if "no question at all" in ctx:
+            line = ("सब ठीक है।", "ठीक हूँ, यही काफी है।")[self.n % 2] if lang == "hi" else ("Glad all is good here.", "All good here, and that is enough.")[self.n % 2]
+        else:
+            line = LINES[lang][self.n % len(LINES[lang])]
+        return LLMReply(text=json.dumps({"option_id": "o1", "text": line, "field": None, "expects_reply": "no question at all" not in ctx}), tool_calls=[], model="fake")
 
 
 @dataclass
@@ -262,8 +265,8 @@ async def check(sessions, timeline: dict[str, list], rows: list, days: int) -> d
                 last_any = at
             if any(n > 2 for n in birds.values()):
                 fails.append(f"{key}: more than 2 early-bird messages in a morning")
-            if p.replies == "never" and any(n > 5 for n in per_day.values()):
-                fails.append(f"{key}: {dict(per_day)} nudges a day to someone who never answers (the ladder allows 4, then 1 a morning)")
+            if p.replies == "never" and any(n > 3 for n in per_day.values()):
+                fails.append(f"{key}: {dict(per_day)} nudges a day to someone who never answers (2 questions, then one warm line)")
             if p.meals:
                 meal_rows = [r for r in rows if r.person_id == p.person["id"] and r.kind == "meal" and r.status == "sent" and r.sent_at]
                 per_day_meals: dict[str, int] = defaultdict(int)

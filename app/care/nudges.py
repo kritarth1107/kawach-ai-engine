@@ -25,7 +25,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import exists, func, or_, select, text as sql, update
+from sqlalchemy import delete, exists, func, or_, select, text as sql, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -227,6 +227,64 @@ async def sent_in_other_family(session: AsyncSession, person: str, family_id: st
     return found is not None
 
 
+_PHONE_KEYS = ("phone", "phoneNumber", "whatsapp", "mobile")
+
+
+def _phone_digits(value: object) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _blob_phone(blob: object) -> str:
+    if not isinstance(blob, dict):
+        return ""
+    for key in _PHONE_KEYS:
+        got = _phone_digits(blob.get(key))
+        if got:
+            return got
+    return ""
+
+
+async def _person_ids(session: AsyncSession, person: str) -> set[str]:
+    """This user id, plus anyone who shares their phone on a roster. No phone stored means just this user."""
+    rows = (await session.execute(sql(
+        "SELECT elder, members FROM family_rosters WHERE family_id NOT LIKE 'shadow:%' AND ("
+        " elder->>'id' = :pid OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(members, '[]'::jsonb)) m"
+        " WHERE m->>'id' = :pid))"
+    ), {"pid": person})).all()
+    phone = ""
+    for elder, members in rows:
+        for blob in [elder or {}, *(members or [])]:
+            if isinstance(blob, dict) and blob.get("id") == person:
+                phone = _blob_phone(blob) or phone
+    if not phone:
+        return {person}
+    found = {person}
+    more = (await session.execute(sql(
+        "SELECT elder, members FROM family_rosters WHERE family_id NOT LIKE 'shadow:%'"
+        " AND (elder::text LIKE :like OR members::text LIKE :like)"
+    ), {"like": f"%{phone}%"})).all()
+    for elder, members in more:
+        for blob in [elder or {}, *(members or [])]:
+            if isinstance(blob, dict) and _blob_phone(blob) == phone and blob.get("id"):
+                found.add(str(blob["id"]))
+    return found
+
+
+async def stream_owner(session: AsyncSession, person: str) -> tuple[str, str] | None:
+    """The one nudge stream for this person: the family where they last wrote (same phone counts as the same person).
+    Two turns at the same moment pick the lower family id, so the choice does not flicker."""
+    ids = sorted(await _person_ids(session, person))
+    row = (await session.execute(
+        select(Turn.family_id, Turn.thread_id).where(
+            Turn.thread_id.in_(ids), Turn.role == "user", ~Turn.family_id.startswith("shadow:"),
+        ).order_by(Turn.at.desc(), Turn.family_id.asc()).limit(1)
+    )).first()
+    if row is None:
+        return None
+    return str(row[0]), str(row[1])
+
+
 async def asked_open(session: AsyncSession, person: str, now: datetime) -> tuple[set[str], list[str]]:
     """Fields and question texts we already asked today and they have not answered since, in any family."""
     start = _day_start(now)
@@ -252,13 +310,24 @@ async def asked_open(session: AsyncSession, person: str, now: datetime) -> tuple
 async def read_clock(session: AsyncSession, family_id: str, person: str, gate: dict, now: datetime, mode: str) -> Clock:
     last_user, last_bot = await engine_times(session, family_id, person)
     last_in = max([t for t in (last_user, _iso(gate.get("last_inbound_at"))) if t], default=None)
+    # A reply in any family they belong to resets the ladder. The chat lives in one family; the sends may not.
+    any_in = await session.scalar(select(func.max(Turn.at)).where(
+        Turn.thread_id == person, Turn.role == "user", ~Turn.family_id.startswith("shadow:")))
+    if any_in and (last_in is None or any_in > last_in):
+        last_in = any_in
     rows = await ledger_rows(session, family_id, person)
     counted = SENT if mode == "shadow" else ("sent",)
-    regular = [r for r in rows if r.status in counted and r.kind != "reminder_followup"]
+    regular = [r for r in rows if r.status in counted and r.kind not in ("reminder_followup", "warm")]
+    cross = list((await session.execute(
+        select(NudgeLedger).where(
+            NudgeLedger.person_id == person, NudgeLedger.status.in_(counted),
+            NudgeLedger.kind.notin_(("reminder_followup", "warm")), ~NudgeLedger.family_id.startswith("shadow:"),
+        ).order_by(NudgeLedger.planned_at.desc()).limit(30)
+    )).scalars())
     outs = [t for t in (last_bot, _iso(gate.get("last_outbound_at"))) if t] + [_when(r) for r in rows if r.status in counted
                                                                                  and not (r.kind == "meal" and r.status == "shadow" and mode == "on")]
     last_out = max(outs, default=None)
-    run = sum(1 for r in regular if last_in is None or _when(r) > last_in)
+    run = sum(1 for r in cross if not r.replied_at and (last_in is None or _when(r) > last_in))
     morning = await morning_start(session, family_id, person, now)
     return Clock(last_in=last_in, last_out=last_out, run=run, nudged_today=any(_when(r) >= morning for r in regular), rows=rows, gate=gate)
 
@@ -323,6 +392,7 @@ _LIGHT_WHY = {
     "lunch": "a light hello around lunch, from something you know about them; one easy question; not a dose; not anything already asked today",
     "evening": "a warm early-evening line about how their day is going, from something you know; one easy question; not a dose; not anything already asked today",
     "opener": "the good morning that waits behind the notice: warm, from something you know, one easy question, not a dose, not anything already asked today",
+    "warm": "a warm line from something they said or you know about them; no question at all, and nothing they have to answer",
 }
 
 
@@ -331,6 +401,9 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
     message within the base cadence, an order moving) come before any backend call."""
     from app.brain.wake import quiet_for
 
+    owner = await stream_owner(session, p.id)
+    if owner and (owner[0] != p.family_id or owner[1] != p.id):
+        return Due(p, Clock(None, None, 0, False), reason="other_family")  # their chat owns the only stream
     rows = await ledger_rows(session, p.family_id, p.id)
     last_user, last_bot = await engine_times(session, p.family_id, p.id)
     empty = Clock(last_user, last_bot, 0, False, rows=rows)
@@ -387,23 +460,18 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         return Due(p, ck, reason="window_closed", mode=m)
     if gate.get("reason"):
         return Due(p, ck, reason=str(gate["reason"])[:60], mode=m)
-    if ck.run >= 2:  # the caregiver is being told: the person themselves still gets a light line, a caregiver does not
+    hold_questions = False
+    if ck.run >= 2:  # two unanswered questions: no more questions until they write. One warm line a day.
         try:
             esc = await host.call("escalation_status", {"to": p.id}, family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id) or {}
         except Exception:  # noqa: BLE001 — the ladder's own rules still hold
             esc = {}
-        if esc.get("state") in ("pending", "deferred", "sent"):
-            if not p.cared:
-                return Due(p, ck, reason="escalating", mode=m)
-            from app.brain.wake import own_night
-
-            night = await own_night(session, p.family_id, p.id)
-            slot = light_slot(now, night[1] if night else None)
-            today = await sent_today(session, p.id, now)
-            wake = night[1] if night else None
-            if slot and len(today) < 3 and not any(light_slot(_when(r), wake) == slot for r in today):
-                return Due(p, ck, light=slot, mode=m)
-            return Due(p, ck, reason="gentle", mode=m)
+        if esc.get("state") in ("pending", "deferred", "sent") and not p.cared:
+            return Due(p, ck, reason="escalating", mode=m)  # a caregiver hears; they are not also nudged
+        today = await sent_today(session, p.id, now)
+        if any(r.kind == "warm" for r in today):
+            return Due(p, ck, reason="quiet", mode=m)
+        hold_questions = True
     last = ck.last_activity
     if bird:
         if last is not None and now - last < CARED_EVERY:
@@ -418,6 +486,8 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
         need = base  # the next morning's first nudge
     if last is not None and now - last < need:
         return Due(p, ck, reason="talking" if ck.last_in and now - ck.last_in < need else "cadence", mode=m)
+    if hold_questions:
+        return Due(p, ck, light="warm", mode=m)
     return Due(p, ck, mode=m)
 
 
@@ -445,6 +515,7 @@ class Context:
     options: list[Option]
     max_len: int
     expects_reply: bool = True
+    questions: bool = True  # false after two unanswered: a warm line, and a question mark is rejected
     ladder: int = 0
     cost: float = 0.0  # INR spent writing and checking it (every try), logged on its ledger row
     avoid: list[str] = field(default_factory=list)  # names they asked never to be called (trust plan A3)
@@ -672,9 +743,9 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
         + ("\n".join(f"  - {r.kind}: {r.text[:120]}{' (answered)' if r.replied_at else ''}" for r in nudges) or "  (none)"),
         "OPTIONS (pick one id):\n" + "\n".join(f"  - {o.id} [{o.kind}] {o.why}" + (f" (field: {o.field})" if o.field else "") for o in options),
         f"LIMITS: at most {max_len} characters; at most one question"
+        + ("; no question at all" if light == "warm" else "")
         + ("; expects_reply false: no question they must answer, a soft 'whenever you're up' tone" if early_bird else "")
-        + (f"; they have not answered your last {ck.run} messages: be lighter and easier to answer" if ck.run >= 2 else "")
-        + ("; one easy question, not a dose, and not a question already asked today" if light else ""),
+        + ("; one easy question, not a dose, and not a question already asked today" if light and light != "warm" else ""),
     ]
     if extra:
         lines.append(extra)
@@ -686,7 +757,8 @@ async def build_context(session: AsyncSession, host, p: Person, ck: Clock, now: 
     memory = "\n".join([*known_facts, *notes, *coming, *(o.why for o in options), *([mood.summary] if mood else []),
                         *(e.summary for e in symptoms[-3:]), f"Now: {local.strftime('%A %d %B %H:%M')} IST"])
     return Context(person=p, text="\n".join(lines), known=known, recent=[t for _, _, t in recent], saheli_recent=saheli[-15:],
-                   profile=profiles.get(p.id), options=options, max_len=max_len, expects_reply=not early_bird, ladder=ck.run,
+                   profile=profiles.get(p.id), options=options, max_len=max_len,
+                   expects_reply=not early_bird and light != "warm", questions=light != "warm", ladder=ck.run,
                    avoid=names["avoid"], never=rejected_facts.terms(wrong), memory=memory,
                    theirs=[t for _, who, t in recent if who == "them"], sent_texts=earlier,
                    medicines=medicine_names(facts, rems), today_asks=today_asks)
@@ -728,6 +800,10 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
         score = PRIORITY.get(kind, 3) + boost - (3 if kind in last_kinds else 0) + lr.weight(kind)
         out.append(Option(id=f"o{len(out) + 1}", kind=kind, why=why, about_ref=about, field=fld, score=score))
 
+    if light == "warm":
+        day = clock.ist(now).strftime("%Y-%m-%d")
+        add("warm", _LIGHT_WHY["warm"], fld="warm", about=f"light:warm:{day}")
+        return out
     if light:
         day = clock.ist(now).strftime("%Y-%m-%d")
         add("follow_up", _LIGHT_WHY[light], fld="hello" if light == "opener" else f"gentle:{light}", about=f"light:{light}:{day}")
@@ -793,8 +869,11 @@ async def candidates(session: AsyncSession, p: Person, ck: Clock, now: datetime,
             add("collect", "their weight, whenever they next check it (no pressure)", fld="weight", cooldown=COLLECT_EVERY["weight"])
         add("collect", "any doctor visit, test or new report this week", fld="reports", cooldown=COLLECT_EVERY["reports"])
     item = await checkins.next_to_know(session, fid, p.id, {f: at for f, at in asked_field.items() if f.startswith("know:")}, now)
-    if item:
-        add("know", f"one light question to learn {item[1]} (save the answer: {item[2]})", fld=f"know:{item[0]}", cooldown=checkins.KNOW_AGAIN)
+    wrote_today = await session.scalar(select(Turn.id).where(
+        Turn.thread_id == p.id, Turn.role == "user", Turn.at >= _day_start(now), ~Turn.family_id.startswith("shadow:")).limit(1))
+    if item and wrote_today:  # never a cold opener: only after they have written today, tied to what they said
+        add("know", f"one light question to learn {item[1]}, tied to something they said today (save the answer: {item[2]})",
+            fld=f"know:{item[0]}", cooldown=checkins.KNOW_AGAIN)
     for name, start, end in SLOTS:
         if start <= m_now < end:
             done = any(r.kind == "reflect" and r.field == f"reflect:{name}" and clock.ist_day(_when(r)) == today for r in rows)
@@ -917,7 +996,10 @@ def check(draft: dict, ctx: Context) -> list[str]:
         problems.append("option_id must be one of the OPTIONS ids")
     if len(text) > int(ctx.max_len * 1.15):
         problems.append(f"too long: {len(text)} characters, the limit is {ctx.max_len}")
-    if text.count("?") + text.count("？") > 1:
+    marks = text.count("?") + text.count("？")
+    if not ctx.questions and marks:
+        problems.append("no question until they write")
+    elif marks > 1:
         problems.append("more than one question")
     if _said(text) == "reminder" or text.lower().lstrip().startswith("reminder:"):
         problems.append('no "Reminder:" label; write it the way a person would text')
@@ -1156,6 +1238,8 @@ async def next_check(session: AsyncSession, person: Person, d: Due, now: datetim
         return local + timedelta(hours=1)
     if d.reason == "other_family":
         return now + CARED_EVERY
+    if d.reason == "quiet":
+        return await _next_look(session, person, now, early_bird=False)  # the next warm line is tomorrow
     return now + timedelta(minutes=5)
 
 
@@ -1252,6 +1336,9 @@ async def load_work(session: AsyncSession, now: datetime, families: set[str] | N
             work.append((r, match))
     for r in fresh_rosters:
         for p in await persons(r):
+            owner = await stream_owner(session, p.id)
+            if owner and (owner[0] != r.family_id or owner[1] != p.id):
+                continue  # their chat is with another family: that stream is the only one
             key = (r.family_id, p.id)
             if key not in seen:
                 seen.add(key)
@@ -1351,16 +1438,28 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                     if claimed:
                         try:
                             async with sessions() as session:
-                                if outcome == "shadow" and (decided is None or decided.mode != "shadow"):
-                                    when = now + timedelta(minutes=5)  # a meals question logged in shadow did not use the hour
-                                elif outcome in ("sent", "shadow", "waiting"):
-                                    when = await next_check(session, p, decided or Due(p, Clock(None, None, 0, False)), now)
-                                elif decided is not None and outcome == decided.reason:
-                                    when = await next_check(session, p, decided, now)
-                                else:
-                                    when = now + timedelta(minutes=5)  # a guard miss or a failed send is tried again next tick
-                                await mark_next(session, r.family_id, p.id, when, at=now)
-                                await session.commit()
+                                dropped = False
+                                if outcome == "other_family":
+                                    owner = await stream_owner(session, p.id)
+                                    if owner and owner[0] != r.family_id:
+                                        await session.execute(delete(NudgeDue).where(
+                                            NudgeDue.family_id == r.family_id, NudgeDue.person_id == p.id))
+                                        await session.execute(delete(NudgeLedger).where(
+                                            NudgeLedger.family_id == r.family_id, NudgeLedger.person_id == p.id,
+                                            NudgeLedger.status == "planned"))
+                                        await session.commit()
+                                        dropped = True
+                                if not dropped:
+                                    if outcome == "shadow" and (decided is None or decided.mode != "shadow"):
+                                        when = now + timedelta(minutes=5)  # a meals question logged in shadow did not use the hour
+                                    elif outcome in ("sent", "shadow", "waiting"):
+                                        when = await next_check(session, p, decided or Due(p, Clock(None, None, 0, False)), now)
+                                    elif decided is not None and outcome == decided.reason:
+                                        when = await next_check(session, p, decided, now)
+                                    else:
+                                        when = now + timedelta(minutes=5)  # a guard miss or a failed send is tried again next tick
+                                    await mark_next(session, r.family_id, p.id, when, at=now)
+                                    await session.commit()
                         except Exception:  # noqa: BLE001 — the claim expires on its own
                             logger.exception("nudge next-due not saved family=%s person=%s", r.family_id, p.id)
 
@@ -1541,19 +1640,62 @@ async def pull_due(session: AsyncSession, family_id: str, person_id: str, when: 
 
 
 async def note_reply(session: AsyncSession, family_id: str, person: str) -> None:
-    """They wrote: every nudge sent to them in the last 6 hours with no reply yet is answered (the ladder resets)."""
+    """They wrote: every nudge sent to this person in the last 6 hours, in every family, is answered (the ladder resets)."""
     now = clock.now()
-    # One statement: the reply and the next look. A turn is counted, and this must not add a second round trip.
+    # One statement: the reply in every family, the other streams wait, and this family's next look. A turn is counted.
     await session.execute(sql(
         "WITH answered AS ("
         " UPDATE nudge_ledger SET replied_at = :now"
-        " WHERE family_id = :fid AND person_id = :pid AND status = 'sent'"
+        " WHERE person_id = :pid AND status = 'sent' AND family_id NOT LIKE 'shadow:%'"
         " AND replied_at IS NULL AND sent_at >= :since"
+        "), held AS ("
+        " UPDATE nudge_due SET next_due = :nxt, anchored_at = :now, claimed_until = NULL"
+        " WHERE person_id = :pid AND family_id <> :fid AND family_id NOT LIKE 'shadow:%'"
         ") INSERT INTO nudge_due (family_id, person_id, next_due, anchored_at, claimed_until)"
         " VALUES (:fid, :pid, :nxt, :now, NULL)"
         " ON CONFLICT (family_id, person_id) DO UPDATE SET"
         " next_due = EXCLUDED.next_due, anchored_at = EXCLUDED.anchored_at, claimed_until = NULL"
     ), {"now": now, "fid": family_id, "pid": person, "since": now - REPLY_WINDOW, "nxt": now + CARED_EVERY})
+
+
+async def reply_rates(session: AsyncSession, *, days: int = 7) -> dict:
+    """How often a sent nudge was answered, over the last `days`, by kind, hour (IST) and person. No names."""
+    since = clock.now() - timedelta(days=max(1, min(days, 30)))
+    rows = (await session.execute(sql(
+        "SELECT kind, person_id, EXTRACT(HOUR FROM sent_at AT TIME ZONE 'Asia/Kolkata')::int AS hour,"
+        " COUNT(*)::int AS sent, COUNT(replied_at)::int AS replied"
+        " FROM nudge_ledger WHERE status = 'sent' AND sent_at >= :since AND family_id NOT LIKE 'shadow:%'"
+        " GROUP BY kind, person_id, hour"
+    ), {"since": since})).all()
+
+    def pack(sent: int, replied: int) -> dict:
+        return {"sent": sent, "replied": replied, "rate": round(100 * replied / sent) if sent else None}
+
+    by_kind: dict[str, list[int]] = {}
+    by_hour: dict[int, list[int]] = {}
+    by_person: dict[str, list[int]] = {}
+    sent = replied = 0
+    for kind, person, hour, n_sent, n_replied in rows:
+        n_sent, n_replied = int(n_sent), int(n_replied)
+        sent += n_sent
+        replied += n_replied
+        for bucket, key in ((by_kind, str(kind or "other")), (by_person, str(person))):
+            got = bucket.setdefault(key, [0, 0])
+            got[0] += n_sent
+            got[1] += n_replied
+        hour_n = int(hour)
+        got_h = by_hour.setdefault(hour_n, [0, 0])
+        got_h[0] += n_sent
+        got_h[1] += n_replied
+    people = [{"person": pid, **pack(n, r)} for pid, (n, r) in by_person.items()]
+    people.sort(key=lambda row: (row["rate"] if row["rate"] is not None else 0, -row["sent"]))
+    return {
+        **pack(sent, replied),
+        "days": days,
+        "byKind": [{"kind": k, **pack(n, r)} for k, (n, r) in sorted(by_kind.items(), key=lambda kv: -kv[1][0])],
+        "byHour": [{"hour": h, **pack(n, r)} for h, (n, r) in sorted(by_hour.items())],
+        "people": people[:50],
+    }
 
 
 async def reply_hint(session: AsyncSession, family_id: str, person: str) -> str:

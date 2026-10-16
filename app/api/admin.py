@@ -128,6 +128,14 @@ async def admin_health(session: DB) -> dict:
             "lastDream": last_dream.isoformat() if last_dream else None, "families": families, "backup": backup}
 
 
+@router.get("/nudge-rates")
+async def admin_nudge_rates(session: DB, days: int = 7) -> dict:
+    """Reply rate of sent nudges by kind, hour and person. The admin overview shows this."""
+    from app.care import nudges
+
+    return await nudges.reply_rates(session, days=days)
+
+
 @router.get("/spend")
 async def admin_spend(days: int = 30) -> dict:
     from app.api.brain import llm_spend

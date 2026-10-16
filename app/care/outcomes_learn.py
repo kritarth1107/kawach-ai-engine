@@ -172,8 +172,12 @@ async def avoid_now(session: AsyncSession, family_id: str, person: str, *, now=N
     if not f:
         return None
     hour = clock.ist(now or clock.now()).hour
-    if hour in set((f.value or {}).get("avoid_hours") or []):
-        prefer = (f.value or {}).get("prefer_hours") or []
+    value = f.value or {}
+    prefer = [int(h) for h in (value.get("prefer_hours") or [])]
+    if prefer and hour not in set(prefer):
+        first = prefer[0]
+        return f"they answer around {first % 12 or 12} {'pm' if first >= 12 else 'am'} (learned); wait"
+    if hour in set(value.get("avoid_hours") or []):
         return ("they rarely answer at this hour (learned); wait" + (f" until around {prefer[0] % 12 or 12} {'pm' if prefer[0] >= 12 else 'am'}" if prefer else ""))
     return None
 

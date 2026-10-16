@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.care import nudges, store
-from app.care.models import NudgeLedger
+from app.care.models import NudgeDue, NudgeLedger
 from app.llm import router, spend
 from app.llm.router import LLMReply
 from app.sim.world import SimHost
@@ -55,6 +55,10 @@ class Writer:
         self.seen.append(kw["messages"][-1]["content"][0]["text"])
         if self.on_call:
             await self.on_call()
+        if "no question at all" in self.seen[-1]:
+            line = ("Glad the temple visit felt lovely.", "That temple morning stayed with me.", "Still thinking of the temple visit.")[(self.calls - 1) % 3]
+            return LLMReply(text=json.dumps({"option_id": "o1", "text": line, "expects_reply": False}),
+                            tool_calls=[], model="fake", usage=self.usage)
         if self.script:
             return LLMReply(text=self.script.pop(0), tool_calls=[], model="fake", usage=self.usage)
         pick = getattr(self, "pick", None)
@@ -203,16 +207,18 @@ async def test_unanswered_nudges_slow_down_then_stop_until_they_write_or_the_nex
 
     assert await at_("14 11:00") == 1  # an hour after their message
     assert await at_("14 12:00") == 2  # one unanswered: still hourly
-    assert await at_("14 13:00") == 2  # two unanswered: every 2 hours
-    assert await at_("14 14:00") == 3
-    assert await at_("14 16:00") == 3  # three unanswered: every 3 hours
-    assert await at_("14 17:00") == 4
-    assert await at_("14 20:00") == 4  # four unanswered: stopped
-    assert await at_("15 09:00") == 5  # the next morning's first nudge
-    assert await at_("15 11:00") == 5
-    assert await at_("15 15:00") == 5
+    assert await at_("14 13:00") == 2  # two unanswered: wait out the two hours
+    assert await at_("14 14:00") == 3  # then one warm line, not another question
+    assert await at_("14 16:00") == 3
+    assert await at_("14 17:00") == 3
+    assert await at_("14 20:00") == 3  # no more questions until they write
+    assert await at_("15 09:00") == 4  # the next day: one warm line
+    assert await at_("15 11:00") == 4
+    assert await at_("15 15:00") == 4
     await wrote(db, MAA, "Yes dear, all is fine here")  # 15:00: a reply resets the ladder
-    assert await at_("15 16:00") == 6
+    await nudges.note_reply(db, FAM, MAA["id"])
+    await db.commit()
+    assert await at_("15 16:00") == 5
     assert [r.unanswered_run for r in await rows(db) if r.status == "sent"][-1] == 0
 
 
@@ -852,7 +858,10 @@ async def test_a_learned_bad_hour_holds_the_nudge(db, at, sessions, writer):
     at("2026-10-14 11:00")
     out = await run(sessions, host)
     assert sent_to(host, MAA) == [] and out["skipped"].get("learned_hour") == 1
-    at("2026-10-14 12:00")
+    at("2026-10-14 12:00")  # not an avoided hour, but not a learned reply hour either
+    await run(sessions, host)
+    assert sent_to(host, MAA) == []
+    at("2026-10-14 16:00")
     await run(sessions, host)
     assert len(sent_to(host, MAA)) == 1
 
@@ -1248,16 +1257,17 @@ async def test_while_the_caregiver_is_being_told_the_ladder_adds_nothing(db, at,
         await run(sessions, host)
     assert len(sent_to(host, MAA)) == 2
     host.world.escalations[MAA["id"]] = "pending"
-    at("2026-10-14 14:00")  # lunch: she still hears from Saheli while the caregiver is told
+    at("2026-10-14 14:00")  # one warm line while the caregiver is told; not another question
     out = await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3 and out.get("sent") == 1 and "escalating" not in out["skipped"]
-    at("2026-10-14 14:05")  # the same slot does not send a second
+    assert "?" not in sent_to(host, MAA)[-1]
+    at("2026-10-14 14:05")  # a second line the same day does not go
     await run(sessions, host)
     assert len(sent_to(host, MAA)) == 3
     host.world.escalations[MAA["id"]] = "replied"
-    at("2026-10-14 17:05")  # three hours after the lunch line, the ordinary ladder runs again
+    at("2026-10-14 17:05")  # they still have not written: no question
     await run(sessions, host)
-    assert len(sent_to(host, MAA)) == 4
+    assert len(sent_to(host, MAA)) == 3
 
 
 def test_one_odd_day_and_a_weekend_shift_still_settle():
@@ -1431,9 +1441,62 @@ async def test_one_person_in_two_families_gets_one_nudge_an_hour(db, at, session
     assert "meal:breakfast" in fields  # the other family must not ask it again today
     host = SimHost()
     at("2026-10-14 11:35")
-    out = await run(sessions, host)
-    assert len(sent_to(host, MAA)) == 1 and out["skipped"].get("other_family") == 1
+    await run(sessions, host)
+    assert len(sent_to(host, MAA)) == 1
     assert not any(m.get("text") == "Did you have breakfast?" for m in host.world.sent)
+    due = list((await db.execute(select(NudgeDue).where(NudgeDue.person_id == MAA["id"]))).scalars())
+    assert {row.family_id for row in due} == {"fam-a"}  # the family they wrote to first owns the only stream
+
+
+async def test_a_reply_in_one_family_answers_the_nudge_the_other_family_sent(db, at):
+    from datetime import timedelta
+
+    at("2026-10-14 12:00")
+    sent = nudges.clock.now() - timedelta(hours=1)
+    for fid in ("fam-a", "fam-b"):
+        await store.save_roster(db, fid, MAA, [])
+    db.add(NudgeLedger(family_id="fam-a", person_id=MAA["id"], kind="know", status="sent", field="know:day",
+                       slot_key="fam-a-know", ref="nudge:know-a", text="How was the temple?", planned_at=sent, sent_at=sent))
+    await db.commit()
+    await nudges.note_reply(db, "fam-b", MAA["id"])
+    await db.commit()
+    row = (await db.execute(select(NudgeLedger).where(NudgeLedger.ref == "nudge:know-a"))).scalar_one()
+    assert row.replied_at is not None
+
+
+async def test_the_same_phone_keeps_one_stream_on_the_family_they_write_to(db, at, sessions, writer):
+    at("2026-10-14 10:00")
+    elder_a = {"id": "elder-a", "name": "Kamla", "role": "elder", "phone": "+91 98111 11111"}
+    elder_b = {"id": "elder-b", "name": "Kamla", "role": "elder", "phone": "9811111111"}
+    await store.save_roster(db, "fam-a", elder_a, [])
+    await store.add_turn(db, family_id="fam-a", thread_id="elder-a", role="user", text="I went to the temple today", speaker_id="elder-a")
+    at("2026-10-14 10:30")
+    await store.save_roster(db, "fam-b", elder_b, [])
+    await store.add_turn(db, family_id="fam-b", thread_id="elder-b", role="user", text="I went to the temple today", speaker_id="elder-b")
+    await db.commit()
+    host = SimHost()
+    at("2026-10-14 12:00")
+    await run(sessions, host)
+    assert sent_to(host, {"id": "elder-a"}) == []
+    assert len(sent_to(host, {"id": "elder-b"})) == 1
+    due = list((await db.execute(select(NudgeDue).where(NudgeDue.person_id.in_(("elder-a", "elder-b"))))).scalars())
+    assert {row.family_id for row in due} == {"fam-b"}
+
+
+async def test_a_get_to_know_question_waits_until_they_have_written_today(db, at):
+    at("2026-10-14 23:00")
+    await store.save_roster(db, FAM, MAA, [])
+    await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="user", text="I went to the temple today", speaker_id=MAA["id"])
+    await db.commit()
+    person = nudges.Person(FAM, MAA["id"], "Kamla", "elder", True, True)
+    clock_ = nudges.Clock(nudges.clock.now(), None, 0, False)
+    at("2026-10-15 11:00")
+    cold = await nudges.candidates(db, person, clock_, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+    assert not any(o.kind == "know" for o in cold)
+    await store.add_turn(db, family_id=FAM, thread_id=MAA["id"], role="user", text="The temple was lovely", speaker_id=MAA["id"])
+    await db.commit()
+    warm = await nudges.candidates(db, person, clock_, nudges.clock.now(), facts=[], acts=[], schedule={}, reminders=[])
+    assert any(o.kind == "know" for o in warm)
 
 
 async def test_a_caregiver_stays_quiet_while_a_cared_person_and_self_care_still_hear(db, at, sessions, writer):
