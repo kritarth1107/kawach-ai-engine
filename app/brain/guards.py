@@ -949,6 +949,19 @@ LEAK = re.compile(
 )
 
 
+def echoes_prompt(text: str, prompt: str, *, run: int = 6) -> bool:
+    """The draft copies a run of `run` words or more from the instructions sent this turn (live nightly 16 Oct: after a
+    name was saved the reply repeated the prompt's "Roman letters … 35 words" rule). Compares the two texts only."""
+    said = words(text)
+    if len(said) < run or not prompt:
+        return False
+    source = set()
+    told = words(prompt)
+    for i in range(len(told) - run + 1):
+        source.add(" ".join(told[i:i + run]))
+    return any(" ".join(said[i:i + run]) in source for i in range(len(said) - run + 1))
+
+
 def leaked_reasoning(text: str) -> bool:
     """The model sometimes returns its notes ("thought\nToday is … IST. Subrata is speaking …") as the reply."""
     return bool(LEAK.search(text or ""))

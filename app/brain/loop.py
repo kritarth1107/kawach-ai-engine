@@ -922,12 +922,15 @@ def _last_draft(msgs: list) -> str:
 
 
 def _asked_name(ctx: tools.TurnCtx) -> str:
-    """The name a naming save just stored. Empty when this turn did not change how they are addressed."""
+    """The name the speaker asked to be called, saved in this turn. Empty when this turn did not change how the speaker
+    is addressed: a naming save about someone else (how a caregiver calls their mother, "Maa") is not their own name
+    (live 16 Oct: a caregiver who wrote "don't speak in Hindi" was told "I'll call you Maa")."""
+    me = ctx.speaker.get("id")
     for action in reversed(ctx.actions):
         if not action.get("ok") or action.get("tool") != "remember":
             continue
         args = action.get("args") or {}
-        if args.get("domain") != "naming":
+        if args.get("domain") != "naming" or action.get("subject") != me:
             continue
         return str((args.get("details") or {}).get("name") or "").strip()
     return ""
@@ -1576,8 +1579,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
         vital_data = _json_result(vital) if vital else {}
         asked_name = _asked_name(ctx)
-        if asked_name:
-            # The name they gave is the whole reply. A draft that also copies the prompt ("Roman letters", "35 words") is not sent.
+        if asked_name and (asked_name not in (final or "") or guards.leaked_reasoning(final or "")
+                           or guards.echoes_prompt(final or "", persona_text.for_groups(_groups()) + "\n" + REPLY_FORMAT)
+                           or guards.language_problems(final or "", profile)):
+            # Their own new name, and a draft that leaves it out, copies the prompt ("Roman letters", "35 words") or is in
+            # the wrong language: the confirmation line instead. A good draft that also answers the rest of the message stays.
             final = guards.call_you(profile, asked_name)
             guarded = True
         if vital:
