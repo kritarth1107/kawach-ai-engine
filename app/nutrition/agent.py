@@ -565,7 +565,8 @@ class NutritionAgent:
             clean = [{k: v for k, v in i.items() if not str(k).startswith("_")} for i in items]
 
         if found is None and not background and not estimates_only:
-            # One catalogue hit, or one estimate. The grounded search runs after the reply.
+            # One catalogue hit, or one estimate. The reply does not wait on the web: a miss with no numbers is
+            # saved pending, and the background fill looks it up, then estimates only if that look-up is empty.
             found = await lookup.reply_lookup(s, who.family_id, clean, pantry_rows=stock, essential=who.essential,
                                                no_questions=not jobs.can_ask(job))
         elif found is None:
@@ -1175,7 +1176,7 @@ async def fill_missing(session: AsyncSession) -> dict:
             item["quantity"] = float(e.quantity)
         if e.unit:
             item["unit"] = e.unit
-        found = await lookup.reply_lookup(session, e.family_id, [item], essential=False)
+        found = await lookup.resolve(session, e.family_id, [item], cache_only=True)
         food = found[0].food if found else None
         if food is None:
             try:
@@ -1184,6 +1185,9 @@ async def fill_missing(session: AsyncSession) -> dict:
                 raw = None
             if raw and ("energy_kcal" in (raw.get("per_100g") or {}) or "water" in (raw.get("tags") or [])):
                 food = await lookup.keep(session, e.family_id, item, raw)
+        if food is None:
+            found = await lookup.reply_lookup(session, e.family_id, [item], essential=False)
+            food = found[0].food if found else None
         per = (food.per_100g or {}) if food is not None else {}
         if food is None or ("energy_kcal" not in per and "water" not in (food.tags or [])):
             flags["fill_tries"] = int(flags.get("fill_tries") or 0) + 1

@@ -217,7 +217,7 @@ async def test_the_web_search_runs_after_the_reply_and_shares_the_food(db, at, n
         yield db
 
     await agent.refine_saved(sessions, saved["job_id"])
-    assert nfake.web.asked == ["egg"]
+    assert nfake.web.asked == ["boiled egg"]
     food = (await db.execute(NutritionFood.__table__.select().where(NutritionFood.name == "Egg, whole, boiled"))).first()
     assert food.family_id is None and food.source == "usda" and food.source_urls
 

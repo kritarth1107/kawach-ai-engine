@@ -120,6 +120,19 @@ async def test_a_common_dish_is_the_databank_value_with_no_model(db, at, nfake):
     assert abs(food.units["piece"] - 36) < 1
 
 
+async def test_a_single_food_is_the_ifct_value_with_no_model(db, at, nfake):
+    at("2026-10-16 12:00")
+    got = await lookup.resolve(db, FAM, [{"name": "gooseberry", "quantity": 100, "unit": "g"},
+                                        {"name": "paneer masala dosa", "quantity": 1, "unit": "piece"}])
+    berry, dosa = got[0].food, got[1].food
+    assert berry is not None and berry.source == "ifct" and berry.name == "Goosberry"
+    assert "estimate" not in nfake.calls and nfake.web.asked == []
+    grams = lookup.P.grams_for(berry, 100, "g").grams
+    kcal = lookup.N.kcal(lookup.N.scale(berry.per_100g, grams))
+    assert 20 <= kcal <= 28
+    assert dosa is not None and dosa.source == "indb" and "paneer" in dosa.name.lower()
+
+
 async def test_a_blank_photo_is_read_again(monkeypatch):
     from app.nutrition import vision
 

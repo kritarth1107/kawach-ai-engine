@@ -1,0 +1,3725 @@
+{
+"source": "Indian Food Composition Tables 2017, Longvah et al., National Institute of Nutrition. Per 100 g. Single foods: fruits, vegetables, nuts, dairy.",
+"url": "https://www.nin.res.in/",
+"foods": [
+{
+"code": "C001",
+"name": "Agathi leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 70.5,
+"protein_g": 8.01,
+"carbs_g": 5.21,
+"fat_g": 1.35,
+"fibre_g": 8.6,
+"sugar_g": 0.23
+},
+"aliases": [
+"agathi leaves"
+]
+},
+{
+"code": "C002",
+"name": "Amaranth leaves, green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 30.6,
+"protein_g": 3.29,
+"carbs_g": 2.28,
+"fat_g": 0.65,
+"fibre_g": 4.41,
+"sugar_g": 0.32
+},
+"aliases": [
+"amaranth leaves, green",
+"green amaranth leaves"
+]
+},
+{
+"code": "C003",
+"name": "Amaranth leaves, red",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 33.5,
+"protein_g": 3.93,
+"carbs_g": 2.37,
+"fat_g": 0.63,
+"fibre_g": 4.91,
+"sugar_g": 0.28
+},
+"aliases": [
+"amaranth leaves, red",
+"red amaranth leaves"
+]
+},
+{
+"code": "C004",
+"name": "Amaranth leaves, red and green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 31.5,
+"protein_g": 3.09,
+"carbs_g": 2.87,
+"fat_g": 0.53,
+"fibre_g": 4.6,
+"sugar_g": 0.15
+},
+"aliases": [
+"amaranth leaves, red and green",
+"red and green amaranth leaves"
+]
+},
+{
+"code": "C005",
+"name": "Amaranth, spinous, leaves, green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 26.3,
+"protein_g": 3.54,
+"carbs_g": 1.61,
+"fat_g": 0.36,
+"fibre_g": 5.1,
+"sugar_g": 0.14
+},
+"aliases": [
+"amaranth, spinous, leaves, green",
+"spinous, leaves, green amaranth"
+]
+},
+{
+"code": "C006",
+"name": "Amaranth, spinous, leaves, red and green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 23.7,
+"protein_g": 2.8,
+"carbs_g": 1.45,
+"fat_g": 0.34,
+"fibre_g": 5.57,
+"sugar_g": 0.13
+},
+"aliases": [
+"amaranth, spinous, leaves, red and green",
+"spinous, leaves, red and green amaranth"
+]
+},
+{
+"code": "C007",
+"name": "Basella leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 19.6,
+"protein_g": 1.57,
+"carbs_g": 2.01,
+"fat_g": 0.45,
+"fibre_g": 2.21,
+"sugar_g": 0.02
+},
+"aliases": [
+"basella leaves"
+]
+},
+{
+"code": "C008",
+"name": "Bathua leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 27.7,
+"protein_g": 2.5,
+"carbs_g": 2.56,
+"fat_g": 0.44,
+"fibre_g": 4.01,
+"sugar_g": 0.52
+},
+"aliases": [
+"bathua leaves"
+]
+},
+{
+"code": "C009",
+"name": "Beetroot leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 34.7,
+"protein_g": 2.38,
+"carbs_g": 3.86,
+"fat_g": 0.75,
+"fibre_g": 3.64,
+"sugar_g": 0.13
+},
+"aliases": [
+"beetroot leaves"
+]
+},
+{
+"code": "C010",
+"name": "Betel leaves, big (kolkata)",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 48.3,
+"protein_g": 2.51,
+"carbs_g": 7.37,
+"fat_g": 0.75,
+"fibre_g": 2.12,
+"sugar_g": 0.37
+},
+"aliases": [
+"betel leaves, big (kolkata)",
+"big (kolkata) betel leaves"
+]
+},
+{
+"code": "C011",
+"name": "Betel leaves, small",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 43.7,
+"protein_g": 2.62,
+"carbs_g": 6.16,
+"fat_g": 0.75,
+"fibre_g": 1.97,
+"sugar_g": 0.4
+},
+"aliases": [
+"betel leaves, small",
+"small betel leaves"
+]
+},
+{
+"code": "C012",
+"name": "Brussels sprouts",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 44.2,
+"protein_g": 4.26,
+"carbs_g": 5.09,
+"fat_g": 0.5,
+"fibre_g": 4.29,
+"sugar_g": 0.17
+},
+"aliases": [
+"brussels sprouts"
+]
+},
+{
+"code": "C013",
+"name": "Cabbage, Chinese",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 17.9,
+"protein_g": 1.58,
+"carbs_g": 2.36,
+"fat_g": 0.13,
+"fibre_g": 2.01,
+"sugar_g": 0.42
+},
+"aliases": [
+"cabbage, chinese",
+"chinese cabbage"
+]
+},
+{
+"code": "C014",
+"name": "Cabbage, collard greens",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 30.1,
+"protein_g": 3.63,
+"carbs_g": 2.79,
+"fat_g": 0.27,
+"fibre_g": 2.98,
+"sugar_g": 0.76
+},
+"aliases": [
+"cabbage, collard greens",
+"collard greens cabbage"
+]
+},
+{
+"code": "C015",
+"name": "Cabbage, green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 21.5,
+"protein_g": 1.36,
+"carbs_g": 3.25,
+"fat_g": 0.12,
+"fibre_g": 2.76,
+"sugar_g": 1.0
+},
+"aliases": [
+"cabbage, green",
+"green cabbage"
+]
+},
+{
+"code": "C016",
+"name": "Cabbage, violet",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 23.2,
+"protein_g": 1.39,
+"carbs_g": 3.54,
+"fat_g": 0.21,
+"fibre_g": 2.21,
+"sugar_g": 0.8
+},
+"aliases": [
+"cabbage, violet",
+"violet cabbage"
+]
+},
+{
+"code": "C017",
+"name": "Cauliflower leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 35.4,
+"protein_g": 3.9,
+"carbs_g": 3.39,
+"fat_g": 0.42,
+"fibre_g": 3.43,
+"sugar_g": 0.61
+},
+"aliases": [
+"cauliflower leaves"
+]
+},
+{
+"code": "C018",
+"name": "Colocasia leaves, green",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 43.5,
+"protein_g": 3.42,
+"carbs_g": 3.69,
+"fat_g": 1.38,
+"fibre_g": 5.6,
+"sugar_g": 0.63
+},
+"aliases": [
+"colocasia leaves, green",
+"green colocasia leaves"
+]
+},
+{
+"code": "C019",
+"name": "Drumstick leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 67.4,
+"protein_g": 6.41,
+"carbs_g": 5.62,
+"fat_g": 1.64,
+"fibre_g": 8.21,
+"sugar_g": 0.02
+},
+"aliases": [
+"drumstick leaves"
+]
+},
+{
+"code": "C020",
+"name": "Fenugreek leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 34.4,
+"protein_g": 3.68,
+"carbs_g": 2.17,
+"fat_g": 0.83,
+"fibre_g": 4.9,
+"sugar_g": 0.88
+},
+"aliases": [
+"fenugreek leaves"
+]
+},
+{
+"code": "C021",
+"name": "Garden cress",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 49.7,
+"protein_g": 5.62,
+"carbs_g": 4.48,
+"fat_g": 0.8,
+"fibre_g": 2.6,
+"sugar_g": 0.92
+},
+"aliases": [
+"garden cress"
+]
+},
+{
+"code": "C022",
+"name": "Gogu leaves, green stem",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 36.3,
+"protein_g": 1.86,
+"carbs_g": 4.06,
+"fat_g": 1.09,
+"fibre_g": 4.59,
+"sugar_g": 0.01
+},
+"aliases": [
+"gogu leaves, green stem",
+"green stem gogu leaves"
+]
+},
+{
+"code": "C023",
+"name": "Gogu leaves, red stem",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 36.6,
+"protein_g": 1.85,
+"carbs_g": 4.24,
+"fat_g": 1.07,
+"fibre_g": 3.89,
+"sugar_g": 0.01
+},
+"aliases": [
+"gogu leaves, red stem",
+"red stem gogu leaves"
+]
+},
+{
+"code": "C024",
+"name": "Knol-Khol, leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 42.5,
+"protein_g": 3.12,
+"carbs_g": 6.16,
+"fat_g": 0.35,
+"fibre_g": 2.76,
+"sugar_g": 0.1
+},
+"aliases": [
+"knol-khol, leaves",
+"leaves knol-khol"
+]
+},
+{
+"code": "C025",
+"name": "Lettuce",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 21.7,
+"protein_g": 1.54,
+"carbs_g": 3.01,
+"fat_g": 0.27,
+"fibre_g": 1.79,
+"sugar_g": 0.22
+},
+"aliases": [
+"lettuce"
+]
+},
+{
+"code": "C026",
+"name": "Mustard leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 30.4,
+"protein_g": 3.52,
+"carbs_g": 2.41,
+"fat_g": 0.51,
+"fibre_g": 3.92,
+"sugar_g": 0.04
+},
+"aliases": [
+"mustard leaves"
+]
+},
+{
+"code": "C027",
+"name": "Pak Choi leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 16.0,
+"protein_g": 1.41,
+"carbs_g": 1.78,
+"fat_g": 0.25,
+"fibre_g": 1.91,
+"sugar_g": 0.52
+},
+"aliases": [
+"pak choi leaves"
+]
+},
+{
+"code": "C028",
+"name": "Parsley",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 72.9,
+"protein_g": 5.55,
+"carbs_g": 9.43,
+"fat_g": 1.14,
+"fibre_g": 3.87,
+"sugar_g": 0.69
+},
+"aliases": [
+"parsley"
+]
+},
+{
+"code": "C029",
+"name": "Ponnaganni",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 50.9,
+"protein_g": 5.29,
+"carbs_g": 5.17,
+"fat_g": 0.71,
+"fibre_g": 6.74,
+"sugar_g": 0.44
+},
+"aliases": [
+"ponnaganni"
+]
+},
+{
+"code": "C030",
+"name": "Pumpkin leaves, tender",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 44.2,
+"protein_g": 4.21,
+"carbs_g": 4.75,
+"fat_g": 0.74,
+"fibre_g": 2.25,
+"sugar_g": 0.1
+},
+"aliases": [
+"pumpkin leaves, tender",
+"tender pumpkin leaves"
+]
+},
+{
+"code": "C031",
+"name": "Radish leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 26.1,
+"protein_g": 2.22,
+"carbs_g": 2.77,
+"fat_g": 0.51,
+"fibre_g": 1.82,
+"sugar_g": 0.29
+},
+"aliases": [
+"radish leaves"
+]
+},
+{
+"code": "C032",
+"name": "Rumex leaves",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 19.6,
+"protein_g": 1.62,
+"carbs_g": 2.33,
+"fat_g": 0.33,
+"fibre_g": 1.27,
+"sugar_g": 0.45
+},
+"aliases": [
+"rumex leaves"
+]
+},
+{
+"code": "C033",
+"name": "Spinach",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 24.4,
+"protein_g": 2.14,
+"carbs_g": 2.05,
+"fat_g": 0.64,
+"fibre_g": 2.38,
+"sugar_g": 0.24
+},
+"aliases": [
+"spinach"
+]
+},
+{
+"code": "C034",
+"name": "Tamarind leaves, tender",
+"group": "Green Leafy Vegetables",
+"per_100g": {
+"energy_kcal": 71.5,
+"protein_g": 5.84,
+"carbs_g": 10.04,
+"fat_g": 0.49,
+"fibre_g": 10.7,
+"sugar_g": 0.17
+},
+"aliases": [
+"tamarind leaves, tender",
+"tender tamarind leaves"
+]
+},
+{
+"code": "D001",
+"name": "Ash gourd",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 17.4,
+"protein_g": 0.79,
+"carbs_g": 2.84,
+"fat_g": 0.14,
+"fibre_g": 3.37,
+"sugar_g": 0.19
+},
+"aliases": [
+"ash gourd"
+]
+},
+{
+"code": "D002",
+"name": "Bamboo shoot, tender",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 16.3,
+"protein_g": 1.33,
+"carbs_g": 1.67,
+"fat_g": 0.35,
+"fibre_g": 1.55,
+"sugar_g": 0.09
+},
+"aliases": [
+"bamboo shoot, tender",
+"tender bamboo shoot"
+]
+},
+{
+"code": "D003",
+"name": "Bean scarlet, tender",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 42.8,
+"protein_g": 2.86,
+"carbs_g": 5.16,
+"fat_g": 0.99,
+"fibre_g": 4.5,
+"sugar_g": 1.03
+},
+"aliases": [
+"bean scarlet, tender",
+"tender bean scarlet"
+]
+},
+{
+"code": "D004",
+"name": "Bitter gourd, jagged, teeth ridges, elongate",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 20.8,
+"protein_g": 1.44,
+"carbs_g": 2.82,
+"fat_g": 0.24,
+"fibre_g": 3.78,
+"sugar_g": 0.04
+},
+"aliases": [
+"bitter gourd, jagged, teeth ridges, elongate",
+"jagged, teeth ridges, elongate bitter gourd"
+]
+},
+{
+"code": "D005",
+"name": "Bitter gourd, jagged, teeth ridges, short",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 18.9,
+"protein_g": 1.34,
+"carbs_g": 2.53,
+"fat_g": 0.24,
+"fibre_g": 3.49,
+"sugar_g": 0.06
+},
+"aliases": [
+"bitter gourd, jagged, teeth ridges, short",
+"jagged, teeth ridges, short bitter gourd"
+]
+},
+{
+"code": "D006",
+"name": "Bitter gourd, jagged, smooth ridges, elongate",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.4,
+"protein_g": 1.61,
+"carbs_g": 2.29,
+"fat_g": 0.26,
+"fibre_g": 3.72,
+"sugar_g": 0.08
+},
+"aliases": [
+"bitter gourd, jagged, smooth ridges, elongate",
+"jagged, smooth ridges, elongate bitter gourd"
+]
+},
+{
+"code": "D007",
+"name": "Bottle gourd, elongate, pale green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 11.0,
+"protein_g": 0.53,
+"carbs_g": 1.68,
+"fat_g": 0.13,
+"fibre_g": 2.12,
+"sugar_g": 0.36
+},
+"aliases": [
+"bottle gourd, elongate, pale green",
+"elongate, pale green bottle gourd"
+]
+},
+{
+"code": "D008",
+"name": "Bottle gourd, round, pale green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 13.6,
+"protein_g": 0.42,
+"carbs_g": 2.53,
+"fat_g": 0.12,
+"fibre_g": 2.1,
+"sugar_g": 0.34
+},
+"aliases": [
+"bottle gourd, round, pale green",
+"round, pale green bottle gourd"
+]
+},
+{
+"code": "D009",
+"name": "Bottle gourd, elongate, dark green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 12.9,
+"protein_g": 0.49,
+"carbs_g": 2.25,
+"fat_g": 0.13,
+"fibre_g": 2.11,
+"sugar_g": 0.39
+},
+"aliases": [
+"bottle gourd, elongate, dark green",
+"elongate, dark green bottle gourd"
+]
+},
+{
+"code": "D010",
+"name": "Brinjal 1",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.2,
+"protein_g": 1.77,
+"carbs_g": 3.49,
+"fat_g": 0.39,
+"fibre_g": 3.57,
+"sugar_g": 0.88
+},
+"aliases": [
+"brinjal 1"
+]
+},
+{
+"code": "D011",
+"name": "Brinjal 2",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.7,
+"protein_g": 1.82,
+"carbs_g": 2.71,
+"fat_g": 0.34,
+"fibre_g": 4.01,
+"sugar_g": 0.98
+},
+"aliases": [
+"brinjal 2"
+]
+},
+{
+"code": "D012",
+"name": "Brinjal 3",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 24.4,
+"protein_g": 1.36,
+"carbs_g": 3.38,
+"fat_g": 0.33,
+"fibre_g": 4.26,
+"sugar_g": 0.93
+},
+"aliases": [
+"brinjal 3"
+]
+},
+{
+"code": "D013",
+"name": "Brinjal 4",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.9,
+"protein_g": 1.51,
+"carbs_g": 3.19,
+"fat_g": 0.31,
+"fibre_g": 4.04,
+"sugar_g": 0.86
+},
+"aliases": [
+"brinjal 4"
+]
+},
+{
+"code": "D014",
+"name": "Brinjal 5",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 26.5,
+"protein_g": 1.38,
+"carbs_g": 4.02,
+"fat_g": 0.29,
+"fibre_g": 4.13,
+"sugar_g": 0.99
+},
+"aliases": [
+"brinjal 5"
+]
+},
+{
+"code": "D015",
+"name": "Brinjal 6",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.2,
+"protein_g": 1.46,
+"carbs_g": 3.29,
+"fat_g": 0.29,
+"fibre_g": 3.68,
+"sugar_g": 1.0
+},
+"aliases": [
+"brinjal 6"
+]
+},
+{
+"code": "D016",
+"name": "Brinjal 7",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.4,
+"protein_g": 1.4,
+"carbs_g": 3.1,
+"fat_g": 0.37,
+"fibre_g": 3.32,
+"sugar_g": 1.38
+},
+"aliases": [
+"brinjal 7"
+]
+},
+{
+"code": "D017",
+"name": "Brinjal 8",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 28.0,
+"protein_g": 1.82,
+"carbs_g": 3.75,
+"fat_g": 0.33,
+"fibre_g": 4.01,
+"sugar_g": 0.79
+},
+"aliases": [
+"brinjal 8"
+]
+},
+{
+"code": "D018",
+"name": "Brinjal 9",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 25.3,
+"protein_g": 1.47,
+"carbs_g": 3.52,
+"fat_g": 0.35,
+"fibre_g": 4.0,
+"sugar_g": 0.91
+},
+"aliases": [
+"brinjal 9"
+]
+},
+{
+"code": "D019",
+"name": "Brinjal 10",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.7,
+"protein_g": 1.68,
+"carbs_g": 4.08,
+"fat_g": 0.25,
+"fibre_g": 3.9,
+"sugar_g": 0.86
+},
+"aliases": [
+"brinjal 10"
+]
+},
+{
+"code": "D020",
+"name": "Brinjal 11",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 25.1,
+"protein_g": 1.43,
+"carbs_g": 3.53,
+"fat_g": 0.31,
+"fibre_g": 4.12,
+"sugar_g": 1.05
+},
+"aliases": [
+"brinjal 11"
+]
+},
+{
+"code": "D021",
+"name": "Brinjal 12",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 22.2,
+"protein_g": 1.6,
+"carbs_g": 2.73,
+"fat_g": 0.27,
+"fibre_g": 3.89,
+"sugar_g": 1.22
+},
+"aliases": [
+"brinjal 12"
+]
+},
+{
+"code": "D022",
+"name": "Brinjal 13",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 29.6,
+"protein_g": 1.49,
+"carbs_g": 4.51,
+"fat_g": 0.31,
+"fibre_g": 3.92,
+"sugar_g": 1.15
+},
+"aliases": [
+"brinjal 13"
+]
+},
+{
+"code": "D023",
+"name": "Brinjal 14",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 25.3,
+"protein_g": 1.56,
+"carbs_g": 3.27,
+"fat_g": 0.35,
+"fibre_g": 3.87,
+"sugar_g": 0.88
+},
+"aliases": [
+"brinjal 14"
+]
+},
+{
+"code": "D024",
+"name": "Brinjal 15",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.2,
+"protein_g": 1.58,
+"carbs_g": 3.96,
+"fat_g": 0.29,
+"fibre_g": 3.99,
+"sugar_g": 0.82
+},
+"aliases": [
+"brinjal 15"
+]
+},
+{
+"code": "D025",
+"name": "Brinjal 16",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 24.6,
+"protein_g": 1.26,
+"carbs_g": 3.46,
+"fat_g": 0.34,
+"fibre_g": 3.74,
+"sugar_g": 0.99
+},
+"aliases": [
+"brinjal 16"
+]
+},
+{
+"code": "D026",
+"name": "Brinjal 17",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 21.7,
+"protein_g": 1.18,
+"carbs_g": 2.89,
+"fat_g": 0.36,
+"fibre_g": 3.94,
+"sugar_g": 0.85
+},
+"aliases": [
+"brinjal 17"
+]
+},
+{
+"code": "D027",
+"name": "Brinjal 18",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.7,
+"protein_g": 1.47,
+"carbs_g": 4.1,
+"fat_g": 0.33,
+"fibre_g": 4.38,
+"sugar_g": 1.44
+},
+"aliases": [
+"brinjal 18"
+]
+},
+{
+"code": "D028",
+"name": "Brinjal 19",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.9,
+"protein_g": 1.26,
+"carbs_g": 3.39,
+"fat_g": 0.31,
+"fibre_g": 3.97,
+"sugar_g": 0.96
+},
+"aliases": [
+"brinjal 19"
+]
+},
+{
+"code": "D029",
+"name": "Brinjal 20",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.7,
+"protein_g": 1.44,
+"carbs_g": 3.15,
+"fat_g": 0.34,
+"fibre_g": 3.73,
+"sugar_g": 0.76
+},
+"aliases": [
+"brinjal 20"
+]
+},
+{
+"code": "D030",
+"name": "Brinjal 21",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.0,
+"protein_g": 1.36,
+"carbs_g": 3.93,
+"fat_g": 0.35,
+"fibre_g": 3.85,
+"sugar_g": 0.93
+},
+"aliases": [
+"brinjal 21"
+]
+},
+{
+"code": "D031",
+"name": "Brinjal - all varieties",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 25.3,
+"protein_g": 1.48,
+"carbs_g": 3.52,
+"fat_g": 0.32,
+"fibre_g": 3.98,
+"sugar_g": 0.97
+},
+"aliases": [
+"brinjal - all varieties"
+]
+},
+{
+"code": "D032",
+"name": "Broad beans",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 29.4,
+"protein_g": 3.85,
+"carbs_g": 2.11,
+"fat_g": 0.15,
+"fibre_g": 8.63,
+"sugar_g": 1.22
+},
+"aliases": [
+"broad beans"
+]
+},
+{
+"code": "D033",
+"name": "Capsicum, green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 16.3,
+"protein_g": 1.11,
+"carbs_g": 1.84,
+"fat_g": 0.34,
+"fibre_g": 2.06,
+"sugar_g": 0.86
+},
+"aliases": [
+"capsicum, green",
+"green capsicum"
+]
+},
+{
+"code": "D034",
+"name": "Capsicum, red",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.8,
+"protein_g": 1.47,
+"carbs_g": 2.14,
+"fat_g": 0.47,
+"fibre_g": 2.19,
+"sugar_g": 0.93
+},
+"aliases": [
+"capsicum, red",
+"red capsicum"
+]
+},
+{
+"code": "D035",
+"name": "Capsicum, yellow",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 18.6,
+"protein_g": 1.35,
+"carbs_g": 1.95,
+"fat_g": 0.41,
+"fibre_g": 2.19,
+"sugar_g": 0.97
+},
+"aliases": [
+"capsicum, yellow",
+"yellow capsicum"
+]
+},
+{
+"code": "D036",
+"name": "Cauliflower",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 22.9,
+"protein_g": 2.15,
+"carbs_g": 2.03,
+"fat_g": 0.44,
+"fibre_g": 3.71,
+"sugar_g": 0.47
+},
+"aliases": [
+"cauliflower"
+]
+},
+{
+"code": "D037",
+"name": "Celery stalk",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 16.5,
+"protein_g": 0.98,
+"carbs_g": 2.33,
+"fat_g": 0.24,
+"fibre_g": 2.09,
+"sugar_g": 0.75
+},
+"aliases": [
+"celery stalk"
+]
+},
+{
+"code": "D038",
+"name": "Cho-cho-marrow",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 18.9,
+"protein_g": 0.66,
+"carbs_g": 3.47,
+"fat_g": 0.15,
+"fibre_g": 1.55,
+"sugar_g": 0.76
+},
+"aliases": [
+"cho-cho-marrow"
+]
+},
+{
+"code": "D039",
+"name": "Cluster beans",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 40.2,
+"protein_g": 3.55,
+"carbs_g": 4.91,
+"fat_g": 0.37,
+"fibre_g": 4.83,
+"sugar_g": 0.12
+},
+"aliases": [
+"cluster beans"
+]
+},
+{
+"code": "D040",
+"name": "Colocasia, stem, black",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.9,
+"protein_g": 0.76,
+"carbs_g": 3.83,
+"fat_g": 0.34,
+"fibre_g": 3.01,
+"sugar_g": 0.53
+},
+"aliases": [
+"colocasia, stem, black",
+"stem, black colocasia"
+]
+},
+{
+"code": "D041",
+"name": "Colocasia, stem, green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.4,
+"protein_g": 0.91,
+"carbs_g": 2.86,
+"fat_g": 0.22,
+"fibre_g": 2.33,
+"sugar_g": 0.25
+},
+"aliases": [
+"colocasia, stem, green",
+"stem, green colocasia"
+]
+},
+{
+"code": "D042",
+"name": "Corn, baby",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 73.1,
+"protein_g": 2.69,
+"carbs_g": 11.66,
+"fat_g": 1.33,
+"fibre_g": 6.09,
+"sugar_g": 0.49
+},
+"aliases": [
+"baby corn",
+"corn, baby"
+]
+},
+{
+"code": "D043",
+"name": "Cucumber, green, elongate",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.6,
+"protein_g": 0.71,
+"carbs_g": 3.48,
+"fat_g": 0.16,
+"fibre_g": 2.14,
+"sugar_g": 0.27
+},
+"aliases": [
+"cucumber, green, elongate",
+"green, elongate cucumber"
+]
+},
+{
+"code": "D044",
+"name": "Cucumber, green, short",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 17.4,
+"protein_g": 0.83,
+"carbs_g": 2.82,
+"fat_g": 0.18,
+"fibre_g": 2.13,
+"sugar_g": 0.21
+},
+"aliases": [
+"cucumber, green, short",
+"green, short cucumber"
+]
+},
+{
+"code": "D045",
+"name": "Cucumber, orange, round",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.6,
+"protein_g": 0.98,
+"carbs_g": 3.01,
+"fat_g": 0.24,
+"fibre_g": 2.46,
+"sugar_g": 0.22
+},
+"aliases": [
+"cucumber, orange, round",
+"orange, round cucumber"
+]
+},
+{
+"code": "D046",
+"name": "Drumstick",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 29.4,
+"protein_g": 2.62,
+"carbs_g": 3.76,
+"fat_g": 0.12,
+"fibre_g": 6.83,
+"sugar_g": 1.47
+},
+"aliases": [
+"drumstick"
+]
+},
+{
+"code": "D047",
+"name": "Field beans, tender, broad",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 30.8,
+"protein_g": 3.06,
+"carbs_g": 2.75,
+"fat_g": 0.64,
+"fibre_g": 5.64,
+"sugar_g": 0.95
+},
+"aliases": [
+"field beans, tender, broad",
+"tender, broad field beans"
+]
+},
+{
+"code": "D048",
+"name": "Field beans, tender, lean",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 33.5,
+"protein_g": 3.71,
+"carbs_g": 2.85,
+"fat_g": 0.6,
+"fibre_g": 6.19,
+"sugar_g": 0.76
+},
+"aliases": [
+"field beans, tender, lean",
+"tender, lean field beans"
+]
+},
+{
+"code": "D049",
+"name": "French beans, country",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 24.4,
+"protein_g": 2.49,
+"carbs_g": 2.68,
+"fat_g": 0.26,
+"fibre_g": 4.38,
+"sugar_g": 1.06
+},
+"aliases": [
+"country french beans",
+"french beans, country"
+]
+},
+{
+"code": "D050",
+"name": "French beans, hybrid",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 22.2,
+"protein_g": 2.12,
+"carbs_g": 2.63,
+"fat_g": 0.19,
+"fibre_g": 4.18,
+"sugar_g": 1.0
+},
+"aliases": [
+"french beans, hybrid",
+"hybrid french beans"
+]
+},
+{
+"code": "D051",
+"name": "Jack fruit, raw",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 26.3,
+"protein_g": 1.98,
+"carbs_g": 3.48,
+"fat_g": 0.35,
+"fibre_g": 7.69,
+"sugar_g": 2.02
+},
+"aliases": [
+"jack fruit, raw",
+"raw jack fruit"
+]
+},
+{
+"code": "D052",
+"name": "Jack fruit, seeds, mature",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 77.0,
+"protein_g": 5.79,
+"carbs_g": 11.81,
+"fat_g": 0.44,
+"fibre_g": 8.63,
+"sugar_g": 2.23
+},
+"aliases": [
+"jack fruit, seeds, mature",
+"seeds, mature jack fruit"
+]
+},
+{
+"code": "D053",
+"name": "Knol - Khol",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 16.0,
+"protein_g": 1.58,
+"carbs_g": 1.39,
+"fat_g": 0.35,
+"fibre_g": 2.75,
+"sugar_g": 0.43
+},
+"aliases": [
+"knol - khol"
+]
+},
+{
+"code": "D054",
+"name": "Kovai, big",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 17.4,
+"protein_g": 1.39,
+"carbs_g": 2.01,
+"fat_g": 0.24,
+"fibre_g": 3.0,
+"sugar_g": 0.98
+},
+"aliases": [
+"big kovai",
+"kovai, big"
+]
+},
+{
+"code": "D055",
+"name": "Kovai, small",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.1,
+"protein_g": 1.22,
+"carbs_g": 2.41,
+"fat_g": 0.24,
+"fibre_g": 3.25,
+"sugar_g": 1.07
+},
+"aliases": [
+"kovai, small",
+"small kovai"
+]
+},
+{
+"code": "D056",
+"name": "Ladies finger",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 27.5,
+"protein_g": 2.08,
+"carbs_g": 3.62,
+"fat_g": 0.22,
+"fibre_g": 4.08,
+"sugar_g": 0.48
+},
+"aliases": [
+"ladies finger"
+]
+},
+{
+"code": "D057",
+"name": "Mango, green, raw",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 49.0,
+"protein_g": 0.69,
+"carbs_g": 10.59,
+"fat_g": 0.08,
+"fibre_g": 3.01,
+"sugar_g": 2.42
+},
+"aliases": [
+"green, raw mango",
+"mango, green, raw"
+]
+},
+{
+"code": "D058",
+"name": "Onion, stalk",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 25.6,
+"protein_g": 2.07,
+"carbs_g": 2.99,
+"fat_g": 0.26,
+"fibre_g": 5.21,
+"sugar_g": 0.41
+},
+"aliases": [
+"onion, stalk",
+"stalk onion"
+]
+},
+{
+"code": "D059",
+"name": "Papaya, raw",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.9,
+"protein_g": 0.5,
+"carbs_g": 4.4,
+"fat_g": 0.23,
+"fibre_g": 2.28,
+"sugar_g": 3.63
+},
+"aliases": [
+"papaya, raw",
+"raw papaya"
+]
+},
+{
+"code": "D060",
+"name": "Parwar",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 24.1,
+"protein_g": 1.4,
+"carbs_g": 3.54,
+"fat_g": 0.3,
+"fibre_g": 2.61,
+"sugar_g": 0.37
+},
+"aliases": [
+"parwar"
+]
+},
+{
+"code": "D061",
+"name": "Peas, fresh",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 81.3,
+"protein_g": 7.25,
+"carbs_g": 11.88,
+"fat_g": 0.13,
+"fibre_g": 6.32,
+"sugar_g": 0.97
+},
+"aliases": [
+"fresh peas",
+"peas, fresh"
+]
+},
+{
+"code": "D062",
+"name": "Plantain, flower",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 21.3,
+"protein_g": 1.47,
+"carbs_g": 2.15,
+"fat_g": 0.63,
+"fibre_g": 5.25,
+"sugar_g": 0.17
+},
+"aliases": [
+"flower plantain",
+"plantain, flower"
+]
+},
+{
+"code": "D063",
+"name": "Plantain, green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 79.8,
+"protein_g": 1.18,
+"carbs_g": 17.58,
+"fat_g": 0.23,
+"fibre_g": 3.6,
+"sugar_g": 0.86
+},
+"aliases": [
+"green plantain",
+"plantain, green"
+]
+},
+{
+"code": "D064",
+"name": "Plantain, stem",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 39.4,
+"protein_g": 0.35,
+"carbs_g": 8.64,
+"fat_g": 0.16,
+"fibre_g": 2.12,
+"sugar_g": 0.65
+},
+"aliases": [
+"plantain, stem",
+"stem plantain"
+]
+},
+{
+"code": "D065",
+"name": "Pumpkin, green, cylindrical",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 24.6,
+"protein_g": 0.87,
+"carbs_g": 4.22,
+"fat_g": 0.18,
+"fibre_g": 2.53,
+"sugar_g": 2.9
+},
+"aliases": [
+"green, cylindrical pumpkin",
+"pumpkin, green, cylindrical"
+]
+},
+{
+"code": "D066",
+"name": "Pumpkin, orange, round",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 23.2,
+"protein_g": 0.84,
+"carbs_g": 4.0,
+"fat_g": 0.16,
+"fibre_g": 2.56,
+"sugar_g": 2.97
+},
+"aliases": [
+"orange, round pumpkin",
+"pumpkin, orange, round"
+]
+},
+{
+"code": "D067",
+"name": "Red gram, tender, fresh",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 124.3,
+"protein_g": 8.09,
+"carbs_g": 19.46,
+"fat_g": 0.92,
+"fibre_g": 5.9,
+"sugar_g": 0.55
+},
+"aliases": [
+"red gram, tender, fresh",
+"tender, fresh red gram"
+]
+},
+{
+"code": "D068",
+"name": "Ridge gourd",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 13.1,
+"protein_g": 0.91,
+"carbs_g": 1.72,
+"fat_g": 0.14,
+"fibre_g": 1.81,
+"sugar_g": 0.62
+},
+"aliases": [
+"ridge gourd"
+]
+},
+{
+"code": "D069",
+"name": "Ridge gourd, smooth skin",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 15.3,
+"protein_g": 0.98,
+"carbs_g": 2.24,
+"fat_g": 0.13,
+"fibre_g": 1.85,
+"sugar_g": 0.41
+},
+"aliases": [
+"ridge gourd, smooth skin",
+"smooth skin ridge gourd"
+]
+},
+{
+"code": "D070",
+"name": "Snake gourd, long, pale green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 12.4,
+"protein_g": 0.98,
+"carbs_g": 1.27,
+"fat_g": 0.25,
+"fibre_g": 2.27,
+"sugar_g": 0.42
+},
+"aliases": [
+"long, pale green snake gourd",
+"snake gourd, long, pale green"
+]
+},
+{
+"code": "D071",
+"name": "Snake gourd, long, dark green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 12.0,
+"protein_g": 0.89,
+"carbs_g": 1.23,
+"fat_g": 0.25,
+"fibre_g": 2.27,
+"sugar_g": 0.45
+},
+"aliases": [
+"long, dark green snake gourd",
+"snake gourd, long, dark green"
+]
+},
+{
+"code": "D072",
+"name": "Snake gourd, short",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 14.6,
+"protein_g": 0.54,
+"carbs_g": 2.15,
+"fat_g": 0.26,
+"fibre_g": 2.29,
+"sugar_g": 0.46
+},
+"aliases": [
+"short snake gourd",
+"snake gourd, short"
+]
+},
+{
+"code": "D073",
+"name": "Tinda, tender",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 13.9,
+"protein_g": 1.02,
+"carbs_g": 1.9,
+"fat_g": 0.17,
+"fibre_g": 2.0,
+"sugar_g": 0.44
+},
+"aliases": [
+"tender tinda",
+"tinda, tender"
+]
+},
+{
+"code": "D074",
+"name": "Tomato, green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 20.8,
+"protein_g": 1.12,
+"carbs_g": 3.18,
+"fat_g": 0.27,
+"fibre_g": 1.62,
+"sugar_g": 0.83
+},
+"aliases": [
+"green tomato",
+"tomato, green"
+]
+},
+{
+"code": "D075",
+"name": "Tomato, ripe, hybrid",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 18.9,
+"protein_g": 0.76,
+"carbs_g": 3.2,
+"fat_g": 0.25,
+"fibre_g": 1.58,
+"sugar_g": 1.82
+},
+"aliases": [
+"ripe, hybrid tomato",
+"tomato, ripe, hybrid"
+]
+},
+{
+"code": "D076",
+"name": "Tomato, ripe, local",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 19.6,
+"protein_g": 0.9,
+"carbs_g": 2.71,
+"fat_g": 0.47,
+"fibre_g": 1.77,
+"sugar_g": 1.34
+},
+"aliases": [
+"ripe, local tomato",
+"tomato, ripe, local"
+]
+},
+{
+"code": "D077",
+"name": "Zucchini, green",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 20.1,
+"protein_g": 1.1,
+"carbs_g": 2.33,
+"fat_g": 0.51,
+"fibre_g": 2.3,
+"sugar_g": 0.14
+},
+"aliases": [
+"green zucchini",
+"zucchini, green"
+]
+},
+{
+"code": "D078",
+"name": "Zucchini, yellow",
+"group": "Other Vegetables",
+"per_100g": {
+"energy_kcal": 18.9,
+"protein_g": 1.31,
+"carbs_g": 2.2,
+"fat_g": 0.44,
+"fibre_g": 1.84,
+"sugar_g": 0.29
+},
+"aliases": [
+"yellow zucchini",
+"zucchini, yellow"
+]
+},
+{
+"code": "E001",
+"name": "Apple, big",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 62.4,
+"protein_g": 0.29,
+"carbs_g": 13.11,
+"fat_g": 0.64,
+"fibre_g": 2.59,
+"sugar_g": 9.53
+},
+"aliases": [
+"apple, big",
+"big apple"
+]
+},
+{
+"code": "E002",
+"name": "Apple, green",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 51.1,
+"protein_g": 0.46,
+"carbs_g": 10.65,
+"fat_g": 0.5,
+"fibre_g": 2.54,
+"sugar_g": 8.39
+},
+"aliases": [
+"apple, green",
+"green apple"
+]
+},
+{
+"code": "E003",
+"name": "Apple, small",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 63.8,
+"protein_g": 0.31,
+"carbs_g": 13.95,
+"fat_g": 0.53,
+"fibre_g": 2.06,
+"sugar_g": 9.8
+},
+"aliases": [
+"apple, small",
+"small apple"
+]
+},
+{
+"code": "E004",
+"name": "Apple, small, Kashmir",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 64.3,
+"protein_g": 0.27,
+"carbs_g": 13.99,
+"fat_g": 0.6,
+"fibre_g": 2.07,
+"sugar_g": 9.15
+},
+"aliases": [
+"apple, small, kashmir",
+"small, kashmir apple"
+]
+},
+{
+"code": "E005",
+"name": "Apricot, dried",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 315.7,
+"protein_g": 3.17,
+"carbs_g": 72.63,
+"fat_g": 0.74,
+"fibre_g": 3.32,
+"sugar_g": 25.72
+},
+"aliases": [
+"apricot, dried",
+"dried apricot"
+]
+},
+{
+"code": "E006",
+"name": "Apricot, processed",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 56.4,
+"protein_g": 1.47,
+"carbs_g": 10.93,
+"fat_g": 0.64,
+"fibre_g": 0.59,
+"sugar_g": 4.36
+},
+"aliases": [
+"apricot, processed",
+"processed apricot"
+]
+},
+{
+"code": "E007",
+"name": "Avocado fruit",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 144.4,
+"protein_g": 2.95,
+"carbs_g": 1.75,
+"fat_g": 13.86,
+"fibre_g": 6.69,
+"sugar_g": 1.65
+},
+"aliases": [
+"avocado fruit"
+]
+},
+{
+"code": "E008",
+"name": "Bael fruit",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 136.0,
+"protein_g": 2.63,
+"carbs_g": 28.21,
+"fat_g": 0.57,
+"fibre_g": 6.31,
+"sugar_g": 16.35
+},
+"aliases": [
+"bael fruit"
+]
+},
+{
+"code": "E009",
+"name": "Banana, ripe, montham",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 110.7,
+"protein_g": 1.25,
+"carbs_g": 24.95,
+"fat_g": 0.32,
+"fibre_g": 2.21,
+"sugar_g": 14.9
+},
+"aliases": [
+"banana, ripe, montham",
+"ripe, montham banana"
+]
+},
+{
+"code": "E010",
+"name": "Banana, ripe, poovam",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 106.4,
+"protein_g": 1.49,
+"carbs_g": 23.41,
+"fat_g": 0.35,
+"fibre_g": 2.33,
+"sugar_g": 12.54
+},
+"aliases": [
+"banana, ripe, poovam",
+"ripe, poovam banana"
+]
+},
+{
+"code": "E011",
+"name": "Banana, ripe, red",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 111.6,
+"protein_g": 1.29,
+"carbs_g": 25.21,
+"fat_g": 0.29,
+"fibre_g": 1.98,
+"sugar_g": 14.57
+},
+"aliases": [
+"banana, ripe, red",
+"ripe, red banana"
+]
+},
+{
+"code": "E012",
+"name": "Banana, ripe, robusta",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 105.2,
+"protein_g": 1.23,
+"carbs_g": 23.63,
+"fat_g": 0.33,
+"fibre_g": 1.94,
+"sugar_g": 13.65
+},
+"aliases": [
+"banana, ripe, robusta",
+"ripe, robusta banana"
+]
+},
+{
+"code": "E013",
+"name": "Black berry",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 54.3,
+"protein_g": 0.92,
+"carbs_g": 10.64,
+"fat_g": 0.63,
+"fibre_g": 4.35,
+"sugar_g": 7.61
+},
+"aliases": [
+"black berry"
+]
+},
+{
+"code": "E014",
+"name": "Cherries, red",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 59.8,
+"protein_g": 1.49,
+"carbs_g": 11.87,
+"fat_g": 0.46,
+"fibre_g": 2.12,
+"sugar_g": 10.72
+},
+"aliases": [
+"cherries, red",
+"red cherries"
+]
+},
+{
+"code": "E015",
+"name": "Currants, black",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 54.3,
+"protein_g": 1.51,
+"carbs_g": 9.93,
+"fat_g": 0.53,
+"fibre_g": 4.07,
+"sugar_g": 6.33
+},
+"aliases": [
+"black currants",
+"currants, black"
+]
+},
+{
+"code": "E016",
+"name": "Custard apple",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 98.9,
+"protein_g": 1.62,
+"carbs_g": 20.38,
+"fat_g": 0.67,
+"fibre_g": 5.1,
+"sugar_g": 13.35
+},
+"aliases": [
+"custard apple"
+]
+},
+{
+"code": "E017",
+"name": "Dates, dry, pale brown",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 320.3,
+"protein_g": 2.45,
+"carbs_g": 74.91,
+"fat_g": 0.35,
+"fibre_g": 8.95,
+"sugar_g": 66.63
+},
+"aliases": [
+"dates, dry, pale brown",
+"dry, pale brown dates"
+]
+},
+{
+"code": "E018",
+"name": "Dates, dry, dark brown",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 310.9,
+"protein_g": 2.38,
+"carbs_g": 72.67,
+"fat_g": 0.35,
+"fibre_g": 9.1,
+"sugar_g": 68.84
+},
+"aliases": [
+"dates, dry, dark brown",
+"dry, dark brown dates"
+]
+},
+{
+"code": "E019",
+"name": "Dates, processed",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 286.1,
+"protein_g": 1.18,
+"carbs_g": 67.95,
+"fat_g": 0.41,
+"fibre_g": 6.52,
+"sugar_g": 56.96
+},
+"aliases": [
+"dates, processed",
+"processed dates"
+]
+},
+{
+"code": "E020",
+"name": "Fig",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 81.5,
+"protein_g": 2.03,
+"carbs_g": 16.28,
+"fat_g": 0.37,
+"fibre_g": 4.64,
+"sugar_g": 8.64
+},
+"aliases": [
+"fig"
+]
+},
+{
+"code": "E021",
+"name": "Goosberry",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 23.7,
+"protein_g": 0.34,
+"carbs_g": 4.39,
+"fat_g": 0.16,
+"fibre_g": 7.75,
+"sugar_g": 3.39
+},
+"aliases": [
+"goosberry",
+"gooseberry"
+]
+},
+{
+"code": "E022",
+"name": "Grapes, seeded, round, black",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 60.7,
+"protein_g": 0.76,
+"carbs_g": 13.23,
+"fat_g": 0.32,
+"fibre_g": 1.35,
+"sugar_g": 10.02
+},
+"aliases": [
+"grapes, seeded, round, black",
+"seeded, round, black grapes"
+]
+},
+{
+"code": "E023",
+"name": "Grapes, seeded, round, green",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 56.2,
+"protein_g": 0.77,
+"carbs_g": 12.19,
+"fat_g": 0.29,
+"fibre_g": 1.25,
+"sugar_g": 9.59
+},
+"aliases": [
+"grapes, seeded, round, green",
+"seeded, round, green grapes"
+]
+},
+{
+"code": "E024",
+"name": "Grapes, seeded, round, red",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 58.3,
+"protein_g": 0.95,
+"carbs_g": 12.55,
+"fat_g": 0.29,
+"fibre_g": 1.28,
+"sugar_g": 10.47
+},
+"aliases": [
+"grapes, seeded, round, red",
+"seeded, round, red grapes"
+]
+},
+{
+"code": "E025",
+"name": "Grapes, seedless, oval, black",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 94.4,
+"protein_g": 1.41,
+"carbs_g": 20.48,
+"fat_g": 0.46,
+"fibre_g": 1.64,
+"sugar_g": 9.19
+},
+"aliases": [
+"grapes, seedless, oval, black",
+"seedless, oval, black grapes"
+]
+},
+{
+"code": "E026",
+"name": "Grapes, seedless, round, green",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 53.5,
+"protein_g": 0.62,
+"carbs_g": 11.81,
+"fat_g": 0.26,
+"fibre_g": 1.28,
+"sugar_g": 9.6
+},
+"aliases": [
+"grapes, seedless, round, green",
+"seedless, round, green grapes"
+]
+},
+{
+"code": "E027",
+"name": "Grapes, seedless, round, black",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 89.4,
+"protein_g": 1.24,
+"carbs_g": 19.86,
+"fat_g": 0.35,
+"fibre_g": 1.15,
+"sugar_g": 10.88
+},
+"aliases": [
+"grapes, seedless, round, black",
+"seedless, round, black grapes"
+]
+},
+{
+"code": "E028",
+"name": "Guava, white flesh",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 32.3,
+"protein_g": 1.44,
+"carbs_g": 5.13,
+"fat_g": 0.32,
+"fibre_g": 8.59,
+"sugar_g": 4.1
+},
+"aliases": [
+"guava, white flesh",
+"white flesh guava"
+]
+},
+{
+"code": "E029",
+"name": "Guava, pink flesh",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 46.6,
+"protein_g": 1.19,
+"carbs_g": 9.14,
+"fat_g": 0.25,
+"fibre_g": 7.39,
+"sugar_g": 7.79
+},
+"aliases": [
+"guava, pink flesh",
+"pink flesh guava"
+]
+},
+{
+"code": "E030",
+"name": "Jack fruit, ripe",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 72.2,
+"protein_g": 2.74,
+"carbs_g": 14.01,
+"fat_g": 0.15,
+"fibre_g": 3.62,
+"sugar_g": 12.21
+},
+"aliases": [
+"jack fruit, ripe",
+"ripe jack fruit"
+]
+},
+{
+"code": "E031",
+"name": "Jambu fruit, ripe",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 56.2,
+"protein_g": 0.82,
+"carbs_g": 12.3,
+"fat_g": 0.17,
+"fibre_g": 3.07,
+"sugar_g": 6.84
+},
+"aliases": [
+"jambu fruit, ripe",
+"ripe jambu fruit"
+]
+},
+{
+"code": "E032",
+"name": "Karonda fruit",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 33.7,
+"protein_g": 1.15,
+"carbs_g": 2.87,
+"fat_g": 1.67,
+"fibre_g": 7.25,
+"sugar_g": 1.75
+},
+"aliases": [
+"karonda fruit"
+]
+},
+{
+"code": "E033",
+"name": "Lemon, juice",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 36.6,
+"protein_g": 0.41,
+"carbs_g": 0.0,
+"fat_g": 0.75,
+"fibre_g": 0.0,
+"sugar_g": 2.59
+},
+"aliases": [
+"juice lemon",
+"lemon, juice"
+]
+},
+{
+"code": "E034",
+"name": "Lime, sweet, pulp",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 27.2,
+"protein_g": 0.76,
+"carbs_g": 5.18,
+"fat_g": 0.2,
+"fibre_g": 2.07,
+"sugar_g": 3.42
+},
+"aliases": [
+"lime, sweet, pulp",
+"sweet, pulp lime"
+]
+},
+{
+"code": "E035",
+"name": "Litchi",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 53.8,
+"protein_g": 0.99,
+"carbs_g": 11.41,
+"fat_g": 0.26,
+"fibre_g": 1.34,
+"sugar_g": 9.3
+},
+"aliases": [
+"litchi"
+]
+},
+{
+"code": "E036",
+"name": "Mango, ripe, banganapalli",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 41.8,
+"protein_g": 0.54,
+"carbs_g": 8.18,
+"fat_g": 0.55,
+"fibre_g": 1.88,
+"sugar_g": 7.77
+},
+"aliases": [
+"mango, ripe, banganapalli",
+"ripe, banganapalli mango"
+]
+},
+{
+"code": "E037",
+"name": "Mango, ripe, gulabkhas",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 50.0,
+"protein_g": 0.52,
+"carbs_g": 10.32,
+"fat_g": 0.53,
+"fibre_g": 1.67,
+"sugar_g": 8.13
+},
+"aliases": [
+"mango, ripe, gulabkhas",
+"ripe, gulabkhas mango"
+]
+},
+{
+"code": "E038",
+"name": "Mango, ripe, himsagar",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 44.7,
+"protein_g": 0.46,
+"carbs_g": 9.03,
+"fat_g": 0.54,
+"fibre_g": 1.55,
+"sugar_g": 8.06
+},
+"aliases": [
+"mango, ripe, himsagar",
+"ripe, himsagar mango"
+]
+},
+{
+"code": "E039",
+"name": "Mango, ripe, kesar",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 55.2,
+"protein_g": 0.54,
+"carbs_g": 11.36,
+"fat_g": 0.57,
+"fibre_g": 2.02,
+"sugar_g": 9.0
+},
+"aliases": [
+"mango, ripe, kesar",
+"ripe, kesar mango"
+]
+},
+{
+"code": "E040",
+"name": "Mango, ripe, neelam",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 42.5,
+"protein_g": 0.68,
+"carbs_g": 8.21,
+"fat_g": 0.55,
+"fibre_g": 1.77,
+"sugar_g": 7.94
+},
+"aliases": [
+"mango, ripe, neelam",
+"ripe, neelam mango"
+]
+},
+{
+"code": "E041",
+"name": "Mango, ripe, paheri",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 44.9,
+"protein_g": 0.68,
+"carbs_g": 8.67,
+"fat_g": 0.58,
+"fibre_g": 1.97,
+"sugar_g": 8.48
+},
+"aliases": [
+"mango, ripe, paheri",
+"ripe, paheri mango"
+]
+},
+{
+"code": "E042",
+"name": "Mango, ripe, totapari",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 59.3,
+"protein_g": 0.41,
+"carbs_g": 12.75,
+"fat_g": 0.49,
+"fibre_g": 1.73,
+"sugar_g": 9.24
+},
+"aliases": [
+"mango, ripe, totapari",
+"ripe, totapari mango"
+]
+},
+{
+"code": "E043",
+"name": "Mangosteen",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 52.3,
+"protein_g": 0.63,
+"carbs_g": 11.41,
+"fat_g": 0.24,
+"fibre_g": 1.87,
+"sugar_g": 8.91
+},
+"aliases": [
+"mangosteen"
+]
+},
+{
+"code": "E044",
+"name": "Manila tamarind",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 81.7,
+"protein_g": 3.56,
+"carbs_g": 13.54,
+"fat_g": 1.14,
+"fibre_g": 4.4,
+"sugar_g": 12.13
+},
+"aliases": [
+"manila tamarind"
+]
+},
+{
+"code": "E045",
+"name": "Musk melon, orange flesh",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 23.2,
+"protein_g": 0.42,
+"carbs_g": 4.24,
+"fat_g": 0.35,
+"fibre_g": 1.51,
+"sugar_g": 2.99
+},
+"aliases": [
+"musk melon, orange flesh",
+"orange flesh musk melon"
+]
+},
+{
+"code": "E046",
+"name": "Musk melon, yellow flesh",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 27.7,
+"protein_g": 0.53,
+"carbs_g": 5.4,
+"fat_g": 0.26,
+"fibre_g": 1.49,
+"sugar_g": 2.36
+},
+"aliases": [
+"musk melon, yellow flesh",
+"yellow flesh musk melon"
+]
+},
+{
+"code": "E047",
+"name": "Orange, pulp",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 37.3,
+"protein_g": 0.7,
+"carbs_g": 7.92,
+"fat_g": 0.13,
+"fibre_g": 1.29,
+"sugar_g": 6.86
+},
+"aliases": [
+"orange, pulp",
+"pulp orange"
+]
+},
+{
+"code": "E048",
+"name": "Palm fruit, tender",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 24.1,
+"protein_g": 0.5,
+"carbs_g": 4.92,
+"fat_g": 0.12,
+"fibre_g": 2.4,
+"sugar_g": 0.19
+},
+"aliases": [
+"palm fruit, tender",
+"tender palm fruit"
+]
+},
+{
+"code": "E049",
+"name": "Papaya, ripe",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 23.9,
+"protein_g": 0.42,
+"carbs_g": 4.61,
+"fat_g": 0.16,
+"fibre_g": 2.83,
+"sugar_g": 4.09
+},
+"aliases": [
+"papaya, ripe",
+"ripe papaya"
+]
+},
+{
+"code": "E050",
+"name": "Peach",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 40.2,
+"protein_g": 0.86,
+"carbs_g": 7.82,
+"fat_g": 0.37,
+"fibre_g": 2.13,
+"sugar_g": 6.95
+},
+"aliases": [
+"peach"
+]
+},
+{
+"code": "E051",
+"name": "Pear",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 37.5,
+"protein_g": 0.36,
+"carbs_g": 8.09,
+"fat_g": 0.27,
+"fibre_g": 4.48,
+"sugar_g": 7.39
+},
+"aliases": [
+"pear"
+]
+},
+{
+"code": "E052",
+"name": "Phalsa",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 71.5,
+"protein_g": 1.66,
+"carbs_g": 15.09,
+"fat_g": 0.14,
+"fibre_g": 4.54,
+"sugar_g": 13.0
+},
+"aliases": [
+"phalsa"
+]
+},
+{
+"code": "E053",
+"name": "Pineapple",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 43.0,
+"protein_g": 0.52,
+"carbs_g": 9.42,
+"fat_g": 0.16,
+"fibre_g": 3.46,
+"sugar_g": 8.56
+},
+"aliases": [
+"pineapple"
+]
+},
+{
+"code": "E054",
+"name": "Plum",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 56.9,
+"protein_g": 0.64,
+"carbs_g": 12.1,
+"fat_g": 0.4,
+"fibre_g": 2.07,
+"sugar_g": 10.13
+},
+"aliases": [
+"plum"
+]
+},
+{
+"code": "E055",
+"name": "Pomegranate, maroon seeds",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 54.7,
+"protein_g": 1.33,
+"carbs_g": 11.58,
+"fat_g": 0.15,
+"fibre_g": 2.83,
+"sugar_g": 10.87
+},
+"aliases": [
+"maroon seeds pomegranate",
+"pomegranate, maroon seeds"
+]
+},
+{
+"code": "E056",
+"name": "Pummelo",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 50.2,
+"protein_g": 0.68,
+"carbs_g": 10.64,
+"fat_g": 0.42,
+"fibre_g": 0.8,
+"sugar_g": 4.38
+},
+"aliases": [
+"pummelo"
+]
+},
+{
+"code": "E057",
+"name": "Raisins, dried, black",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 305.7,
+"protein_g": 2.57,
+"carbs_g": 71.29,
+"fat_g": 0.34,
+"fibre_g": 3.92,
+"sugar_g": 61.51
+},
+"aliases": [
+"dried, black raisins",
+"raisins, dried, black"
+]
+},
+{
+"code": "E058",
+"name": "Raisins, dried, golden",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 296.6,
+"protein_g": 2.76,
+"carbs_g": 68.79,
+"fat_g": 0.35,
+"fibre_g": 4.56,
+"sugar_g": 57.12
+},
+"aliases": [
+"dried, golden raisins",
+"raisins, dried, golden"
+]
+},
+{
+"code": "E059",
+"name": "Rambutan",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 73.1,
+"protein_g": 0.68,
+"carbs_g": 16.84,
+"fat_g": 0.16,
+"fibre_g": 1.02,
+"sugar_g": 15.8
+},
+"aliases": [
+"rambutan"
+]
+},
+{
+"code": "E060",
+"name": "Sapota",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 73.4,
+"protein_g": 0.92,
+"carbs_g": 13.9,
+"fat_g": 1.26,
+"fibre_g": 9.6,
+"sugar_g": 12.3
+},
+"aliases": [
+"sapota"
+]
+},
+{
+"code": "E061",
+"name": "Soursop",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 62.1,
+"protein_g": 0.74,
+"carbs_g": 11.94,
+"fat_g": 0.94,
+"fibre_g": 4.95,
+"sugar_g": 9.83
+},
+"aliases": [
+"soursop"
+]
+},
+{
+"code": "E062",
+"name": "Star fruit",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 26.3,
+"protein_g": 0.79,
+"carbs_g": 4.51,
+"fat_g": 0.39,
+"fibre_g": 2.81,
+"sugar_g": 3.95
+},
+"aliases": [
+"star fruit"
+]
+},
+{
+"code": "E063",
+"name": "Strawberry",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 24.6,
+"protein_g": 0.97,
+"carbs_g": 3.4,
+"fat_g": 0.56,
+"fibre_g": 2.5,
+"sugar_g": 3.56
+},
+"aliases": [
+"strawberry"
+]
+},
+{
+"code": "E064",
+"name": "Tamarind, pulp",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 288.5,
+"protein_g": 2.92,
+"carbs_g": 67.35,
+"fat_g": 0.15,
+"fibre_g": 5.31,
+"sugar_g": 52.88
+},
+"aliases": [
+"pulp tamarind",
+"tamarind, pulp"
+]
+},
+{
+"code": "E065",
+"name": "Water melon, dark green (sugar baby)",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 20.3,
+"protein_g": 0.6,
+"carbs_g": 3.86,
+"fat_g": 0.16,
+"fibre_g": 0.7,
+"sugar_g": 3.66
+},
+"aliases": [
+"dark green (sugar baby) water melon",
+"water melon, dark green (sugar baby)"
+]
+},
+{
+"code": "E066",
+"name": "Water melon, pale green",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 16.7,
+"protein_g": 0.59,
+"carbs_g": 3.02,
+"fat_g": 0.16,
+"fibre_g": 0.78,
+"sugar_g": 3.0
+},
+"aliases": [
+"pale green water melon",
+"water melon, pale green"
+]
+},
+{
+"code": "E067",
+"name": "Wood apple",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 78.2,
+"protein_g": 3.14,
+"carbs_g": 7.52,
+"fat_g": 3.62,
+"fibre_g": 5.21,
+"sugar_g": 3.81
+},
+"aliases": [
+"wood apple"
+]
+},
+{
+"code": "E068",
+"name": "Zizyphus",
+"group": "Fruits",
+"per_100g": {
+"energy_kcal": 48.8,
+"protein_g": 1.34,
+"carbs_g": 9.4,
+"fat_g": 0.35,
+"fibre_g": 3.73,
+"sugar_g": 8.29
+},
+"aliases": [
+"zizyphus"
+]
+},
+{
+"code": "F001",
+"name": "Beetroot",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 35.6,
+"protein_g": 1.95,
+"carbs_g": 6.18,
+"fat_g": 0.14,
+"fibre_g": 3.31,
+"sugar_g": 4.35
+},
+"aliases": [
+"beetroot"
+]
+},
+{
+"code": "F002",
+"name": "Carrot, orange",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 33.2,
+"protein_g": 0.95,
+"carbs_g": 5.55,
+"fat_g": 0.47,
+"fibre_g": 4.18,
+"sugar_g": 3.23
+},
+"aliases": [
+"carrot, orange",
+"orange carrot"
+]
+},
+{
+"code": "F003",
+"name": "Carrot, red",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 38.2,
+"protein_g": 1.04,
+"carbs_g": 6.71,
+"fat_g": 0.47,
+"fibre_g": 4.49,
+"sugar_g": 3.96
+},
+"aliases": [
+"carrot, red",
+"red carrot"
+]
+},
+{
+"code": "F004",
+"name": "Colocasia",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 88.9,
+"protein_g": 3.31,
+"carbs_g": 17.85,
+"fat_g": 0.17,
+"fibre_g": 3.22,
+"sugar_g": 0.9
+},
+"aliases": [
+"colocasia"
+]
+},
+{
+"code": "F005",
+"name": "Lotus root",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 79.3,
+"protein_g": 1.94,
+"carbs_g": 14.67,
+"fat_g": 0.93,
+"fibre_g": 4.7,
+"sugar_g": 0.24
+},
+"aliases": [
+"lotus root"
+]
+},
+{
+"code": "F006",
+"name": "Potato, brown skin, big",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 69.8,
+"protein_g": 1.54,
+"carbs_g": 14.89,
+"fat_g": 0.23,
+"fibre_g": 1.71,
+"sugar_g": 0.32
+},
+"aliases": [
+"brown skin, big potato",
+"potato, brown skin, big"
+]
+},
+{
+"code": "F007",
+"name": "Potato, brown skin, small",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 60.9,
+"protein_g": 1.35,
+"carbs_g": 12.9,
+"fat_g": 0.22,
+"fibre_g": 1.69,
+"sugar_g": 0.44
+},
+"aliases": [
+"brown skin, small potato",
+"potato, brown skin, small"
+]
+},
+{
+"code": "F008",
+"name": "Potato, red skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 73.1,
+"protein_g": 1.83,
+"carbs_g": 15.43,
+"fat_g": 0.22,
+"fibre_g": 1.68,
+"sugar_g": 0.38
+},
+"aliases": [
+"potato, red skin",
+"red skin potato"
+]
+},
+{
+"code": "F009",
+"name": "Radish, elongate, red skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 32.0,
+"protein_g": 0.67,
+"carbs_g": 6.71,
+"fat_g": 0.13,
+"fibre_g": 2.46,
+"sugar_g": 1.15
+},
+"aliases": [
+"elongate, red skin radish",
+"radish, elongate, red skin"
+]
+},
+{
+"code": "F010",
+"name": "Radish, elongate, white skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 32.3,
+"protein_g": 0.77,
+"carbs_g": 6.56,
+"fat_g": 0.15,
+"fibre_g": 2.65,
+"sugar_g": 0.95
+},
+"aliases": [
+"elongate, white skin radish",
+"radish, elongate, white skin"
+]
+},
+{
+"code": "F011",
+"name": "Radish, round, red skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 31.1,
+"protein_g": 0.89,
+"carbs_g": 6.07,
+"fat_g": 0.16,
+"fibre_g": 2.29,
+"sugar_g": 0.86
+},
+"aliases": [
+"radish, round, red skin",
+"round, red skin radish"
+]
+},
+{
+"code": "F012",
+"name": "Radish, round, white skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 30.8,
+"protein_g": 0.8,
+"carbs_g": 6.13,
+"fat_g": 0.14,
+"fibre_g": 2.37,
+"sugar_g": 1.16
+},
+"aliases": [
+"radish, round, white skin",
+"round, white skin radish"
+]
+},
+{
+"code": "F013",
+"name": "Sweet potato, brown skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 109.0,
+"protein_g": 1.33,
+"carbs_g": 24.25,
+"fat_g": 0.26,
+"fibre_g": 3.99,
+"sugar_g": 3.63
+},
+"aliases": [
+"brown skin sweet potato",
+"sweet potato, brown skin"
+]
+},
+{
+"code": "F014",
+"name": "Sweet potato, pink skin",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 108.0,
+"protein_g": 1.27,
+"carbs_g": 23.93,
+"fat_g": 0.33,
+"fibre_g": 3.94,
+"sugar_g": 4.03
+},
+"aliases": [
+"pink skin sweet potato",
+"sweet potato, pink skin"
+]
+},
+{
+"code": "F015",
+"name": "Tapioca",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 79.8,
+"protein_g": 1.03,
+"carbs_g": 17.81,
+"fat_g": 0.2,
+"fibre_g": 4.61,
+"sugar_g": 2.14
+},
+"aliases": [
+"tapioca"
+]
+},
+{
+"code": "F016",
+"name": "Water Chestnut",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 95.6,
+"protein_g": 0.86,
+"carbs_g": 21.46,
+"fat_g": 0.37,
+"fibre_g": 3.02,
+"sugar_g": 1.95
+},
+"aliases": [
+"water chestnut"
+]
+},
+{
+"code": "F017",
+"name": "Yam, elephant",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 84.4,
+"protein_g": 2.56,
+"carbs_g": 17.46,
+"fat_g": 0.14,
+"fibre_g": 4.17,
+"sugar_g": 1.58
+},
+"aliases": [
+"elephant yam",
+"yam, elephant"
+]
+},
+{
+"code": "F018",
+"name": "Yam, ordinary",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 83.4,
+"protein_g": 2.18,
+"carbs_g": 17.65,
+"fat_g": 0.17,
+"fibre_g": 4.08,
+"sugar_g": 1.15
+},
+"aliases": [
+"ordinary yam",
+"yam, ordinary"
+]
+},
+{
+"code": "F019",
+"name": "Yam, wild",
+"group": "Roots and Tubers",
+"per_100g": {
+"energy_kcal": 102.8,
+"protein_g": 3.07,
+"carbs_g": 20.95,
+"fat_g": 0.3,
+"fibre_g": 4.57,
+"sugar_g": 1.54
+},
+"aliases": [
+"wild yam",
+"yam, wild"
+]
+},
+{
+"code": "H001",
+"name": "Almond",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 609.2,
+"protein_g": 18.41,
+"carbs_g": 3.04,
+"fat_g": 58.49,
+"fibre_g": 13.06,
+"sugar_g": 2.23
+},
+"aliases": [
+"almond"
+]
+},
+{
+"code": "H002",
+"name": "Arecanut, dried, brown",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 350.6,
+"protein_g": 5.78,
+"carbs_g": 70.42,
+"fat_g": 4.35,
+"fibre_g": 11.44,
+"sugar_g": 1.76
+},
+"aliases": [
+"arecanut, dried, brown",
+"dried, brown arecanut"
+]
+},
+{
+"code": "H003",
+"name": "Arecanut, dried, red color",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 353.0,
+"protein_g": 6.46,
+"carbs_g": 70.27,
+"fat_g": 4.46,
+"fibre_g": 11.11,
+"sugar_g": 1.79
+},
+"aliases": [
+"arecanut, dried, red color",
+"dried, red color arecanut"
+]
+},
+{
+"code": "H004",
+"name": "Arecanut, fresh",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 244.7,
+"protein_g": 2.73,
+"carbs_g": 45.0,
+"fat_g": 5.51,
+"fibre_g": 7.63,
+"sugar_g": 4.72
+},
+"aliases": [
+"arecanut, fresh",
+"fresh arecanut"
+]
+},
+{
+"code": "H005",
+"name": "Cashew nut",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 582.7,
+"protein_g": 18.78,
+"carbs_g": 25.46,
+"fat_g": 45.2,
+"fibre_g": 3.86,
+"sugar_g": 3.11
+},
+"aliases": [
+"cashew nut"
+]
+},
+{
+"code": "H006",
+"name": "Coconut, kernel, dry",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 624.0,
+"protein_g": 7.27,
+"carbs_g": 8.01,
+"fat_g": 63.26,
+"fibre_g": 15.88,
+"sugar_g": 6.93
+},
+"aliases": [
+"coconut, kernel, dry",
+"kernel, dry coconut"
+]
+},
+{
+"code": "H007",
+"name": "Coconut, kernel, fresh",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 408.9,
+"protein_g": 3.84,
+"carbs_g": 6.3,
+"fat_g": 41.38,
+"fibre_g": 10.42,
+"sugar_g": 6.2
+},
+"aliases": [
+"coconut, kernel, fresh",
+"kernel, fresh coconut"
+]
+},
+{
+"code": "H008",
+"name": "Garden cress, seeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 445.3,
+"protein_g": 23.36,
+"carbs_g": 33.66,
+"fat_g": 23.74,
+"fibre_g": 8.27,
+"sugar_g": 0.91
+},
+"aliases": [
+"garden cress, seeds",
+"seeds garden cress"
+]
+},
+{
+"code": "H009",
+"name": "Gingelly seeds, black",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 507.6,
+"protein_g": 19.17,
+"carbs_g": 10.29,
+"fat_g": 43.1,
+"fibre_g": 17.16,
+"sugar_g": 0.99
+},
+"aliases": [
+"black gingelly seeds",
+"gingelly seeds, black"
+]
+},
+{
+"code": "H010",
+"name": "Gingelly seeds, brown",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 516.5,
+"protein_g": 21.61,
+"carbs_g": 9.76,
+"fat_g": 43.22,
+"fibre_g": 17.21,
+"sugar_g": 1.39
+},
+"aliases": [
+"brown gingelly seeds",
+"gingelly seeds, brown"
+]
+},
+{
+"code": "H011",
+"name": "Gingelly seeds, white",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 519.6,
+"protein_g": 21.7,
+"carbs_g": 10.83,
+"fat_g": 43.05,
+"fibre_g": 16.99,
+"sugar_g": 0.67
+},
+"aliases": [
+"gingelly seeds, white",
+"white gingelly seeds"
+]
+},
+{
+"code": "H012",
+"name": "Ground nut",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 520.1,
+"protein_g": 23.65,
+"carbs_g": 17.27,
+"fat_g": 39.63,
+"fibre_g": 10.38,
+"sugar_g": 4.42
+},
+"aliases": [
+"ground nut"
+]
+},
+{
+"code": "H013",
+"name": "Mustard seeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 509.6,
+"protein_g": 19.51,
+"carbs_g": 16.8,
+"fat_g": 40.19,
+"fibre_g": 14.1,
+"sugar_g": 5.07
+},
+"aliases": [
+"mustard seeds"
+]
+},
+{
+"code": "H014",
+"name": "Linseeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 443.8,
+"protein_g": 18.55,
+"carbs_g": 10.99,
+"fat_g": 35.67,
+"fibre_g": 26.17,
+"sugar_g": 0.6
+},
+"aliases": [
+"linseeds"
+]
+},
+{
+"code": "H015",
+"name": "Niger seeds, black",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 512.4,
+"protein_g": 18.92,
+"carbs_g": 22.98,
+"fat_g": 38.61,
+"fibre_g": 10.93,
+"sugar_g": 1.75
+},
+"aliases": [
+"black niger seeds",
+"niger seeds, black"
+]
+},
+{
+"code": "H016",
+"name": "Niger seeds, grey",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 508.6,
+"protein_g": 18.34,
+"carbs_g": 20.59,
+"fat_g": 39.53,
+"fibre_g": 10.96,
+"sugar_g": 0.41
+},
+"aliases": [
+"grey niger seeds",
+"niger seeds, grey"
+]
+},
+{
+"code": "H017",
+"name": "Pine seeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 594.2,
+"protein_g": 12.55,
+"carbs_g": 26.77,
+"fat_g": 48.79,
+"fibre_g": 3.79,
+"sugar_g": 4.67
+},
+"aliases": [
+"pine seeds"
+]
+},
+{
+"code": "H018",
+"name": "Pistachio nuts",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 539.4,
+"protein_g": 23.35,
+"carbs_g": 15.82,
+"fat_g": 42.49,
+"fibre_g": 10.64,
+"sugar_g": 7.9
+},
+"aliases": [
+"pistachio nuts"
+]
+},
+{
+"code": "H019",
+"name": "Safflower seeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 473.5,
+"protein_g": 17.66,
+"carbs_g": 30.18,
+"fat_g": 30.87,
+"fibre_g": 13.49,
+"sugar_g": 2.67
+},
+"aliases": [
+"safflower seeds"
+]
+},
+{
+"code": "H020",
+"name": "Sunflower seeds",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 586.3,
+"protein_g": 23.53,
+"carbs_g": 6.85,
+"fat_g": 51.85,
+"fibre_g": 10.8,
+"sugar_g": 2.81
+},
+"aliases": [
+"sunflower seeds"
+]
+},
+{
+"code": "H021",
+"name": "Walnut",
+"group": "Nuts and Oil Seeds",
+"per_100g": {
+"energy_kcal": 671.4,
+"protein_g": 14.92,
+"carbs_g": 10.14,
+"fat_g": 64.27,
+"fibre_g": 5.39,
+"sugar_g": 3.22
+},
+"aliases": [
+"walnut"
+]
+},
+{
+"code": "L001",
+"name": "Milk, whole, Buffalo",
+"group": "Milk and Milk Products",
+"per_100g": {
+"energy_kcal": 107.3,
+"protein_g": 3.68,
+"carbs_g": 8.39,
+"fat_g": 6.58,
+"fibre_g": 0.0,
+"sugar_g": 5.34
+},
+"aliases": [
+"milk, whole, buffalo",
+"whole, buffalo milk"
+]
+},
+{
+"code": "L002",
+"name": "Milk, whole, Cow",
+"group": "Milk and Milk Products",
+"per_100g": {
+"energy_kcal": 72.9,
+"protein_g": 3.26,
+"carbs_g": 4.94,
+"fat_g": 4.48,
+"fibre_g": 0.0,
+"sugar_g": 4.89
+},
+"aliases": [
+"milk, whole, cow",
+"whole, cow milk"
+]
+},
+{
+"code": "L003",
+"name": "Paneer",
+"group": "Milk and Milk Products",
+"per_100g": {
+"energy_kcal": 257.9,
+"protein_g": 18.86,
+"carbs_g": 12.41,
+"fat_g": 14.78,
+"fibre_g": 0.0,
+"sugar_g": 11.57
+},
+"aliases": [
+"paneer"
+]
+},
+{
+"code": "L004",
+"name": "Khoa",
+"group": "Milk and Milk Products",
+"per_100g": {
+"energy_kcal": 316.0,
+"protein_g": 16.34,
+"carbs_g": 16.53,
+"fat_g": 20.62,
+"fibre_g": 0.0,
+"sugar_g": 16.14
+},
+"aliases": [
+"khoa"
+]
+}
+]
+}
