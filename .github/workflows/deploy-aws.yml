@@ -125,14 +125,21 @@ jobs:
                     # GEMINI_SG_FALLBACK=on is the founder yes (15 Oct): one Singapore call after a Mumbai 429 or timeout.
                     | setenv("EMBED_DIM_MIGRATE"; "off")
                     | setenv("GEMINI_SG_FALLBACK"; "on")
-                    # 16 Oct guest bench: Apollo and Rapido stay on v2; 1mg uses v4 Gemini. Browse thinks high, matching the winning runs.
-                    | setenv("BROWSER_API_APOLLO"; "v2")
-                    | setenv("BROWSER_API_RAPIDO"; "v2")
+                    # 16 Oct 13:40: every store and phase is V4, on Browser Use GPT or Claude. Prepare, login and place think high.
+                    # A service pin already on the task is overwritten here, including the old 1mg Gemini model.
+                    | setenv("BROWSER_API"; "v4")
+                    | setenv("BROWSER_MODEL"; "gpt-6-luna")
+                    | setenv("BROWSER_API_APOLLO"; "v4")
+                    | setenv("BROWSER_API_RAPIDO"; "v4")
                     | setenv("BROWSER_API_1MG"; "v4")
-                    | setenv("BROWSER_MODEL_1MG"; "gemini-3.5-flash")
-                    | setenv("BROWSER_THINKING_APOLLO"; "browse:high")
-                    | setenv("BROWSER_THINKING_RAPIDO"; "browse:high")
-                    | setenv("BROWSER_THINKING_1MG"; "browse:high")
+                    | setenv("BROWSER_MODEL_1MG"; "gpt-6-luna")
+                    | setenv("BROWSER_MODEL_BLINKIT"; "claude-opus-5")
+                    | setenv("BROWSER_MODEL_OLA"; "claude-sonnet-5")
+                    | setenv("BROWSER_MODEL_RAPIDO"; "claude-sonnet-5")
+                    | setenv("BROWSER_THINKING"; "prepare:high,otp:high,place:high")
+                    | setenv("BROWSER_THINKING_APOLLO"; "prepare:high,otp:high,place:high")
+                    | setenv("BROWSER_THINKING_RAPIDO"; "prepare:high,otp:high,place:high")
+                    | setenv("BROWSER_THINKING_1MG"; "prepare:high,otp:high,place:high")
                   else . end)
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
             > /tmp/td.json
