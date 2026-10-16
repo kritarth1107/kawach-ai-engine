@@ -220,7 +220,11 @@ class BrowserUseCloud:
         meta = dict(metadata or {})
         secret = str(meta.pop("login_code", "") or "")
         service, phase = meta.get("service"), str(meta.get("phase") or "")
-        if api_version(service, phase) == "v4":
+        # A session belongs to one API. The fast path opens a v2 browser; posting that id to V4 is a 404
+        # and the cart in that browser is never placed. Follow-up runs stay on the API that opened it.
+        owned = str(meta.get("session_api") or "")
+        version = owned if owned in ("v2", "v4") else api_version(service, phase)
+        if version == "v4":
             return await self._run_v4(goal=goal, schema=schema, session_id=session_id, profile_id=profile_id, start_url=start_url,
                                       secret=secret, service=service, phase=phase)
         body: dict = {

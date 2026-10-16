@@ -1300,7 +1300,14 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     if task.phase != "prepare" and isinstance(got, dict) and got.get("loginPhone"):
         phone = "".join(c for c in str(got.get("loginPhone")) if c.isdigit())[-10:]
         task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
-    task.details = {**(task.details or {}), "browser_api": api_version(task.service, task.phase)}
+    # The fast path's browser is a v2 session. A later V4 run cannot see it (live 2026-10-16: place posted
+    # that id and Browser Use answered "session not found"). Stay on the API that opened the session.
+    owned = (task.details or {}).get("session_api")
+    if owned not in ("v2", "v4") and task.agent_session and (task.details or {}).get("fast_session"):
+        owned = "v2"
+    if owned not in ("v2", "v4"):
+        owned = api_version(task.service, task.phase)
+    task.details = {**(task.details or {}), "browser_api": owned, "session_api": owned}
 
     async def start(session_id: str | None, profile: str | None) -> AgentRun:
         return await agent.run(
@@ -1314,7 +1321,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             # a practice place also opens the payment step and empties the cart afterwards
             max_steps=spec.steps.get(task.phase, 40) + (15 if task.phase == "place" and practice.on(task) else 0),
             metadata={"app": "kavach", "task": str(task.id), "phase": task.phase, "service": task.service, "agent": spec.name,
-                      **({"login_code": secret} if secret else {})},
+                      "session_api": owned, **({"login_code": secret} if secret else {})},
             llm=spec.model,
             flash=task.phase in flash_phases(),
         )
@@ -3460,6 +3467,7 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
         if not task.agent_session:
             sid = await agent.open_session(profile_id)
             task.agent_session = sid
+            task.details = {**(task.details or {}), "session_api": "v2"}
             await sandbox.started(session, session_id=sid, task_id=str(task.id), family_id=task.family_id, service=task.service,
                                   profile_id=profile_id)
             _claim(task)
@@ -3524,6 +3532,7 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
             profile_id = got.get("profileId") if isinstance(got, dict) else got
             await sandbox.bind_profile(session, task.family_id, task.service, profile_id)
             task.agent_session = await agent.open_session(profile_id)
+            task.details = {**(task.details or {}), "session_api": "v2"}
             await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
                                   service=task.service, profile_id=profile_id)
             _claim(task)
@@ -3623,6 +3632,7 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
             got = await profile_for(task)
             profile_id = got.get("profileId") if isinstance(got, dict) else got
             task.agent_session = await agent.open_session(profile_id)
+            task.details = {**(task.details or {}), "session_api": "v2"}
             await sandbox.started(session, session_id=task.agent_session, task_id=str(task.id), family_id=task.family_id,
                                   service=task.service, profile_id=profile_id)
             _claim(task)

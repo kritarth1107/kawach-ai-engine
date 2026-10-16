@@ -198,6 +198,33 @@ async def test_v2_sends_the_thinking_level_for_the_phase():
     await bu.close()
 
 
+async def test_a_v2_fast_session_is_not_sent_to_v4(monkeypatch):
+    """The cart is in the v2 browser. V4 does not know that id."""
+    monkeypatch.setenv("BROWSER_API", "v4")
+    seen = []
+
+    def v2(req: httpx.Request) -> httpx.Response:
+        seen.append((req.url.path, json.loads(req.content or b"{}")))
+        return httpx.Response(200, json={"id": "t1", "sessionId": "v2-fast"})
+
+    def v4(req: httpx.Request) -> httpx.Response:
+        seen.append(("v4", req.url.path))
+        return httpx.Response(404, json={"detail": "session not found"})
+
+    import asyncio
+
+    bu = browser_use.BrowserUseCloud(api_key="k")
+    bu._client = httpx.AsyncClient(base_url=browser_use.API, transport=httpx.MockTransport(v2))
+    bu._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(v4))
+    bu._loop = asyncio.get_running_loop()
+    await bu.run(goal="Place the cart, cash on delivery, do not pay", hints="h", schema={}, session_id="v2-fast",
+                 profile_id=None, start_url=None, max_steps=5,
+                 metadata={"service": "blinkit", "phase": "place", "session_api": "v2"})
+    assert seen == [("/api/v2/tasks", seen[0][1])]
+    assert seen[0][1]["sessionId"] == "v2-fast"
+    await bu.close()
+
+
 async def test_v4_keeps_the_code_off_the_task_and_the_proxy_in_india(monkeypatch):
     monkeypatch.setenv("BROWSER_API", "v4")
     seen = []

@@ -451,9 +451,11 @@ async def test_start_task_without_a_store_compares_the_usual_ones(db, at):
 class ClosingAgent(FakeAgent):
     """Browser Use refuses a step on a browser that already stopped."""
 
+    refuse = 'browser-use POST tasks 400: {"detail":"Browser session is stopped. Please start a new session and try again."}'
+
     async def run(self, *, session_id, **kw):
         if session_id and session_id in self.sessions_stopped:
-            raise RuntimeError('browser-use POST tasks 400: {"detail":"Browser session is stopped. Please start a new session and try again."}')
+            raise RuntimeError(self.refuse)
         return await super().run(session_id=session_id, **kw)
 
 
@@ -474,6 +476,38 @@ async def test_go_ahead_after_the_look_up_browser_closed_starts_a_fresh_one(db, 
     # the look-up ran without the family's login; the go-ahead's step opens the family's own browser (founder 2026-10-12)
     assert agent.runs[-1]["profile"] == "prof-fam-t-instamart" and any("opens the family's own" in h_["note"] or "fresh one" in h_["note"]
                                                                        for h_ in t.history[-3:])
+
+
+async def test_v4_place_stays_on_the_v2_browser_that_built_the_cart(db, at, sessions, monkeypatch):
+    """Live 2026-10-16: the fast path opened a v2 browser, then place posted that id to V4 and got session not found."""
+    from app.sim.agent import PLACED
+    from app.tasks import fastpath
+
+    at("2026-10-16 21:50")
+    monkeypatch.setenv("BROWSER_API", "v4")
+    alerts = []
+
+    class Host:
+        async def call(self, tool, args, **kw):
+            alerts.append(tool)
+            return {}
+
+    agent = FastAgent(script={"place": [{**PLACED, "total": "₹129"}]})
+    h = LoginHarness(sessions, agent, "9000012345")
+    h.host = Host()
+
+    async def tick():
+        return await runtime.tick(h.sessions, h.agent, profile_for=h.profile_for, notify=h.notify, host_for=lambda f: h.host)
+
+    h.tick = tick
+    t, calls = await _instamart_browser_order(db, h, monkeypatch, fastpath.FastPathError("not placed: Pay button not found"))
+    for _ in range(4):
+        await h.tick()
+    await db.refresh(t)
+    assert [r["phase"] for r in agent.runs] == ["place"]
+    assert agent.runs[0]["session"] == "fs-1" and agent.runs[0]["api"] == "v2"
+    assert t.details["session_api"] == "v2" and t.status == "done" and not t.result.get("paid")
+    runtime._ALERTED.pop("instamart:place", None)
 
 
 async def test_code_for_a_closed_login_page_asks_for_a_new_one_and_is_not_kept(db, at, sessions):

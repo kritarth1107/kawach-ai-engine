@@ -44,7 +44,8 @@ class FakeAgent:
         out = queue.pop(0) if len(queue) > 1 else queue[0]
         self._out[tid] = out
         self.runs.append({"task": tid, "phase": phase, "goal": goal, "session": session_id, "profile": profile_id, "hints": hints, "llm": llm,
-                          "agent": metadata.get("agent"), "service": metadata.get("service"), "flash": flash})
+                          "agent": metadata.get("agent"), "service": metadata.get("service"), "flash": flash,
+                          "api": metadata.get("session_api")})
         return AgentRun(task_id=tid, session_id=session_id or f"s-{tid}", status="created")
 
     async def poll(self, task_id: str) -> AgentRun:
