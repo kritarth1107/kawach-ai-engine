@@ -116,6 +116,9 @@ def test_a_cut_off_list_is_the_schedule_the_tool_returned():
     assert line == "Aaj: Metformin 500 mg 08:00."
     logged = guards.dose_logged({"saved": {"language": "pa"}, "now": "gurmukhi"}, "Montelukast", ["21:30"])
     assert "21:30" in logged and "Montelukast" in logged
+    # Konkani is not Hindi. A fixed Hindi line is not sent over her own reply.
+    assert guards.dose_logged({"saved": {"language": "kok"}}, "aspirin", ["13:00"]) == ""
+    assert guards.due_today({"saved": {"language": "kok"}}, [{"name": "Aspirin", "time": "13:00"}]) == ""
 
 
 def test_a_clock_time_they_did_not_give_is_not_said():

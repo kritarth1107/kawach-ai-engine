@@ -1598,18 +1598,23 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 final = f"{final.rstrip()} {told}".strip()
             guarded = True
         sched = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "today_schedule"), None)
-        due = [m for m in (_json_result(sched).get("medicines") or []) if isinstance(m, dict) and m.get("name")] if sched else []
+        due = [m for m in ((sched or {}).get("medicines") or _json_result(sched).get("medicines") or [])
+               if isinstance(m, dict) and m.get("name")] if sched else []
         if due and any(str(m["name"]).lower() not in (final or "").lower() for m in due):
             # The list they asked for was cut off. The names and times are the tool's, said in full.
-            final = guards.due_today(profile, due)
-            guarded = True
+            full = guards.due_today(profile, due)
+            if full:
+                final = full
+                guarded = True
         dose = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"), None)
         dose_data = _json_result(dose) if dose else {}
         dose_times = [str(t) for t in (dose_data.get("scheduled") or []) if t]
         if dose_times and not any(t in (final or "") for t in dose_times):
-            # "On time" is only true when the reply names the time the record holds.
-            final = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
-            guarded = True
+            # "On time" is only true when the reply names the time the record holds. A language with no fixed line keeps her reply.
+            logged = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
+            if logged:
+                final = logged
+                guarded = True
         asked = "?" in (req.text or "") or "？" in (req.text or "")
         sources = "\n".join([req.text or "", *tool_texts, *(str(x) for x in ctx.known)])
         sent = any(a.get("ok") and a.get("tool") == "send_message" for a in ctx.actions)

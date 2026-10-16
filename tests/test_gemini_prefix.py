@@ -30,7 +30,7 @@ def test_a_normal_turn_sends_the_core_and_stays_under_9k(monkeypatch):
     cold = {t.name for t in tools.specs_for()}
     assert {"remember", "log_dose", "log_vital", "log_event", "set_reminder", "send_message", "alert_caregiver", "need_tools"} <= cold
     assert "ask one specific question" in for_groups(set())
-    assert "today_schedule or reminder_log" in for_groups(set())
+    assert "today_schedule once for each person" in for_groups(set())
     assert "log_event or log_vital" in for_groups(set())
     assert "log_food" not in cold and "start_task" not in cold and "nutrition_report" not in cold
     assert "daily_brief" not in cold and "change_reminder" not in cold

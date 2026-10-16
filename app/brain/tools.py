@@ -348,8 +348,14 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
             if ctx.resolved_subject != addressed:
                 out["for_other"] = True
         blob = json.dumps(out, default=str, ensure_ascii=False)
-        ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400],
-                            **({"subject": ctx.resolved_subject} if ctx.resolved_subject else {})})
+        kept: dict = {"subject": ctx.resolved_subject} if ctx.resolved_subject else {}
+        if name == "today_schedule" and isinstance(out, dict):
+            # The trace keeps 400 characters, which cuts a day's list into invalid JSON. The names stay whole.
+            kept["medicines"] = [
+                {"name": str(m.get("name") or ""), "dose": m.get("dose"), "time": m.get("time")}
+                for m in (out.get("medicines") or []) if isinstance(m, dict) and m.get("name")
+            ][:12]
+        ctx.actions.append({"tool": name, "args": args, "ok": True, "result": blob[:400], **kept})
         return blob, False
     except ToolRefused as exc:
         await _release_record_locks(ctx)

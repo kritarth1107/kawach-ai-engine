@@ -1444,8 +1444,34 @@ _DOSE_AT = {
 }
 
 
+# Fixed lines were written for these languages. Konkani and the others are not Hindi, so they do not borrow a Hindi line.
+_AUTHORED = {
+    "en": "english", "hi": "devanagari", "mr": "mr", "bn": "bengali", "as": "bengali",
+    "ta": "tamil", "te": "telugu", "kn": "kannada", "ml": "malayalam",
+    "gu": "gujarati", "pa": "gurmukhi", "or": "odia",
+}
+
+
+def authored(profile: dict | None, table: dict) -> str | None:
+    """A fixed line only when it was written for this person's language. Empty when it was not."""
+    from app.care import language
+
+    saved = (profile or {}).get("saved") or {}
+    code = (language.normalise(saved).get("language") if saved.get("language") else None) or "en"
+    if saved.get("script") == "roman" and code == "hi" and "indic" in table:
+        return table["indic"]
+    key = _AUTHORED.get(code)
+    if key and key in table:
+        return table[key]
+    return None
+
+
 def due_today(profile: dict | None, medicines: list[dict]) -> str:
-    """Every medicine the schedule tool returned, with its time. A cut-off list is not the answer."""
+    """Every medicine the schedule tool returned, with its time. A cut-off list is not the answer.
+    Empty when that sentence was not written for their language: their own reply stays."""
+    line = authored(profile, _DUE)
+    if not line:
+        return ""
     bits = []
     for med in medicines[:8]:
         bit = str(med.get("name") or "")
@@ -1455,12 +1481,18 @@ def due_today(profile: dict | None, medicines: list[dict]) -> str:
             bit += " " + str(med["time"])
         if bit.strip():
             bits.append(bit.strip())
-    return canned(profile, _DUE).format(list="; ".join(bits))
+    if not bits:
+        return ""
+    return line.format(list="; ".join(bits))
 
 
 def dose_logged(profile: dict | None, name: str, times: list[str]) -> str:
-    """Taken is logged. The time is the one on the record, not a claim that this taking matched it."""
-    return canned(profile, _DOSE_AT).format(name=name, when=", ".join(times))
+    """Taken is logged. The time is the one on the record, not a claim that this taking matched it.
+    Empty when that sentence was not written for their language."""
+    line = authored(profile, _DOSE_AT)
+    if not line:
+        return ""
+    return line.format(name=name, when=", ".join(times))
 
 
 def medicine_line(profile: dict | None, medicines: list[tuple[str, str, list[str]]]) -> str:
