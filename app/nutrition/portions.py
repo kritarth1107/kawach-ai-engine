@@ -82,6 +82,11 @@ def grams_for(food, quantity: float | None, unit: str | None, sizes: dict | None
             return Portion(round(qty * base * SIZE_RATIO.get(u, 1.0), 1), estimate, "personal size")
     if u and u in units:
         return Portion(round(qty * float(units[u]), 1), estimate, "food unit")
+    # People say katori. A dish whose measured katori is the small or the large one keeps that weight.
+    if u == "katori":
+        for alt in ("katori_small", "katori_large"):
+            if alt in units:
+                return Portion(round(qty * float(units[alt]), 1), estimate, "food unit")
     if u in ("pack", "serving", "piece") and serving:
         return Portion(round(qty * float(serving), 1), estimate, "serving")
     if u in DEFAULT_G:

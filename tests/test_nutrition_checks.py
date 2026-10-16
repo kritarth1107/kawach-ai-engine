@@ -50,6 +50,8 @@ def test_grams_from_food_unit_personal_size_and_usual_portion():
     usual = P.grams_for(egg, None, None)
     assert usual.grams == 100 and usual.estimate  # 2 pieces, marked an estimate
     assert P.grams_for(food(units={}), 2, "glass").grams == 500  # the usual glass
+    poha = food(units={"katori_small": 55}, default_unit="katori_small", typical_qty=1)
+    assert P.grams_for(poha, 1, "katori").grams == 55  # they said katori; the dish's own katori is the small one
 
 
 def test_compute_scales_nutrients_and_part_eaten():
