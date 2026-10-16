@@ -136,6 +136,15 @@ def note_spend(role: str, model: str, cost: float, tokens_in: int, tokens_out: i
         calls.append((role, model, cost, tokens_in, tokens_out))
 
 
+def note_cache(cached: int, prompt: int) -> None:
+    """Tokens Gemini reported as cached_content_token_count, and the prompt they came from. Counts only."""
+    steps = _timing.get()
+    if steps is None:
+        return
+    steps["cacheRead"] = int(steps.get("cacheRead", 0) + cached)
+    steps["promptTok"] = int(steps.get("promptTok", 0) + prompt)
+
+
 # ── where one turn's time went (the why-trail's `timing`; /v2/admin/latency sums it) ──
 
 

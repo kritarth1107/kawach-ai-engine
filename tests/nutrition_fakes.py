@@ -90,7 +90,30 @@ class FakeNutritionModels:
                 items = []
                 for f in body.get("FOODS") or []:
                     name = str(f.get("food") or "").split(",")[0].strip().lower()
+                    d = self.decisions.get(name) or {}
+                    if d.get("medicine"):
+                        items.append({"i": f["i"], "medicine": True})
+                        continue
+                    want = d.get("match_name")
+                    if want:
+                        match = next((c["id"] for c in (f.get("candidates") or []) if str(c.get("name") or "").lower() == str(want).lower()), None)
+                        if match:
+                            items.append({"i": f["i"], "match": match})
+                            continue
+                    if d.get("needs") == "label" and body.get("ask", True):
+                        items.append({"i": f["i"], "needs": "label", "options": d.get("options") or []})
+                        continue
                     est = dict(self.estimates.get(name) or {})
+                    if d.get("needs") == "which":
+                        est = dict(self.estimates.get(str(d.get("canonical") or name).lower()) or est)
+                        est["assumed"] = True
+                    if not est and self.web is not None:
+                        published = self.web.foods.get(name)
+                        if published:
+                            est = dict(published)
+                    for k in ("kind", "countable", "default_unit", "tags", "canonical"):
+                        if k in d:
+                            est[k] = d[k]
                     est["i"] = f["i"]
                     items.append(est)
                 return LLMReply(text=json.dumps({"items": items}), tool_calls=[], model="fake")
@@ -169,6 +192,9 @@ def nfake(monkeypatch):
     monkeypatch.setattr(lookup, "off_barcode", off_barcode)
     monkeypatch.setattr(lookup, "off_search", off_search)
     f.web, f.off = web, offs  # type: ignore[attr-defined]
+    from app.nutrition import jobs
+
+    monkeypatch.setattr(jobs, "kick_refine", lambda job_id: None)
     yield f
     from app.nutrition import jobs
 

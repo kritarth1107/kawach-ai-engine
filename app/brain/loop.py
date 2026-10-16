@@ -986,14 +986,65 @@ async def _run_turn_body(session: AsyncSession, host: ToolHost, req: TurnRequest
     return result
 
 
+def _tool_say(results: list[dict]) -> str | None:
+    """The line a tool already wrote for the person, when every result this step is that kind of line."""
+    said: str | None = None
+    for r in results:
+        if r.get("is_error"):
+            return None
+        try:
+            data = json.loads(r.get("content") or "")
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        say = str(data.get("say") or "").strip()
+        if not say:
+            return None
+        if said is not None:
+            return None
+        said = say
+    return said
+
+
+def _reply_is_tool_line(draft: str, tool_texts: list[str], profile: dict | None) -> bool:
+    """The draft is the tool's own line (or that line in their script). Nothing in it was written by the model."""
+    d = (draft or "").strip()
+    if not d:
+        return False
+    for raw in tool_texts:
+        body = raw.split(": ", 1)[-1] if ": " in raw else raw
+        try:
+            data = json.loads(body)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        say = str(data.get("say") or "").strip()
+        if say and d in (say, guards.saved_line_for(profile, say).strip()):
+            return True
+    return False
+
+
 async def _judge_claims(ctx: tools.TurnCtx, draft: str, *, memory: str, theirs: list[str], tool_texts: list[str], situation: str,
                         asked: bool = False) -> list:
-    """The live judge, on this family's sample for the day and on every crisis, alert, or unsure voice note."""
+    """The live judge, on this family's sample for the day and on every crisis, alert, or unsure voice note.
+
+    A draft is checked once. The same words are not sent again. A rewrite is a new draft, so it is checked.
+    A draft that is only the tool's line is not checked: the tool wrote it."""
     from app.quality import sample
 
+    if _reply_is_tool_line(draft, tool_texts, ctx.profiles.get(ctx.speaker.get("id"))):
+        return []
     used = [a["tool"] for a in ctx.actions if a.get("ok")]
     force = sample.always_live(voice_unsure=ctx.voice_unsure, alerts=bool(ctx.alerts), health=health_turn(ctx.actions),
                                tools=used, situation=situation)
+    if not force and not asked and not grounding.needs_check(draft):
+        return []
+    # The same draft is not sent to the model twice. A rewrite is a new draft and is checked.
+    text = (draft or "").strip()
+    if text and text == ctx.judged_text:
+        return list(ctx.judged_claims)
     if force:
         ctx.judge_band = sample.ALWAYS
     elif ctx.judge_band == sample.SKIP:
@@ -1002,8 +1053,11 @@ async def _judge_claims(ctx: tools.TurnCtx, draft: str, *, memory: str, theirs: 
         ctx.judge_band = sample.SAMPLE if await sample.ordinary_room(ctx.session, ctx.family_id) > 0 else sample.SKIP
     if ctx.judge_band == sample.SKIP:
         return []
-    return await grounding.check(draft, memory=memory, their_messages=theirs, tool_results=tool_texts, actions=True,
-                                 doctor_note=health_turn(ctx.actions), always=asked)
+    claims = await grounding.check(draft, memory=memory, their_messages=theirs, tool_results=tool_texts, actions=True,
+                                   doctor_note=health_turn(ctx.actions), always=asked)
+    ctx.judged_text = text
+    ctx.judged_claims = list(claims)
+    return claims
 
 
 async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, take_lock: bool = True) -> TurnResult:
@@ -1340,6 +1394,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             ctx.known.append(out)
             results.append({"id": call.id, "name": call.name, "content": out, "is_error": is_error})
         msgs.append({"role": "tool", "results": results})
+        needs_model = False
         if (not is_system and req.speaker.get("id")
                 and any(r["name"] == "log_food" and not r["is_error"] for r in results)
                 and not any(a.get("ok") and a["tool"] == "gap_asked" for a in ctx.actions)):
@@ -1348,18 +1403,27 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             note = gaps.refresh_note(await gaps.block(session, req.family_id, req.speaker["id"], req.speaker.get("name") or "them"))
             if note:
                 ctx.pending_gap = "water"
+                needs_model = True
                 msgs.append({"role": "user", "content": [{"type": "text", "text": note}]})
         if (not is_system and any(c.name == "open_loop" and (c.args or {}).get("kind") == "followup" and (c.args or {}).get("at")
                                   for c in reply.tool_calls)
                 and not any(a.get("ok") and a["tool"] == "web_search" for a in ctx.actions)):
+            needs_model = True
             msgs.append({"role": "user", "content": [{"type": "text", "text":
                 "They named what it is and when it ends. Call web_search for it in this turn, then one question about that thing. "
                 "The follow-up is already set."}]})
         if any(c.name == "remember" and (c.args or {}).get("domain") == "naming" for c in reply.tool_calls) and any(
                 r["name"] == "remember" and not r["is_error"] for r in results):
+            needs_model = True
             msgs.append({"role": "user", "content": [{"type": "text", "text":
                 "They corrected how they are addressed. Say one brief sorry in their language, then the name they asked for. "
                 "Do not use an avoided word."}]})
+        if not needs_model and not is_system:
+            # The tool already wrote the line. Another brain call would only repeat it, a few seconds later.
+            say = _tool_say(results)
+            if say:
+                reply.text = guards.saved_line_for(ctx.profiles.get(req.speaker.get("id")), say)
+                break
 
     if not is_system:
         await cover_red_flag(ctx, situation)

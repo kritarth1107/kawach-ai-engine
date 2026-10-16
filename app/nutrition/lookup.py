@@ -213,7 +213,10 @@ ESTIMATE_PROMPT = """You estimate the nutrition of a food eaten in India when no
 
 FOODS is every food in the meal that has no published value. Build each from its usual recipe and ingredients (and the
 ingredients given, if any). Give values per 100 g as eaten, and the usual grams of the units people use for it in Indian
-homes. Leave out nutrients you cannot estimate.
+homes. Leave out nutrients you cannot estimate. A medicine or a supplement is not food: for that item return only
+{"i": 0, "medicine": true}. If one of that food's candidates is the same food, return only {"i": 0, "match": "that id"}.
+A pack you cannot identify returns {"i": 0, "needs": "label"}. When several versions are common, return the usual one
+with "assumed": true. A home recipe with no usual amounts returns {"i": 0, "kind": "recipe"}.
 
 Return only JSON: {"items": [{"i": 0}]} and each item has this shape plus its i:
 """ + FOOD_JSON
@@ -396,12 +399,18 @@ def _decorate(item: dict, decision: dict, food: dict) -> dict:
     return food
 
 
-async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True, timeout_s: float = 6.0) -> list[dict | None]:
-    """One call for every food in the meal that still has no published value. None where the model failed."""
+async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True, timeout_s: float = 6.0,
+                       cards: list[list[dict]] | None = None, may_ask: bool = True) -> list[dict | None]:
+    """One call for every food in the meal that still has no published value. None where the model failed.
+
+    A row may be a food, or only a match, a medicine, a label question, or a recipe with no amounts.
+    """
     if not pairs:
         return []
-    body = json.dumps({"FOODS": [{"i": i, "food": _describe(item, str(decision.get("canonical") or "") or None)}
-                                  for i, (item, decision) in enumerate(pairs)]}, ensure_ascii=False)
+    cards = cards or [[] for _ in pairs]
+    body = json.dumps({"ask": may_ask, "FOODS": [{"i": i, "food": _describe(item, str(decision.get("canonical") or "") or None),
+                                              **({"candidates": cards[i]} if cards[i] else {})}
+                                              for i, ((item, decision), _c) in enumerate(zip(pairs, cards))]}, ensure_ascii=False)
     try:
         got = await ask("nutrition", ESTIMATE_PROMPT, body, essential=essential, max_tokens=2000, timeout_s=timeout_s)
     except router.AllModelsFailed:
@@ -411,14 +420,89 @@ async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True
     if isinstance(rows, list):
         for row in rows:
             if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(pairs):
+                if row.get("medicine") is True:
+                    out[row["i"]] = {"medicine": True}
+                    continue
+                if isinstance(row.get("match"), str) and row.get("match"):
+                    out[row["i"]] = {"match": row["match"]}
+                    continue
+                if row.get("needs") == "label":
+                    out[row["i"]] = {"needs": "label", "options": [str(o)[:60] for o in row.get("options") or []][:4]}
+                    continue
                 food = _food_from_json(row, source="model")
                 if food is not None:
+                    if row.get("assumed") is True:
+                        food["_assumed"] = True
                     out[row["i"]] = _decorate(pairs[row["i"]][0], pairs[row["i"]][1], food)
-    elif len(pairs) == 1:
+                elif row.get("kind") in KINDS:
+                    out[row["i"]] = {"kind": row.get("kind")}
+    elif len(pairs) == 1 and isinstance(got, dict):
         food = _food_from_json(got, source="model")
         if food is not None:
             out[0] = _decorate(pairs[0][0], pairs[0][1], food)
     return out
+
+
+async def reply_lookup(session: AsyncSession, family_id: str, items: list[dict], *, pantry_rows: list[NutritionPantry] | None = None,
+                       essential: bool = True, no_questions: bool = False) -> list[Resolved]:
+    """What the person's reply may wait for: a catalogue hit, or one estimate for the whole meal.
+
+    The grounded search is not started here. A saved estimate is marked for that search after they have been told.
+    """
+    found = await resolve(session, family_id, items, pantry_rows=pantry_rows, cache_only=True)
+    missing = [i for i, r in enumerate(found) if r.food is None and not r.medicine]
+    if not missing:
+        return found
+    pantry_rows = list(pantry_rows or [])
+    by_id = {str(p.id): p for p in pantry_rows}
+    by_food = {p.food_id: p for p in pantry_rows if p.food_id}
+    card_lists = []
+    for i in missing:
+        cards, _exact = await candidates(session, family_id, items[i], pantry_rows)
+        card_lists.append(cards)
+    # One call. Live nutrition calls are a few seconds; this is the only one the reply waits for.
+    foods = await estimate_all([(items[i], {}) for i in missing], essential=essential, timeout_s=3.0, cards=card_lists,
+                               may_ask=not no_questions)
+    for i, food in zip(missing, foods):
+        if not isinstance(food, dict):
+            found[i].needs = "photo"
+            continue
+        if food.get("medicine") is True:
+            found[i].medicine = True
+            continue
+        if food.get("needs") == "label":
+            found[i].needs = "label"
+            found[i].options = list(food.get("options") or [])
+            continue
+        match = str(food.get("match") or "")
+        if match.startswith("pantry:") and match[7:] in by_id:
+            pantry = by_id[match[7:]]
+            found[i].pantry = pantry
+            if pantry.food_id:
+                found[i].food = await session.get(NutritionFood, pantry.food_id)
+            if found[i].food is not None:
+                continue
+        fid = _uuid(match) if match else None
+        if fid is not None:
+            row = await session.get(NutritionFood, fid)
+            if row is not None and row.family_id in (None, family_id):
+                found[i].food = row
+                found[i].pantry = by_food.get(row.id)
+                continue
+        if food.get("per_100g"):
+            if food.pop("_assumed", None):
+                found[i].assumed_kind = True
+            await _keep_fetched(session, family_id, items[i], food, found[i])
+            continue
+        if food.get("kind") in KINDS:
+            found[i].decision = {"kind": food["kind"]}
+            found[i].needs = "photo"
+            continue
+        found[i].needs = "photo"
+    for r in found:
+        if r.food is not None:
+            r.food.uses = (r.food.uses or 0) + 1
+    return found
 
 
 # ── the catalogue ────────────────────────────────────────────────────────────

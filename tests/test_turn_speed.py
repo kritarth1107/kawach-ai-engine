@@ -5,6 +5,7 @@ Live 12 Oct 20:33 UTC: one turn hung, Cloud Run cut the request at 300 s but the
 instance shut down 10 minutes later; five messages waited behind it (125-248 s each). The backend stops waiting at 120 s."""
 
 import asyncio
+import json
 
 import pytest
 from sqlalchemy import select, text
@@ -49,6 +50,33 @@ def model(monkeypatch):
 
 def req(text_: str, ref: str) -> loop.TurnRequest:
     return loop.TurnRequest(family_id=FAM, elder=ME, speaker=ME, members=[ME], text=text_, message_ref=ref)
+
+
+async def test_a_tool_line_is_sent_without_another_model_call(db, monkeypatch):
+    """The tool already said what to tell them. A second brain call and a judge would only repeat it."""
+    await store.save_roster(db, FAM, ME, [ME])
+    seen: list[str] = []
+
+    class Rec:
+        async def complete(self, route, **kw):
+            seen.append("call")
+            if len(seen) == 1:
+                return LLMReply(text="", tool_calls=[ToolCall("c1", "remember", {"domain": "preference"})], model="fake")
+            return LLMReply(text="This second draft must not be sent.", tool_calls=[], model="fake")
+
+    async def fake_run(ctx, name, args):
+        ctx.actions.append({"tool": name, "args": args, "ok": True})
+        return json.dumps({"result": "saved", "say": "Saved: two eggs, 140 kcal."}), False
+
+    router.register_provider("fake", Rec())
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')
+    monkeypatch.setenv("JUDGE_PER_FAMILY", "3")
+    monkeypatch.setattr(loop.tools, "run", fake_run)
+    router.reset_breakers()
+    spend.reset()
+    result = await loop.run_turn(db, SimHost(), req("two eggs", "speed-say"))
+    assert seen == ["call"]
+    assert "140 kcal" in result.reply and "second draft" not in result.reply
 
 
 async def test_the_why_trail_keeps_where_the_time_went(db, model):

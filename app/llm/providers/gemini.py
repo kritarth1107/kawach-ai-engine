@@ -225,7 +225,7 @@ def to_gemini_contents(messages: list[dict], model: str) -> list[types.Content]:
     names: dict[str, str] = {}
 
     def push(role: str, parts: list[types.Part]) -> None:
-        if out and out[-1].role == role:
+        if out and out[-1].role == role and out[-1].parts is not None:
             out[-1].parts.extend(parts)
         else:
             out.append(types.Content(role=role, parts=parts))

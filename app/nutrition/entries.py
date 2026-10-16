@@ -313,8 +313,6 @@ async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, l
             conf = "unquantified"
         elif est and conf in ("said", "label"):
             conf = "estimate"
-        elif it.food is not None and (it.food.source == "model" or (it.food.checked or {}).get("rough")) and conf == "said":
-            conf = "estimate"
         flags = dict(it.flags)
         if it.food is not None and it.food.tags:
             flags["tags"] = list(it.food.tags)
