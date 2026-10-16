@@ -37,6 +37,9 @@ def test_a_normal_turn_sends_the_core_and_stays_under_9k(monkeypatch):
     assert "daily_brief" in {t.name for t in tools.specs_for(onboarding=True)}
     assert "change_reminder" in {t.name for t in tools.specs_for(situation="med_question")}
     assert "task_input" not in {t.name for t in tools.specs_for(situation="order")}
+    order = {t.name for t in tools.specs_for(situation="order")}
+    assert {"cancel_task", "done_in_app", "order_feedback", "task_status"} <= order
+    assert {"cancel_task", "order_feedback"} <= {t.name for t in tools.specs_for(extra={"order"})}
     assert "task_input" in {t.name for t in tools.specs_for(open_tasks=True)}
     assert "weekly_report" in {t.name for t in tools.specs_for(system=True)}
     groups = tools.groups_for()

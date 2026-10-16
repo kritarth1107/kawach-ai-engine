@@ -268,6 +268,10 @@ def specs_for(*, open_tasks: bool = False, system: bool = False, situation: str 
     skip: set[str] = set()
     if not open_tasks:
         skip |= _WHEN_TASK
+        if "order" in groups:
+            # A booked ride or a placed order is no longer a live task. The cancel, an in-app cancel, and
+            # "has it come?" still have to be callable. task_input stays off until a task is running.
+            skip -= {"cancel_task", "done_in_app", "order_feedback", "task_status"}
     if not system:
         skip |= _WHEN_SYSTEM
     rows = [spec for spec, _ in _TOOLS.values() if spec.name in allow and spec.name not in skip]
