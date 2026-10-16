@@ -200,7 +200,9 @@ def key_for(label_or_type: str) -> str:
 # ── planning check-ins ─────────────────────────────────────────────────────────
 
 async def _loop_exists(session: AsyncSession, family_id: str, dedupe: str) -> bool:
-    return (await session.execute(select(OpenLoop.id).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == dedupe).limit(1))).first() is not None
+    return (await session.execute(
+        select(OpenLoop.id).where(OpenLoop.family_id == family_id, OpenLoop.dedupe_key == dedupe, OpenLoop.status == "open").limit(1)
+    )).first() is not None
 
 
 async def plan_for(session: AsyncSession, family_id: str, subject_id: str, fact: CareFact, *, now: datetime | None = None) -> int:
@@ -234,16 +236,19 @@ async def plan_for(session: AsyncSession, family_id: str, subject_id: str, fact:
             at = day + timedelta(minutes=at_min)
             if at <= local:
                 continue
-            # one per occurrence and phase of this version of the activity (a changed time or a resume plans afresh)
-            dedupe = f"act:{subject_id}:{fact.key}:{str(fact.id)[:8]}:{date}:{phase}"
+            # one per activity, day and phase. The fact id stays out of the key: a second saved gym was a second check.
+            mine = {"activity_key": fact.key, "phase": phase, "date": date, "type": v.get("type")}
+            if await _occurrence_open(session, family_id, subject_id, mine):
+                continue
+            dedupe = f"act:{subject_id}:{fact.key}:{date}:{phase}"
             if await _loop_exists(session, family_id, dedupe):
                 continue
             title = f"{v['label']} {('starts at ' + v['start']) if phase == 'before' and v['start'] else 'check-in'} ({days_text(v['days'])})"
             await store.open_loop(
                 session, family_id=family_id, subject_id=subject_id, kind="activity", title=title, owner_id=subject_id,
                 wake_at=at.astimezone(now.tzinfo) if now.tzinfo else at, dedupe_key=dedupe,
-                detail={"activity_key": fact.key, "phase": phase, "date": date, "max_wakes": 1 if phase == "before" else 2,
-                        "rewake_minutes": 75, "expire_at": (day + timedelta(hours=23, minutes=30)).isoformat()},
+                detail={"activity_key": fact.key, "phase": phase, "date": date, "type": v.get("type") or "",
+                        "max_wakes": 1, "expire_at": (day + timedelta(hours=23, minutes=30)).isoformat()},
             )
             made += 1
     return made
@@ -260,6 +265,74 @@ async def plan_all(sessions: async_sessionmaker, *, now: datetime | None = None)
             made += await plan_for(session, f.family_id, f.subject_id, f, now=now)
         await session.commit()
     return made
+
+
+def _same_occurrence(a: dict, b: dict) -> bool:
+    """The same check: one activity, one day, one phase. Two facts of the same catalogue type (two gyms) are one.
+    A custom activity matches only its own key, so two different customs on the same day both stay."""
+    if (a.get("date"), a.get("phase")) != (b.get("date"), b.get("phase")):
+        return False
+    if a.get("activity_key") and a.get("activity_key") == b.get("activity_key"):
+        return True
+    ta, tb = a.get("type"), b.get("type")
+    return bool(ta and ta == tb and ta != "custom")
+
+
+async def _fact_type(session: AsyncSession, family_id: str, subject_id: str, key: str | None) -> str:
+    if not key:
+        return ""
+    fact = await store.active_fact(session, family_id, subject_id, key)
+    return str(normalise(fact.value).get("type") or "") if fact else ""
+
+
+def _tagged(loop: OpenLoop, types: dict[str, str]) -> dict:
+    detail = dict(loop.detail or {})
+    if not detail.get("type"):
+        detail["type"] = types.get(detail.get("activity_key") or "") or ""
+    return detail
+
+
+async def _occurrence_open(session: AsyncSession, family_id: str, subject_id: str, mine: dict) -> bool:
+    rows = [loop for loop in (await session.execute(
+        select(OpenLoop).where(OpenLoop.family_id == family_id, OpenLoop.subject_id == subject_id,
+                               OpenLoop.kind == "activity", OpenLoop.status == "open")
+    )).scalars() if loop.status == "open"]
+    types = {}
+    for loop in rows:
+        key = (loop.detail or {}).get("activity_key")
+        if key and key not in types and not (loop.detail or {}).get("type"):
+            types[key] = await _fact_type(session, family_id, subject_id, key)
+    return any(_same_occurrence(mine, _tagged(loop, types)) for loop in rows)
+
+
+async def claim_occurrence(session: AsyncSession, loop: OpenLoop) -> bool:
+    """One activity check per day. Locks the open ones and keeps a single loop; the others are closed.
+    The caller still asks only on the first wake."""
+    if loop.kind != "activity" or loop.status != "open":
+        return False
+    detail = loop.detail or {}
+    if not detail.get("date") or not detail.get("phase"):
+        return True
+    rows = [other for other in (await session.execute(
+        select(OpenLoop).where(OpenLoop.family_id == loop.family_id, OpenLoop.subject_id == loop.subject_id,
+                               OpenLoop.kind == "activity", OpenLoop.status == "open")
+        .order_by(OpenLoop.id).with_for_update()
+    )).scalars() if other.status == "open"]
+    types: dict[str, str] = {}
+    for other in rows:
+        key = (other.detail or {}).get("activity_key")
+        if key and key not in types and not (other.detail or {}).get("type"):
+            types[key] = await _fact_type(session, loop.family_id, loop.subject_id, key)
+    mine = _tagged(loop, types)
+    same = [other for other in rows if _same_occurrence(mine, _tagged(other, types))]
+    if not same:
+        return True
+    winner = same[0]
+    for other in same:
+        if other.id == winner.id:
+            continue
+        other.status, other.closed_note, other.updated_at = "cancelled", "already checking this activity today", clock.now()
+    return loop.id == winner.id
 
 
 async def drop_future_loops(session: AsyncSession, family_id: str, key: str) -> int:

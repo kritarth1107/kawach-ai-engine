@@ -170,7 +170,7 @@ async def activity_prompt(session: AsyncSession, loop: OpenLoop) -> str | None:
             f"whether they are back / it happened and how it went, one question. When they answer, log_activity what they say "
             f"(done or skipped, details, any reading such as weight), then ask one natural follow-up from their answer ({asks}); "
             f"at most two follow-ups in all, then wrap up warmly. If they skipped, be kind and ask if the time should change. "
-            f"If they do not answer, ask once more later; keep this loop open until it is logged. Reply none.")
+            f"If they do not answer, reply none and do not open another loop. One question until they answer. Reply none.")
 
 
 async def wake_prompt(session: AsyncSession, loop: OpenLoop, elder_id: str) -> str | None:
@@ -485,6 +485,18 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                 await session.commit()
                 stats["deferred"] += 1
                 continue
+            if loop.kind == "activity":
+                from app.care import activities as acts
+
+                if not await acts.claim_occurrence(session, loop):
+                    await session.commit()
+                    continue
+                # one question for this occurrence. A loop already planned with a second wake waits until it expires.
+                if int((loop.detail or {}).get("wakes") or 0) >= 1:
+                    expire = (loop.detail or {}).get("expire_at")
+                    loop.wake_at = datetime.fromisoformat(expire) if expire else None
+                    await session.commit()
+                    continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
             kind = loop.kind
             loop_subject = loop.subject_id
@@ -500,7 +512,8 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
             d = loop.detail = {**(loop.detail or {}), "wakes": wakes + 1, "runs": runs}
             # One-shot reminders (family tasks, appointments, refills) stay open on the dashboard but wake only once; a loop
             # with expire_at wakes once more then, to close itself.
-            once = wakes + 1 >= int(d.get("max_wakes", MAX_WAKES))
+            cap = 1 if kind == "activity" else int(d.get("max_wakes", MAX_WAKES))
+            once = wakes + 1 >= cap
             if once:
                 loop.wake_at = datetime.fromisoformat(d["expire_at"]) if d.get("expire_at") else None
             else:

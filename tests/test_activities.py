@@ -64,6 +64,7 @@ async def test_the_after_check_in_asks_and_log_activity_records_it_with_readings
     at("2026-10-13 10:50")
     prompt = await wake.wake_prompt(db, after, ME["id"])
     assert "[Activity: after]" in prompt and "log_activity" in prompt and "lose 5 kg" in prompt and "exercises" in prompt
+    assert "ask once more" not in prompt and "do not open another loop" in prompt
     host = SimHost()
     out, err = await call(ctx(db, host, said="haan aa gaya, chest and triceps kiya 50 min, weight 89.8"), "log_activity",
                           {"key": "activity:gym", "done": True, "summary": "Chest and triceps, 50 minutes", "duration_min": 50,
@@ -320,3 +321,112 @@ async def test_a_habit_button_is_logged_and_later_moves_the_nudge_once(db, at):
     assert await activities.record_button(db, FAM, ME["id"], "done", ref) == "noted"
     ev = (await db.execute(select(CareEvent).where(CareEvent.family_id == FAM, CareEvent.kind == "activity_done"))).scalars().one()
     assert ev.payload["key"] == "activity:gym"
+
+
+async def test_two_gym_facts_plan_one_check_and_a_walk_still_gets_its_own(db, at):
+    """A second saved gym must not plan a second after-check. A different activity still does."""
+    at("2026-10-13 07:00")
+    await store.save_roster(db, FAM, ME, [ME])
+    await call(ctx(db), "activity", {"action": "add", "type": "gym", "days": [0, 1, 2, 3, 4, 5], "start": "09:30"})
+    again = await store.write_fact(
+        db, family_id=FAM, subject_id=ME["id"], domain="activity", key="activity:gym_again", source_kind="elder_said",
+        value=activities.normalise({"type": "gym", "label": "Gym again", "kind": "habit", "days": [0, 1, 2, 3, 4, 5], "start": "18:00", "end": "19:00"}),
+        text="Gym again",
+    )
+    assert await activities.plan_for(db, FAM, ME["id"], again.fact) == 0
+    await call(ctx(db), "activity", {"action": "add", "type": "evening_walk", "start": "18:00"})
+    today = [l for l in await loops(db) if l.status == "open" and l.detail["date"] == "2026-10-13" and l.detail["phase"] == "after"]
+    assert sorted(l.detail["activity_key"] for l in today) == ["activity:evening_walk", "activity:gym"]
+    assert all(l.detail["max_wakes"] == 1 for l in today)
+
+
+async def test_one_wake_asks_a_gym_once_and_does_not_open_a_second_loop(db, at, monkeypatch):
+    """Live 2026-10-16: one wake ran two activity-after turns, then a watch loop asked again, then both woke a second time."""
+    from datetime import timedelta
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core import clock
+    from app.llm import router
+    from app.llm.router import LLMReply, ToolCall
+
+    class Brain:
+        def __init__(self):
+            self.seen = []
+
+        async def complete(self, route, *, messages, **kw):
+            text = messages[-1]["content"][0]["text"] if messages[-1]["role"] == "user" else ""
+            self.seen.append(text)
+            if "[Activity: after]" in text:
+                return LLMReply(text="", tool_calls=[
+                    ToolCall("c1", "send_message", {"to": ME["id"], "text": "Rahul, are you back from the gym?"}),
+                    ToolCall("c2", "open_loop", {"kind": "watch", "title": "Gym workout follow-up", "check_back_in_minutes": 65}),
+                ], model="fake")
+            return LLMReply(text="none", tool_calls=[], model="fake")
+
+    brain = Brain()
+    router.register_provider("fake", brain)
+    monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "worker": ["fake:m"]}')
+    router.reset_breakers()
+    try:
+        sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+        at("2026-10-13 07:00")
+        await store.save_roster(db, FAM, ME, [ME])
+        await call(ctx(db), "activity", {"action": "add", "type": "gym", "days": [0, 1, 2, 3, 4, 5], "start": "09:30"})
+        now = at("2026-10-13 10:50")
+        for loop in await loops(db):
+            if loop.detail.get("phase") == "before":
+                loop.wake_at = now + timedelta(days=1)  # only the after-check is due
+        detail = {"activity_key": "activity:gym", "phase": "after", "date": "2026-10-13", "type": "gym",
+                  "max_wakes": 2, "rewake_minutes": 75, "expire_at": "2026-10-13T23:30:00+05:30", "wakes": 0}
+        await store.open_loop(db, family_id=FAM, subject_id=ME["id"], kind="activity", title="Gym check-in again",
+                              owner_id=ME["id"], wake_at=now - timedelta(seconds=30),
+                              dedupe_key="act:self-a:activity:gym:bbbbbbbb:2026-10-13:after", detail=detail)
+        await db.commit()
+        host = SimHost()
+        stats = await wake.wake_due(sessions, lambda fid: host)
+        assert stats["ran"] == 1 and len(host.world.sent) == 1
+        assert host.world.sent[0]["text"] == "Rahul, are you back from the gym?"
+        assert sum("[Activity: after]" in s for s in brain.seen) == 1
+        db.expire_all()
+        today = [l for l in await loops(db) if l.detail.get("date") == "2026-10-13" and l.detail.get("phase") == "after"]
+        live = [l for l in today if l.status == "open"]
+        assert len(live) == 1 and live[0].detail["wakes"] == 1
+        assert len([l for l in today if l.status == "cancelled"]) == 1
+        assert not list((await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "watch"))).scalars())
+        # the old second wake (still before it expires) must not ask again
+        at("2026-10-13 12:00")
+        live[0].wake_at = clock.now() - timedelta(minutes=1)
+        await db.commit()
+        asked = sum("[Activity: after]" in s for s in brain.seen)
+        stats = await wake.wake_due(sessions, lambda fid: host)
+        assert stats["ran"] == 0 and len(host.world.sent) == 1
+        assert sum("[Activity: after]" in s for s in brain.seen) == asked
+    finally:
+        router._providers.pop("fake", None)
+
+
+async def test_an_activity_check_waits_when_it_is_already_their_night(db, at):
+    """No proactive question after the sleep time they told Saheli."""
+    from datetime import timedelta
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.core import clock
+
+    sessions = async_sessionmaker(bind=db.bind, expire_on_commit=False, join_transaction_mode="create_savepoint")
+    now = at("2026-10-13 22:20")
+    await store.save_roster(db, FAM, ME, [ME])
+    await call(ctx(db), "activity", {"action": "add", "type": "sleep", "start": "22:00", "kind": "routine"})
+    await call(ctx(db), "activity", {"action": "add", "type": "wake_up", "start": "06:30", "kind": "routine"})
+    loop = await store.open_loop(
+        db, family_id=FAM, subject_id=ME["id"], kind="activity", title="Gym check-in", owner_id=ME["id"],
+        wake_at=now - timedelta(minutes=1),
+        detail={"activity_key": "activity:gym", "phase": "after", "date": "2026-10-13", "type": "gym", "max_wakes": 1,
+                "expire_at": "2026-10-14T23:30:00+05:30"},
+    )
+    await db.commit()
+    stats = await wake.wake_due(sessions, lambda fid: SimHost())
+    assert stats["deferred"] == 1 and stats["ran"] == 0
+    await db.refresh(loop)
+    assert loop.status == "open" and clock.ist(loop.wake_at).strftime("%d %H:%M") == "14 07:00"

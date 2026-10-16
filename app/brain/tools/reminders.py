@@ -52,6 +52,18 @@ def wake_from_clock(hhmm: str, now: datetime | None = None) -> datetime | None:
     ["kind", "title"],
 )
 async def open_loop_tool(ctx: TurnCtx, a: dict) -> dict:
+    # An activity check already asks once and stays open until they answer. A watch or follow-up opened from that
+    # turn asked the same thing again (one wake produced the check, then a second loop asked an hour later).
+    if a.get("kind") in ("question", "followup", "watch"):
+        parts = (ctx.message_ref or "").split(":")
+        if len(parts) >= 2 and parts[0] == "wake":
+            try:
+                source = await ctx.session.get(OpenLoop, uuid.UUID(parts[1]))
+            except ValueError:
+                source = None
+            if source and source.kind == "activity" and source.status == "open":
+                return {"skipped": True, "why": "this activity check is already open; do not ask again until they answer",
+                        "loop_id": str(source.id)}
     wake = wake_from_clock(a["at"]) if a.get("at") else None
     if wake is None and a.get("check_back_in_minutes"):
         wake = clock.now() + timedelta(minutes=a["check_back_in_minutes"])
