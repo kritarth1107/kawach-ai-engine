@@ -118,7 +118,7 @@ jobs:
                 .containerDefinitions |= map(
                   if ((.image | split("/") | last | split(":")[0]) == $NAME) then
                     .image = $IMG
-                    # Fargate's longest stop is 120s. Uvicorn waits 110s, then the drain rolls a turn back.
+                    # Fargate stop is 120s. Uvicorn waits 110s, then the drain rolls a turn back.
                     | .stopTimeout = 120
                     # A one-shot EMBED_DIM_MIGRATE=on must not survive the next image roll.
                     # 15 Oct 02:33 copied the temporary :17 flag onto :18.
