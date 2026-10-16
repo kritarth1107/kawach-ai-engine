@@ -32,3 +32,16 @@ async def test_a_gemini_429_is_a_throttle(monkeypatch, capsys):
         router.reset_breakers()
     lines = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{") and "Kavach/Gemini" in line]
     assert lines and lines[-1]["Throttles"] == 1 and lines[-1]["Errors"] == 0 and lines[-1]["Calls"] == 1
+    assert "_aws" not in lines[-1]
+
+
+def test_emf_stays_a_log_line_unless_asked(capsys, monkeypatch):
+    from app.obs.emf import note
+    monkeypatch.delenv("CLOUDWATCH_EMF", raising=False)
+    note("Kavach/Gemini", "brain", errors=1)
+    off = json.loads(capsys.readouterr().out)
+    assert off["namespace"] == "Kavach/Gemini" and off["Errors"] == 1 and "_aws" not in off
+    monkeypatch.setenv("CLOUDWATCH_EMF", "on")
+    note("Kavach/Gemini", "brain", errors=1)
+    on = json.loads(capsys.readouterr().out)
+    assert on["_aws"]["CloudWatchMetrics"][0]["Namespace"] == "Kavach/Gemini"
