@@ -237,6 +237,33 @@ async def nudge_due_job(body: NudgeDueIn, session: AsyncSession = Depends(get_db
     return {"ok": True}
 
 
+class ButtonTapIn(BaseModel):
+    family_id: str = Field(max_length=64)
+    person_id: str = Field(max_length=64)
+    action: str = Field(max_length=16)
+    kind: str = Field(max_length=24)
+    ref: str = Field(max_length=160)
+
+
+@router.post("/jobs/button-tap")
+async def button_tap_job(body: ButtonTapIn, session: AsyncSession = Depends(get_db)) -> dict:
+    """A reminder button the backend handled (habit or appointment). The tap is recorded here; the reply is the backend's."""
+    if body.action not in ("done", "later", "skip"):
+        return {"ok": False, "result": "unknown"}
+    if body.kind == "habit":
+        from app.care import activities
+
+        result = await activities.record_button(session, body.family_id, body.person_id, body.action, body.ref)
+    elif body.kind == "appointment":
+        from app.care import nudges
+
+        result = await nudges.record_appointment_tap(session, body.family_id, body.person_id, body.action, body.ref)
+    else:
+        return {"ok": False, "result": "unknown"}
+    await session.commit()
+    return {"ok": True, "result": result}
+
+
 @router.post("/jobs/nudge")
 async def nudge_job() -> dict:
     """Cloud Scheduler, every minute (D5): regular nudges and 5-minute reminder follow-ups. The admin flag nudge.regular

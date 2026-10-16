@@ -451,3 +451,65 @@ def own_reminder_before(value: dict, times: list[tuple[int, list[int]]]) -> bool
         return False
     act_days = set(value.get("days") or range(7))
     return any(start - 120 <= t <= start and (not days or act_days & set(days)) for t, days in times)
+
+
+def closed_window_reminder(detail: dict, value: dict | None) -> dict | None:
+    """The before-phase of a habit or task, when their chat is closed: the reminder template at that time, with a button
+    for done, later and skip. The after-phase is a question, not a time they set, so it stays a normal message."""
+    if (detail or {}).get("phase") != "before":
+        return None
+    v = normalise(value or {})
+    label = str(v.get("label") or "this")[:60]
+    at = str(v.get("start") or "now")[:20]
+    key = str((detail or {}).get("activity_key") or "")
+    date = str((detail or {}).get("date") or "")
+    if not key:
+        return None
+    ref = f"{key}@{date}" if date else key
+    return {
+        "purpose": "reminder",
+        "params": [label, at],
+        "quickReplyPayloads": [f"done:habit:{ref}", f"later:habit:{ref}", f"skip:habit:{ref}"],
+    }
+
+
+def _habit_ref(ref: str, now: datetime) -> tuple[str, str]:
+    key, _, date = (ref or "").partition("@")
+    if key and not key.startswith("activity:"):
+        key = key_for(key)
+    if not date:
+        date = clock.ist(now).strftime("%Y-%m-%d")
+    return key, date
+
+
+async def record_button(session: AsyncSession, family_id: str, person_id: str, action: str, ref: str, *, now: datetime | None = None) -> str:
+    """A habit button (done, later, skip). Later moves that occurrence's nudge by 15 minutes, once."""
+    now = now or clock.now()
+    key, date = _habit_ref(ref, now)
+    if action not in ("done", "later", "skip") or not key:
+        return "unknown"
+    fact = await store.active_fact(session, family_id, person_id, key)
+    label = normalise(fact.value)["label"] if fact else key
+    loops = [lp for lp in await store.live_loops(session, family_id, [person_id])
+             if lp.kind == "activity" and (lp.detail or {}).get("activity_key") == key and (lp.detail or {}).get("date") == date]
+    if action == "later":
+        if not loops:
+            return "unknown"
+        if any((lp.detail or {}).get("snoozed") for lp in loops):
+            return "already"
+        lp = next((lp for lp in loops if (lp.detail or {}).get("phase") == "before"), loops[0])
+        detail = dict(lp.detail or {})
+        detail["snoozed"] = True
+        lp.detail = detail
+        lp.wake_at = now + timedelta(minutes=15)
+        lp.updated_at = now
+        return "snoozed"
+    kind = "activity_done" if action == "done" else "activity_skipped"
+    await store.record_event(
+        session, family_id=family_id, subject_id=person_id, kind=kind,
+        summary=f"{label}: {'done' if action == 'done' else 'skipped'}"[:500],
+        payload={"key": key, "label": label, "button": action, "date": date}, actor_id=person_id, at=now,
+    )
+    for lp in loops:
+        await store.close_loop(session, lp.id, note="they tapped")
+    return "noted"

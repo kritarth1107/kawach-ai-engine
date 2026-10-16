@@ -1748,3 +1748,45 @@ async def test_a_reason_in_the_reply_is_saved_and_used(db, at, sessions, writer)
     at("2026-10-14 15:00")
     await run(sessions, host)
     assert not any(r.kind == "checkin" for r in await rows(db))
+
+
+async def test_a_closed_chat_gets_an_appointment_at_its_time_for_elder_and_self_care(db, at, sessions, writer):
+    self_care = {"id": "self-n", "name": "Meera", "role": "member"}
+    at("2026-10-16 09:00")
+    await family(db, (MAA, self_care))
+    await wrote(db, MAA, "I am up")
+    await store.add_turn(db, family_id=FAM, thread_id=self_care["id"], role="user", text="I am up", speaker_id=self_care["id"])
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="appointment", key="appointment:eye",
+                           value={"when": "2026-10-16T15:00:00+05:30"}, text="Eye check", source_kind="told")
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="language", key="language",
+                           value={"language": "hi"}, text="Speaks Hindi.", source_kind="told")
+    await store.write_fact(db, family_id=FAM, subject_id=self_care["id"], domain="condition", key="condition:knee",
+                           value={"name": "a stiff knee"}, text="A stiff knee.", source_kind="told")
+    await store.write_fact(db, family_id=FAM, subject_id=self_care["id"], domain="appointment", key="appointment:dentist",
+                           value={"when": "2026-10-16T15:00:00+05:30"}, text="your dentist visit", source_kind="told")
+    await db.commit()
+    host = SimHost()
+    host.world.closed.add(MAA["id"])
+    host.world.closed.add(self_care["id"])
+    at("2026-10-16 15:00")
+    await run(sessions, host)
+    by_to = {t["to"]: t for t in host.world.templates}
+    assert by_to[MAA["id"]]["purpose"] == "reminder" and by_to[MAA["id"]]["params"] == ["Eye check", "3:00 PM"]
+    assert by_to[MAA["id"]]["lang"] == "hi" and by_to[MAA["id"]]["quickReplyPayloads"][0] == "done:appointment:appointment:eye"
+    assert by_to[self_care["id"]]["params"][0] == "your dentist visit"
+    at("2026-10-16 15:05")
+    await run(sessions, host)
+    assert len(host.world.templates) == 2  # once each
+
+
+async def test_an_open_chat_does_not_send_the_appointment_template(db, at, sessions, writer):
+    at("2026-10-16 14:40")
+    await family(db, (MAA,))
+    await wrote(db, MAA, "I am here")
+    await store.write_fact(db, family_id=FAM, subject_id=MAA["id"], domain="appointment", key="appointment:eye",
+                           value={"when": "2026-10-16T14:50:00+05:30"}, text="Eye check", source_kind="told")
+    await db.commit()
+    host = SimHost()
+    at("2026-10-16 14:55")
+    await run(sessions, host)
+    assert host.world.templates == []

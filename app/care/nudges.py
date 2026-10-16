@@ -388,6 +388,7 @@ class Due:
     light: str = ""  # opener | morning | lunch | evening: a reduced line, still due
     hold_chat: bool = False  # optional chat waits; medicine, the schedule and appointments do not
     quiet_why: str = ""  # a reason already on the record: no check-in until it passes
+    notice: tuple[str, str, str] | None = None  # a closed-chat appointment: what, time, fact key (key may end with :later)
 
 
 def light_slot(now: datetime, wake_min: int | None) -> str | None:
@@ -446,6 +447,100 @@ async def quiet_reason(session: AsyncSession, p: Person, ck: Clock, now: datetim
     return ""
 
 
+def _clock_label(at: datetime) -> str:
+    return clock.ist(at).strftime("%I:%M %p").lstrip("0")
+
+
+async def _appointment_sent(session: AsyncSession, family_id: str, person_id: str, key: str, now: datetime) -> bool:
+    since = now - timedelta(hours=20)
+    rows = list((await session.execute(
+        select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == person_id,
+                                CareEvent.kind == "appointment_notice", CareEvent.at >= since)
+    )).scalars())
+    return any((r.payload or {}).get("key") == key for r in rows)
+
+
+async def appointment_notice(session: AsyncSession, p: Person, now: datetime) -> tuple[str, str, str] | None:
+    """An appointment whose time was in the last 15 minutes, or a Later tap whose 15 minutes are up. None when already sent."""
+    facts = await store.facts(session, p.family_id, p.id, domains=["appointment"])
+    by_key = {f.key: f for f in facts}
+    for f in facts:
+        when = _iso((f.value or {}).get("when"))
+        if when is None:
+            continue
+        late = now - when
+        if timedelta(0) <= late <= timedelta(minutes=15) and not await _appointment_sent(session, p.family_id, p.id, f.key, now):
+            return ((f.text or "your appointment").strip()[:60], _clock_label(when), f.key)
+    since = now - timedelta(minutes=20)
+    later = list((await session.execute(
+        select(CareEvent).where(CareEvent.family_id == p.family_id, CareEvent.subject_id == p.id,
+                                CareEvent.kind == "appointment_later", CareEvent.at >= since)
+    )).scalars())
+    for ev in later:
+        send_at = _iso((ev.payload or {}).get("send_at"))
+        ref = str((ev.payload or {}).get("ref") or "")
+        if not send_at or not ref or abs(now - send_at) > timedelta(minutes=2):
+            continue
+        if await _appointment_sent(session, p.family_id, p.id, f"{ref}:later", now):
+            continue
+        fact = by_key.get(ref)
+        when = _iso((fact.value or {}).get("when")) if fact else None
+        label = ((fact.text if fact else None) or "your appointment").strip()[:60]
+        return (label, _clock_label(when) if when else _clock_label(now), f"{ref}:later")
+    return None
+
+
+async def send_closed_notice(session: AsyncSession, host, p: Person, notice: tuple[str, str, str], now: datetime) -> bool:
+    """The reminder template for an appointment, at its time, when the chat is closed. The buttons record the tap."""
+    what, when, key = notice
+    ref = key[:-6] if key.endswith(":later") else key
+    langs = await store.facts(session, p.family_id, p.id, domains=["language"])
+    code = str((langs[0].value or {}).get("language") or "") if langs else ""
+    if code == "english":
+        code = "en"
+    template: dict = {"purpose": "reminder", "params": [what[:60], when[:20]],
+                      "quickReplyPayloads": [f"done:appointment:{ref}", f"later:appointment:{ref}", f"skip:appointment:{ref}"]}
+    if code:
+        template["lang"] = code
+    res = await host.call(
+        "send_whatsapp",
+        {"to": p.id, "text": f"{what} is due at {when}.", "kind": "reminder", "ref": f"appointment:{ref}"[:160],
+         "template": template},
+        family_id=p.family_id.removeprefix("shadow:"), subject_id=p.id, actor_id=p.id,
+    )
+    if not (res or {}).get("delivered"):
+        return False
+    await store.record_event(
+        session, family_id=p.family_id, subject_id=p.id, kind="appointment_notice",
+        summary=f"{what} at {when}"[:500], payload={"key": key, "ref": ref}, actor_id=p.id, at=now,
+    )
+    return True
+
+
+async def record_appointment_tap(session: AsyncSession, family_id: str, person_id: str, action: str, ref: str, *, now: datetime | None = None) -> str:
+    """A button on an appointment reminder. Later asks for one more send, 15 minutes on."""
+    now = now or clock.now()
+    if action not in ("done", "later", "skip") or not ref:
+        return "unknown"
+    if action == "later":
+        prior = list((await session.execute(
+            select(CareEvent).where(CareEvent.family_id == family_id, CareEvent.subject_id == person_id,
+                                    CareEvent.kind == "appointment_later", CareEvent.at >= now - timedelta(hours=20))
+        )).scalars())
+        if any((r.payload or {}).get("ref") == ref for r in prior):
+            return "already"  # one Later per appointment
+        await store.record_event(
+            session, family_id=family_id, subject_id=person_id, kind="appointment_later",
+            summary="later", payload={"ref": ref, "send_at": (now + timedelta(minutes=15)).isoformat()}, actor_id=person_id, at=now,
+        )
+        return "snoozed"
+    await store.record_event(
+        session, family_id=family_id, subject_id=person_id, kind="appointment_done" if action == "done" else "appointment_skipped",
+        summary=action, payload={"ref": ref, "button": action}, actor_id=person_id, at=now,
+    )
+    return "noted"
+
+
 async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str | None, *, busy: bool) -> Due:
     """Is a regular nudge due for this person now, and if not, why (the plan's §1.3). The cheap checks (their night, a
     message within the base cadence, an order moving) come before any backend call."""
@@ -474,7 +569,10 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
     # a meal question written in its own shadow (nudge.meals) went to nobody: it never holds back the hour's real nudge
     engine_last = max([t for t in (last_user, last_bot, *(_when(r) for r in rows if r.status in SENT and not (r.kind in HABIT_SHADOW and r.status == "shadow")))
                        if t], default=None)
-    if engine_last and now - engine_last < base:
+    # a closed chat (nothing from them in 24 hours) is not "talking": a template we sent this morning must not hold an
+    # appointment that is due now
+    inbound_stale = last_user is None or now - last_user >= WINDOW
+    if engine_last and now - engine_last < base and not inbound_stale:
         return Due(p, empty, reason="talking" if last_user and now - last_user < base else "cadence")
     if busy:
         return Due(p, empty, reason="busy", mode=mode or cached_mode())
@@ -506,8 +604,10 @@ async def due(session: AsyncSession, host, p: Person, now: datetime, mode: str |
             if light_slot(now, night[1] if night else None) == "morning":
                 today = await sent_today(session, p.id, now)
                 if not any(r.field == "hello" or (r.reason or "").startswith("waiting:") for r in today):
-                    return Due(p, ck, light="opener", mode=m)  # one utility template; the greeting waits behind it
-        return Due(p, ck, reason="window_closed", mode=m)
+                    notice = await appointment_notice(session, p, now)
+                    return Due(p, ck, light="opener", mode=m, notice=notice)  # one utility template; the greeting waits behind it
+        notice = await appointment_notice(session, p, now)
+        return Due(p, ck, reason="window_closed", mode=m, notice=notice)
     if gate.get("reason"):
         return Due(p, ck, reason=str(gate["reason"])[:60], mode=m)
     hold_chat = False
@@ -1297,6 +1397,32 @@ async def _next_look(session: AsyncSession, person: Person, now: datetime, *, ea
     return _next_minute(now, minute)
 
 
+async def next_appointment_at(session: AsyncSession, person: Person, now: datetime) -> datetime | None:
+    """The next appointment time still to send, or a Later tap's send time, so a closed chat is looked at then."""
+    facts = await store.facts(session, person.family_id, person.id, domains=["appointment"])
+    times: list[datetime] = []
+    for f in facts:
+        when = _iso((f.value or {}).get("when"))
+        if when and when > now and not await _appointment_sent(session, person.family_id, person.id, f.key, now):
+            times.append(when)
+    later = list((await session.execute(
+        select(CareEvent).where(CareEvent.family_id == person.family_id, CareEvent.subject_id == person.id,
+                                CareEvent.kind == "appointment_later", CareEvent.at >= now - timedelta(minutes=20))
+    )).scalars())
+    for ev in later:
+        send_at = _iso((ev.payload or {}).get("send_at"))
+        ref = str((ev.payload or {}).get("ref") or "")
+        if send_at and send_at > now and ref and not await _appointment_sent(session, person.family_id, person.id, f"{ref}:later", now):
+            times.append(send_at)
+    return min(times) if times else None
+
+
+async def _before_appointment(session: AsyncSession, person: Person, now: datetime, when: datetime) -> datetime:
+    """Look again at an appointment's time when that is sooner than the usual next look."""
+    appt = await next_appointment_at(session, person, now)
+    return appt if appt and now < appt < when else when
+
+
 async def next_check(session: AsyncSession, person: Person, d: Due, now: datetime) -> datetime:
     """When to read this person again. Sooner is safe (due() still decides); later must not skip a message they would get."""
     if not d.reason:
@@ -1304,7 +1430,7 @@ async def next_check(session: AsyncSession, person: Person, d: Due, now: datetim
             step = CARED_EVERY if person.cared else CAREGIVER_EVERY  # the next look still sees a meal or a dose
         else:
             step = cadence(person.cared, d.clock.run + 1) or timedelta(hours=12)
-        return now + step
+        return await _before_appointment(session, person, now, now + step)
     if d.reason in ("cadence", "talking") and d.clock.last_activity:
         lr = await learned(session, person.family_id, person.id, now)
         need = cadence(person.cared, d.clock.run) or (CARED_EVERY if person.cared else CAREGIVER_EVERY)
@@ -1322,7 +1448,8 @@ async def next_check(session: AsyncSession, person: Person, d: Due, now: datetim
     if d.reason == "ladder":
         return await _next_look(session, person, now, early_bird=False)
     if d.reason == "window_closed":
-        return await _next_look(session, person, now, early_bird=False)  # a tap pulls this forward; until then the next morning
+        morning = await _next_look(session, person, now, early_bird=False)  # a tap pulls this forward; until then the next morning
+        return await _before_appointment(session, person, now, morning)
     if d.reason == "asked_stop":
         return now + timedelta(minutes=5)  # an undo has no turn either; the fact is read on the next look
     if d.reason == "learned_hour":
@@ -1486,18 +1613,24 @@ async def run(sessions: async_sessionmaker, host_for, *, now: datetime | None = 
                         decided = d
                         if await caregiver_note_due(session, p, d, now):
                             await note_caregiver(sessions, host, r, p, now)
+                        notice_ok = await send_closed_notice(session, host, p, d.notice, now) if d.notice else True
                         if d.mode:
                             stats["mode"] = d.mode
                         if d.mode == "off":
                             outcome = "off"
                             return
                         if d.reason:
+                            if d.notice and not notice_ok:
+                                outcome = "notice_retry"  # the template did not go: look again in a few minutes, not tomorrow
+                                return
                             outcome = d.reason
                             stats["skipped"][d.reason] = stats["skipped"].get(d.reason, 0) + 1
                             if d.mode and d.mode != "off" and d.reason not in ("cadence", "asleep", "talking"):
                                 await log_skip(session, p, now, d.reason, d.clock.rows)
                                 await session.commit()
                             return
+                        if d.notice and notice_ok:
+                            await session.commit()  # the appointment template is its own send; the morning line uses the next session
                         m = d.mode or "off"
                         stats["due"] += 1
                         ctx = await build_context(session, host, p, d.clock, now, early_bird=d.early_bird, light=d.light, hold_chat=d.hold_chat, quiet_why=d.quiet_why)

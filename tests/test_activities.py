@@ -287,3 +287,36 @@ async def test_a_duplicate_the_reader_names_is_stopped_only_if_saheli_adopted_it
         assert {f.key for f in await activities.active(db, FAM, ME["id"])} == {"activity:sleep", "activity:night_walk"}, "what they told stays"
     finally:
         router._providers.pop("fake", None)
+
+
+def test_a_habit_before_its_time_is_a_reminder_template_and_the_check_in_after_is_not():
+    hint = activities.closed_window_reminder(
+        {"phase": "before", "activity_key": "activity:gym", "date": "2026-10-16"},
+        {"type": "gym", "label": "Gym", "start": "09:30", "kind": "habit"},
+    )
+    assert hint["purpose"] == "reminder" and hint["params"] == ["Gym", "09:30"]
+    assert hint["quickReplyPayloads"] == [
+        "done:habit:activity:gym@2026-10-16", "later:habit:activity:gym@2026-10-16", "skip:habit:activity:gym@2026-10-16",
+    ]
+    assert activities.closed_window_reminder({"phase": "after", "activity_key": "activity:gym"}, {"label": "Gym"}) is None
+
+
+async def test_a_habit_button_is_logged_and_later_moves_the_nudge_once(db, at):
+    at("2026-10-13 07:00")
+    await store.save_roster(db, FAM, ME, [ME])
+    await call(ctx(db), "activity", {"action": "add", "type": "gym", "days": [0, 1, 2, 3, 4, 5], "start": "09:30"})
+    before = next(l for l in await loops(db) if l.detail["phase"] == "before" and l.detail["date"] == "2026-10-13")
+    ref = f"{before.detail['activity_key']}@{before.detail['date']}"
+    c = ctx(db)
+    c.speaker = {"id": "system", "role": "system", "name": "Saheli"}
+    c.message_ref = f"wake:{before.id}:0"
+    c.profiles = {ME["id"]: {"saved": {"language": "hi"}}}
+    hint = await tools.template_hint(c, ME["id"], "Gym starts soon")
+    assert hint["lang"] == "hi" and hint["quickReplyPayloads"][0] == f"done:habit:{ref}"
+    assert await activities.record_button(db, FAM, ME["id"], "later", ref) == "snoozed"
+    assert await activities.record_button(db, FAM, ME["id"], "later", ref) == "already"
+    await db.refresh(before)
+    assert before.status == "open" and (before.detail or {}).get("snoozed") is True
+    assert await activities.record_button(db, FAM, ME["id"], "done", ref) == "noted"
+    ev = (await db.execute(select(CareEvent).where(CareEvent.family_id == FAM, CareEvent.kind == "activity_done"))).scalars().one()
+    assert ev.payload["key"] == "activity:gym"

@@ -2267,9 +2267,29 @@ async def template_hint(ctx: TurnCtx, to: str, text: str, reminder: dict | None 
         return {**(await _order_notice(ctx, to)), **lang}
     if ref.startswith("refill:"):
         return {"purpose": "alert_order", "params": [await _refill_who(ctx, ref)], **lang}
+    if ref.startswith("wake:") and to == ctx.elder_id:
+        hint = await _wake_reminder(ctx, ref)
+        if hint:
+            return {**hint, **lang}
     if to != ctx.elder_id:
         return {"purpose": "alert", "params": [who, first_line(text)], **lang}
     return None
+
+
+async def _wake_reminder(ctx: TurnCtx, ref: str) -> dict | None:
+    """A habit's before-nudge, as the reminder template, so a closed chat still gets it at that time."""
+    from app.care import activities as acts
+
+    try:
+        loop_id = uuid.UUID(ref.split(":")[1])
+    except (IndexError, ValueError):
+        return None
+    loop = await ctx.session.get(OpenLoop, loop_id)
+    if loop is None or loop.kind != "activity":
+        return None
+    detail = loop.detail or {}
+    fact = await store.active_fact(ctx.session, ctx.family_id, loop.subject_id, str(detail.get("activity_key") or ""))
+    return acts.closed_window_reminder(detail, fact.value if fact else {})
 
 
 @tool(
