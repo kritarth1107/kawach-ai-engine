@@ -14,7 +14,7 @@ DOMAINS = {
     "no_order": "Items never to order again",
     "allergy": "Allergies: food, medicine or other, with reaction",
     "diet": "Diet rules: low_salt, low_sugar, fasting, no_onion, no_spice, vegetarian, …",
-    "dish": "Dishes they actually cook or eat",
+    "dish": "Dishes they cook or eat regularly, or call a favourite, in their own words. One meal they had is a food log, not a dish",
     "condition": "Health conditions",
     "vital_target": "Target ranges for BP, sugar, weight",
     "routine": "Wake, sleep and meal times, maid or cook time (a habit with a time, like the gym or a walk, is an activity)",

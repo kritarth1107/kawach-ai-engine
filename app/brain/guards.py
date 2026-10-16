@@ -738,6 +738,17 @@ def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool, name
     return out[0].upper() + out[1:] if out[0].isascii() else out
 
 
+def old_message_again(text: str, earlier: list[tuple[str, str]], *, near: float = 0.75) -> str | None:
+    """earlier: [(when, Saheli's message to this person in the last 7 days)]. The day of one this message copies, if any
+    (live 16 Oct: a question about bhindi she was never asked about, copied word for word from a 14 Oct message)."""
+    if len(words(text)) < 6:
+        return None
+    for when, old in reversed(earlier):
+        if similar(text, old) >= near:
+            return when
+    return None
+
+
 def duplicate_message(text: str, sent: list[tuple[str, bool]], *, near: float = 0.6) -> str | None:
     """sent: [(earlier message to this person, they answered since)], newest last. The earlier one this repeats, if any."""
     for old, answered in reversed(sent):

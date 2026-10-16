@@ -269,8 +269,13 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
     tasks = await data.tasks()
     data.open_tasks = bool(tasks)
     dose = await dose_answer_block(data, req)
+    tapped_open = (req.text or "").strip() == "open:waiting"
     parts = [
         f"NOW: {now.strftime('%A %d %B %Y, %H:%M')} IST",
+        *(["THEIR MESSAGE is a tap on \"read message\" under Saheli's notice, not words of theirs. What waited was just "
+           "given (JUST GIVEN below) or nothing waited. Do not repeat it and do not answer it. Write one short, warm line that "
+           "fits this time of day (NOW) and their record, or reply none. Never a line from your earlier messages, and "
+           "nothing they did not tell you."] if tapped_open else []),
         f"SPEAKING: {req.speaker.get('name')} ({'the care recipient' if req.speaker['id'] == req.elder['id'] else req.speaker.get('role', 'family')}), via {req.channel}",
         voice_block(req),
         digest.ledger(day_events),
@@ -802,6 +807,11 @@ async def guard_problems(session: AsyncSession, req: TurnRequest, ctx: tools.Tur
     earlier = [t.text for t in recent
                if t.role == "assistant" and t.at >= clock.now() - timedelta(hours=12)][-8:]
     problems += guards.repeats(final, earlier)
+    week = [(clock.ist(t.at).strftime("%d %b"), t.text) for t in recent
+            if t.role == "assistant" and clock.now() - timedelta(days=7) <= t.at < clock.now() - timedelta(hours=12)]
+    if copied := guards.old_message_again(final, week):
+        problems.append(f"this is the message you already sent on {copied}; write something new about now, from what they "
+                        "said and their record, not a line from your earlier messages")
     problems += guards.timed_promise(final, ctx.actions)
     if (req.text or "").strip() and not ctx.is_system:
         still = await questions_still_open(session, req.speaker["id"])

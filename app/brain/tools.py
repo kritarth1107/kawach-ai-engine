@@ -311,7 +311,8 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
     "remember",
     "Save or update a fact in the care record so every later reply uses it. Use it before replying whenever "
     "someone tells you something that matters for care: a medicine or dose time, an allergy, a diet rule, a dish "
-    "they cook, a routine, a naming preference or correction, family rules (who to call first, who pays, who must "
+    "they say they cook or eat regularly or love (one meal they had, or an answer to 'what did you eat', is log_food or "
+    "nothing, never a dish fact), a routine, a naming preference or correction, family rules (who to call first, who pays, who must "
     "not be told), doctors, hospital, helpers. The same domain+name updates the existing fact. For medicine, give "
     "details {name, dose, times: ['HH:MM', ...], food_timing, days: [0-6, Monday=0] or omit for daily, "
     "instructions}; their reminders follow these times. For naming, use name 'address_as' with details "
