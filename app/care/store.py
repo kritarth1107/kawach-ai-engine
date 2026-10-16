@@ -8,9 +8,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy import and_, event, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from app.care import versions
 from app.care.domains import HEALTH_DOMAINS, NONE_DOMAINS, PERSON_SOURCES, is_none_key, medicine_slug, merged_value, naming_value, needs_confirmation
@@ -36,24 +37,35 @@ def _release_record_now(session: AsyncSession) -> bool:
 
 
 async def hold_record(session: AsyncSession, family_id: str, subject_id: str) -> None:
-    """One writer at a time for this person's care record. Released when that write commits, not for the model call.
+    """One writer at a time for this person's care record, until this transaction commits or rolls back.
 
-    The wait is bounded. A lock left on a pooled connection used to sit there until the night was killed (recall, and
-    one probe shard, 16 Oct)."""
+    A transaction lock, so no path can leave it behind: a session lock taken inside a savepoint (the first turn's care
+    import, a nudge reply note) stayed on the connection when the turn committed before its model call, the connection
+    went back to the pool, and the next write of that person timed out (nightly probes, 16 Oct: 5 of 27 turns). The
+    wait is bounded."""
     import os
 
     key = f"record:{family_id}:{subject_id}"
     wait = os.getenv("RECORD_LOCK_WAIT_S", "20s")
     await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": wait})
     try:
-        await session.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
+        await session.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
     except Exception as exc:
         if "lock timeout" not in str(exc).lower():
             raise
-        await session.rollback()
+        if not session.in_nested_transaction():
+            await session.rollback()  # inside a tool's savepoint, the savepoint's own rollback is enough
         raise TimeoutError(f"care record busy for {wait} family={family_id}") from exc
     locks: dict[str, int] = session.sync_session.info.setdefault(_RECORD_LOCKS, {})
     locks[key] = locks.get(key, 0) + 1
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _record_locks_ended(session: Session, transaction) -> None:
+    """The transaction ended, and its record locks with it. A savepoint ending does not end them (after_commit fires
+    for a released savepoint too, so it is not used)."""
+    if transaction.parent is None and not transaction.nested:
+        session.info.pop(_RECORD_LOCKS, None)
 
 
 def record_locks_held(session: AsyncSession) -> bool:
@@ -61,27 +73,13 @@ def record_locks_held(session: AsyncSession) -> bool:
 
 
 async def release_record_locks(session: AsyncSession, *, commit: bool) -> None:
-    locks: dict[str, int] = session.sync_session.info.get(_RECORD_LOCKS) or {}
-    if not locks:
+    """Commit, which ends the record locks. Without commit nothing is released: the locks end with the transaction
+    (the caller's commit or rollback), and record_locks_held stays true so the turn commits after a failed tool too.
+    A system turn that holds its family lock keeps everything until its own commit."""
+    if not session.sync_session.info.get(_RECORD_LOCKS):
         return
     if commit and session.sync_session.info.get("family_xact_lock"):
         commit = False
-
-    async def _unlock() -> None:
-        for key, n in list(locks.items()):
-            for _ in range(n):
-                await session.execute(text("SELECT pg_advisory_unlock(hashtext(:k))"), {"k": key})
-
-    # Unlock on this connection, then commit. A commit returns the connection to the pool, and a session lock left on
-    # it is held forever: the next write of the same person waits until the night is killed (recall 16 Oct) or the
-    # leaked lock_timeout cancels it and the probe shard dies.
-    try:
-        await _unlock()
-    except Exception:  # noqa: BLE001 — a failed statement aborts the transaction; the lock still has to drop
-        await session.rollback()
-        await _unlock()
-        commit = False
-    locks.clear()
     if commit:
         await session.commit()
         session.sync_session.info.pop("family_xact_lock", None)
@@ -94,7 +92,6 @@ async def record_write(session: AsyncSession, family_id: str, subject_id: str):
         yield
     except BaseException:
         if _release_record_now(session):
-            await release_record_locks(session, commit=False)
             await session.rollback()
         raise
     if _release_record_now(session):

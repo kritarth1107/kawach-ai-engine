@@ -59,6 +59,47 @@ async def test_a_committed_record_lock_does_not_stick_to_the_pooled_connection()
         await engine.dispose()
 
 
+async def test_a_write_inside_a_savepoint_never_leaves_its_lock_on_a_pooled_connection(monkeypatch):
+    """Nightly probes 16 Oct: the first turn's care import wrote inside a savepoint, the turn committed before its model
+    call, the session lock stayed on the pooled connection, and the person's next write timed out (5 of 27 turns)."""
+    monkeypatch.setenv("RECORD_LOCK_WAIT_S", "2s")
+    engine = create_async_engine(TEST_DB, pool_size=2, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as turn:
+            async with turn.begin_nested():
+                await store.write_fact(turn, family_id="lock-sp", subject_id="lock-sp-elder", domain="routine",
+                                       key="routine:walk", value={"time": "07:00"}, text="Walks at 7", source_kind="caregiver_said")
+            assert store.record_locks_held(turn)
+            await turn.commit()  # the commit before the model call
+            assert not store.record_locks_held(turn)
+            async with sessions() as other:  # the next write, on another pooled connection
+                await asyncio.wait_for(store.hold_record(other, "lock-sp", "lock-sp-elder"), timeout=5)
+                await store.release_record_locks(other, commit=True)
+        async with sessions() as cleanup:
+            await cleanup.execute(text("DELETE FROM care_facts WHERE family_id = 'lock-sp'"))
+            await cleanup.execute(text("DELETE FROM memory_versions WHERE family_id = 'lock-sp'"))
+            await cleanup.commit()
+    finally:
+        await engine.dispose()
+
+
+async def test_a_rolled_back_write_frees_its_record():
+    engine = create_async_engine(TEST_DB, pool_size=2, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as first:
+            await store.hold_record(first, "lock-rb", "lock-rb-elder")
+            await first.rollback()
+            assert not store.record_locks_held(first)
+            async with sessions() as second:
+                await second.execute(text("SELECT set_config('lock_timeout', '2s', true)"))
+                await asyncio.wait_for(store.hold_record(second, "lock-rb", "lock-rb-elder"), timeout=5)
+                await second.rollback()
+    finally:
+        await engine.dispose()
+
+
 def test_slug_ignores_strength_and_form():
     assert slug("Metformin 500 mg tablet") == "metformin"
     assert fact_key("allergy", "Milk") == "allergy:milk"

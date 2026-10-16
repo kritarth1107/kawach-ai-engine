@@ -44,9 +44,9 @@ def _engine(session: AsyncSession) -> AsyncEngine:
 async def _lock_speaker(conn, key: str, wait_s: float) -> None:
     from app.brain.loop import FamilyBusy
 
-    # This connection is only the lock, and it closes when the turn finishes. Setting the
-    # timeout needs no read of the old value and no restore.
-    await conn.execute(text("SELECT set_config('lock_timeout', :t, false)"), {"t": f"{int(wait_s * 1000)}ms"})
+    # The wait is local to this transaction, so it ends at the commit below and never stays on the pooled connection
+    # (a session lock_timeout left there cancelled the next borrower's locks: a probe seed, 16 Oct).
+    await conn.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": f"{int(wait_s * 1000)}ms"})
     try:
         await conn.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
     except DBAPIError as exc:
@@ -56,13 +56,6 @@ async def _lock_speaker(conn, key: str, wait_s: float) -> None:
         if timed_out or "lock timeout" in str(exc).lower():
             raise FamilyBusy(f"speaker busy for {wait_s:.0f}s") from exc
         raise
-    await conn.commit()
-
-
-async def _reset_lock_timeout(conn) -> None:
-    """The speaker connection goes back to the pool. A session lock_timeout left on it cancels the next borrower's
-    locks (a probe seed, 16 Oct) instead of waiting."""
-    await conn.execute(text("SELECT set_config('lock_timeout', '0', false)"))
     await conn.commit()
 
 
@@ -212,15 +205,12 @@ async def run(session: AsyncSession, host: ToolHost, req):
         key = _speaker_key(req.family_id, speaker_id)
         waited = time.monotonic()
         async with _engine(session).connect() as conn:
+            await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
+            trace.note_step("lock", (time.monotonic() - waited) * 1000)
             try:
-                await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
-                trace.note_step("lock", (time.monotonic() - waited) * 1000)
-                try:
-                    return await loop._run_turn(session, host, req, take_lock=False)
-                finally:
-                    await _unlock_speaker(conn, key)
+                return await loop._run_turn(session, host, req, take_lock=False)
             finally:
-                await _reset_lock_timeout(conn)
+                await _unlock_speaker(conn, key)
 
     await session.execute(
         pg_insert(TurnInbox)
@@ -247,11 +237,8 @@ async def run(session: AsyncSession, host: ToolHost, req):
     key = _speaker_key(req.family_id, speaker_id)
     waited = time.monotonic()
     async with _engine(session).connect() as conn:
+        await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
         try:
-            await _lock_speaker(conn, key, loop.LOCK_WAIT_S["message"])
-            try:
-                return await _while_locked(session, host, req, waited)
-            finally:
-                await _unlock_speaker(conn, key)
+            return await _while_locked(session, host, req, waited)
         finally:
-            await _reset_lock_timeout(conn)
+            await _unlock_speaker(conn, key)
