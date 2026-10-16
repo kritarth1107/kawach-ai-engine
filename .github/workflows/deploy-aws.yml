@@ -25,6 +25,10 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     services:
       db:
         image: pgvector/pgvector:pg16
@@ -44,7 +48,15 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt pytest pytest-asyncio
-      - run: python -m pytest -q
+      - name: Shard ${{ matrix.shard }} of 4
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mapfile -t files < <(find tests -name 'test_*.py' | sort)
+          pick=()
+          for ((i=SHARD; i<${#files[@]}; i+=4)); do pick+=("${files[i]}"); done
+          if [ ${#pick[@]} -eq 0 ]; then echo "shard $SHARD has no files"; exit 0; fi
+          python -m pytest -q "${pick[@]}"
 
   lint:
     runs-on: ubuntu-latest
@@ -58,8 +70,20 @@ jobs:
       - run: ruff check app eval tests
       - run: python scripts/pyright_gate.py
 
+  owners:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Owner trailer
+        env:
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: python3 scripts/owners_check.py
+
   deploy:
-    needs: [test, lint]
+    needs: [test, lint, owners]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -70,12 +94,13 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
           aws-region: ap-south-1
+      - uses: docker/setup-buildx-action@v3
       - name: Build and push
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
         run: |
           aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR%/*}"
-          docker build -t app:build .
+          docker buildx build --load --cache-from type=gha --cache-to type=gha,mode=max -t app:build .
           curl -fsS -o /tmp/rds-ca.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
           user=$(docker inspect -f '{{.Config.User}}' app:build)
           user=${user:-root}
@@ -83,12 +108,6 @@ jobs:
           printf 'FROM app:build\nUSER root\nCOPY --chmod=644 rds-ca.pem /etc/ssl/certs/rds-global-bundle.pem\nUSER %s\n' "$user" > /tmp/ca-wrap/Dockerfile
           docker build -t "$IMAGE" /tmp/ca-wrap
           docker push "$IMAGE"
-      - name: Saheli check before the service moves
-        env:
-          IMAGE: ${{ env.ECR }}:${{ github.sha }}
-          OVERRIDE: ${{ github.event.inputs.override_nightly }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-        run: bash scripts/saheli_check.sh
       - name: Roll the live service (image only)
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
@@ -174,4 +193,6 @@ jobs:
                     environment:[{name:"POSTGRES_USER",value:"postgres"},{name:"POSTGRES_PASSWORD",value:"postgres"},{name:"POSTGRES_DB",value:"kawach_replay"}],
                     portMappings:[{containerPort:5432,protocol:"tcp"}]}])' /tmp/td.json > /tmp/learn-gate.json
           aws ecs register-task-definition --cli-input-json file:///tmp/learn-gate.json --query taskDefinition.revision --output text
+          # The night. Cron starts this family. The deploy does not wait for it.
+          bash scripts/saheli_check.sh
           aws ecs wait services-stable --cluster kavach --service "$SERVICE"

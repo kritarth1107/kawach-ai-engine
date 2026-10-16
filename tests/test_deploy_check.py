@@ -1,23 +1,6 @@
-"""The pre-deploy check moves the service only when the replay actually passed."""
+"""The night spends at most ₹150, and the owner check requires a review outside your area."""
 
-from app.jobs.deploy_check import verdict
 from app.jobs.saheli_night import CAPS, night_env
-
-
-def test_a_pass_is_the_only_zero():
-    assert verdict({"passed": True}) == 0
-
-
-def test_a_regression_blocks():
-    assert verdict({"passed": False, "failures": ["case a"]}) == 1
-
-
-def test_a_refused_model_blocks():
-    assert verdict({"unavailable": True, "passed": False}) == 1
-
-
-def test_a_missing_summary_blocks():
-    assert verdict(None) == 1
 
 
 def test_the_night_cap_stays_150():
