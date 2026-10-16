@@ -312,6 +312,116 @@ def canned(p: dict | None, table: dict):
     return table["english"]
 
 
+# Who an alert reached. The loop says this line back as it stands, so it is already in the person's language.
+# English stays the line the tests look for. Every other script is the same fact, not an English sentence pasted on.
+_TOLD_N = {
+    "english": "{n} family member(s) told on WhatsApp",
+    "indic": "WhatsApp par parivar ke {n} sadasya ko bata diya",
+    "devanagari": "वॉट्सऐप पर परिवार के {n} सदस्य को बता दिया",
+    "mr": "व्हाट्सअॅपवर कुटुंबातील {n} जणांना सांगितले",
+    "bengali": "হোয়াটসঅ্যাপে পরিবারের {n} জনকে জানিয়েছি",
+    "tamil": "வாட்ஸ்அப்பில் குடும்பத்தில் {n} பேரிடம் சொல்லிவிட்டேன்",
+    "telugu": "వాట్సాప్‌లో కుటుంబంలోని {n} మందికి చెప్పాను",
+    "kannada": "ವಾಟ್ಸಾಪ್‌ನಲ್ಲಿ ಕುಟುಂಬದ {n} ಜನರಿಗೆ ಹೇಳಿದ್ದೇನೆ",
+    "malayalam": "വാട്ട്‌സാപ്പിൽ കുടുംബത്തിലെ {n} പേരോട് പറഞ്ഞു",
+    "gujarati": "વોટ્સએપ પર પરિવારના {n} સભ્યને કહી દીધું",
+    "gurmukhi": "ਵਟਸਐਪ ਤੇ ਪਰਿਵਾਰ ਦੇ {n} ਮੈਂਬਰ ਨੂੰ ਦੱਸ ਦਿੱਤਾ",
+    "odia": "ୱାଟସଆପରେ ପରିବାରର {n} ଜଣଙ୍କୁ କହିଦେଲି",
+}
+_TOLD_LATELY = {
+    "english": "the family was already told in the last half hour",
+    "indic": "pichhle aadhe ghante mein parivar ko bata diya gaya tha",
+    "devanagari": "पिछले आधे घंटे में परिवार को बता दिया गया था",
+    "mr": "मागच्या अर्ध्या तासात कुटुंबाला सांगितले होते",
+    "bengali": "গত আধ ঘণ্টায় পরিবারকে জানানো হয়েছে",
+    "tamil": "கடந்த அரை மணியில் குடும்பத்திடம் சொல்லிவிட்டோம்",
+    "telugu": "గత అరగంటలో కుటుంబానికి చెప్పాం",
+    "kannada": "ಕಳೆದ ಅರ್ಧ ಗಂಟೆಯಲ್ಲಿ ಕುಟುಂಬಕ್ಕೆ ಹೇಳಿದ್ದೇವೆ",
+    "malayalam": "കഴിഞ്ഞ അര മണിക്കൂറിനുള്ളിൽ കുടുംബത്തെ അറിയിച്ചു",
+    "gujarati": "છેલ્લા અડધા કલાકમાં પરિવારને કહી દીધું હતું",
+    "gurmukhi": "ਪਿਛਲੇ ਅੱਧੇ ਘੰਟੇ ਵਿੱਚ ਪਰਿਵਾਰ ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਸੀ",
+    "odia": "ଗତ ଆଧା ଘଣ୍ଟାରେ ପରିବାରକୁ କୁହାଯାଇଛି",
+}
+_TOLD_ALONE = {
+    "english": "no one else in the family to tell (never the person themselves)",
+    "indic": "parivar mein bataane ke liye aur koi nahi (khud unhein kabhi nahi)",
+    "devanagari": "परिवार में बताने के लिए और कोई नहीं (खुद उस व्यक्ति को कभी नहीं)",
+    "mr": "कुटुंबात सांगायला दुसरे कोणी नाही (त्या व्यक्तीला कधी नाही)",
+    "bengali": "পরিবারে জানাবার আর কেউ নেই (নিজেকে কখনও না)",
+    "tamil": "குடும்பத்தில் சொல்ல வேறு யாரும் இல்லை (அவர்களிடமே ஒருபோதும் இல்லை)",
+    "telugu": "చెప్పడానికి కుటుంబంలో మరెవరూ లేరు (వారికే ఎప్పుడూ కాదు)",
+    "kannada": "ಹೇಳಲು ಕುಟುಂಬದಲ್ಲಿ ಬೇರೆ ಯಾರೂ ಇಲ್ಲ (ಅವರಿಗೇ ಎಂದಿಗೂ ಅಲ್ಲ)",
+    "malayalam": "പറയാൻ കുടുംബത്തിൽ മറ്റാരുമില്ല (അവരോട് ഒരിക്കലും അല്ല)",
+    "gujarati": "કહેવા પરિવારમાં બીજું કોઈ નથી (તેમને પોતાને ક્યારેય નહીં)",
+    "gurmukhi": "ਦੱਸਣ ਲਈ ਪਰਿਵਾਰ ਵਿੱਚ ਹੋਰ ਕੋਈ ਨਹੀਂ (ਉਨ੍ਹਾਂ ਨੂੰ ਖੁਦ ਕਦੇ ਨਹੀਂ)",
+    "odia": "କହିବାକୁ ପରିବାରରେ ଆଉ କେହି ନାହାନ୍ତି (ନିଜକୁ କେବେ ନୁହେଁ)",
+}
+_TOLD_DASH = {
+    "english": "the family sees it on the dashboard",
+    "indic": "parivar ise dashboard par dekhega",
+    "devanagari": "परिवार इसे डैशबोर्ड पर देखेगा",
+    "mr": "कुटुंब हे डॅशबोर्डवर पाहील",
+    "bengali": "পরিবার এটা ড্যাশবোর্ডে দেখবে",
+    "tamil": "குடும்பம் இதை டாஷ்போர்டில் பார்க்கும்",
+    "telugu": "కుటుంబం దీన్ని డాష్‌బోర్డులో చూస్తుంది",
+    "kannada": "ಕುಟುಂಬ ಇದನ್ನು ಡ್ಯಾಶ್‌ಬೋರ್ಡ್‌ನಲ್ಲಿ ನೋಡುತ್ತದೆ",
+    "malayalam": "കുടുംബം ഇത് ഡാഷ്‌ബോർഡിൽ കാണും",
+    "gujarati": "પરિવાર આ ડેશબોર્ડ પર જોશે",
+    "gurmukhi": "ਪਰਿਵਾਰ ਇਹ ਡੈਸ਼ਬੋਰਡ ਉੱਤੇ ਵੇਖੇਗਾ",
+    "odia": "ପରିବାର ଏହାକୁ ଡ୍ୟାସବୋର୍ଡରେ ଦେଖିବ",
+}
+_TEAM_SENT = {
+    "english": "; the Kavach care team has been emailed and will check on them",
+    "indic": "; Kavach care team ko email ho gaya hai, ve dekhenge",
+    "devanagari": "; Kavach care team को ईमेल हो गया है, वे देखेंगे",
+    "mr": "; Kavach care team ला ईमेल गेला आहे, ते पाहतील",
+    "bengali": "; Kavach care team-কে ইমেল করা হয়েছে, তারা দেখবে",
+    "tamil": "; Kavach care team-க்கு மின்னஞ்சல் போயிற்று, அவர்கள் பார்ப்பார்கள்",
+    "telugu": "; Kavach care team కు ఈమెయిల్ అయింది, వారు చూస్తారు",
+    "kannada": "; Kavach care team ಗೆ ಇಮೇಲ್ ಆಗಿದೆ, ಅವರು ನೋಡುತ್ತಾರೆ",
+    "malayalam": "; Kavach care team-ന് ഇമെയിൽ ആയി, അവർ നോക്കും",
+    "gujarati": "; Kavach care team ને ઈમેલ થઈ ગયો છે, તેઓ જોશે",
+    "gurmukhi": "; Kavach care team ਨੂੰ ਈਮੇਲ ਹੋ ਗਿਆ ਹੈ, ਉਹ ਵੇਖਣਗੇ",
+    "odia": "; Kavach care team କୁ ଇମେଲ ହୋଇଛି, ସେମାନେ ଦେଖିବେ",
+}
+_TEAM_PENDING = {
+    "english": "; the Kavach care team is being emailed and will check on them",
+    "indic": "; Kavach care team ko email ho raha hai, ve dekhenge",
+    "devanagari": "; Kavach care team को ईमेल हो रहा है, वे देखेंगे",
+    "mr": "; Kavach care team ला ईमेल जात आहे, ते पाहतील",
+    "bengali": "; Kavach care team-কে ইমেল করা হচ্ছে, তারা দেখবে",
+    "tamil": "; Kavach care team-க்கு மின்னஞ்சல் போகிறது, அவர்கள் பார்ப்பார்கள்",
+    "telugu": "; Kavach care team కు ఈమెయిల్ అవుతోంది, వారు చూస్తారు",
+    "kannada": "; Kavach care team ಗೆ ಇಮೇಲ್ ಆಗುತ್ತಿದೆ, ಅವರು ನೋಡುತ್ತಾರೆ",
+    "malayalam": "; Kavach care team-ന് ഇമെയിൽ പോകുന്നു, അവർ നോക്കും",
+    "gujarati": "; Kavach care team ને ઈમેલ થઈ રહ્યો છે, તેઓ જોશે",
+    "gurmukhi": "; Kavach care team ਨੂੰ ਈਮੇਲ ਹੋ ਰਿਹਾ ਹੈ, ਉਹ ਵੇਖਣਗੇ",
+    "odia": "; Kavach care team କୁ ଇମେଲ ହେଉଛି, ସେମାନେ ଦେଖିବେ",
+}
+_TEAM_ONLY_SENT = {k: v[2:] if k == "english" else v.lstrip("; ").rstrip() for k, v in _TEAM_SENT.items()}
+_TEAM_ONLY_SENT["english"] = "the Kavach care team has been emailed and will check on them"
+_TEAM_ONLY_PENDING = {k: v[2:] if k == "english" else v.lstrip("; ").rstrip() for k, v in _TEAM_PENDING.items()}
+_TEAM_ONLY_PENDING["english"] = "the Kavach care team is being emailed and will check on them"
+
+
+def who_was_told(profile: dict | None, *, n: int = 0, lately: bool = False, alone: bool = False,
+                 team: str | None = None, already_today: bool = False) -> str:
+    """The alert result the reply may repeat, already in this person's language."""
+    if already_today:
+        return canned(profile, _TEAM_ONLY_SENT if team == "sent" else _TEAM_ONLY_PENDING)
+    if n:
+        who = canned(profile, _TOLD_N).format(n=n)
+    elif lately:
+        who = canned(profile, _TOLD_LATELY)
+    elif alone:
+        who = canned(profile, _TOLD_ALONE)
+    else:
+        who = canned(profile, _TOLD_DASH)
+    if team:
+        who += canned(profile, _TEAM_SENT if team == "sent" else _TEAM_PENDING)
+    return who
+
+
 # ── grounding ──────────────────────────────────────────────────────────────────
 
 VITAL_WORDS = re.compile(
@@ -626,6 +736,17 @@ def tidy_opening(text: str, *, greeted_today: bool, mid_conversation: bool, name
     if len(words(out)) < 2:  # the greeting was the whole message
         return text
     return out[0].upper() + out[1:] if out[0].isascii() else out
+
+
+def old_message_again(text: str, earlier: list[tuple[str, str]], *, near: float = 0.75) -> str | None:
+    """earlier: [(when, Saheli's message to this person in the last 7 days)]. The day of one this message copies, if any
+    (live 16 Oct: a question about bhindi she was never asked about, copied word for word from a 14 Oct message)."""
+    if len(words(text)) < 6:
+        return None
+    for when, old in reversed(earlier):
+        if similar(text, old) >= near:
+            return when
+    return None
 
 
 def duplicate_message(text: str, sent: list[tuple[str, bool]], *, near: float = 0.6) -> str | None:
@@ -1269,7 +1390,9 @@ def settle_reply(text: str, profile: dict | None, *, situation: str, needs_frami
         if situation == "med_question" and medicines:
             return medicine_line(profile, medicines)
         return canned(profile, _CAN)
-    if situation == "med_question" or needs_framing:
+    # Only when she explained a medicine or a health fact and left the line off. A schedule or a logged
+    # symptom is not that explanation: framing it cuts the answer down to a notice.
+    if needs_framing:
         out = with_framing(profile, out)
     if force_light or (apology_in(out) and not prior_assistant and not naming and situation != "med_question"
                        and not _cannot_do(out)):

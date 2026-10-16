@@ -227,6 +227,12 @@ def test_a_medicine_explanation_is_framed_by_code():
     assert "डॉक्टर" in hindi
     already = "Metformin helps. This is general information; confirm it with your doctor or pharmacist."
     assert guards.with_framing(None, already) == already
+    schedule = "Aaj Maa ki Telma 40 mg subah 8 baje hai."
+    kept = guards.settle_reply(
+        schedule, {"saved": {"language": "hi"}, "script": "latin", "roman": "indic"},
+        situation="med_question", needs_framing=False, force_light=False, held_topic_text="", actions=[],
+        prior_assistant=True, naming=False, user_text="What medicines are due today?")
+    assert "Telma" in kept and "general information" not in kept and "सामान्य जानकारी" not in kept
 
 
 def test_an_apology_with_no_earlier_message_of_hers_is_rewritten():
