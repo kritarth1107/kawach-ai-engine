@@ -73,8 +73,10 @@ async def count_item(rows: list[NutritionEntry], item: str, *, essential: bool =
     return {"item": item, "count": round(count, 1), "entries": [f"{r.day} {entries.line(r)}" for r in hit][:20]}
 
 
-def _entry_numbers(nutrients: dict | None) -> dict:
+def _entry_numbers(nutrients: dict | None, *, pending: bool = False) -> dict:
     """The numbers a question about a logged food is answered from. kcal is energy_kcal. A missing nutrient is left out, not shown as 0."""
+    if pending:
+        return {"numbers": "pending"}
     n = nutrients or {}
     out: dict = {"kcal": N.kcal(n), "protein_g": N.grams_of(n, "protein_g")}
     for key in ("carbs_g", "sugar_g", "fat_g", "fibre_g", "sodium_mg"):
@@ -91,7 +93,7 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
     days = entries.day_days(last, (datetime.fromisoformat(last) - datetime.fromisoformat(first)).days + 1)
     out: dict = {"who": name, "from": first, "to": last, "tracking": s["tracking"]}
     if what == "entries":
-        out["entries"] = [{**_entry_numbers(r.nutrients), "entry_id": str(r.id), "day": r.day,
+        out["entries"] = [{**_entry_numbers(r.nutrients, pending=entries.numbers_pending(r)), "entry_id": str(r.id), "day": r.day,
                            "time": clock.ist(r.eaten_at).strftime("%H:%M"), "meal": r.meal, "what": entries.line(r),
                            "confidence": r.confidence} for r in rows][:60]
     elif what == "counts":
@@ -108,8 +110,11 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
         tg, _ = await targets.current(session, family_id, subject_id)
         per_day = []
         for d in days:
-            t = entries.totals(by_day.get(d, []))
-            per_day.append({"day": d, "kcal": N.kcal(t), "protein_g": N.grams_of(t, "protein_g"), "carbs_g": N.grams_of(t, "carbs_g"),
+            day_rows = by_day.get(d, [])
+            t = entries.totals([r for r in day_rows if not entries.numbers_pending(r)])
+            waiting = any(entries.numbers_pending(r) for r in day_rows) and "energy_kcal" not in t
+            per_day.append({"day": d, "kcal": None if waiting else N.kcal(t), "numbers": "pending" if waiting else None,
+                            "protein_g": None if waiting else N.grams_of(t, "protein_g"), "carbs_g": N.grams_of(t, "carbs_g"),
                             "fat_g": N.grams_of(t, "fat_g"), "fibre_g": N.grams_of(t, "fibre_g"), "sugar_g": N.grams_of(t, "sugar_g"),
                             "sodium_mg": N.grams_of(t, "sodium_mg"), "water_ml": N.grams_of(t, "water_ml"), "main_meals_logged": _covered(by_day.get(d, [])),
                             "items": len([r for r in by_day.get(d, []) if r.kind == "food"])})
@@ -123,6 +128,8 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
             out["estimated"] = estimated[:10]
     if not rows:
         out["note"] = "Nothing logged in this period: say so plainly; never guess what they ate."
+    elif any(entries.numbers_pending(r) for r in rows):
+        out["note"] = "Some of this food is saved and its numbers are still being added. Do not say 0 calories or 0 g protein for it."
     return out
 
 
@@ -200,9 +207,12 @@ def _meals(rows: list[NutritionEntry], day: str, now_local: datetime) -> list[di
         es = [r for r in rows if r.meal == slot]
         if not es and slot not in P.MAIN_MEALS:
             continue
-        t = entries.totals(es)
+        known = [r for r in es if not entries.numbers_pending(r)]
+        t = entries.totals(known)
+        waiting = any(entries.numbers_pending(r) for r in es) and "energy_kcal" not in t and "water_ml" not in t
         due = day < today or (day == today and minute >= SLOT_END.get(slot, 24 * 60))
-        out.append({"meal": slot, "label": entries.MEAL_LABEL[slot], "entries": [entries.entry_json(r) for r in es], "kcal": N.kcal(t),
+        out.append({"meal": slot, "label": entries.MEAL_LABEL[slot], "entries": [entries.entry_json(r) for r in es],
+                    "kcal": None if waiting else N.kcal(t), "numbersPending": waiting,
                     "protein_g": N.grams_of(t, "protein_g"), "skipped": bool(es) and all(r.kind == "skipped" for r in es),
                     "notLogged": not es and slot in P.MAIN_MEALS and due})
     return out
@@ -222,7 +232,8 @@ async def view(session: AsyncSession, family_id: str, subject_id: str, *, day: s
     rows = await entries.between(session, family_id, subject_id, month_days[0], day)
     by_day = _by_day(rows)
     today_rows = by_day.get(day, [])
-    tot = entries.totals(today_rows)
+    tot = entries.totals([r for r in today_rows if not entries.numbers_pending(r)])
+    today_waiting = any(entries.numbers_pending(r) for r in today_rows) and "energy_kcal" not in tot and "water_ml" not in tot
     glass = float(s["sizes"].get("glass_ml") or 250)
     water_t = next((t for t in active_tg if t["field"] == "water_ml"), None)
     counters_week = {d: entries.counters(by_day.get(d, []), s) for d in week}
@@ -234,9 +245,12 @@ async def view(session: AsyncSession, family_id: str, subject_id: str, *, day: s
                          "usual": round(sum(past) / len(past), 1) if past else None, "week": [counters_week[d][c] for d in week]})
 
     def day_row(d: str) -> dict:
-        t = entries.totals(by_day.get(d, []))
         rows_d = by_day.get(d, [])
-        return {**_day_meals(rows_d), "day": d, "kcal": N.kcal(t), "protein_g": N.grams_of(t, "protein_g"), "carbs_g": N.grams_of(t, "carbs_g"),
+        known = [r for r in rows_d if not entries.numbers_pending(r)]
+        t = entries.totals(known)
+        waiting = any(entries.numbers_pending(r) for r in rows_d) and "energy_kcal" not in t and "water_ml" not in t
+        return {**_day_meals(rows_d), "day": d, "kcal": None if waiting else N.kcal(t), "numbersPending": waiting,
+                "protein_g": None if waiting else N.grams_of(t, "protein_g"), "carbs_g": N.grams_of(t, "carbs_g"),
                 "fat_g": N.grams_of(t, "fat_g"), "fibre_g": N.grams_of(t, "fibre_g"), "sugar_g": N.grams_of(t, "sugar_g"),
                 "sodium_mg": N.grams_of(t, "sodium_mg"), "water_ml": N.grams_of(t, "water_ml"), "items": len([r for r in by_day.get(d, []) if r.kind == "food"]),
                 "mealsLogged": _covered(by_day.get(d, [])), "complete": round(_covered(by_day.get(d, [])) / 3, 2),
@@ -271,7 +285,8 @@ async def view(session: AsyncSession, family_id: str, subject_id: str, *, day: s
                      "how": t.get("how"), "status": t["status"]} for t in tg],
         "rules": [{"key": r["key"], "rule": r.get("rule"), "food": r.get("food"), "maxPerDay": r.get("max_per_day"), "none": bool(r.get("none")),
                    "when": r.get("when"), "setBy": r.get("set_by"), "how": r.get("how"), "status": r["status"], "text": r["text"]} for r in rules],
-        "today": {"day": day, "meals": _meals(today_rows, day, now_local), "totals": _round({k: v for k, v in tot.items() if k in N.TOTAL_KEYS}),
+        "today": {"day": day, "meals": _meals(today_rows, day, now_local), "numbersPending": today_waiting,
+                  "totals": _round({k: v for k, v in tot.items() if k in N.TOTAL_KEYS}),
                   "progress": targets.progress(tot, active_tg),
                   "water": {"ml": N.grams_of(tot, "water_ml"), "glasses": round(N.grams_of(tot, "water_ml") / glass, 1), "glassMl": glass,
                             "targetMl": _f(targets.goal_of(water_t)) if water_t else None}},

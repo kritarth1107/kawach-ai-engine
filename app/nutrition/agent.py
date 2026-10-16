@@ -223,6 +223,15 @@ def _say(rows: list[NutritionEntry], tracking: str, relevant: set[str] | None = 
     food = [r for r in rows if r.kind == "food"]
     if not food:
         return "Noted: " + ", ".join(entries.line(r) for r in rows) + "."
+    if any(r.confidence == "pending" for r in food):
+        what = ", ".join(entries.line(r) for r in food)
+        known = [r for r in food if r.confidence != "pending"]
+        phrase = N.highlight_phrase(entries.totals(known), relevant) if known else ""
+        lead = f"Saved: {what}, {phrase}." if phrase else f"Saved: {what}."
+        line = f"{lead} Saved, adding the numbers in a minute."
+        if any((r.flags or {}).get("kind_open") for r in food):
+            return line[:-1] + " — tell me if it was a different one."
+        return line
     parts = [_saved_line(r) for r in food]
     what = ", ".join(_with_facts(text, r.flags or {}) for (text, _), r in zip(parts, food))
     tot = entries.totals(food)
@@ -600,6 +609,9 @@ class NutritionAgent:
                 if estimates_only:
                     # The web search has not run yet. An empty estimate is not the save; the background look-up is.
                     return _still_looking(job)
+                # No numbers yet. Save the food they named and fill the numbers after. Never as 0 kcal.
+                # The kind is still open, so the one correction stays on the line.
+                it["_pending"] = True
                 it["_kind_open"] = True
         # how much: one pack or one drink is saved; a counted food with no number is asked once
         # (unless they don't know, or a photo showed it). A plate or a katori stays a usual-portion estimate.
@@ -654,8 +666,12 @@ class NutritionAgent:
                 conf = "estimate"
             elif not it.get("quantity") and not it.get("_grams"):
                 conf = "estimate" if r.food is not None else "unquantified"
+            if r.food is None:
+                conf = "pending"
             assumed = {"usual": True} if it.get("_usual") else (
                 _assumed_flags(r.food) if it.get("_assumed") and r.food is not None else {})
+            if conf == "pending":
+                assumed = {**assumed, "numbers": "pending"}
             if it.get("_kind_open"):
                 assumed = {**assumed, "kind_open": True}
             to_save.append(entries.Item(name=it.get("name") or (r.food.name if r.food else "food"), food=r.food, quantity=it.get("quantity"),
@@ -819,8 +835,10 @@ class NutritionAgent:
         prog = targets.progress(tot, tgts)
         say = _say(rows, tracking, await targets.focus(s, who.family_id, job.subject_id))
         out: dict = {"result": "saved", "job_id": str(job.id), "meal": rows[0].meal if rows else None, "day": day,
-                     "saved": [{"id": str(r.id), "name": r.name, "said": r.name_said, "qty": P.qty_label(r.quantity, r.unit), "kcal": N.kcal(r.nutrients),
-                                "protein_g": N.grams_of(r.nutrients, "protein_g"), "confidence": r.confidence} for r in rows],
+                     "saved": [{"id": str(r.id), "name": r.name, "said": r.name_said, "qty": P.qty_label(r.quantity, r.unit),
+                                "kcal": None if r.confidence == "pending" else N.kcal(r.nutrients),
+                                "protein_g": None if r.confidence == "pending" else N.grams_of(r.nutrients, "protein_g"),
+                                "confidence": r.confidence} for r in rows],
                      "say": say,
                      "totals_today": {k: round(v, 1) for k, v in tot.items() if k in N.MACROS or k == "water_ml"},
                      "undo": "To correct it: change_food with entry_id (or last=true) and set; to remove it: change_food delete=true."}
@@ -830,7 +848,7 @@ class NutritionAgent:
                 out["follow"] = question
                 out["follow_how"] = FOLLOW_HOW
         line = targets.today_line(prog) if tracking == "full" else None
-        if line:
+        if line and not all(r.confidence == "pending" for r in rows if r.kind == "food"):
             out["today"] = line
         if tracking == "counts":
             out["note"] = "They chose counts only: say what was saved without nutrient numbers."
@@ -986,6 +1004,8 @@ async def handle(session: AsyncSession, who: Who, args: dict, *, subject_id: str
         jobs.kick_nutrition()
     elif out.get("refine"):
         jobs.kick_refine(job.id)
+    if any(s.get("confidence") == "pending" for s in out.get("saved") or []):
+        jobs.kick_fill()
     return out
 
 
@@ -1131,3 +1151,67 @@ async def refine_saved(sessions, job_id) -> None:
             changed = True
         if changed:
             await session.commit()
+
+
+async def fill_missing(session: AsyncSession) -> dict:
+    """Numbers for food saved without them, since 14 Oct. Catalogue, then one estimate, then the web. Never writes 0 kcal."""
+    from sqlalchemy import and_, or_
+
+    rows = list((await session.execute(select(NutritionEntry).where(
+        NutritionEntry.status == "active", NutritionEntry.kind == "food",
+        or_(NutritionEntry.confidence == "pending",
+            and_(NutritionEntry.confidence == "unquantified", NutritionEntry.day >= "2026-10-14")),
+    ).order_by(NutritionEntry.day.desc(), NutritionEntry.eaten_at.desc()).limit(12))).scalars())
+    filled = still = 0
+    for e in rows:
+        if not entries.numbers_pending(e):
+            continue
+        flags = dict(e.flags or {})
+        if int(flags.get("fill_tries") or 0) >= 4:
+            still += 1
+            continue
+        item: dict = {"name": e.name_said or e.name}
+        if e.quantity:
+            item["quantity"] = float(e.quantity)
+        if e.unit:
+            item["unit"] = e.unit
+        found = await lookup.reply_lookup(session, e.family_id, [item], essential=False)
+        food = found[0].food if found else None
+        if food is None:
+            try:
+                raw = await lookup.web(item, None, timeout_s=lookup.WEB_S)
+            except lookup.Slow:
+                raw = None
+            if raw and ("energy_kcal" in (raw.get("per_100g") or {}) or "water" in (raw.get("tags") or [])):
+                food = await lookup.keep(session, e.family_id, item, raw)
+        per = (food.per_100g or {}) if food is not None else {}
+        if food is None or ("energy_kcal" not in per and "water" not in (food.tags or [])):
+            flags["fill_tries"] = int(flags.get("fill_tries") or 0) + 1
+            flags["numbers"] = "pending"
+            e.flags, e.confidence, e.updated_at = flags, "pending", clock.now()
+            still += 1
+            continue
+        grams, vals, est = entries.compute(food, e.quantity, e.unit)
+        if not vals and "water" not in (food.tags or []):
+            flags["fill_tries"] = int(flags.get("fill_tries") or 0) + 1
+            flags["numbers"] = "pending"
+            e.flags, e.confidence, e.updated_at = flags, "pending", clock.now()
+            still += 1
+            continue
+        e.food_id = food.id
+        e.name = (food.name or e.name)[:200]
+        e.nutrients, e.grams = vals or {}, grams
+        e.confidence = "estimate" if est or e.quantity is None else "said"
+        flags.pop("numbers", None)
+        flags.pop("fill_tries", None)
+        if food.tags:
+            flags["tags"] = list(food.tags)
+        if food.source == "model" or (food.checked or {}).get("rough"):
+            flags["refine"] = True
+        e.flags = flags
+        e.version = (e.version or 1) + 1
+        e.updated_at = clock.now()
+        await entries.record(session, e, "write", reason="numbers added")
+        await entries.sync_meal_event(session, e.family_id, e.meal_id)
+        filled += 1
+    return {"filled": filled, "still": still, "seen": len(rows)}

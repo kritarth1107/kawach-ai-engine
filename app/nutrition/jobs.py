@@ -2,8 +2,8 @@
 
     queued → resolving → needs_input → resolving → saved | dropped
 
-- The quick path runs inside the turn (about 8 s at most: NUTRITION_INLINE_S). A new food whose web look-up does not fit
-  goes on in the background (`kick_nutrition()`, like `kick_tasks()`), and Saheli tells them when it is saved.
+- The reply waits for one catalogue hit or one estimate (about 12 s: ESTIMATE_BUDGET). A miss is saved as pending, never
+  as 0 kcal, and the sweep fills the numbers after.
 - A question waits 2 hours. Then food they said they ate is saved as "unquantified" (counted, no nutrients); a question
   about an order's food (did you eat it?) saves nothing.
 - The sweep runs from /v2/jobs/wake (every 5 minutes) and /v2/jobs/nutrition.
@@ -35,7 +35,7 @@ MAX_QUESTIONS = 2
 def inline_seconds() -> float:
     """How long log_food may spend before the reply. The brain has already used part of the turn; past this the meal
     finishes in the background and that save is the one line they hear."""
-    return float(os.getenv("NUTRITION_INLINE_S", "4"))
+    return float(os.getenv("NUTRITION_INLINE_S", "16"))
 
 
 async def by_source(session: AsyncSession, family_id: str, source_ref: str) -> NutritionJob | None:
@@ -171,6 +171,7 @@ def context_block(jobs: list[NutritionJob], names: dict) -> str:
 
 _kicked: asyncio.Task | None = None
 _refine: asyncio.Task | None = None
+_fill: asyncio.Task | None = None
 
 
 def kick_nutrition() -> None:
@@ -210,6 +211,30 @@ def kick_refine(job_id) -> None:
         _refine = asyncio.get_running_loop().create_task(_run())
     except RuntimeError:
         logger.warning("no running loop for the nutrition refine")
+
+
+def kick_fill() -> None:
+    """Fill numbers for food saved without them. One run at a time; the sweep retries whatever is left."""
+    global _fill
+    if _fill is not None and not _fill.done():
+        return
+
+    from app.db.session import SessionLocal
+
+    async def _run() -> None:
+        from app.nutrition import agent
+
+        try:
+            async with SessionLocal() as session:
+                await agent.fill_missing(session)
+                await session.commit()
+        except Exception:  # noqa: BLE001 — the next sweep fills the same rows
+            logger.exception("nutrition fill failed")
+
+    try:
+        _fill = asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        logger.warning("no running loop for the nutrition fill")
 
 
 async def sweep(sessions, host_for=None) -> dict:
@@ -267,6 +292,14 @@ async def sweep(sessions, host_for=None) -> dict:
             logger.info("nutrition night slots moved=%s kept=%s", moved["changed"], moved["kept"])
     except Exception:  # noqa: BLE001 — a re-slot must not stop the rest of the sweep
         logger.exception("nutrition night reslot failed")
+    try:
+        async with sessions() as session:
+            filled = await agent.fill_missing(session)
+            await session.commit()
+        stats["filled"] = filled["filled"]
+        stats["still"] = filled["still"]
+    except Exception:  # noqa: BLE001 — a fill must not stop the rest of the sweep
+        logger.exception("nutrition fill failed")
     return stats
 
 

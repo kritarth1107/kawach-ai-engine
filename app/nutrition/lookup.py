@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 # One grounded search, shared by every place it tries. Longer than this, the meal is saved from an estimate and the
 # search result replaces it afterwards (the person is not left waiting minutes).
 WEB_S = 12.0
+# How long the person's reply waits for the one estimate. A slow region used to die at 3 s and the meal was saved as 0 kcal.
+ESTIMATE_BUDGET = 12.0
 
 KINDS = ("generic", "packaged", "restaurant", "recipe")
 TAGS = ("egg", "tea", "coffee", "water", "fruit", "vegetable", "sweet", "sugar", "dairy", "fried", "alcohol", "sugary_drink", "grain",
@@ -461,7 +463,8 @@ async def reply_lookup(session: AsyncSession, family_id: str, items: list[dict],
         cards, _exact = await candidates(session, family_id, items[i], pantry_rows)
         card_lists.append(cards)
     # One call. Live nutrition calls are a few seconds; this is the only one the reply waits for.
-    foods = await estimate_all([(items[i], {}) for i in missing], essential=essential, timeout_s=3.0, cards=card_lists,
+    # One call, long enough for a slow Mumbai answer. A timeout is not a zero: the caller saves the food as pending.
+    foods = await estimate_all([(items[i], {}) for i in missing], essential=essential, timeout_s=ESTIMATE_BUDGET, cards=card_lists,
                                may_ask=not no_questions)
     for i, food in zip(missing, foods):
         if not isinstance(food, dict):

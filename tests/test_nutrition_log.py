@@ -718,7 +718,7 @@ async def test_a_look_up_that_never_finished_is_closed_after_two_hours(db, at, n
     stats = await jobs.sweep(S())
     got = await db.get(NutritionJob, job.id)
     rows = await active(db)
-    assert stats["expired"] == 1 and got.state == "saved" and rows[0].source == "caregiver" and rows[0].confidence == "unquantified"
+    assert stats["expired"] == 1 and got.state == "saved" and rows[0].source == "caregiver" and rows[0].confidence == "pending"
 
 
 async def test_removing_the_last_item_of_a_photo_meal_deletes_the_photo(db, at, nfake, monkeypatch):
@@ -1089,3 +1089,39 @@ async def test_pantry_stock_does_not_send_a_known_food_to_the_model(db, at, nfak
     saved, err = await call(db, "log_food", {"items": [{"name": "tea", "quantity": 1, "unit": "cup"}]})
     assert not err and saved["result"] == "saved", saved
     assert "normalise" not in nfake.calls and "estimate" not in nfake.calls
+
+
+async def test_a_slow_model_is_waited_for_and_a_timeout_is_not_saved_as_zero(db, at, nfake, monkeypatch):
+    """Past the old 3 s cap, a slow estimate still returns numbers. A call that does not fit is pending, never 0 kcal."""
+    import time
+
+    at("2026-10-16 16:30")
+    nfake.estimates["poha"] = {"name": "Poha", "per_100g": {"energy_kcal": 180, "protein_g": 3, "carbs_g": 30, "fat_g": 5},
+                               "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
+    nfake.estimate_delay = 3.2
+    started = time.monotonic()
+    saved, err = await call(db, "log_food", {"items": [{"name": "poha", "quantity": 1, "unit": "plate"}]})
+    assert not err and saved["result"] == "saved", saved
+    assert time.monotonic() - started >= 3.0
+    assert saved["saved"][0]["kcal"] and saved["saved"][0]["confidence"] != "pending"
+    assert " 0 kcal" not in f" {saved['say']}" and "0 calories" not in saved["say"]
+
+    monkeypatch.setattr(lookup, "ESTIMATE_BUDGET", 0.2)
+    nfake.estimate_delay = 1.0
+    nfake.web.slow = True
+    out, err = await call(db, "log_food", {"items": [{"name": "upma", "quantity": 1, "unit": "plate"}]})
+    assert not err and out["result"] == "saved", out
+    assert out["saved"][0]["confidence"] == "pending" and out["saved"][0]["kcal"] is None, out
+    assert "adding the numbers" in out["say"]
+    assert " 0 kcal" not in f" {out['say']}" and "0 calories" not in out["say"]
+    row = next(e for e in await active(db) if "upma" in (e.name or "").lower() or "upma" in (e.name_said or "").lower())
+    assert row.nutrients == {} and row.confidence == "pending"
+
+    nfake.estimate_delay = 0
+    nfake.web.slow = False
+    nfake.estimates["upma"] = {"name": "Upma", "per_100g": {"energy_kcal": 160, "protein_g": 4, "carbs_g": 28, "fat_g": 4},
+                               "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
+    got = await agent.fill_missing(db)
+    assert got["filled"] == 1, got
+    await db.refresh(row)
+    assert row.confidence != "pending" and (row.nutrients or {}).get("energy_kcal")

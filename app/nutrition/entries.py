@@ -68,7 +68,10 @@ def entry_json(e: NutritionEntry) -> dict:
     n = e.nutrients or {}
     return {"id": str(e.id), "mealId": str(e.meal_id), "meal": e.meal, "kind": e.kind, "eatenAt": e.eaten_at.isoformat(), "day": e.day,
             "name": e.name, "nameSaid": e.name_said, "quantity": e.quantity, "unit": e.unit, "qty": P.qty_label(e.quantity, e.unit),
-            "grams": e.grams, "nutrients": n, "kcal": N.kcal(n), "protein_g": N.grams_of(n, "protein_g"), "confidence": e.confidence,
+            "grams": e.grams, "nutrients": n,
+            "kcal": None if numbers_pending(e) else N.kcal(n),
+            "protein_g": None if numbers_pending(e) else N.grams_of(n, "protein_g"),
+            "confidence": "pending" if numbers_pending(e) else e.confidence,
             "source": e.source, "sourceRef": e.source_ref, "photoRef": e.photo_ref, "consumed": e.consumed, "portionEaten": e.portion_eaten,
             "status": e.status, "loggedBy": e.logged_by, "flags": e.flags or {}, "note": e.note, "version": e.version,
             "foodId": str(e.food_id) if e.food_id else None}
@@ -309,7 +312,10 @@ async def save_meal(session: AsyncSession, *, family_id: str, subject_id: str, l
                 it.confidence = "estimate"
         grams, vals, est = compute(it.food, it.quantity, it.unit, sizes=sizes, portion=portion if consumed == "part" else None, grams=it.grams)
         conf = it.confidence
-        if it.food is None or grams is None:
+        if conf == "pending":
+            # A slow look-up is not zero. The numbers are filled in after, and the diary says so.
+            grams, vals = None, {}
+        elif it.food is None or grams is None:
             conf = "unquantified"
         elif est and conf in ("said", "label"):
             conf = "estimate"
@@ -528,6 +534,18 @@ async def get(session: AsyncSession, family_id: str, entry_id: str) -> Nutrition
     except ValueError:
         return None
     return e if e and e.family_id == family_id else None
+
+
+def numbers_pending(e: NutritionEntry) -> bool:
+    """True when this food was saved without numbers. Water that already has its ml is not waiting."""
+    if e.kind != "food" or e.status != "active":
+        return False
+    n = e.nutrients or {}
+    if "water_ml" in n or "water" in ((e.flags or {}).get("tags") or []):
+        return False
+    if "energy_kcal" in n:
+        return False
+    return e.confidence in ("pending", "unquantified") or (e.flags or {}).get("numbers") == "pending"
 
 
 def totals(rows: list[NutritionEntry]) -> dict:

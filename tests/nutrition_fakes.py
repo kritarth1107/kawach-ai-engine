@@ -50,6 +50,7 @@ class FakeNutritionModels:
         self.allergy: dict[str, list[str]] = {}  # food name (lower) → allergens
         self.rule_hits: dict[str, list[str]] = {}  # food name (lower) → rule keys
         self.estimates: dict[str, dict] = {}
+        self.estimate_delay = 0.0
         self.part_of: dict[str, str] = {}  # a flavour's name → the dish it describes, for the parts prompt only
         self.item_ids: list[str] | None = None
         self.notes: dict[int, dict] = {}
@@ -84,6 +85,9 @@ class FakeNutritionModels:
             return LLMReply(text=json.dumps({"items": out}), tool_calls=[], model="fake")
         if system.startswith(lookup.ESTIMATE_PROMPT[:40]):
             self.calls.append("estimate")
+            if self.estimate_delay:
+                import asyncio
+                await asyncio.sleep(self.estimate_delay)
             raw = text.strip()
             if raw.startswith("{"):
                 body = json.loads(raw)
@@ -195,6 +199,7 @@ def nfake(monkeypatch):
     from app.nutrition import jobs
 
     monkeypatch.setattr(jobs, "kick_refine", lambda job_id: None)
+    monkeypatch.setattr(jobs, "kick_fill", lambda: None)
     yield f
     from app.nutrition import jobs
 
