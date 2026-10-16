@@ -45,14 +45,16 @@ def email(subject: str, text: str) -> bool:
         return False
     to = [x.strip() for x in os.environ.get("TEAM_REPORT_TO", "kritarth@kavach.care").split(",") if x.strip()]
     body = json.dumps({"from": "Kavach nightly <alerts@emails.kavach.care>", "to": to, "subject": subject[:160], "text": text[:20000]}).encode()
+    # Cloudflare in front of Resend answers 403 / error 1010 to Python-urllib and to a missing User-Agent.
+    # That is not a bad key or an unverified domain. A named agent gets through.
     req = urllib.request.Request("https://api.resend.com/emails", data=body, method="POST",
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                                          "User-Agent": "kavach-nightly"})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
             return 200 <= r.status < 300
     except urllib.error.HTTPError as exc:
-        # 403 is this key not being allowed to send as `from` (the domain is not on the key, or the key can only
-        # write to its owner). The body says which. The key itself is not printed.
+        # The body says which (a restricted key, a bad from address, or Cloudflare 1010). The key is not printed.
         detail = exc.read().decode(errors="replace")[:300]
         print(f"::warning::the team email failed: HTTP {exc.code} from {body_from(body)}: {detail}")
         return False
