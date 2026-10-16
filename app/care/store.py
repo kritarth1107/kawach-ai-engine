@@ -36,9 +36,22 @@ def _release_record_now(session: AsyncSession) -> bool:
 
 
 async def hold_record(session: AsyncSession, family_id: str, subject_id: str) -> None:
-    """One writer at a time for this person's care record. Released when that write commits, not for the model call."""
+    """One writer at a time for this person's care record. Released when that write commits, not for the model call.
+
+    The wait is bounded. A lock left on a pooled connection used to sit there until the night was killed (recall, and
+    one probe shard, 16 Oct)."""
+    import os
+
     key = f"record:{family_id}:{subject_id}"
-    await session.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
+    wait = os.getenv("RECORD_LOCK_WAIT_S", "20s")
+    await session.execute(text("SELECT set_config('lock_timeout', :t, true)"), {"t": wait})
+    try:
+        await session.execute(text("SELECT pg_advisory_lock(hashtext(:k))"), {"k": key})
+    except Exception as exc:
+        if "lock timeout" not in str(exc).lower():
+            raise
+        await session.rollback()
+        raise TimeoutError(f"care record busy for {wait} family={family_id}") from exc
     locks: dict[str, int] = session.sync_session.info.setdefault(_RECORD_LOCKS, {})
     locks[key] = locks.get(key, 0) + 1
 

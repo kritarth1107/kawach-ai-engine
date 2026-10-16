@@ -224,8 +224,41 @@ def check(probe: dict, res, host, profile: dict | None, fam: dict) -> list[str]:
     return fails
 
 
-async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_cap: float, probes: list[dict] | None = None) -> None:
+async def _one_probe(sessions, fam, q, row, host, who, speaker, text, elder, members, before_sent, before_alerts, t0) -> None:
     from app.brain.loop import TurnRequest, run_turn, writing_profiles
+
+    async with sessions() as s:
+        await seed_family(s, fam, Seeded())
+        await s.commit()
+    images = photo_for(q) if q["topic"] == "photo" else []
+    async with sessions() as s:
+        res = await run_turn(s, host, TurnRequest(family_id=fam["familyId"], elder=elder, speaker=speaker, members=members, text=text,
+                                                  message_ref=f"probe-{q['id']}-{uuid.uuid4().hex[:6]}", images=images,
+                                                  modality="voice" if q.get("voice") else "text"))
+    async with sessions() as s:
+        profile = (await writing_profiles(s, fam["familyId"], [speaker])).get(who["id"])
+    fails = check(q, res, host, profile, fam)
+    row["language_ok"] = not any(f.startswith("language:") for f in fails)
+    if fails and "?" in (res.reply or "") and any(f.startswith("expected one of") for f in fails):
+        # Saheli asked something first (whose medicine? which time?): they answer once, then the turn is judged as a whole
+        answer = await answer_as(who, q, text, res.reply)
+        clock.set_now(clock.now() + __import__("datetime").timedelta(minutes=2))
+        async with sessions() as s:
+            res2 = await run_turn(s, host, TurnRequest(family_id=fam["familyId"], elder=elder, speaker=speaker, members=members, text=answer,
+                                                       message_ref=f"probe-{q['id']}-b-{uuid.uuid4().hex[:6]}"))
+        row["second"] = {"text": answer, "reply": res2.reply, "tools": [a["tool"] for a in res2.actions]}
+        res.actions = [*res.actions, *res2.actions]
+        res.alerts = [*res.alerts, *res2.alerts]
+        res.reply = res2.reply
+        fails = check(q, res, host, profile, fam)
+        row["language_ok"] = not any(f.startswith("language:") for f in fails)
+    row.update({"reply": res.reply, "tools": [a["tool"] for a in res.actions], "alerts": res.alerts, "model": res.model,
+                "actions": [{"tool": a["tool"], "ok": a.get("ok"), "args": a.get("args")} for a in res.actions],
+                "ms": int((time.monotonic() - t0) * 1000), "sent": host.world.sent[before_sent:], "team_alerts": len(host.world.team_alerts),
+                "new_alerts": host.world.alerts[before_alerts:], "fails": fails, "pass": not fails})
+
+
+async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_cap: float, probes: list[dict] | None = None) -> None:
     from app.llm import spend
 
     elder, members = roster_of(fam)
@@ -249,37 +282,18 @@ async def run_family(sessions: async_sessionmaker, fam: dict, out: list, spent_c
         t0 = time.monotonic()
         row = {"probe": q["id"], "family": fam["id"], "household": fam["household"], "language": q["language"], "topic": q["topic"], "who": who["key"],
                "text": text, "written": bool(q.get("text")), "tier": fam["tier"]}
-        try:
-            async with sessions() as s:
-                await seed_family(s, fam, Seeded())
-                await s.commit()
-            images = photo_for(q) if q["topic"] == "photo" else []
-            async with sessions() as s:
-                res = await run_turn(s, host, TurnRequest(family_id=fam["familyId"], elder=elder, speaker=speaker, members=members, text=text,
-                                                          message_ref=f"probe-{q['id']}-{uuid.uuid4().hex[:6]}", images=images,
-                                                          modality="voice" if q.get("voice") else "text"))
-            async with sessions() as s:
-                profile = (await writing_profiles(s, fam["familyId"], [speaker])).get(who["id"])
-            fails = check(q, res, host, profile, fam)
-            row["language_ok"] = not any(f.startswith("language:") for f in fails)
-            if fails and "?" in (res.reply or "") and any(f.startswith("expected one of") for f in fails):
-                # Saheli asked something first (whose medicine? which time?): they answer once, then the turn is judged as a whole
-                answer = await answer_as(who, q, text, res.reply)
-                clock.set_now(clock.now() + __import__("datetime").timedelta(minutes=2))
-                async with sessions() as s:
-                    res2 = await run_turn(s, host, TurnRequest(family_id=fam["familyId"], elder=elder, speaker=speaker, members=members, text=answer,
-                                                               message_ref=f"probe-{q['id']}-b-{uuid.uuid4().hex[:6]}"))
-                row["second"] = {"text": answer, "reply": res2.reply, "tools": [a["tool"] for a in res2.actions]}
-                res.actions = [*res.actions, *res2.actions]
-                res.alerts = [*res.alerts, *res2.alerts]
-                res.reply = res2.reply
-                fails = check(q, res, host, profile, fam)
-                row["language_ok"] = not any(f.startswith("language:") for f in fails)
-            row.update({"reply": res.reply, "tools": [a["tool"] for a in res.actions], "alerts": res.alerts, "model": res.model,
-                        "actions": [{"tool": a["tool"], "ok": a.get("ok"), "args": a.get("args")} for a in res.actions],
-                        "ms": int((time.monotonic() - t0) * 1000), "sent": host.world.sent[before_sent:], "team_alerts": len(host.world.team_alerts),
-                        "new_alerts": host.world.alerts[before_alerts:], "fails": fails, "pass": not fails})
-        except Exception as exc:  # noqa: BLE001 — one probe must not stop the night
+
+        # asyncio.wait returns even when the probe ignores cancellation. One probe that never comes back (a lock, a
+        # search) must not hold the shard until the job is killed (shard 1, 16 Oct: six probes, then silence).
+        work = asyncio.ensure_future(
+            _one_probe(sessions, fam, q, row, host, who, speaker, text, elder, members, before_sent, before_alerts, t0)
+        )
+        done, _pending = await asyncio.wait({work}, timeout=float(os.getenv("PROBE_TIMEOUT_S", "180")))
+        if work not in done:
+            work.cancel()
+            print(f"probe {q['id']} still running after the time limit", flush=True)
+            row.update({"error": "still running after the time limit", "fails": ["the turn crashed"], "pass": False})
+        elif (exc := work.exception()) is not None:
             row.update({"error": f"{type(exc).__name__}: {exc}"[:300], "fails": ["the turn crashed"], "pass": False})
         out.append(row)
 

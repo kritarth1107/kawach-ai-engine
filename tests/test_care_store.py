@@ -1,6 +1,8 @@
 import asyncio
 from datetime import timedelta
 
+import pytest
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -23,6 +25,21 @@ async def _med(db, dose, source, by=None):
         source_kind=source,
         stated_by=by,
     )
+
+
+async def test_a_busy_record_lock_gives_up_instead_of_waiting(monkeypatch):
+    monkeypatch.setenv("RECORD_LOCK_WAIT_S", "1s")
+    engine = create_async_engine(TEST_DB, pool_size=2, max_overflow=0)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as holder:
+            await store.hold_record(holder, "lock-busy", "elder-busy")
+            async with sessions() as waiter:
+                with pytest.raises(TimeoutError):
+                    await store.hold_record(waiter, "lock-busy", "elder-busy")
+            await store.release_record_locks(holder, commit=True)
+    finally:
+        await engine.dispose()
 
 
 async def test_a_committed_record_lock_does_not_stick_to_the_pooled_connection():
