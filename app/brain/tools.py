@@ -200,7 +200,7 @@ _WHEN_SYSTEM = {"weekly_report", "service_status"}
 _CORE = frozenset({
     "remember", "recall", "search_records", "confirm_change", "whats_pending",
     "log_dose", "log_vital", "log_event", "stop", "note",
-    "set_reminder", "reminders", "today_schedule",
+    "set_reminder", "reminders", "today_schedule", "reminder_log",
     "send_message", "alert_caregiver", "web_search",
     "undo_change", "open_loop", "need_tools",
 })
@@ -224,7 +224,7 @@ _GROUPS = {
     "health": frozenset({
         "lab_trend", "health_record", "find_lab_test", "find_doctor", "add_doctor_question", "wellbeing",
         "set_stock", "medicine_stock", "emergency_card", "care_team", "log_outcome", "assign_family_task",
-        "family_tasks", "patterns", "change_reminder", "reminder_log",
+        "family_tasks", "patterns", "change_reminder",
     }),
     "activity": frozenset({"activity", "log_activity"}),
     "chat": frozenset({"sing", "voice_replies", "feedback"}),
@@ -294,6 +294,8 @@ async def need_tools(ctx: TurnCtx, args: dict) -> dict:
     if group not in _GROUPS or group == "system":
         return {"error": "group must be order, nutrition, setup, memory, health, activity or chat"}
     ctx.tool_groups.add(group)
+    # Counted later: a group asked on more than 3% of a situation's turns joins that situation.
+    logger.info("need_tools situation=%s group=%s", ctx.situation, group)
     return {"ok": True, "group": group}
 
 
