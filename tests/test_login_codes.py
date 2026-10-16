@@ -76,6 +76,39 @@ async def test_the_code_is_typed_into_the_boxes_by_code_and_the_agent_only_carri
     assert any("typed into the code boxes" in x["note"] for x in t.history) and not any("4821" in x["note"] for x in t.history)
 
 
+async def test_a_v2_browser_is_not_told_to_ask_for_a_v4_secret(db, at, sessions, monkeypatch):
+    """The fast path's browser is v2. V4's login_code secret does not exist there, so the digits go in that run's goal."""
+    at("2026-10-16 22:40")
+    monkeypatch.setenv("BROWSER_API", "v4")
+    agent = FakeAgent(script={"prepare": [OTP, CART]})
+    h = H(sessions, agent)
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await db.refresh(t)
+    t.agent_session = "v2-fast"
+    t.details = {**(t.details or {}), "session_api": "v2", "browser_api": "v2", "fast_session": True}
+    await db.commit()
+    await _code(db, t)
+    await h.tick()
+    goal = agent.runs[-1]["goal"]
+    assert agent.runs[-1]["api"] == "v2" and agent.runs[-1]["session"] == "v2-fast"
+    assert "4821" in goal and "secret named login_code" not in goal
+
+
+async def test_a_v4_browser_gets_the_code_as_a_secret_not_in_the_goal(db, at, sessions, monkeypatch):
+    at("2026-10-16 22:41")
+    monkeypatch.setenv("BROWSER_API", "v4")
+    agent = FakeAgent(script={"prepare": [OTP, CART]})
+    h = H(sessions, agent)
+    t = await _order(db)
+    await h.tick(); await h.tick()
+    await _code(db, t)
+    await h.tick()
+    goal = agent.runs[-1]["goal"]
+    assert agent.runs[-1]["api"] == "v4"
+    assert "4821" not in goal and "secret named login_code" in goal
+
+
 async def test_without_the_page_the_agent_types_it_key_by_key_and_never_asks_for_another(db, at, sessions):
     at("2026-10-13 02:12")
     agent = FakeAgent(script={"prepare": [OTP, CART]})  # no way into its page here: the agent types it

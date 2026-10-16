@@ -148,14 +148,14 @@ async def execute(agent, *, sleep=asyncio.sleep, polls: int = 40, balance=None,
                 if run.status in _DONE:
                     break
                 await sleep(5)
-                run = await agent.poll(run.task_id)
+                run = await agent.poll(run.task_id, api=api)
             else:
-                await agent.stop(run.task_id, end_session=True)
+                await agent.stop(run.task_id, end_session=True, api=api, session_id=getattr(run, "session_id", None))
                 run.status = "stopped"
         finally:
             if getattr(run, "session_id", None):
                 try:
-                    await agent.stop_session(run.session_id)
+                    await agent.stop_session(run.session_id, api=api)
                 except Exception as exc:  # noqa: BLE001 — a stuck session is reported, the next run still starts
                     print(f"session stop failed {service} {model}: {type(exc).__name__}", file=sys.stderr)
         return {"api": api, "model": model, "service": service, "phase": phase, "status": run.status,

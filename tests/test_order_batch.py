@@ -132,7 +132,7 @@ class LookAgent:
     async def cdp_url(self, sid):
         return f"ws://{sid}"
 
-    async def stop_session(self, sid):
+    async def stop_session(self, sid, *, api=None):
         self.stopped.append(sid)
 
 

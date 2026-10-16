@@ -30,6 +30,7 @@ class FakeAgent:
     steps_per_run: int = 12
     runs: list[dict] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
+    stops: list[dict] = field(default_factory=list)
     sessions_stopped: list[str] = field(default_factory=list)
     path: list[str] = field(default_factory=lambda: ["https://shop.test/", "https://shop.test/search?q=atta", "https://shop.test/cart", "https://shop.test/checkout"])
     _ids: itertools.count = field(default_factory=lambda: itertools.count(1))
@@ -48,7 +49,7 @@ class FakeAgent:
                           "api": metadata.get("session_api")})
         return AgentRun(task_id=tid, session_id=session_id or f"s-{tid}", status="created")
 
-    async def poll(self, task_id: str) -> AgentRun:
+    async def poll(self, task_id: str, *, api: str | None = None) -> AgentRun:
         if task_id in self.stopped:
             return AgentRun(task_id=task_id, session_id="", status="stopped", output=None)
         self._polls[task_id] = self._polls.get(task_id, 0) + 1
@@ -59,8 +60,10 @@ class FakeAgent:
             return AgentRun(task_id=task_id, session_id="", status="failed", output=None, error=out["__fail__"], steps=self.steps_per_run)
         return AgentRun(task_id=task_id, session_id="", status="finished", output=dict(out), steps=self.steps_per_run, path=list(self.path))
 
-    async def stop(self, task_id: str, *, end_session: bool = False) -> None:
+    async def stop(self, task_id: str, *, end_session: bool = False, api: str | None = None,
+                   session_id: str | None = None) -> None:
         self.stopped.append(task_id)
+        self.stops.append({"task": task_id, "end_session": end_session, "api": api, "session": session_id})
 
     async def live_url(self, session_id: str) -> str | None:
         return None
@@ -68,5 +71,5 @@ class FakeAgent:
     async def new_profile(self, name: str) -> str:
         return f"prof-{name}"
 
-    async def stop_session(self, session_id: str) -> None:
+    async def stop_session(self, session_id: str, *, api: str | None = None) -> None:
         self.sessions_stopped.append(session_id)

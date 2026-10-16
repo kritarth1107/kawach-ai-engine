@@ -164,15 +164,16 @@ class BrowserAgent(Protocol):
     async def run(self, *, goal: str, hints: str, schema: dict, session_id: str | None, profile_id: str | None,
                   start_url: str | None, max_steps: int, metadata: dict, llm: str | None = None, flash: bool = False) -> AgentRun: ...
 
-    async def poll(self, task_id: str) -> AgentRun: ...
+    async def poll(self, task_id: str, *, api: str | None = None) -> AgentRun: ...
 
-    async def stop(self, task_id: str, *, end_session: bool = False) -> None: ...
+    async def stop(self, task_id: str, *, end_session: bool = False, api: str | None = None,
+                   session_id: str | None = None) -> None: ...
 
     async def live_url(self, session_id: str) -> str | None: ...
 
     async def new_profile(self, name: str) -> str: ...
 
-    async def stop_session(self, session_id: str) -> None: ...
+    async def stop_session(self, session_id: str, *, api: str | None = None) -> None: ...
 
 
 class BrowserUseCloud:
@@ -290,8 +291,11 @@ class BrowserUseCloud:
         self._v4.add(out["id"])
         return AgentRun(task_id=out["id"], session_id=out["sessionId"], status="created")
 
-    async def poll(self, task_id: str) -> AgentRun:
-        if task_id in self._v4:
+    async def poll(self, task_id: str, *, api: str | None = None) -> AgentRun:
+        # _v4 is this process only. A restarted worker still has the API on the task (api=), and must not
+        # poll a V4 run id on the v2 task endpoint.
+        if api == "v4" or task_id in self._v4:
+            self._v4.add(task_id)
             return await self._poll_v4(task_id)
         t = await self._req("GET", f"/tasks/{task_id}")
         raw = t.get("output")
@@ -336,9 +340,13 @@ class BrowserUseCloud:
         got = await (self._req_v4 if api == "v4" else self._req)("GET", f"/browsers/{session_id}/downloads")
         return list(got.get("downloads") or got.get("files") or [])
 
-    async def stop(self, task_id: str, *, end_session: bool = False) -> None:
-        if task_id in self._v4:
+    async def stop(self, task_id: str, *, end_session: bool = False, api: str | None = None,
+                   session_id: str | None = None) -> None:
+        if api == "v4" or task_id in self._v4:
+            self._v4.add(task_id)
             await self._req_v4("POST", f"/runs/{task_id}/cancel")
+            if end_session and session_id:
+                await self.stop_session(session_id, api="v4")
             return
         await self._req("PATCH", f"/tasks/{task_id}", {"action": "stop_task_and_session" if end_session else "stop"})
 
@@ -349,15 +357,18 @@ class BrowserUseCloud:
     async def new_profile(self, name: str) -> str:
         return (await self._req("POST", "/profiles", {"name": name[:100]}))["id"]
 
-    async def stop_session(self, session_id: str) -> None:
+    async def stop_session(self, session_id: str, *, api: str | None = None) -> None:
         """Stop the cloud browser. A finished run keeps billing until this. V4's browser id is not the session id."""
         if not session_id:
             return
-        try:
-            await self._req("PATCH", f"/sessions/{session_id}", {"action": "stop"})
-            return
-        except RuntimeError:
-            logger.warning("v2 session stop missed %s", session_id[:8])
+        if api != "v4":
+            try:
+                await self._req("PATCH", f"/sessions/{session_id}", {"action": "stop"})
+                return
+            except RuntimeError:
+                logger.warning("v2 session stop missed %s", session_id[:8])
+                if api == "v2":
+                    return
         try:
             data = await self._req_v4("GET", "/browsers?limit=50")
         except RuntimeError:
@@ -377,3 +388,21 @@ class BrowserUseCloud:
 
     async def cdp_url(self, session_id: str) -> str | None:
         return (await self._req("GET", f"/browsers/{session_id}")).get("cdpUrl")
+
+    async def cdp_for(self, session_id: str, *, api: str | None = None) -> str | None:
+        """CDP for the browser this API opened. A V4 agent-session id is not a v2 browser id."""
+        if api != "v4":
+            return await self.cdp_url(session_id)
+        try:
+            data = await self._req_v4("GET", "/browsers?limit=50")
+        except RuntimeError:
+            return None
+        for item in data.get("items") or []:
+            if item.get("agentSessionId") != session_id and item.get("id") != session_id:
+                continue
+            if item.get("cdpUrl"):
+                return item["cdpUrl"]
+            bid = item.get("id")
+            if bid:
+                return (await self._req_v4("GET", f"/browsers/{bid}")).get("cdpUrl")
+        return None

@@ -124,7 +124,7 @@ async def test_sweeper_retries_when_stop_fails(db, at, sessions):
     await db.commit()
 
     class Down(FakeAgent):
-        async def stop_session(self, session_id):
+        async def stop_session(self, session_id, *, api=None):
             raise RuntimeError("browser-use PATCH sessions 503: down")
 
     out = await sandbox.sweep(sessions, Down())

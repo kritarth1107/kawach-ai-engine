@@ -31,7 +31,7 @@ class PathAgent(FakeAgent):
 
     paths: dict = field(default_factory=dict)
 
-    async def poll(self, task_id: str):
+    async def poll(self, task_id: str, *, api: str | None = None):
         run = await super().poll(task_id)
         phase = next((r["phase"] for r in self.runs if r["task"] == task_id), "prepare")
         return dataclasses.replace(run, path=list(self.paths.get(phase, self.path)))

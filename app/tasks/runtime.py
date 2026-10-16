@@ -652,7 +652,7 @@ async def choose_stores(sessions: async_sessionmaker, agent: BrowserAgent | None
                 if g.status in ("queued", "running"):
                     if g.status == "running" and g.agent_task and agent is not None:
                         try:
-                            await agent.stop(g.agent_task, end_session=True)
+                            await _stop_run(agent, g, end_session=True)
                         except Exception:  # noqa: BLE001 — the session is released with the task
                             logger.warning("stop failed task=%s", g.id)
                     g.status, g.cancel_requested, g.input_needed = "cancelled", True, None
@@ -1195,11 +1195,53 @@ async def _type_code(agent: BrowserAgent, task: Task, code: str) -> bool:
     if not task.agent_session or not hasattr(agent, "cdp_url") or os.getenv("TYPE_LOGIN_CODES", "on") != "on":
         return False
     try:
-        cdp = await agent.cdp_url(task.agent_session)
+        cdp = await _cdp(agent, task)
     except Exception:  # noqa: BLE001
         return False
     hosts = tuple(d.removeprefix("*.") for d in DOMAINS.get(task.service, ()))
     return bool(cdp) and await codeentry.type_code(cdp, code, hosts=hosts)
+
+
+def _session_api(task: Task) -> str:
+    """The API that opened this task's browser. A later phase stays on it, even when the env says V4."""
+    owned = (task.details or {}).get("session_api")
+    if owned not in ("v2", "v4") and task.agent_session and (task.details or {}).get("fast_session"):
+        owned = "v2"
+    if owned not in ("v2", "v4"):
+        owned = api_version(task.service, task.phase)
+    return owned
+
+
+def _run_api(task: Task) -> str | None:
+    api = (task.details or {}).get("session_api") or (task.details or {}).get("browser_api")
+    return api if api in ("v2", "v4") else None
+
+
+async def _cdp(agent: BrowserAgent, task: Task) -> str | None:
+    """The browser's CDP address on the API that opened it. A V4 session id is not a v2 browser id."""
+    if (task.details or {}).get("session_api") == "v4" and hasattr(agent, "cdp_for"):
+        return await agent.cdp_for(task.agent_session, api="v4")
+    return await agent.cdp_url(task.agent_session)
+
+
+async def _poll_run(agent: BrowserAgent, task: Task):
+    api = _run_api(task)
+    if api:
+        return await agent.poll(task.agent_task, api=api)
+    return await agent.poll(task.agent_task)
+
+
+async def _stop_run(agent: BrowserAgent, task: Task, *, end_session: bool = False) -> None:
+    """Stop the run on the API that started it. A V4 run id sent to the v2 stop leaves the run going."""
+    if not task.agent_task:
+        return
+    kw: dict = {"end_session": end_session}
+    api = _run_api(task)
+    if api:
+        kw["api"] = api
+    if task.agent_session:
+        kw["session_id"] = task.agent_session
+    await agent.stop(task.agent_task, **kw)
 
 
 def _guest_run(task: Task) -> bool:
@@ -1213,7 +1255,7 @@ async def _drop_session(agent: BrowserAgent, task: Task, why: str) -> None:
     note(task, why)
     if sid and hasattr(agent, "stop_session"):
         try:
-            await agent.stop_session(sid)
+            await agent.stop_session(sid, api=_run_api(task))
         except Exception:  # noqa: BLE001 — the sweeper stops a browser nobody uses
             logger.warning("stop session failed task=%s", task.id)
 
@@ -1302,11 +1344,7 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
         task.details = {**(task.details or {}), "login": phone[-4:] if len(phone) == 10 else "none"}
     # The fast path's browser is a v2 session. A later V4 run cannot see it (live 2026-10-16: place posted
     # that id and Browser Use answered "session not found"). Stay on the API that opened the session.
-    owned = (task.details or {}).get("session_api")
-    if owned not in ("v2", "v4") and task.agent_session and (task.details or {}).get("fast_session"):
-        owned = "v2"
-    if owned not in ("v2", "v4"):
-        owned = api_version(task.service, task.phase)
+    owned = _session_api(task)
     task.details = {**(task.details or {}), "browser_api": owned, "session_api": owned}
 
     async def start(session_id: str | None, profile: str | None) -> AgentRun:
@@ -1331,7 +1369,11 @@ async def _start_run(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     except RuntimeError as exc:
         # The browser of the last step already closed (live 2026-10-09: the look-up's browser was gone when the go-ahead
         # came, and the login step failed three times). Start a fresh one on the family's profile, which keeps the login.
-        if not task.agent_session or "session is stopped" not in str(exc).lower():
+        # v2 says "session is stopped"; V4 says "session not found". A place or a cancel is not started
+        # again: the cart or the booking is in the browser that just died.
+        dead = str(exc).lower()
+        gone = "session is stopped" in dead or "session not found" in dead
+        if not task.agent_session or not gone or task.phase in ("place", "cancel"):
             raise
         note(task, "the earlier browser had closed; starting a fresh one")
         task.agent_session = None
@@ -2613,11 +2655,11 @@ async def _stop_before_confirm(agent: BrowserAgent, task: Task) -> tuple[str, st
     if task.status == "running" and task.agent_task:
         if logged:
             try:
-                path = (await agent.poll(task.agent_task)).path or []
+                path = (await _poll_run(agent, task)).path or []
             except Exception:  # noqa: BLE001 — the check reads the store's list instead
                 logger.warning("poll before stop failed task=%s", task.id)
         try:
-            await agent.stop(task.agent_task, end_session=not logged)
+            await _stop_run(agent, task, end_session=not logged)
         except Exception:  # noqa: BLE001
             logger.warning("stop failed task=%s", task.id)
     if not logged:
@@ -3434,6 +3476,10 @@ async def _fast_lookup(session: AsyncSession, agent: BrowserAgent, task: Task, p
     ride = site.kind == "ride"
     if not hasattr(agent, "open_session"):
         return None
+    if (task.details or {}).get("session_api") == "v4":
+        # Saved steps drive a v2 browser over CDP. A V4 session id is not that browser; opening a second
+        # one would drop the page the agent already has.
+        return None
     if not ride and site.needs_point and not fastpath.has_point(lat, lng):
         # Live 2026-10-11 (a Bangalore family, pincode only): Blinkit and Zepto answered 400, Instamart "not found". The
         # place is given a point (backend); until then the browser agent looks with the written address.
@@ -3523,6 +3569,9 @@ async def _fast_cart(session: AsyncSession, agent: BrowserAgent, task: Task, pro
     d = task.details or {}
     chosen = [i for i in (d.get("chosen") or []) if i.get("store_id") or i.get("cart_ref")]
     if not chosen or not hasattr(agent, "open_session"):
+        return None
+    if d.get("session_api") == "v4":
+        task.details = {**d, "fast_cart_tried": True}
         return None
     task.details = {**d, "fast_cart_tried": True, "fast_place_check": None}
     place = (d.get("limits") or {}).get("place") or {}
@@ -3625,6 +3674,8 @@ async def _fast_place(session: AsyncSession, agent: BrowserAgent, task: Task, pr
     again first: any change → nothing is sent and the cart is built again for a fresh confirm. A sent order without a
     clear answer is reported unclear and never retried. None only when the browser could not be reached (agent places)."""
     d = task.details or {}
+    if d.get("session_api") == "v4":
+        return None
     try:
         cdp = await agent.cdp_url(task.agent_session) if task.agent_session else None
         if not cdp:
@@ -3716,7 +3767,7 @@ async def _order_on_store_list(task: Task, agent: BrowserAgent, host=None) -> di
     names = [str(c.get("name")) for c in d.get("chosen") or [] if c.get("name")]
     try:
         if task.service == "blinkit" and task.agent_session:
-            cdp = await agent.cdp_url(task.agent_session)
+            cdp = await _cdp(agent, task)
             found = await fastpath.blinkit_recent_order(cdp, total, names=names) if cdp else None
             if found:
                 return {"placed": True, "order_id": found, "payment_method": "Cash on Delivery"}
@@ -3822,7 +3873,7 @@ async def release_sessions(sessions: async_sessionmaker, agent: BrowserAgent, li
             if t.status == "needs_input" and t.input_needed == "otp":
                 continue  # the login page is waiting for the code in this browser
             try:
-                await agent.stop_session(t.agent_session)
+                await agent.stop_session(t.agent_session, api=_run_api(t))
                 await sandbox.stopped(session, t.agent_session, f"task {t.status}")
             except Exception:  # noqa: BLE001 — already gone, or the service is down: the sweeper retries from the ledger
                 logger.warning("stop session failed task=%s", t.id)
@@ -3877,12 +3928,12 @@ async def cancel_properly(session: AsyncSession, agent: BrowserAgent, task: Task
     """Stop an order that is not placed: the browser run, its cloud browser (the login stays in the profile) and the task."""
     if task.status == "running" and task.agent_task:
         try:
-            await agent.stop(task.agent_task, end_session=True)
+            await _stop_run(agent, task, end_session=True)
         except Exception:  # noqa: BLE001 — the sweeper stops what the ledger knows
             logger.warning("stop failed task=%s", task.id)
     if task.agent_session:
         try:
-            await agent.stop_session(task.agent_session)
+            await agent.stop_session(task.agent_session, api=_run_api(task))
             await sandbox.stopped(session, task.agent_session, "order cancelled")
         except Exception:  # noqa: BLE001
             logger.warning("stop session failed task=%s", task.id)
@@ -4236,7 +4287,9 @@ async def tick(
                             typed = await _type_code(agent, task, code)
                             if typed:
                                 extra, secret = CODE_TYPED, ""
-                            elif api_version(task.service, "prepare") == "v4":
+                            elif _session_api(task) == "v4":
+                                # The secret binding exists only on a V4 run. A v2 browser (the fast path) is told
+                                # the digits in its goal; telling it to ask for a V4 secret leaves the boxes empty.
                                 extra, secret = CODE_BY_SECRET, code
                             else:
                                 extra, secret = CODE_BY_HAND.format(code=code), ""
@@ -4250,7 +4303,7 @@ async def tick(
                 elif task.status == "running":
                     if (task.details or {}).get("browser_api") == "v4" and hasattr(agent, "_v4"):
                         agent._v4.add(task.agent_task)
-                    run: AgentRun = await agent.poll(task.agent_task)
+                    run: AgentRun = await _poll_run(agent, task)
                     stats["polled"] += 1
                     hit = (guard.past_confirm(task.service, run.path)
                            if task.phase in guard.BEFORE_CONFIRM and not _guest_run(task) and run.status not in ("finished", "failed", "stopped")
@@ -4259,7 +4312,7 @@ async def tick(
                         # On every look, a run before the confirm on a page it must never be on is stopped at once (founder
                         # 2026-10-12: the look-up pressed "Confirm & Book"); the browser stays for the check or the cancel.
                         try:
-                            await agent.stop(task.agent_task)
+                            await _stop_run(agent, task)
                         except Exception:  # noqa: BLE001 — the run's own end comes next look; the guard acts on its pages
                             logger.warning("guard stop failed task=%s", task.id)
                         note(task, f"stopped by the guard on {hit[1]} ({hit[0]})")
@@ -4286,7 +4339,7 @@ async def tick(
                             # A crash or a timeout does not mean the run stopped. Cancel it before another start. A place
                             # step is not in this list: it may already have booked, so it is not run again.
                             try:
-                                await agent.stop(task.agent_task)
+                                await _stop_run(agent, task)
                             except Exception:  # noqa: BLE001
                                 logger.warning("cancel before retry failed task=%s", task.id)
                             task.details = {**(task.details or {}), "retries": retries + 1}
@@ -4305,7 +4358,7 @@ async def tick(
                             # Practice: the account's own order list must show nothing new (the agent might have pressed it).
                             try:
                                 since = datetime.fromisoformat(task.details["run_started"]) - timedelta(minutes=2)
-                                new = await fastpath.swiggy_orders_since(await agent.cdp_url(task.agent_session), since)
+                                new = await fastpath.swiggy_orders_since(await _cdp(agent, task), since)
                                 if new:
                                     out = {**out, "placed": True, "order_id": new[0].get("id") or "unknown"}
                                 note(task, "practice check of the order list: " + ("unreadable" if new is None else f"{len(new)} new orders"))
@@ -4370,7 +4423,7 @@ async def tick(
                             if text_ not in await _learned(session, task.service):
                                 session.add(SkillNote(service=task.service, note=text_, created_at=clock.now()))
                     elif clock.now() - datetime.fromisoformat(task.details["run_started"]) > (CHECK_TIMEOUT if task.phase == "check" else RUN_TIMEOUT):
-                        await agent.stop(task.agent_task)
+                        await _stop_run(agent, task)
                         sandbox.audit(task, phase=task.phase, status="timeout", steps=run.steps, path=run.path, cost=0)
                         task.status = "failed"
                         message = {

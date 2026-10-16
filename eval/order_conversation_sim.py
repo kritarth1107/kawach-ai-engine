@@ -153,7 +153,7 @@ class Browser:
     async def cdp_url(self, sid):
         return f"ws://{sid}"
 
-    async def stop_session(self, sid):
+    async def stop_session(self, sid, *, api=None):
         return None
 
     async def run(self, *, goal, hints, schema, session_id, profile_id, start_url, max_steps, metadata, llm=None, flash=False):
@@ -247,7 +247,7 @@ class Browser:
             return {**base, **await self.shop.place(service, None, {"total": total})}
         return {**base, "problem": f"unexpected phase {phase}"}
 
-    async def poll(self, tid):
+    async def poll(self, tid, *, api=None):
         from app.tasks.browser_use import AgentRun
 
         r = self._runs[tid]

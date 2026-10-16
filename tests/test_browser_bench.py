@@ -43,14 +43,14 @@ class _Agent:
         self.runs.append({**kw, "_api": os.environ.get("BROWSER_API"), "_model": os.environ.get("BROWSER_MODEL")})
         return SimpleNamespace(task_id=f"t{len(self.runs)}", session_id="sess", status=self.status, output={"paid": False})
 
-    async def poll(self, task_id):
+    async def poll(self, task_id, *, api=None):
         self.polls += 1
         return SimpleNamespace(task_id=task_id, session_id="sess", status="started", output=None)
 
-    async def stop(self, task_id, *, end_session=False):
+    async def stop(self, task_id, *, end_session=False, api=None, session_id=None):
         self.stopped.append(("stop", task_id, end_session))
 
-    async def stop_session(self, session_id):
+    async def stop_session(self, session_id, *, api=None):
         self.stopped.append(("session", session_id))
 
 

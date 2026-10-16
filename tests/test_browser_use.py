@@ -198,6 +198,84 @@ async def test_v2_sends_the_thinking_level_for_the_phase():
     await bu.close()
 
 
+STORES = ("blinkit", "instamart", "zepto", "swiggy", "zomato", "apollo", "1mg", "pharmeasy", "uber", "ola", "rapido")
+
+
+@pytest.mark.parametrize("service", STORES)
+async def test_each_store_follows_the_api_that_owns_the_session(monkeypatch, service):
+    """A v2 id posted to V4 is a 404. Poll and stop on a new process must use the API stored on the task."""
+    monkeypatch.setenv("BROWSER_API", "v4")
+    seen = []
+
+    def v2(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path))
+        if req.method == "GET" and req.url.path.endswith("/tasks/run-v2"):
+            return httpx.Response(200, json={"id": "run-v2", "sessionId": "v2-fast", "status": "started", "output": None, "steps": []})
+        return httpx.Response(200, json={"id": "run-v2", "sessionId": "v2-fast"})
+
+    def v4(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, "v4", req.url.path))
+        if req.method == "GET" and req.url.path.endswith("/runs/run-v4"):
+            return httpx.Response(200, json={"id": "run-v4", "sessionId": "v4-sess", "status": "running", "output": None})
+        if req.method == "GET" and "browsers" in req.url.path:
+            return httpx.Response(200, json={"items": [{"id": "br-1", "agentSessionId": "v4-sess", "cdpUrl": "ws://cdp.v4/br-1", "status": "active"}]})
+        return httpx.Response(200, json={"id": "run-v4", "sessionId": "v4-sess", "status": "queued"})
+
+    import asyncio
+
+    bu = browser_use.BrowserUseCloud(api_key="k")
+    bu._client = httpx.AsyncClient(base_url=browser_use.API, transport=httpx.MockTransport(v2))
+    bu._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(v4))
+    bu._loop = asyncio.get_running_loop()
+    await bu.run(goal="Place it, cash on delivery, do not pay", hints="h", schema={}, session_id="v2-fast", profile_id=None,
+                 start_url=None, max_steps=5, metadata={"service": service, "phase": "place", "session_api": "v2"})
+    assert seen[-1] == ("POST", "/api/v2/tasks")
+    fresh = browser_use.BrowserUseCloud(api_key="k")
+    fresh._client = httpx.AsyncClient(base_url=browser_use.API, transport=httpx.MockTransport(v2))
+    fresh._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(v4))
+    fresh._loop = asyncio.get_running_loop()
+    left = await fresh.poll("run-v4", api="v4")
+    assert left.status == "started" and ("GET", "v4", "/api/v4/runs/run-v4") in seen
+    await fresh.stop("run-v4", end_session=True, api="v4", session_id="v4-sess")
+    assert ("POST", "v4", "/api/v4/runs/run-v4/cancel") in seen
+    assert not any(len(item) == 2 and item[0] == "PATCH" for item in seen)
+    cdp = await fresh.cdp_for("v4-sess", api="v4")
+    assert cdp == "ws://cdp.v4/br-1"
+    await bu.run(goal="Look it up", hints="h", schema={}, session_id=None, profile_id=None, start_url=None, max_steps=5,
+                 metadata={"service": service, "phase": "browse"})
+    assert seen[-1][1:] == ("v4", "/api/v4/runs")
+    await bu.close()
+    await fresh.close()
+
+
+async def test_a_v4_reply_that_is_not_json_a_run_left_running_and_a_missing_session(monkeypatch):
+    monkeypatch.setenv("BROWSER_API", "v4")
+    calls = {"n": 0}
+
+    def v4(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if req.method == "POST":
+            return httpx.Response(404, json={"detail": "session not found"})
+        if calls["n"] == 1:
+            return httpx.Response(200, json={"id": "r", "sessionId": "s", "status": "dispatching"})
+        return httpx.Response(200, json={"id": "r", "sessionId": "s", "status": "completed", "result": "not json"})
+
+    import asyncio
+
+    bu = browser_use.BrowserUseCloud(api_key="k")
+    bu._client_v4 = httpx.AsyncClient(base_url=browser_use.API_V4, transport=httpx.MockTransport(v4))
+    bu._loop = asyncio.get_running_loop()
+    bu._v4.add("r")
+    running = await bu.poll("r", api="v4")
+    assert running.status == "started" and running.error is None
+    bad = await bu.poll("r", api="v4")
+    assert bad.status == "finished" and bad.error == "bad json"
+    with pytest.raises(RuntimeError, match="session not found"):
+        await bu.run(goal="g", hints="h", schema={}, session_id="v2-fast", profile_id=None, start_url=None, max_steps=3,
+                     metadata={"service": "zepto", "phase": "prepare", "session_api": "v4"})
+    await bu.close()
+
+
 async def test_a_v2_fast_session_is_not_sent_to_v4(monkeypatch):
     """The cart is in the v2 browser. V4 does not know that id."""
     monkeypatch.setenv("BROWSER_API", "v4")
