@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.brain import grounding, guards, policy, tools
 from app.brain.host import ToolHost
-from app.brain.persona import PERSONA, REPLY_FORMAT
+from app.brain import persona as persona_text
+from app.brain.persona import REPLY_FORMAT
 from app.care import digest, freshness, importer, links, store
 from app.care.domains import SLOTS
 from app.care.models import Turn
@@ -1225,7 +1226,13 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         ctx.last_assistant = last_hers
         ctx.held_topic = guards.held_topic(last_hers, req.text)
     ctx.known.append("")  # tool results are appended as they come
-    stable = [PERSONA + "\n\n" + REPLY_FORMAT, fam_block]
+
+    def _groups() -> set[str]:
+        # Core every call. The situation tag, an open task, onboarding, a photo, or need_tools adds a group.
+        return tools.groups_for(
+            situation=situation, open_tasks=bool(data.open_tasks), system=is_system,
+            onboarding=bool(req.onboarding), images=bool(req.images), extra=ctx.tool_groups,
+        )
     brain_role = role_for(situation)
     # A photo or video stills: the vision model looks. The text brain cannot open them and used to say so.
     if req.images and "vision" in router.configured_roles():
@@ -1269,13 +1276,18 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # The Singapore call is a second budget only when that flag is on. Off: one call, then stop.
             bound = cap + (CALL_CAP_S if router.sg_enabled() else 0)
             try:
+                groups = _groups()
                 reply = await asyncio.wait_for(router.complete(
                     brain_role,
-                    system_stable=stable,
+                    # Rebuilt each step: need_tools adds a group, and that group's persona block, for the next call.
+                    system_stable=[persona_text.for_groups(groups) + "\n\n" + REPLY_FORMAT, fam_block],
                     system_dynamic=dynamic + ("\n\nYou have used all your steps: reply to the person now with what you have." if last else ""),
                     messages=msgs,
                     # On the last step there are no tools, so the person always gets a reply.
-                    tools=None if last else tools.specs_for(open_tasks=data.open_tasks, system=is_system),
+                    tools=None if last else tools.specs_for(
+                        open_tasks=bool(data.open_tasks), system=is_system, situation=situation,
+                        onboarding=bool(req.onboarding), images=bool(req.images), extra=ctx.tool_groups,
+                    ),
                     max_tokens=LIGHT_MAX_TOKENS if effort == "minimal" else 6000,
                     effort=effort,
                     essential=not is_system,  # past the hard cap only people's messages get answers
@@ -1461,7 +1473,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         # They asked something and nothing was saved. "Okay, noted" is not the answer.
         try:
             again = await router.complete(
-                brain_role, system_stable=stable,
+                brain_role, system_stable=[persona_text.for_groups(_groups()) + "\n\n" + REPLY_FORMAT, fam_block],
                 system_dynamic=dynamic + "\n\nThey asked a question. The last draft was not an answer. Answer it from the "
                 "care record and this turn. If the record does not have it, say you do not have it. Do not reply with only an acknowledgement.",
                 messages=msgs, tools=None, max_tokens=600, effort=effort, essential=True, timeout_s=CALL_CAP_S,

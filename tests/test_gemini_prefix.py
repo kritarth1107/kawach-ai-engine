@@ -11,32 +11,45 @@ from app.llm.router import LLMReply, Route, ToolSpec
 
 
 def test_every_call_starts_with_the_same_tool_prefix():
-    """A running task only adds tools after the ones every call already sends."""
+    """A situation only adds tools after the ones every call already sends."""
     cold = [t.name for t in tools.specs_for()]
     with_task = [t.name for t in tools.specs_for(open_tasks=True)]
     with_system = [t.name for t in tools.specs_for(system=True)]
     assert with_task[: len(cold)] == cold
     assert with_system[: len(cold)] == cold
-    assert with_task[len(cold):] and "task_input" in with_task[len(cold):]
+    assert "task_input" in with_task[len(cold):]
+    assert "start_task" in with_task[len(cold):]
 
 
-def test_a_cold_chat_keeps_care_and_orders_and_leaves_a_running_task(monkeypatch):
+def test_a_normal_turn_sends_the_core_and_stays_under_9k(monkeypatch):
+    """Persona plus tools on a chit-chat, counted the same way as the old 37k (characters / 4)."""
     monkeypatch.setenv("LLM_PRICES_INR", '{"gemini-3.5-flash":[64,383]}')
+    import json
+
+    from app.brain.persona import REPLY_FORMAT, for_groups
     cold = {t.name for t in tools.specs_for()}
-    assert "remember" in cold and "log_food" in cold and "start_task" in cold and "note_trip" in cold
-    assert "daily_brief" in cold and "past_orders" in cold and "nutrition_report" in cold
-    assert "task_input" not in cold and "cancel_task" not in cold
+    assert {"remember", "log_dose", "log_vital", "set_reminder", "send_message", "alert_caregiver", "need_tools"} <= cold
+    assert "log_food" not in cold and "start_task" not in cold and "nutrition_report" not in cold
+    assert "daily_brief" not in cold and "change_reminder" not in cold
+    assert "start_task" in {t.name for t in tools.specs_for(situation="order")}
+    assert "note_trip" in {t.name for t in tools.specs_for(situation="order")}
+    assert "log_food" in {t.name for t in tools.specs_for(images=True)}
+    assert "daily_brief" in {t.name for t in tools.specs_for(onboarding=True)}
+    assert "change_reminder" in {t.name for t in tools.specs_for(situation="med_question")}
+    assert "task_input" not in {t.name for t in tools.specs_for(situation="order")}
     assert "task_input" in {t.name for t in tools.specs_for(open_tasks=True)}
     assert "weekly_report" in {t.name for t in tools.specs_for(system=True)}
-    before = spend.cost_inr("gemini-3.5-flash", {"in": 40000})
-    # 15 Oct was about 40k input tokens a call at full price. The prefix is cached at a quarter; the family's own
-    # record stays outside it. One call, about 1,000 fresh tokens.
-    from app.brain.persona import PERSONA, REPLY_FORMAT
-    import json
-    prefix = (len(PERSONA) + len(REPLY_FORMAT) + len(json.dumps([
+    groups = tools.groups_for()
+    text = for_groups(groups) + "\n\n" + REPLY_FORMAT
+    tool_tok = len(json.dumps([
         {"n": t.name, "d": t.description, "s": t.schema} for t in tools.specs_for()
-    ]))) // 4
-    after = spend.cost_inr("gemini-3.5-flash", {"in": prefix + 1000, "cache_read": prefix})
+    ])) // 4
+    normal = len(text) // 4 + tool_tok
+    assert normal < 9000
+    # The family's record stays in the system instruction, after this prefix.
+    assert "CARE RECORD" in text
+    before = spend.cost_inr("gemini-3.5-flash", {"in": 40000})
+    after = spend.cost_inr("gemini-3.5-flash", {"in": normal + 1000, "cache_read": normal})
     assert before > 2.4
     assert after < before / 3
 

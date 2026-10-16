@@ -58,6 +58,7 @@ class TurnCtx:
     judge_band: str = ""  # sample | always | skip, set once per turn (app.quality.sample)
     judged_text: str = ""  # the draft already sent to the live judge; the same words are not sent again
     judged_claims: list = field(default_factory=list)
+    tool_groups: set[str] = field(default_factory=set)  # groups need_tools asked for; the next step sends them
     channel: str = "whatsapp"  # whatsapp | dashboard: where a change came from, for memory history
     # Set only by the dashboard, after the caregiver confirmed in a dialog: an undo may then end or restart a medicine
     # at once. Never set from a model's tool arguments.
@@ -189,25 +190,107 @@ def specs() -> list[ToolSpec]:
     return [spec for spec, _ in _TOOLS.values()]
 
 
-# Tools that only do something once a task is already running. A cold message can still log a meal, start an
-# order, set up, or ask for the brief: those stay. Never chosen from the words someone typed.
+# Tools that only do something once a task is already running, or once a scheduled turn is speaking.
+# Never chosen from the words someone typed: the situation tag, an open task, onboarding, or need_tools.
 _WHEN_TASK = {"task_input", "order_feedback", "spending", "done_in_app", "cancel_task", "task_status"}
 _WHEN_SYSTEM = {"weekly_report", "service_status"}
 
+# A normal turn sends only _CORE. The situation tag (already computed), an open task, onboarding, or a photo
+# adds a group. need_tools adds one the model asked for. Every tool is in exactly one place.
+_CORE = frozenset({
+    "remember", "recall", "search_records", "confirm_change", "whats_pending",
+    "log_dose", "log_vital", "stop", "note",
+    "set_reminder", "reminders", "today_schedule",
+    "send_message", "alert_caregiver", "web_search",
+    "undo_change", "open_loop", "need_tools",
+})
+_GROUPS = {
+    "order": frozenset({
+        "start_task", "places", "save_place", "map_link", "ask_location", "remove_place", "task_input",
+        "ways_there", "note_trip", "accept_trip", "read_trip", "boundaries", "set_boundaries",
+        "cancel_task", "done_in_app", "task_status", "order_feedback", "spending", "past_orders", "offer_buttons",
+        "fact_still_true",
+    }),
+    "nutrition": frozenset({
+        "log_food", "food_log", "change_food", "nutrition_target", "pantry", "nutrition_settings", "nutrition_report",
+    }),
+    "setup": frozenset({
+        "setup_progress", "finish_setup", "add_person", "my_name", "daily_brief", "language_preference",
+    }),
+    "memory": frozenset({
+        "forget", "memory_changes", "list_skills", "save_family_skill", "forget_skill", "note_habit",
+        "learning_consent", "close_loop", "gap_asked",
+    }),
+    "health": frozenset({
+        "lab_trend", "health_record", "find_lab_test", "find_doctor", "add_doctor_question", "wellbeing",
+        "set_stock", "medicine_stock", "emergency_card", "care_team", "log_outcome", "assign_family_task",
+        "family_tasks", "patterns", "change_reminder", "reminder_log",
+    }),
+    "activity": frozenset({"activity", "log_activity", "log_event"}),
+    "chat": frozenset({"sing", "voice_replies", "feedback"}),
+    "system": frozenset({"weekly_report", "service_status"}),
+}
+_HEALTH_SITUATIONS = frozenset({
+    "emergency", "med_question", "dose_report", "vital_report", "symptom", "low_mood", "grief",
+    "appointment", "refill", "injection",
+})
+TOOL_GROUPS = frozenset(_GROUPS)
 
-def specs_for(*, open_tasks: bool = False, system: bool = False) -> list[ToolSpec]:
-    """The tools for this turn. A running task and a scheduled turn add the tools that only those need."""
-    skip = set(_WHEN_TASK) | set(_WHEN_SYSTEM)
-    if open_tasks:
-        skip -= _WHEN_TASK
+
+def groups_for(*, situation: str = "", open_tasks: bool = False, system: bool = False,
+               onboarding: bool = False, images: bool = False, extra: set[str] | None = None) -> set[str]:
+    """Which tool groups this call sends. The situation tag is already decided; nothing here reads the person's words."""
+    groups: set[str] = set(extra) if extra else set()
+    if situation == "order" or open_tasks:
+        groups.add("order")
+    if situation == "setup" or onboarding:
+        groups.add("setup")
+        groups.add("memory")
+    if situation in _HEALTH_SITUATIONS:
+        groups.add("health")
     if system:
-        skip -= _WHEN_SYSTEM
-    # Always-on tools first, in one order, so every call shares that prefix. A running task or a scheduled turn
-    # only adds tools after it. Gemini's implicit cache is a repeated prefix; a tool inserted in the middle breaks it.
-    later = _WHEN_TASK | _WHEN_SYSTEM
-    rows = [spec for spec, _ in _TOOLS.values() if spec.name not in skip]
-    rows.sort(key=lambda s: (s.name in later, s.name))
+        groups.add("system")
+        groups.add("health")
+    if images:
+        groups.add("nutrition")
+        groups.add("photos")
+    return {g for g in groups if g in _GROUPS or g == "photos"}
+
+
+def specs_for(*, open_tasks: bool = False, system: bool = False, situation: str = "",
+              onboarding: bool = False, images: bool = False, extra: set[str] | None = None) -> list[ToolSpec]:
+    """Core tools, then only the groups this turn needs. Core stays a stable prefix."""
+    groups = groups_for(situation=situation, open_tasks=open_tasks, system=system,
+                        onboarding=onboarding, images=images, extra=extra)
+    allow = set(_CORE)
+    for name in groups:
+        allow |= _GROUPS.get(name, frozenset())
+    skip: set[str] = set()
+    if not open_tasks:
+        skip |= _WHEN_TASK
+    if not system:
+        skip |= _WHEN_SYSTEM
+    rows = [spec for spec, _ in _TOOLS.values() if spec.name in allow and spec.name not in skip]
+    rows.sort(key=lambda s: (s.name not in _CORE, s.name))
     return rows
+
+
+@tool(
+    "need_tools",
+    "Call this once when the next step needs a tool that is not listed on this call. "
+    "group: order (buy, ride, trip, flight, a place), nutrition (a meal, a food change, a nutrition target or report), "
+    "setup (onboarding, the daily brief, a person, a language change), memory (forget, history of a change, a family skill), "
+    "health (a lab, a doctor, stock, the care team, a dose-time change), activity (a walk, a nap, something that happened), "
+    "chat (they asked you to sing, or to change voice replies). The next step has that group. Then call the tool.",
+    {"group": {"type": "string", "enum": ["order", "nutrition", "setup", "memory", "health", "activity", "chat"]}},
+    ["group"],
+)
+async def need_tools(ctx: TurnCtx, args: dict) -> dict:
+    group = str(args.get("group") or "")
+    if group not in _GROUPS or group == "system":
+        return {"error": "group must be order, nutrition, setup, memory, health, activity or chat"}
+    ctx.tool_groups.add(group)
+    return {"ok": True, "group": group}
 
 
 def arg_problems(schema: dict, args: Any) -> list[str]:
