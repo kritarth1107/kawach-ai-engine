@@ -35,16 +35,27 @@ class Fake:
         self.pause = 0.0
         self.inflight = 0
         self.most_at_once = 0
+        # pair_wait: a call waits up to this long for a second call to be in flight (a fixed sleep let a loaded CI runner
+        # finish one turn's call before the other turn's started, and the test failed on timing, not on a lock)
+        self.pair_wait = 0.0
+        self.paired = asyncio.Event()
 
     async def complete(self, route, **kw):
         self.calls += 1
         self.inflight += 1
         self.most_at_once = max(self.most_at_once, self.inflight)
+        if self.inflight >= 2:
+            self.paired.set()
         self.seen.append(json.dumps(kw.get("messages"), default=str))
         try:
             if self.hold_first and self.calls == 1:
                 self.started.set()
                 await self.release.wait()
+            elif self.pair_wait:
+                try:
+                    await asyncio.wait_for(self.paired.wait(), timeout=self.pair_wait)
+                except TimeoutError:
+                    pass  # no second call came: the turns did wait for each other, and the assert below says so
             elif self.pause:
                 await asyncio.sleep(self.pause)
         finally:
@@ -140,9 +151,9 @@ async def test_a_burst_from_one_person_is_one_follow_up(sessions, model, monkeyp
 
 
 async def test_two_people_do_not_wait_for_each_other(sessions, model):
-    model.pause = 0.35
     await _run(sessions, A, "ping from one", "batch-p1")
     model.most_at_once = 0
+    model.pair_wait = 5.0  # each call waits for the other person's call; serialized turns would leave it at 1
     one, two = await asyncio.gather(
         _run(sessions, A, "ping from one again", "batch-p2"),
         _run(sessions, B, "ping from two", "batch-p3"),
