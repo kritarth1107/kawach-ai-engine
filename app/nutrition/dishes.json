@@ -1,0 +1,3798 @@
+{
+"source": "Indian Nutrient Databank, Jaacks et al. 2024. Values per 100 g as eaten and per one household unit.",
+"url": "https://github.com/lindsayjaacks/Indian-Nutrient-Databank-INDB-",
+"dishes": [
+{
+"code": "ASC144",
+"name": "Idli",
+"per_100g": {
+"energy_kcal": 137.5,
+"protein_g": 4.64,
+"carbs_g": 28.18,
+"fat_g": 0.33,
+"fibre_g": 2.31,
+"sugar_g": 0.28
+},
+"unit": "piece",
+"grams": 25.1,
+"kcal_1": 34.5,
+"aliases": [
+"idli"
+]
+},
+{
+"code": "BFP044",
+"name": "Poha",
+"per_100g": {
+"energy_kcal": 294.5,
+"protein_g": 6.09,
+"carbs_g": 35.05,
+"fat_g": 14.14,
+"fibre_g": 3.72,
+"sugar_g": 0.87
+},
+"unit": "katori_small",
+"grams": 54.6,
+"kcal_1": 160.8,
+"aliases": [
+"poha"
+]
+},
+{
+"code": "OSR141",
+"name": "Dalma",
+"per_100g": {
+"energy_kcal": 118.9,
+"protein_g": 4.91,
+"carbs_g": 15.04,
+"fat_g": 4.58,
+"fibre_g": 2.16,
+"sugar_g": 3.1
+},
+"unit": "katori",
+"grams": 263.8,
+"kcal_1": 313.7,
+"aliases": [
+"dalma"
+]
+},
+{
+"code": "ASC167",
+"name": "Sambar",
+"per_100g": {
+"energy_kcal": 96.9,
+"protein_g": 3.35,
+"carbs_g": 10.57,
+"fat_g": 4.38,
+"fibre_g": 3.52,
+"sugar_g": 3.31
+},
+"unit": "katori",
+"grams": 257.2,
+"kcal_1": 249.3,
+"aliases": [
+"sambar"
+]
+},
+{
+"code": "ASC474",
+"name": "Dhokla",
+"per_100g": {
+"energy_kcal": 216.5,
+"protein_g": 13.45,
+"carbs_g": 30.68,
+"fat_g": 5.28,
+"fibre_g": 4.95,
+"sugar_g": 4.78
+},
+"unit": "piece",
+"grams": 40.0,
+"kcal_1": 86.5,
+"aliases": [
+"dhokla"
+]
+},
+{
+"code": "ASC020",
+"name": "Egg nog",
+"per_100g": {
+"energy_kcal": 97.1,
+"protein_g": 4.78,
+"carbs_g": 8.15,
+"fat_g": 5.11,
+"fibre_g": 0.02,
+"sugar_g": 8.06
+},
+"unit": "glass",
+"grams": 303.5,
+"kcal_1": 294.8,
+"aliases": [
+"egg nog"
+]
+},
+{
+"code": "ASC057",
+"name": "Fried Egg",
+"per_100g": {
+"energy_kcal": 223.7,
+"protein_g": 11.59,
+"carbs_g": 0.31,
+"fat_g": 19.62,
+"fibre_g": 0.29,
+"sugar_g": 0.0
+},
+"unit": "piece",
+"grams": 57.8,
+"kcal_1": 129.2,
+"aliases": [
+"fried egg"
+]
+},
+{
+"code": "ASC155",
+"name": "Mixed dal",
+"per_100g": {
+"energy_kcal": 61.9,
+"protein_g": 2.51,
+"carbs_g": 5.79,
+"fat_g": 3.1,
+"fibre_g": 1.62,
+"sugar_g": 0.34
+},
+"unit": "katori",
+"grams": 297.8,
+"kcal_1": 184.4,
+"aliases": [
+"mixed dal"
+]
+},
+{
+"code": "BFP041",
+"name": "Rice upma",
+"per_100g": {
+"energy_kcal": 151.3,
+"protein_g": 2.63,
+"carbs_g": 17.96,
+"fat_g": 7.46,
+"fibre_g": 2.12,
+"sugar_g": 1.13
+},
+"unit": "katori",
+"grams": 106.3,
+"kcal_1": 160.7,
+"aliases": [
+"rice upma"
+]
+},
+{
+"code": "BFP575",
+"name": "Soya roti",
+"per_100g": {
+"energy_kcal": 284.0,
+"protein_g": 9.18,
+"carbs_g": 40.03,
+"fat_g": 9.23,
+"fibre_g": 8.71,
+"sugar_g": 1.58
+},
+"unit": "piece",
+"grams": 50.3,
+"kcal_1": 142.9,
+"aliases": [
+"soya roti"
+]
+},
+{
+"code": "BFP042",
+"name": "Bread upma",
+"per_100g": {
+"energy_kcal": 129.5,
+"protein_g": 2.8,
+"carbs_g": 12.6,
+"fat_g": 7.75,
+"fibre_g": 1.96,
+"sugar_g": 1.56
+},
+"unit": "katori",
+"grams": 106.3,
+"kcal_1": 137.6,
+"aliases": [
+"bread upma"
+]
+},
+{
+"code": "BFP148",
+"name": "Plain dosa",
+"per_100g": {
+"energy_kcal": 380.9,
+"protein_g": 10.34,
+"carbs_g": 64.08,
+"fat_g": 8.43,
+"fibre_g": 5.23,
+"sugar_g": 0.7
+},
+"unit": "piece",
+"grams": 36.1,
+"kcal_1": 137.6,
+"aliases": [
+"dosa",
+"plain dosa"
+]
+},
+{
+"code": "OSR151",
+"name": "Jowar dosa",
+"per_100g": {
+"energy_kcal": 294.3,
+"protein_g": 8.5,
+"carbs_g": 40.53,
+"fat_g": 10.28,
+"fibre_g": 5.56,
+"sugar_g": 0.59
+},
+"unit": "piece",
+"grams": 33.0,
+"kcal_1": 97.2,
+"aliases": [
+"jowar dosa"
+]
+},
+{
+"code": "ASC058",
+"name": "Poached egg",
+"per_100g": {
+"energy_kcal": 123.9,
+"protein_g": 11.98,
+"carbs_g": 0.37,
+"fat_g": 8.19,
+"fibre_g": 0.3,
+"sugar_g": 0.05
+},
+"unit": "piece",
+"grams": 56.0,
+"kcal_1": 69.4,
+"aliases": [
+"poached egg"
+]
+},
+{
+"code": "ASC114",
+"name": "Plain pulao",
+"per_100g": {
+"energy_kcal": 140.2,
+"protein_g": 2.34,
+"carbs_g": 21.82,
+"fat_g": 4.62,
+"fibre_g": 1.69,
+"sugar_g": 1.15
+},
+"unit": "plate",
+"grams": 307.9,
+"kcal_1": 431.7,
+"aliases": [
+"plain pulao"
+]
+},
+{
+"code": "ASC146",
+"name": "Masala dosa",
+"per_100g": {
+"energy_kcal": 164.6,
+"protein_g": 3.29,
+"carbs_g": 19.57,
+"fat_g": 7.84,
+"fibre_g": 2.52,
+"sugar_g": 1.33
+},
+"unit": "piece",
+"grams": 209.7,
+"kcal_1": 345.1,
+"aliases": [
+"masala dosa"
+]
+},
+{
+"code": "ASC163",
+"name": "Lobia curry",
+"per_100g": {
+"energy_kcal": 149.0,
+"protein_g": 6.06,
+"carbs_g": 17.88,
+"fat_g": 5.62,
+"fibre_g": 4.57,
+"sugar_g": 2.51
+},
+"unit": "katori",
+"grams": 119.9,
+"kcal_1": 178.7,
+"aliases": [
+"lobia curry"
+]
+},
+{
+"code": "ASC096",
+"name": "Chapati/Roti",
+"per_100g": {
+"energy_kcal": 202.3,
+"protein_g": 5.88,
+"carbs_g": 35.65,
+"fat_g": 3.56,
+"fibre_g": 6.31,
+"sugar_g": 1.0
+},
+"unit": "piece",
+"grams": 36.0,
+"kcal_1": 72.8,
+"aliases": [
+"chapati",
+"chapati/roti",
+"roti"
+]
+},
+{
+"code": "ASC118",
+"name": "Paneer pulao",
+"per_100g": {
+"energy_kcal": 581.9,
+"protein_g": 1.98,
+"carbs_g": 8.76,
+"fat_g": 59.81,
+"fibre_g": 0.62,
+"sugar_g": 1.11
+},
+"unit": "plate",
+"grams": 837.9,
+"kcal_1": 4875.8,
+"aliases": [
+"paneer pulao"
+]
+},
+{
+"code": "ASC119",
+"name": "Peanut pulao",
+"per_100g": {
+"energy_kcal": 193.3,
+"protein_g": 5.32,
+"carbs_g": 21.18,
+"fat_g": 9.51,
+"fibre_g": 2.9,
+"sugar_g": 1.6
+},
+"unit": "plate",
+"grams": 357.9,
+"kcal_1": 691.7,
+"aliases": [
+"peanut pulao"
+]
+},
+{
+"code": "ASC128",
+"name": "Spanish rice",
+"per_100g": {
+"energy_kcal": 164.2,
+"protein_g": 4.19,
+"carbs_g": 31.1,
+"fat_g": 2.23,
+"fibre_g": 2.78,
+"sugar_g": 1.26
+},
+"unit": "plate",
+"grams": 217.5,
+"kcal_1": 357.2,
+"aliases": [
+"spanish rice"
+]
+},
+{
+"code": "ASC195",
+"name": "Paneer curry",
+"per_100g": {
+"energy_kcal": 176.5,
+"protein_g": 7.8,
+"carbs_g": 8.4,
+"fat_g": 12.38,
+"fibre_g": 1.4,
+"sugar_g": 6.29
+},
+"unit": "katori",
+"grams": 202.3,
+"kcal_1": 357.1,
+"aliases": [
+"paneer curry"
+]
+},
+{
+"code": "ASC221",
+"name": "Shahi paneer",
+"per_100g": {
+"energy_kcal": 156.5,
+"protein_g": 5.06,
+"carbs_g": 6.64,
+"fat_g": 12.34,
+"fibre_g": 1.4,
+"sugar_g": 5.01
+},
+"unit": "katori",
+"grams": 259.3,
+"kcal_1": 405.9,
+"aliases": [
+"shahi paneer"
+]
+},
+{
+"code": "ASC287",
+"name": "Paneer kheer",
+"per_100g": {
+"energy_kcal": 105.3,
+"protein_g": 4.53,
+"carbs_g": 10.03,
+"fat_g": 5.37,
+"fibre_g": 0.07,
+"sugar_g": 9.87
+},
+"unit": "katori",
+"grams": 289.4,
+"kcal_1": 304.8,
+"aliases": [
+"paneer kheer"
+]
+},
+{
+"code": "ASC427",
+"name": "Eggless cake",
+"per_100g": {
+"energy_kcal": 318.1,
+"protein_g": 8.12,
+"carbs_g": 46.14,
+"fat_g": 11.75,
+"fibre_g": 0.68,
+"sugar_g": 27.7
+},
+"unit": "slice",
+"grams": 61.0,
+"kcal_1": 193.9,
+"aliases": [
+"eggless cake"
+]
+},
+{
+"code": "BFP090",
+"name": "Chicken stew",
+"per_100g": {
+"energy_kcal": 127.5,
+"protein_g": 7.19,
+"carbs_g": 4.44,
+"fat_g": 8.91,
+"fibre_g": 1.82,
+"sugar_g": 1.43
+},
+"unit": "katori",
+"grams": 296.9,
+"kcal_1": 378.6,
+"aliases": [
+"chicken stew"
+]
+},
+{
+"code": "BFP141",
+"name": "Mutton pulao",
+"per_100g": {
+"energy_kcal": 130.8,
+"protein_g": 6.52,
+"carbs_g": 11.26,
+"fat_g": 10.78,
+"fibre_g": 1.65,
+"sugar_g": 1.0
+},
+"unit": "plate",
+"grams": 662.6,
+"kcal_1": 866.5,
+"aliases": [
+"mutton pulao"
+]
+},
+{
+"code": "BFP143",
+"name": "Mexican rice",
+"per_100g": {
+"energy_kcal": 120.6,
+"protein_g": 4.62,
+"carbs_g": 14.21,
+"fat_g": 4.88,
+"fibre_g": 1.64,
+"sugar_g": 1.44
+},
+"unit": "plate",
+"grams": 517.8,
+"kcal_1": 624.2,
+"aliases": [
+"mexican rice"
+]
+},
+{
+"code": "OSR113",
+"name": "Rice murukku",
+"per_100g": {
+"energy_kcal": 594.0,
+"protein_g": 5.41,
+"carbs_g": 33.29,
+"fat_g": 48.22,
+"fibre_g": 2.18,
+"sugar_g": 0.17
+},
+"unit": "piece",
+"grams": 30.9,
+"kcal_1": 183.3,
+"aliases": [
+"rice murukku"
+]
+},
+{
+"code": "ASC089",
+"name": "Egg drop soup",
+"per_100g": {
+"energy_kcal": 26.6,
+"protein_g": 12.93,
+"carbs_g": 1.1,
+"fat_g": 13.52,
+"fibre_g": 0.81,
+"sugar_g": 0.6
+},
+"unit": "bowl",
+"grams": 317.8,
+"kcal_1": 84.6,
+"aliases": [
+"egg drop soup"
+]
+},
+{
+"code": "ASC224",
+"name": "Chilli paneer",
+"per_100g": {
+"energy_kcal": 777.5,
+"protein_g": 2.1,
+"carbs_g": 3.31,
+"fat_g": 84.01,
+"fibre_g": 0.5,
+"sugar_g": 1.5
+},
+"unit": "katori",
+"grams": 296.9,
+"kcal_1": 2308.3,
+"aliases": [
+"chilli paneer"
+]
+},
+{
+"code": "ASC240",
+"name": "Chicken curry",
+"per_100g": {
+"energy_kcal": 129.2,
+"protein_g": 11.79,
+"carbs_g": 3.38,
+"fat_g": 7.57,
+"fibre_g": 1.41,
+"sugar_g": 1.79
+},
+"unit": "katori",
+"grams": 247.9,
+"kcal_1": 320.4,
+"aliases": [
+"chicken curry"
+]
+},
+{
+"code": "ASC283",
+"name": "Makhana kheer",
+"per_100g": {
+"energy_kcal": 107.8,
+"protein_g": 3.31,
+"carbs_g": 12.88,
+"fat_g": 5.0,
+"fibre_g": 0.11,
+"sugar_g": 11.54
+},
+"unit": "katori",
+"grams": 278.1,
+"kcal_1": 299.9,
+"aliases": [
+"makhana kheer"
+]
+},
+{
+"code": "ASC472",
+"name": "Paushtik roti",
+"per_100g": {
+"energy_kcal": 149.3,
+"protein_g": 7.17,
+"carbs_g": 26.59,
+"fat_g": 1.51,
+"fibre_g": 5.74,
+"sugar_g": 2.03
+},
+"unit": "piece",
+"grams": 42.9,
+"kcal_1": 64.1,
+"aliases": [
+"paushtik roti"
+]
+},
+{
+"code": "BFP142",
+"name": "Chicken pulao",
+"per_100g": {
+"energy_kcal": 108.2,
+"protein_g": 6.07,
+"carbs_g": 11.17,
+"fat_g": 8.48,
+"fibre_g": 1.64,
+"sugar_g": 0.99
+},
+"unit": "plate",
+"grams": 668.1,
+"kcal_1": 723.2,
+"aliases": [
+"chicken pulao"
+]
+},
+{
+"code": "BFP313",
+"name": "Curd dressing",
+"per_100g": {
+"energy_kcal": 78.8,
+"protein_g": 5.59,
+"carbs_g": 8.03,
+"fat_g": 2.9,
+"fibre_g": 0.22,
+"sugar_g": 7.57
+},
+"unit": "cup",
+"grams": 209.2,
+"kcal_1": 164.8,
+"aliases": [
+"curd dressing"
+]
+},
+{
+"code": "OSR066",
+"name": "Handi chicken",
+"per_100g": {
+"energy_kcal": 166.0,
+"protein_g": 12.32,
+"carbs_g": 1.49,
+"fat_g": 12.46,
+"fibre_g": 0.67,
+"sugar_g": 0.75
+},
+"unit": "plate",
+"grams": 231.9,
+"kcal_1": 385.0,
+"aliases": [
+"handi chicken"
+]
+},
+{
+"code": "OSR067",
+"name": "Lemon chicken",
+"per_100g": {
+"energy_kcal": 169.8,
+"protein_g": 20.2,
+"carbs_g": 0.55,
+"fat_g": 9.66,
+"fibre_g": 0.16,
+"sugar_g": 0.16
+},
+"unit": "plate",
+"grams": 286.6,
+"kcal_1": 486.6,
+"aliases": [
+"lemon chicken"
+]
+},
+{
+"code": "OSR086",
+"name": "Chicken salad",
+"per_100g": {
+"energy_kcal": 338.2,
+"protein_g": 15.33,
+"carbs_g": 1.3,
+"fat_g": 30.26,
+"fibre_g": 2.0,
+"sugar_g": 0.96
+},
+"unit": "katori",
+"grams": 247.0,
+"kcal_1": 835.3,
+"aliases": [
+"chicken salad"
+]
+},
+{
+"code": "ASC116",
+"name": "Mushroom pulao",
+"per_100g": {
+"energy_kcal": 124.3,
+"protein_g": 2.52,
+"carbs_g": 19.02,
+"fat_g": 4.03,
+"fibre_g": 1.88,
+"sugar_g": 1.0
+},
+"unit": "plate",
+"grams": 358.4,
+"kcal_1": 445.4,
+"aliases": [
+"mushroom pulao"
+]
+},
+{
+"code": "ASC120",
+"name": "Navratan pulao",
+"per_100g": {
+"energy_kcal": 261.7,
+"protein_g": 6.2,
+"carbs_g": 36.98,
+"fat_g": 9.45,
+"fibre_g": 3.82,
+"sugar_g": 2.52
+},
+"unit": "plate",
+"grams": 183.1,
+"kcal_1": 479.2,
+"aliases": [
+"navratan pulao"
+]
+},
+{
+"code": "ASC164",
+"name": "Soyabean curry",
+"per_100g": {
+"energy_kcal": 163.3,
+"protein_g": 10.43,
+"carbs_g": 6.76,
+"fat_g": 10.19,
+"fibre_g": 7.34,
+"sugar_g": 2.66
+},
+"unit": "katori",
+"grams": 119.9,
+"kcal_1": 195.8,
+"aliases": [
+"soyabean curry"
+]
+},
+{
+"code": "ASC194",
+"name": "Pea vadi curry",
+"per_100g": {
+"energy_kcal": 101.9,
+"protein_g": 4.64,
+"carbs_g": 8.9,
+"fat_g": 5.08,
+"fibre_g": 4.28,
+"sugar_g": 1.92
+},
+"unit": "katori",
+"grams": 287.3,
+"kcal_1": 292.9,
+"aliases": [
+"pea vadi curry"
+]
+},
+{
+"code": "ASC233",
+"name": "Chicken yakhni",
+"per_100g": {
+"energy_kcal": 99.0,
+"protein_g": 10.66,
+"carbs_g": 0.78,
+"fat_g": 6.1,
+"fibre_g": 0.62,
+"sugar_g": 0.12
+},
+"unit": "katori",
+"grams": 252.2,
+"kcal_1": 249.6,
+"aliases": [
+"chicken yakhni"
+]
+},
+{
+"code": "BFP043",
+"name": "Vegetable upma",
+"per_100g": {
+"energy_kcal": 146.5,
+"protein_g": 4.73,
+"carbs_g": 16.46,
+"fat_g": 6.63,
+"fibre_g": 4.19,
+"sugar_g": 1.39
+},
+"unit": "plate",
+"grams": 235.7,
+"kcal_1": 345.2,
+"aliases": [
+"vegetable upma"
+]
+},
+{
+"code": "BFP045",
+"name": "Vegetable poha",
+"per_100g": {
+"energy_kcal": 180.5,
+"protein_g": 4.89,
+"carbs_g": 21.52,
+"fat_g": 8.07,
+"fibre_g": 3.76,
+"sugar_g": 1.4
+},
+"unit": "katori",
+"grams": 97.8,
+"kcal_1": 176.6,
+"aliases": [
+"vegetable poha"
+]
+},
+{
+"code": "BFP216",
+"name": "Tomato chicken",
+"per_100g": {
+"energy_kcal": 111.7,
+"protein_g": 10.57,
+"carbs_g": 2.13,
+"fat_g": 6.71,
+"fibre_g": 1.42,
+"sugar_g": 0.93
+},
+"unit": "katori",
+"grams": 176.3,
+"kcal_1": 196.8,
+"aliases": [
+"tomato chicken"
+]
+},
+{
+"code": "BFP217",
+"name": "Creamy chicken",
+"per_100g": {
+"energy_kcal": 152.9,
+"protein_g": 13.52,
+"carbs_g": 3.13,
+"fat_g": 9.57,
+"fibre_g": 0.69,
+"sugar_g": 2.11
+},
+"unit": "katori",
+"grams": 217.4,
+"kcal_1": 332.4,
+"aliases": [
+"creamy chicken"
+]
+},
+{
+"code": "BFP574",
+"name": "Atta dal burfi",
+"per_100g": {
+"energy_kcal": 298.8,
+"protein_g": 6.66,
+"carbs_g": 40.64,
+"fat_g": 12.47,
+"fibre_g": 4.08,
+"sugar_g": 21.08
+},
+"unit": "piece",
+"grams": 38.7,
+"kcal_1": 115.8,
+"aliases": [
+"atta dal burfi"
+]
+},
+{
+"code": "ASC140",
+"name": "Chicken lasagne",
+"per_100g": {
+"energy_kcal": 187.5,
+"protein_g": 10.45,
+"carbs_g": 13.9,
+"fat_g": 10.36,
+"fibre_g": 0.11,
+"sugar_g": 2.74
+},
+"unit": "plate",
+"grams": 514.5,
+"kcal_1": 964.6,
+"aliases": [
+"chicken lasagne"
+]
+},
+{
+"code": "ASC299",
+"name": "Moong dal halwa",
+"per_100g": {
+"energy_kcal": 349.8,
+"protein_g": 8.35,
+"carbs_g": 40.23,
+"fat_g": 17.68,
+"fibre_g": 2.65,
+"sugar_g": 25.59
+},
+"unit": "katori",
+"grams": 95.4,
+"kcal_1": 333.7,
+"aliases": [
+"moong dal halwa"
+]
+},
+{
+"code": "BFP091",
+"name": "Veg paneer stew",
+"per_100g": {
+"energy_kcal": 145.5,
+"protein_g": 6.98,
+"carbs_g": 10.22,
+"fat_g": 8.41,
+"fibre_g": 3.08,
+"sugar_g": 4.85
+},
+"unit": "katori",
+"grams": 236.9,
+"kcal_1": 344.7,
+"aliases": [
+"veg paneer stew"
+]
+},
+{
+"code": "OSR062",
+"name": "Afghani chicken",
+"per_100g": {
+"energy_kcal": 151.5,
+"protein_g": 15.66,
+"carbs_g": 1.95,
+"fat_g": 9.07,
+"fibre_g": 0.31,
+"sugar_g": 0.83
+},
+"unit": "plate",
+"grams": 189.7,
+"kcal_1": 287.5,
+"aliases": [
+"afghani chicken"
+]
+},
+{
+"code": "ASC135",
+"name": "Chicken chowmein",
+"per_100g": {
+"energy_kcal": 151.3,
+"protein_g": 6.33,
+"carbs_g": 13.3,
+"fat_g": 8.23,
+"fibre_g": 1.64,
+"sugar_g": 1.63
+},
+"unit": "plate",
+"grams": 344.3,
+"kcal_1": 521.0,
+"aliases": [
+"chicken chowmein"
+]
+},
+{
+"code": "ASC294",
+"name": "Shahi suji halwa",
+"per_100g": {
+"energy_kcal": 382.3,
+"protein_g": 3.48,
+"carbs_g": 44.44,
+"fat_g": 21.73,
+"fibre_g": 2.96,
+"sugar_g": 27.21
+},
+"unit": "katori",
+"grams": 98.3,
+"kcal_1": 375.8,
+"aliases": [
+"shahi suji halwa"
+]
+},
+{
+"code": "BFP187",
+"name": "Besan gatte curry",
+"per_100g": {
+"energy_kcal": 189.4,
+"protein_g": 7.75,
+"carbs_g": 16.26,
+"fat_g": 10.72,
+"fibre_g": 3.25,
+"sugar_g": 4.5
+},
+"unit": "katori",
+"grams": 255.7,
+"kcal_1": 484.2,
+"aliases": [
+"besan gatte curry"
+]
+},
+{
+"code": "OSR155",
+"name": "Maa chaane ki dal",
+"per_100g": {
+"energy_kcal": 344.7,
+"protein_g": 19.8,
+"carbs_g": 43.11,
+"fat_g": 9.5,
+"fibre_g": 13.45,
+"sugar_g": 1.05
+},
+"unit": "katori",
+"grams": 81.1,
+"kcal_1": 279.4,
+"aliases": [
+"maa chaane ki dal"
+]
+},
+{
+"code": "ASC129",
+"name": "Chinese fried rice",
+"per_100g": {
+"energy_kcal": 120.6,
+"protein_g": 4.05,
+"carbs_g": 13.4,
+"fat_g": 5.43,
+"fibre_g": 2.31,
+"sugar_g": 1.47
+},
+"unit": "plate",
+"grams": 351.3,
+"kcal_1": 423.6,
+"aliases": [
+"chinese fried rice"
+]
+},
+{
+"code": "ASC223",
+"name": "Methi malai paneer",
+"per_100g": {
+"energy_kcal": 195.0,
+"protein_g": 7.34,
+"carbs_g": 8.15,
+"fat_g": 14.76,
+"fibre_g": 1.47,
+"sugar_g": 6.0
+},
+"unit": "katori",
+"grams": 193.4,
+"kcal_1": 377.0,
+"aliases": [
+"methi malai paneer"
+]
+},
+{
+"code": "BFP479",
+"name": "Lemon curd filling",
+"per_100g": {
+"energy_kcal": 225.6,
+"protein_g": 3.43,
+"carbs_g": 26.41,
+"fat_g": 12.58,
+"fibre_g": 0.0,
+"sugar_g": 26.13
+},
+"unit": "tbsp",
+"grams": 25.0,
+"kcal_1": 56.4,
+"aliases": [
+"lemon curd filling"
+]
+},
+{
+"code": "OSR065",
+"name": "Chicken manchurian",
+"per_100g": {
+"energy_kcal": 142.3,
+"protein_g": 9.53,
+"carbs_g": 6.06,
+"fat_g": 11.96,
+"fibre_g": 0.41,
+"sugar_g": 0.9
+},
+"unit": "plate",
+"grams": 444.7,
+"kcal_1": 633.0,
+"aliases": [
+"chicken manchurian"
+]
+},
+{
+"code": "ASC469",
+"name": "Sprouted moong poha",
+"per_100g": {
+"energy_kcal": 192.6,
+"protein_g": 5.59,
+"carbs_g": 26.6,
+"fat_g": 6.89,
+"fibre_g": 3.13,
+"sugar_g": 1.93
+},
+"unit": "plate",
+"grams": 191.3,
+"kcal_1": 368.5,
+"aliases": [
+"sprouted moong poha"
+]
+},
+{
+"code": "BFP174",
+"name": "Moong dal with vadi",
+"per_100g": {
+"energy_kcal": 24.1,
+"protein_g": 0.4,
+"carbs_g": 1.0,
+"fat_g": 2.05,
+"fibre_g": 0.39,
+"sugar_g": 0.45
+},
+"unit": "bowl",
+"grams": 362.5,
+"kcal_1": 87.3,
+"aliases": [
+"moong dal with vadi"
+]
+},
+{
+"code": "ASC101",
+"name": "Dal parantha/paratha",
+"per_100g": {
+"energy_kcal": 268.2,
+"protein_g": 6.78,
+"carbs_g": 30.03,
+"fat_g": 13.05,
+"fibre_g": 6.46,
+"sugar_g": 1.43
+},
+"unit": "piece",
+"grams": 76.7,
+"kcal_1": 205.7,
+"aliases": [
+"dal parantha/paratha"
+]
+},
+{
+"code": "ASC117",
+"name": "Sprouted moong pulao",
+"per_100g": {
+"energy_kcal": 113.0,
+"protein_g": 2.19,
+"carbs_g": 17.49,
+"fat_g": 3.61,
+"fibre_g": 1.78,
+"sugar_g": 1.43
+},
+"unit": "plate",
+"grams": 407.9,
+"kcal_1": 460.8,
+"aliases": [
+"sprouted moong pulao"
+]
+},
+{
+"code": "ASC359",
+"name": "Paneer pakora/pakoda",
+"per_100g": {
+"energy_kcal": 718.1,
+"protein_g": 3.27,
+"carbs_g": 5.52,
+"fat_g": 76.05,
+"fibre_g": 0.89,
+"sugar_g": 1.08
+},
+"unit": "plate",
+"grams": 646.7,
+"kcal_1": 4644.5,
+"aliases": [
+"paneer pakora/pakoda"
+]
+},
+{
+"code": "ASC381",
+"name": "Paneer shaslik/tikka",
+"per_100g": {
+"energy_kcal": 93.8,
+"protein_g": 5.11,
+"carbs_g": 7.98,
+"fat_g": 4.49,
+"fibre_g": 1.23,
+"sugar_g": 4.61
+},
+"unit": "plate",
+"grams": 438.7,
+"kcal_1": 411.7,
+"aliases": [
+"paneer shaslik/tikka"
+]
+},
+{
+"code": "ASC054",
+"name": "Murmura (Puffed rice)",
+"per_100g": {
+"energy_kcal": 113.3,
+"protein_g": 3.62,
+"carbs_g": 15.67,
+"fat_g": 4.04,
+"fibre_g": 0.28,
+"sugar_g": 7.31
+},
+"unit": "katori",
+"grams": 278.0,
+"kcal_1": 315.0,
+"aliases": [
+"murmura",
+"murmura (puffed rice)",
+"puffed rice"
+]
+},
+{
+"code": "ASC115",
+"name": "Mixed vegetable pulao",
+"per_100g": {
+"energy_kcal": 113.0,
+"protein_g": 2.72,
+"carbs_g": 17.49,
+"fat_g": 3.33,
+"fibre_g": 2.67,
+"sugar_g": 1.35
+},
+"unit": "plate",
+"grams": 438.4,
+"kcal_1": 495.6,
+"aliases": [
+"mixed vegetable pulao"
+]
+},
+{
+"code": "ASC468",
+"name": "Sprouted moong daliya",
+"per_100g": {
+"energy_kcal": 111.6,
+"protein_g": 2.81,
+"carbs_g": 14.77,
+"fat_g": 4.71,
+"fibre_g": 3.12,
+"sugar_g": 1.67
+},
+"unit": "plate",
+"grams": 316.0,
+"kcal_1": 352.5,
+"aliases": [
+"sprouted moong daliya"
+]
+},
+{
+"code": "BFP165",
+"name": "Home made egg noodles",
+"per_100g": {
+"energy_kcal": 240.8,
+"protein_g": 6.55,
+"carbs_g": 42.92,
+"fat_g": 4.37,
+"fibre_g": 1.6,
+"sugar_g": 1.03
+},
+"unit": "bowl",
+"grams": 225.0,
+"kcal_1": 541.8,
+"aliases": [
+"home made egg noodles"
+]
+},
+{
+"code": "ASC097",
+"name": "Plain parantha/paratha",
+"per_100g": {
+"energy_kcal": 298.3,
+"protein_g": 5.06,
+"carbs_g": 30.69,
+"fat_g": 16.86,
+"fibre_g": 5.43,
+"sugar_g": 0.86
+},
+"unit": "piece",
+"grams": 55.8,
+"kcal_1": 166.3,
+"aliases": [
+"parantha",
+"paratha",
+"plain parantha/paratha"
+]
+},
+{
+"code": "ASC104",
+"name": "Keema parantha/paratha",
+"per_100g": {
+"energy_kcal": 238.1,
+"protein_g": 9.41,
+"carbs_g": 18.36,
+"fat_g": 13.91,
+"fibre_g": 3.44,
+"sugar_g": 0.99
+},
+"unit": "piece",
+"grams": 100.0,
+"kcal_1": 238.2,
+"aliases": [
+"keema parantha/paratha"
+]
+},
+{
+"code": "ASC222",
+"name": "Paneer in butter sauce",
+"per_100g": {
+"energy_kcal": 145.6,
+"protein_g": 6.99,
+"carbs_g": 9.7,
+"fat_g": 8.81,
+"fibre_g": 1.5,
+"sugar_g": 7.49
+},
+"unit": "katori",
+"grams": 156.8,
+"kcal_1": 228.3,
+"aliases": [
+"paneer in butter sauce"
+]
+},
+{
+"code": "BFP110",
+"name": "Methi parantha/paratha",
+"per_100g": {
+"energy_kcal": 148.4,
+"protein_g": 4.27,
+"carbs_g": 22.19,
+"fat_g": 4.34,
+"fibre_g": 5.09,
+"sugar_g": 2.44
+},
+"unit": "piece",
+"grams": 91.2,
+"kcal_1": 135.3,
+"aliases": [
+"methi parantha/paratha"
+]
+},
+{
+"code": "BFP240",
+"name": "Egg curry (Anda curry)",
+"per_100g": {
+"energy_kcal": 117.5,
+"protein_g": 5.38,
+"carbs_g": 4.03,
+"fat_g": 8.81,
+"fibre_g": 2.09,
+"sugar_g": 1.9
+},
+"unit": "katori",
+"grams": 151.6,
+"kcal_1": 178.1,
+"aliases": [
+"anda curry",
+"egg curry",
+"egg curry (anda curry)"
+]
+},
+{
+"code": "ASC087",
+"name": "Chicken sweet corn soup",
+"per_100g": {
+"energy_kcal": 28.3,
+"protein_g": 14.48,
+"carbs_g": 1.63,
+"fat_g": 12.59,
+"fibre_g": 0.47,
+"sugar_g": 0.27
+},
+"unit": "bowl",
+"grams": 241.8,
+"kcal_1": 68.5,
+"aliases": [
+"chicken sweet corn soup"
+]
+},
+{
+"code": "ASC105",
+"name": "Paneer parantha/paratha",
+"per_100g": {
+"energy_kcal": 263.0,
+"protein_g": 7.98,
+"carbs_g": 24.33,
+"fat_g": 14.62,
+"fibre_g": 4.0,
+"sugar_g": 3.77
+},
+"unit": "piece",
+"grams": 85.0,
+"kcal_1": 223.6,
+"aliases": [
+"paneer parantha/paratha"
+]
+},
+{
+"code": "ASC122",
+"name": "Mutton biryani/biriyani",
+"per_100g": {
+"energy_kcal": 190.8,
+"protein_g": 7.38,
+"carbs_g": 22.5,
+"fat_g": 7.72,
+"fibre_g": 2.42,
+"sugar_g": 2.39
+},
+"unit": "plate",
+"grams": 207.8,
+"kcal_1": 396.4,
+"aliases": [
+"mutton biryani/biriyani"
+]
+},
+{
+"code": "ASC170",
+"name": "Sprouted moong dal chat",
+"per_100g": {
+"energy_kcal": 32.5,
+"protein_g": 1.35,
+"carbs_g": 6.01,
+"fat_g": 0.32,
+"fibre_g": 1.35,
+"sugar_g": 1.57
+},
+"unit": "plate",
+"grams": 256.5,
+"kcal_1": 83.3,
+"aliases": [
+"sprouted moong dal chat"
+]
+},
+{
+"code": "BFP576",
+"name": "Poshtik khichdi/khichri",
+"per_100g": {
+"energy_kcal": 93.4,
+"protein_g": 3.04,
+"carbs_g": 15.64,
+"fat_g": 1.88,
+"fibre_g": 2.0,
+"sugar_g": 0.26
+},
+"unit": "plate",
+"grams": 360.3,
+"kcal_1": 336.4,
+"aliases": [
+"poshtik khichdi/khichri"
+]
+},
+{
+"code": "ASC178",
+"name": "Dry potato (Sookhe aloo)",
+"per_100g": {
+"energy_kcal": 103.1,
+"protein_g": 1.62,
+"carbs_g": 14.38,
+"fat_g": 4.18,
+"fibre_g": 1.88,
+"sugar_g": 0.33
+},
+"unit": "katori",
+"grams": 105.7,
+"kcal_1": 109.1,
+"aliases": [
+"dry potato",
+"dry potato (sookhe aloo)",
+"sookhe aloo"
+]
+},
+{
+"code": "BFP136",
+"name": "Peas pulao (Matar pulao)",
+"per_100g": {
+"energy_kcal": 108.9,
+"protein_g": 3.89,
+"carbs_g": 18.42,
+"fat_g": 1.9,
+"fibre_g": 3.21,
+"sugar_g": 1.3
+},
+"unit": "plate",
+"grams": 471.9,
+"kcal_1": 513.8,
+"aliases": [
+"matar pulao",
+"peas pulao",
+"peas pulao (matar pulao)"
+]
+},
+{
+"code": "ASC052",
+"name": "Rice flakes (Chiwda/Aval)",
+"per_100g": {
+"energy_kcal": 112.4,
+"protein_g": 3.62,
+"carbs_g": 15.57,
+"fat_g": 3.99,
+"fibre_g": 0.37,
+"sugar_g": 7.28
+},
+"unit": "katori",
+"grams": 278.0,
+"kcal_1": 312.6,
+"aliases": [
+"aval",
+"chiwda",
+"rice flakes",
+"rice flakes (chiwda/aval)"
+]
+},
+{
+"code": "ASC112",
+"name": "Tandoori parantha/paratha",
+"per_100g": {
+"energy_kcal": 295.4,
+"protein_g": 5.08,
+"carbs_g": 30.74,
+"fat_g": 16.51,
+"fibre_g": 5.44,
+"sugar_g": 0.86
+},
+"unit": "piece",
+"grams": 55.7,
+"kcal_1": 164.4,
+"aliases": [
+"tandoori parantha/paratha"
+]
+},
+{
+"code": "ASC113",
+"name": "Boiled rice (Uble chawal)",
+"per_100g": {
+"energy_kcal": 117.2,
+"protein_g": 2.6,
+"carbs_g": 25.72,
+"fat_g": 0.18,
+"fibre_g": 1.25,
+"sugar_g": 0.22
+},
+"unit": "plate",
+"grams": 300.0,
+"kcal_1": 351.6,
+"aliases": [
+"boiled rice",
+"boiled rice (uble chawal)",
+"uble chawal"
+]
+},
+{
+"code": "ASC246",
+"name": "Fish curry (Machli curry)",
+"per_100g": {
+"energy_kcal": 111.1,
+"protein_g": 8.76,
+"carbs_g": 3.77,
+"fat_g": 6.69,
+"fibre_g": 1.89,
+"sugar_g": 2.02
+},
+"unit": "katori",
+"grams": 254.0,
+"kcal_1": 282.2,
+"aliases": [
+"fish curry",
+"fish curry (machli curry)",
+"machli curry"
+]
+},
+{
+"code": "ASC296",
+"name": "Egg halwa (Ande ka halwa)",
+"per_100g": {
+"energy_kcal": 299.7,
+"protein_g": 7.85,
+"carbs_g": 39.59,
+"fat_g": 13.41,
+"fibre_g": 0.49,
+"sugar_g": 37.85
+},
+"unit": "katori",
+"grams": 96.5,
+"kcal_1": 289.3,
+"aliases": [
+"ande ka halwa",
+"egg halwa",
+"egg halwa (ande ka halwa)"
+]
+},
+{
+"code": "ASC323",
+"name": "Meringue and rice pudding",
+"per_100g": {
+"energy_kcal": 112.9,
+"protein_g": 4.84,
+"carbs_g": 14.6,
+"fat_g": 4.05,
+"fibre_g": 0.17,
+"sugar_g": 10.87
+},
+"unit": "katori",
+"grams": 224.0,
+"kcal_1": 253.0,
+"aliases": [
+"meringue and rice pudding"
+]
+},
+{
+"code": "BFP170",
+"name": "Sour lentils (Khatti dal)",
+"per_100g": {
+"energy_kcal": 34.8,
+"protein_g": 2.22,
+"carbs_g": 6.04,
+"fat_g": 0.12,
+"fibre_g": 1.22,
+"sugar_g": 1.25
+},
+"unit": "bowl",
+"grams": 362.7,
+"kcal_1": 126.2,
+"aliases": [
+"khatti dal",
+"sour lentils",
+"sour lentils (khatti dal)"
+]
+},
+{
+"code": "BFP218",
+"name": "Broccoli chicken ala king",
+"per_100g": {
+"energy_kcal": 119.6,
+"protein_g": 7.97,
+"carbs_g": 5.34,
+"fat_g": 7.57,
+"fibre_g": 1.92,
+"sugar_g": 2.49
+},
+"unit": "katori",
+"grams": 236.1,
+"kcal_1": 282.3,
+"aliases": [
+"broccoli chicken ala king"
+]
+},
+{
+"code": "ASC123",
+"name": "Vegetable biryani/biriyani",
+"per_100g": {
+"energy_kcal": 174.6,
+"protein_g": 3.16,
+"carbs_g": 18.56,
+"fat_g": 9.51,
+"fibre_g": 3.31,
+"sugar_g": 2.14
+},
+"unit": "plate",
+"grams": 301.6,
+"kcal_1": 526.5,
+"aliases": [
+"vegetable biryani/biriyani"
+]
+},
+{
+"code": "ASC125",
+"name": "Sweet rice (Meethe chawal)",
+"per_100g": {
+"energy_kcal": 215.4,
+"protein_g": 2.1,
+"carbs_g": 42.59,
+"fat_g": 4.57,
+"fibre_g": 1.13,
+"sugar_g": 24.8
+},
+"unit": "plate",
+"grams": 347.8,
+"kcal_1": 749.1,
+"aliases": [
+"meethe chawal",
+"sweet rice",
+"sweet rice (meethe chawal)"
+]
+},
+{
+"code": "ASC193",
+"name": "Pea curry (Matar ki sabzi)",
+"per_100g": {
+"energy_kcal": 103.0,
+"protein_g": 4.51,
+"carbs_g": 9.2,
+"fat_g": 5.11,
+"fibre_g": 4.44,
+"sugar_g": 1.98
+},
+"unit": "katori",
+"grams": 277.3,
+"kcal_1": 285.6,
+"aliases": [
+"matar ki sabzi",
+"pea curry",
+"pea curry (matar ki sabzi)"
+]
+},
+{
+"code": "OSR069",
+"name": "Baked eggs in tomato sauce",
+"per_100g": {
+"energy_kcal": 80.0,
+"protein_g": 4.92,
+"carbs_g": 3.78,
+"fat_g": 5.22,
+"fibre_g": 0.01,
+"sugar_g": 2.03
+},
+"unit": "plate",
+"grams": 497.5,
+"kcal_1": 398.2,
+"aliases": [
+"baked eggs in tomato sauce"
+]
+},
+{
+"code": "BFP031",
+"name": "Potato canjee (Aloo canjee)",
+"per_100g": {
+"energy_kcal": 16.3,
+"protein_g": 0.44,
+"carbs_g": 2.69,
+"fat_g": 0.39,
+"fibre_g": 0.43,
+"sugar_g": 0.1
+},
+"unit": "glass",
+"grams": 195.3,
+"kcal_1": 31.8,
+"aliases": [
+"aloo canjee",
+"potato canjee",
+"potato canjee (aloo canjee)"
+]
+},
+{
+"code": "BFP151",
+"name": "Masala dosa paneer fillings",
+"per_100g": {
+"energy_kcal": 243.1,
+"protein_g": 10.31,
+"carbs_g": 29.76,
+"fat_g": 8.84,
+"fibre_g": 3.11,
+"sugar_g": 4.81
+},
+"unit": "piece",
+"grams": 197.3,
+"kcal_1": 479.8,
+"aliases": [
+"masala dosa paneer fillings"
+]
+},
+{
+"code": "OSR103",
+"name": "Moong bean dosa (Pesarattu)",
+"per_100g": {
+"energy_kcal": 286.0,
+"protein_g": 12.32,
+"carbs_g": 31.91,
+"fat_g": 11.67,
+"fibre_g": 6.04,
+"sugar_g": 2.9
+},
+"unit": "piece",
+"grams": 26.6,
+"kcal_1": 75.9,
+"aliases": [
+"moong bean dosa",
+"moong bean dosa (pesarattu)",
+"pesarattu"
+]
+},
+{
+"code": "ASC276",
+"name": "Potato raita (Aloo ka raita)",
+"per_100g": {
+"energy_kcal": 75.4,
+"protein_g": 4.22,
+"carbs_g": 10.24,
+"fat_g": 2.04,
+"fibre_g": 0.75,
+"sugar_g": 5.08
+},
+"unit": "katori",
+"grams": 157.7,
+"kcal_1": 118.9,
+"aliases": [
+"aloo ka raita",
+"potato raita",
+"potato raita (aloo ka raita)"
+]
+},
+{
+"code": "ASC297",
+"name": "Potato halwa (Aloo ka halwa)",
+"per_100g": {
+"energy_kcal": 151.7,
+"protein_g": 1.53,
+"carbs_g": 29.18,
+"fat_g": 3.48,
+"fibre_g": 1.64,
+"sugar_g": 17.42
+},
+"unit": "katori",
+"grams": 158.0,
+"kcal_1": 239.7,
+"aliases": [
+"aloo ka halwa",
+"potato halwa",
+"potato halwa (aloo ka halwa)"
+]
+},
+{
+"code": "BFP147",
+"name": "Instant idli (with semolina)",
+"per_100g": {
+"energy_kcal": 247.3,
+"protein_g": 9.16,
+"carbs_g": 43.4,
+"fat_g": 3.61,
+"fibre_g": 7.13,
+"sugar_g": 3.35
+},
+"unit": "piece",
+"grams": 35.3,
+"kcal_1": 87.2,
+"aliases": [
+"instant idli",
+"instant idli (with semolina)",
+"with semolina"
+]
+},
+{
+"code": "BFP239",
+"name": "Potato curry (Aloo ki sabzi)",
+"per_100g": {
+"energy_kcal": 89.6,
+"protein_g": 1.52,
+"carbs_g": 10.42,
+"fat_g": 4.47,
+"fibre_g": 2.42,
+"sugar_g": 1.58
+},
+"unit": "katori",
+"grams": 201.6,
+"kcal_1": 180.5,
+"aliases": [
+"aloo ki sabzi",
+"potato curry",
+"potato curry (aloo ki sabzi)"
+]
+},
+{
+"code": "ASC175",
+"name": "Potato fenugreek (Aloo methi)",
+"per_100g": {
+"energy_kcal": 135.1,
+"protein_g": 2.25,
+"carbs_g": 8.47,
+"fat_g": 10.04,
+"fibre_g": 2.93,
+"sugar_g": 0.54
+},
+"unit": "katori",
+"grams": 204.3,
+"kcal_1": 276.0,
+"aliases": [
+"aloo methi",
+"potato fenugreek",
+"potato fenugreek (aloo methi)"
+]
+},
+{
+"code": "ASC190",
+"name": "Pea potato curry (Aloo matar)",
+"per_100g": {
+"energy_kcal": 100.9,
+"protein_g": 3.48,
+"carbs_g": 9.74,
+"fat_g": 5.13,
+"fibre_g": 3.61,
+"sugar_g": 1.86
+},
+"unit": "katori",
+"grams": 277.3,
+"kcal_1": 279.9,
+"aliases": [
+"aloo matar",
+"pea potato curry",
+"pea potato curry (aloo matar)"
+]
+},
+{
+"code": "ASC215",
+"name": "Spinach paneer (Palak paneer)",
+"per_100g": {
+"energy_kcal": 77.7,
+"protein_g": 4.03,
+"carbs_g": 4.43,
+"fat_g": 4.76,
+"fibre_g": 1.91,
+"sugar_g": 2.55
+},
+"unit": "katori",
+"grams": 295.5,
+"kcal_1": 229.6,
+"aliases": [
+"palak paneer",
+"spinach paneer",
+"spinach paneer (palak paneer)"
+]
+},
+{
+"code": "ASC262",
+"name": "Potato salad (Aloo ka salaad)",
+"per_100g": {
+"energy_kcal": 89.9,
+"protein_g": 1.4,
+"carbs_g": 11.19,
+"fat_g": 4.4,
+"fibre_g": 1.32,
+"sugar_g": 3.94
+},
+"unit": "katori",
+"grams": 236.0,
+"kcal_1": 212.2,
+"aliases": [
+"aloo ka salaad",
+"potato salad",
+"potato salad (aloo ka salaad)"
+]
+},
+{
+"code": "ASC289",
+"name": "Carrot kheer (Gajar ki kheer)",
+"per_100g": {
+"energy_kcal": 85.3,
+"protein_g": 2.81,
+"carbs_g": 10.09,
+"fat_g": 3.85,
+"fibre_g": 0.73,
+"sugar_g": 9.63
+},
+"unit": "katori",
+"grams": 254.4,
+"kcal_1": 217.2,
+"aliases": [
+"carrot kheer",
+"carrot kheer (gajar ki kheer)",
+"gajar ki kheer"
+]
+},
+{
+"code": "ASC295",
+"name": "Carrot halwa (Gajar ka halwa)",
+"per_100g": {
+"energy_kcal": 172.6,
+"protein_g": 3.11,
+"carbs_g": 18.53,
+"fat_g": 9.73,
+"fibre_g": 2.65,
+"sugar_g": 16.85
+},
+"unit": "katori",
+"grams": 167.8,
+"kcal_1": 289.7,
+"aliases": [
+"carrot halwa",
+"carrot halwa (gajar ka halwa)",
+"gajar ka halwa"
+]
+},
+{
+"code": "ASC059",
+"name": "Scrambled egg (Ande ki bhurji)",
+"per_100g": {
+"energy_kcal": 156.0,
+"protein_g": 10.29,
+"carbs_g": 1.35,
+"fat_g": 12.21,
+"fibre_g": 0.24,
+"sugar_g": 1.08
+},
+"unit": "piece",
+"grams": 70.0,
+"kcal_1": 109.2,
+"aliases": [
+"ande ki bhurji",
+"scrambled egg",
+"scrambled egg (ande ki bhurji)"
+]
+},
+{
+"code": "ASC147",
+"name": "Semolina dosa (Suji/Rava dosa)",
+"per_100g": {
+"energy_kcal": 227.1,
+"protein_g": 7.3,
+"carbs_g": 32.84,
+"fat_g": 7.12,
+"fibre_g": 4.04,
+"sugar_g": 4.37
+},
+"unit": "piece",
+"grams": 73.4,
+"kcal_1": 166.7,
+"aliases": [
+"rava dosa",
+"semolina dosa",
+"semolina dosa (suji/rava dosa)",
+"suji"
+]
+},
+{
+"code": "ASC293",
+"name": "Semolina halwa (Suji ka halwa)",
+"per_100g": {
+"energy_kcal": 225.6,
+"protein_g": 2.16,
+"carbs_g": 24.67,
+"fat_g": 13.38,
+"fibre_g": 1.86,
+"sugar_g": 13.98
+},
+"unit": "katori",
+"grams": 159.6,
+"kcal_1": 360.2,
+"aliases": [
+"semolina halwa",
+"semolina halwa (suji ka halwa)",
+"suji ka halwa"
+]
+},
+{
+"code": "ASC298",
+"name": "Pumpkin halwa (Kaddu ka halwa)",
+"per_100g": {
+"energy_kcal": 190.3,
+"protein_g": 1.33,
+"carbs_g": 27.6,
+"fat_g": 8.81,
+"fibre_g": 2.97,
+"sugar_g": 26.64
+},
+"unit": "katori",
+"grams": 155.0,
+"kcal_1": 295.0,
+"aliases": [
+"kaddu ka halwa",
+"pumpkin halwa",
+"pumpkin halwa (kaddu ka halwa)"
+]
+},
+{
+"code": "BFP039",
+"name": "Semolina upma (Suji/Rava upma)",
+"per_100g": {
+"energy_kcal": 147.9,
+"protein_g": 3.3,
+"carbs_g": 16.31,
+"fat_g": 7.49,
+"fibre_g": 3.24,
+"sugar_g": 1.31
+},
+"unit": "katori",
+"grams": 106.3,
+"kcal_1": 157.1,
+"aliases": [
+"rava upma",
+"semolina upma",
+"semolina upma (suji/rava upma)",
+"upma"
+]
+},
+{
+"code": "BFP321",
+"name": "Spinach raita (Palak ka raita)",
+"per_100g": {
+"energy_kcal": 52.8,
+"protein_g": 3.95,
+"carbs_g": 5.06,
+"fat_g": 1.86,
+"fibre_g": 1.39,
+"sugar_g": 3.97
+},
+"unit": "katori",
+"grams": 203.2,
+"kcal_1": 107.2,
+"aliases": [
+"palak ka raita",
+"spinach raita",
+"spinach raita (palak ka raita)"
+]
+},
+{
+"code": "BFP336",
+"name": "Pumpkin kheer (Kaddu ki kheer)",
+"per_100g": {
+"energy_kcal": 86.4,
+"protein_g": 2.76,
+"carbs_g": 10.44,
+"fat_g": 3.86,
+"fibre_g": 0.63,
+"sugar_g": 10.12
+},
+"unit": "katori",
+"grams": 267.7,
+"kcal_1": 231.2,
+"aliases": [
+"kaddu ki kheer",
+"pumpkin kheer",
+"pumpkin kheer (kaddu ki kheer)"
+]
+},
+{
+"code": "BFP579",
+"name": "Semolina idli (Suji/Rava idli)",
+"per_100g": {
+"energy_kcal": 206.4,
+"protein_g": 9.34,
+"carbs_g": 33.67,
+"fat_g": 3.47,
+"fibre_g": 5.85,
+"sugar_g": 3.42
+},
+"unit": "piece",
+"grams": 29.6,
+"kcal_1": 61.1,
+"aliases": [
+"rava idli",
+"semolina idli",
+"semolina idli (suji/rava idli)"
+]
+},
+{
+"code": "ASC102",
+"name": "Sprouted moong parantha/paratha",
+"per_100g": {
+"energy_kcal": 228.6,
+"protein_g": 4.29,
+"carbs_g": 24.31,
+"fat_g": 12.43,
+"fibre_g": 4.49,
+"sugar_g": 1.47
+},
+"unit": "piece",
+"grams": 76.7,
+"kcal_1": 175.3,
+"aliases": [
+"sprouted moong parantha/paratha"
+]
+},
+{
+"code": "ASC171",
+"name": "Potato cauliflower (Aloo gobhi)",
+"per_100g": {
+"energy_kcal": 106.2,
+"protein_g": 1.9,
+"carbs_g": 5.99,
+"fat_g": 8.13,
+"fibre_g": 3.02,
+"sugar_g": 0.44
+},
+"unit": "katori",
+"grams": 175.7,
+"kcal_1": 186.6,
+"aliases": [
+"aloo gobhi",
+"potato cauliflower",
+"potato cauliflower (aloo gobhi)"
+]
+},
+{
+"code": "ASC191",
+"name": "Pea paneer curry (Matar paneer)",
+"per_100g": {
+"energy_kcal": 134.8,
+"protein_g": 6.61,
+"carbs_g": 9.29,
+"fat_g": 7.75,
+"fibre_g": 3.3,
+"sugar_g": 3.89
+},
+"unit": "katori",
+"grams": 277.3,
+"kcal_1": 373.9,
+"aliases": [
+"matar paneer",
+"pea paneer curry",
+"pea paneer curry (matar paneer)"
+]
+},
+{
+"code": "BFP134",
+"name": "Cumin pulao (Jeera/Zeera pulao)",
+"per_100g": {
+"energy_kcal": 135.2,
+"protein_g": 2.47,
+"carbs_g": 23.61,
+"fat_g": 3.2,
+"fibre_g": 1.4,
+"sugar_g": 0.64
+},
+"unit": "plate",
+"grams": 270.5,
+"kcal_1": 365.8,
+"aliases": [
+"cumin pulao",
+"cumin pulao (jeera/zeera pulao)",
+"jeera",
+"zeera pulao"
+]
+},
+{
+"code": "ASC165",
+"name": "Kidney bean curry (Rajmah curry)",
+"per_100g": {
+"energy_kcal": 143.7,
+"protein_g": 5.95,
+"carbs_g": 16.38,
+"fat_g": 5.77,
+"fibre_g": 5.83,
+"sugar_g": 2.49
+},
+"unit": "katori",
+"grams": 119.9,
+"kcal_1": 172.4,
+"aliases": [
+"kidney bean curry",
+"kidney bean curry (rajmah curry)",
+"rajma",
+"rajmah",
+"rajmah curry"
+]
+},
+{
+"code": "ASC273",
+"name": "Cucumber raita (Kheere ka raita)",
+"per_100g": {
+"energy_kcal": 59.1,
+"protein_g": 4.04,
+"carbs_g": 6.35,
+"fat_g": 2.08,
+"fibre_g": 0.86,
+"sugar_g": 5.22
+},
+"unit": "katori",
+"grams": 152.7,
+"kcal_1": 90.3,
+"aliases": [
+"cucumber raita",
+"cucumber raita (kheere ka raita)",
+"kheere ka raita"
+]
+},
+{
+"code": "ASC286",
+"name": "Semolina kheer (Suji/Rava kheer)",
+"per_100g": {
+"energy_kcal": 113.2,
+"protein_g": 3.43,
+"carbs_g": 15.88,
+"fat_g": 4.2,
+"fibre_g": 0.51,
+"sugar_g": 12.88
+},
+"unit": "katori",
+"grams": 230.4,
+"kcal_1": 260.9,
+"aliases": [
+"rava kheer",
+"semolina kheer",
+"semolina kheer (suji/rava kheer)"
+]
+},
+{
+"code": "ASC253",
+"name": "Paneer, apple and pineapple salad",
+"per_100g": {
+"energy_kcal": 95.1,
+"protein_g": 3.88,
+"carbs_g": 8.35,
+"fat_g": 5.07,
+"fibre_g": 1.65,
+"sugar_g": 6.36
+},
+"unit": "katori",
+"grams": 257.7,
+"kcal_1": 245.1,
+"aliases": [
+"paneer, apple and pineapple salad"
+]
+},
+{
+"code": "BFP208",
+"name": "Spinach mushroom (Palak mushroom)",
+"per_100g": {
+"energy_kcal": 47.6,
+"protein_g": 1.94,
+"carbs_g": 2.95,
+"fat_g": 2.96,
+"fibre_g": 2.27,
+"sugar_g": 1.0
+},
+"unit": "katori",
+"grams": 295.1,
+"kcal_1": 140.5,
+"aliases": [
+"palak mushroom",
+"spinach mushroom",
+"spinach mushroom (palak mushroom)"
+]
+},
+{
+"code": "OSR011",
+"name": "Black rice kheer (Chak-hao kheer)",
+"per_100g": {
+"energy_kcal": 147.9,
+"protein_g": 4.37,
+"carbs_g": 22.93,
+"fat_g": 4.91,
+"fibre_g": 0.76,
+"sugar_g": 12.57
+},
+"unit": "katori",
+"grams": 207.7,
+"kcal_1": 307.2,
+"aliases": [
+"black rice kheer",
+"black rice kheer (chak-hao kheer)",
+"chak-hao kheer"
+]
+},
+{
+"code": "ASC351",
+"name": "Potato pakora/pakoda (Aloo pakoda)",
+"per_100g": {
+"energy_kcal": 677.2,
+"protein_g": 1.9,
+"carbs_g": 6.04,
+"fat_g": 71.84,
+"fibre_g": 1.03,
+"sugar_g": 0.22
+},
+"unit": "plate",
+"grams": 674.5,
+"kcal_1": 4567.6,
+"aliases": [
+"aloo pakoda",
+"potato pakora/pakoda",
+"potato pakora/pakoda (aloo pakoda)"
+]
+},
+{
+"code": "ASC357",
+"name": "Egg pakora/pakoda (Ande ke pakode)",
+"per_100g": {
+"energy_kcal": 710.5,
+"protein_g": 2.83,
+"carbs_g": 4.48,
+"fat_g": 75.86,
+"fibre_g": 0.86,
+"sugar_g": 0.19
+},
+"unit": "plate",
+"grams": 644.5,
+"kcal_1": 4579.2,
+"aliases": [
+"ande ke pakode",
+"egg pakora/pakoda",
+"egg pakora/pakoda (ande ke pakode)"
+]
+},
+{
+"code": "BFP132",
+"name": "Eggplant/Brinjal rice (Vangi bhat)",
+"per_100g": {
+"energy_kcal": 184.8,
+"protein_g": 5.28,
+"carbs_g": 31.74,
+"fat_g": 3.67,
+"fibre_g": 4.44,
+"sugar_g": 4.36
+},
+"unit": "plate",
+"grams": 291.2,
+"kcal_1": 538.1,
+"aliases": [
+"eggplant/brinjal rice",
+"eggplant/brinjal rice (vangi bhat)",
+"vangi bhat"
+]
+},
+{
+"code": "OSR142",
+"name": "Split bengal gram dal (Channa dal)",
+"per_100g": {
+"energy_kcal": 99.7,
+"protein_g": 4.15,
+"carbs_g": 9.99,
+"fat_g": 4.62,
+"fibre_g": 3.72,
+"sugar_g": 0.98
+},
+"unit": "katori",
+"grams": 292.2,
+"kcal_1": 291.2,
+"aliases": [
+"channa dal",
+"split bengal gram dal",
+"split bengal gram dal (channa dal)"
+]
+},
+{
+"code": "ASC152",
+"name": "Washed urad dal (Dhuli urad ki dal)",
+"per_100g": {
+"energy_kcal": 61.3,
+"protein_g": 2.51,
+"carbs_g": 5.84,
+"fat_g": 2.98,
+"fibre_g": 1.53,
+"sugar_g": 0.32
+},
+"unit": "katori",
+"grams": 296.0,
+"kcal_1": 181.5,
+"aliases": [
+"washed urad dal",
+"washed urad dal (dhuli urad ki dal)"
+]
+},
+{
+"code": "ASC172",
+"name": "Potato capsicum (Shimla mirch aloo)",
+"per_100g": {
+"energy_kcal": 125.5,
+"protein_g": 1.41,
+"carbs_g": 8.72,
+"fat_g": 9.33,
+"fibre_g": 2.02,
+"sugar_g": 0.54
+},
+"unit": "katori",
+"grams": 150.8,
+"kcal_1": 189.2,
+"aliases": [
+"potato capsicum",
+"potato capsicum (shimla mirch aloo)",
+"shimla mirch aloo"
+]
+},
+{
+"code": "ASC192",
+"name": "Pea mushroom curry (Matar mushroom)",
+"per_100g": {
+"energy_kcal": 93.3,
+"protein_g": 3.87,
+"carbs_g": 7.41,
+"fat_g": 5.16,
+"fibre_g": 3.86,
+"sugar_g": 1.82
+},
+"unit": "katori",
+"grams": 277.3,
+"kcal_1": 258.7,
+"aliases": [
+"matar mushroom",
+"pea mushroom curry",
+"pea mushroom curry (matar mushroom)"
+]
+},
+{
+"code": "ASC288",
+"name": "Cabbage kheer (Pattagobhi ki kheer)",
+"per_100g": {
+"energy_kcal": 83.5,
+"protein_g": 2.87,
+"carbs_g": 9.73,
+"fat_g": 3.8,
+"fibre_g": 0.51,
+"sugar_g": 9.28
+},
+"unit": "katori",
+"grams": 254.4,
+"kcal_1": 212.5,
+"aliases": [
+"cabbage kheer",
+"cabbage kheer (pattagobhi ki kheer)",
+"pattagobhi ki kheer"
+]
+},
+{
+"code": "ASC048",
+"name": "Semolina porridge (Suji/Rava daliya)",
+"per_100g": {
+"energy_kcal": 100.9,
+"protein_g": 3.75,
+"carbs_g": 12.39,
+"fat_g": 4.08,
+"fibre_g": 0.7,
+"sugar_g": 7.54
+},
+"unit": "katori",
+"grams": 278.0,
+"kcal_1": 280.5,
+"aliases": [
+"rava daliya",
+"semolina porridge",
+"semolina porridge (suji/rava daliya)"
+]
+},
+{
+"code": "ASC160",
+"name": "Moti mahal dal (Urad rajmah mix dal)",
+"per_100g": {
+"energy_kcal": 103.1,
+"protein_g": 3.93,
+"carbs_g": 8.74,
+"fat_g": 5.66,
+"fibre_g": 3.38,
+"sugar_g": 1.7
+},
+"unit": "katori",
+"grams": 286.7,
+"kcal_1": 295.7,
+"aliases": [
+"moti mahal dal",
+"moti mahal dal (urad rajmah mix dal)"
+]
+},
+{
+"code": "ASC162",
+"name": "Chickpeas curry (Safed channa curry)",
+"per_100g": {
+"energy_kcal": 163.4,
+"protein_g": 6.1,
+"carbs_g": 19.98,
+"fat_g": 6.84,
+"fibre_g": 4.73,
+"sugar_g": 4.78
+},
+"unit": "katori",
+"grams": 119.9,
+"kcal_1": 196.0,
+"aliases": [
+"chickpeas curry",
+"chickpeas curry (safed channa curry)",
+"safed channa curry"
+]
+},
+{
+"code": "ASC196",
+"name": "Lotus stem curry (Kamal kakdi curry)",
+"per_100g": {
+"energy_kcal": 110.3,
+"protein_g": 1.53,
+"carbs_g": 9.24,
+"fat_g": 7.25,
+"fibre_g": 3.14,
+"sugar_g": 2.09
+},
+"unit": "katori",
+"grams": 202.3,
+"kcal_1": 223.2,
+"aliases": [
+"kamal kakdi curry",
+"lotus stem curry",
+"lotus stem curry (kamal kakdi curry)"
+]
+},
+{
+"code": "ASC355",
+"name": "Spinach pakora/pakoda (Palak pakoda)",
+"per_100g": {
+"energy_kcal": 712.6,
+"protein_g": 1.96,
+"carbs_g": 4.68,
+"fat_g": 76.38,
+"fibre_g": 1.02,
+"sugar_g": 0.2
+},
+"unit": "plate",
+"grams": 634.5,
+"kcal_1": 4521.6,
+"aliases": [
+"palak pakoda",
+"spinach pakora/pakoda",
+"spinach pakora/pakoda (palak pakoda)"
+]
+},
+{
+"code": "OSR006",
+"name": "Cucumber sharbat (Kheere ka sharbat)",
+"per_100g": {
+"energy_kcal": 27.3,
+"protein_g": 0.26,
+"carbs_g": 6.64,
+"fat_g": 0.06,
+"fibre_g": 0.78,
+"sugar_g": 5.46
+},
+"unit": "glass",
+"grams": 411.0,
+"kcal_1": 112.1,
+"aliases": [
+"cucumber sharbat",
+"cucumber sharbat (kheere ka sharbat)",
+"kheere ka sharbat"
+]
+},
+{
+"code": "ASC081",
+"name": "Chicken consomme (Clear chicken soup)",
+"per_100g": {
+"energy_kcal": 47.9,
+"protein_g": 11.47,
+"carbs_g": 1.19,
+"fat_g": 12.02,
+"fibre_g": 1.57,
+"sugar_g": 0.54
+},
+"unit": "bowl",
+"grams": 225.9,
+"kcal_1": 108.3,
+"aliases": [
+"chicken consomme",
+"chicken consomme (clear chicken soup)",
+"clear chicken soup"
+]
+},
+{
+"code": "ASC151",
+"name": "Washed moong dal (Dhuli moong ki dal)",
+"per_100g": {
+"energy_kcal": 50.0,
+"protein_g": 2.68,
+"carbs_g": 5.91,
+"fat_g": 1.68,
+"fibre_g": 1.17,
+"sugar_g": 0.12
+},
+"unit": "katori",
+"grams": 277.0,
+"kcal_1": 138.5,
+"aliases": [
+"dal",
+"moong dal",
+"washed moong dal",
+"washed moong dal (dhuli moong ki dal)"
+]
+},
+{
+"code": "ASC261",
+"name": "Mixed vegetable salad with curd sauce",
+"per_100g": {
+"energy_kcal": 60.3,
+"protein_g": 4.23,
+"carbs_g": 7.03,
+"fat_g": 1.5,
+"fibre_g": 3.79,
+"sugar_g": 2.16
+},
+"unit": "katori",
+"grams": 215.4,
+"kcal_1": 129.9,
+"aliases": [
+"mixed vegetable salad with curd sauce"
+]
+},
+{
+"code": "BFP040",
+"name": "Vermicelli upma (Semiya/Seviyan upma)",
+"per_100g": {
+"energy_kcal": 149.1,
+"protein_g": 3.11,
+"carbs_g": 16.88,
+"fat_g": 7.45,
+"fibre_g": 3.21,
+"sugar_g": 1.4
+},
+"unit": "katori",
+"grams": 106.3,
+"kcal_1": 158.4,
+"aliases": [
+"semiya",
+"seviyan upma",
+"vermicelli upma",
+"vermicelli upma (semiya/seviyan upma)"
+]
+},
+{
+"code": "BFP334",
+"name": "Bottle gourd kheer (Ghiya/Lauki kheer)",
+"per_100g": {
+"energy_kcal": 84.1,
+"protein_g": 2.7,
+"carbs_g": 10.0,
+"fat_g": 3.86,
+"fibre_g": 0.55,
+"sugar_g": 9.63
+},
+"unit": "katori",
+"grams": 267.7,
+"kcal_1": 225.1,
+"aliases": [
+"bottle gourd kheer",
+"bottle gourd kheer (ghiya/lauki kheer)",
+"lauki kheer"
+]
+},
+{
+"code": "BFP172",
+"name": "Arhar with spinach (Arhar dal aur palak)",
+"per_100g": {
+"energy_kcal": 52.8,
+"protein_g": 2.05,
+"carbs_g": 4.77,
+"fat_g": 2.76,
+"fibre_g": 1.3,
+"sugar_g": 0.23
+},
+"unit": "bowl",
+"grams": 403.3,
+"kcal_1": 213.1,
+"aliases": [
+"arhar with spinach",
+"arhar with spinach (arhar dal aur palak)"
+]
+},
+{
+"code": "BFP230",
+"name": "Prawn curry (with coconut) (Jhinga curry)",
+"per_100g": {
+"energy_kcal": 109.5,
+"protein_g": 8.54,
+"carbs_g": 3.1,
+"fat_g": 6.93,
+"fibre_g": 1.56,
+"sugar_g": 2.03
+},
+"unit": "katori",
+"grams": 286.1,
+"kcal_1": 313.4,
+"aliases": [
+"prawn curry",
+"prawn curry (with coconut) (jhinga curry)"
+]
+},
+{
+"code": "ASC094",
+"name": "Cold cucumber soup (Thanda kheere ka soup)",
+"per_100g": {
+"energy_kcal": 48.0,
+"protein_g": 2.99,
+"carbs_g": 4.58,
+"fat_g": 1.99,
+"fibre_g": 0.88,
+"sugar_g": 3.34
+},
+"unit": "bowl",
+"grams": 187.7,
+"kcal_1": 90.1,
+"aliases": [
+"cold cucumber soup",
+"cold cucumber soup (thanda kheere ka soup)"
+]
+},
+{
+"code": "ASC285",
+"name": "Vermicelli kheer (Semiya/Seviyan ki kheer)",
+"per_100g": {
+"energy_kcal": 120.1,
+"protein_g": 3.35,
+"carbs_g": 15.87,
+"fat_g": 5.0,
+"fibre_g": 0.5,
+"sugar_g": 12.79
+},
+"unit": "katori",
+"grams": 232.4,
+"kcal_1": 279.1,
+"aliases": [
+"seviyan ki kheer",
+"vermicelli kheer",
+"vermicelli kheer (semiya/seviyan ki kheer)"
+]
+},
+{
+"code": "ASC103",
+"name": "Pea parantha/paratha (Matar ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 190.7,
+"protein_g": 5.59,
+"carbs_g": 21.51,
+"fat_g": 8.8,
+"fibre_g": 5.61,
+"sugar_g": 1.29
+},
+"unit": "piece",
+"grams": 108.4,
+"kcal_1": 206.7,
+"aliases": [
+"matar ka parantha",
+"pea parantha/paratha",
+"pea parantha/paratha (matar ka parantha/paratha)"
+]
+},
+{
+"code": "BFP561",
+"name": "Split bengal gram burfi/fudge (Channa dal burfi)",
+"per_100g": {
+"energy_kcal": 287.4,
+"protein_g": 4.65,
+"carbs_g": 54.63,
+"fat_g": 7.09,
+"fibre_g": 2.06,
+"sugar_g": 43.38
+},
+"unit": "piece",
+"grams": 61.2,
+"kcal_1": 176.0,
+"aliases": [
+"channa dal burfi",
+"split bengal gram burfi/fudge",
+"split bengal gram burfi/fudge (channa dal burfi)"
+]
+},
+{
+"code": "ASC124",
+"name": "Lemon rice (Pulihora, Elumichai sadam, Chitranna)",
+"per_100g": {
+"energy_kcal": 176.3,
+"protein_g": 4.26,
+"carbs_g": 21.62,
+"fat_g": 7.88,
+"fibre_g": 2.52,
+"sugar_g": 0.78
+},
+"unit": "plate",
+"grams": 319.2,
+"kcal_1": 562.7,
+"aliases": [
+"lemon rice",
+"lemon rice (pulihora, elumichai sadam, chitranna)"
+]
+},
+{
+"code": "OSR099",
+"name": "Sago khitchdi/khichri (Sabudana khitchdi/khichri)",
+"per_100g": {
+"energy_kcal": 187.2,
+"protein_g": 2.72,
+"carbs_g": 22.41,
+"fat_g": 10.1,
+"fibre_g": 1.82,
+"sugar_g": 1.03
+},
+"unit": "katori",
+"grams": 271.4,
+"kcal_1": 507.9,
+"aliases": [
+"khichri",
+"sabudana khitchdi",
+"sago khitchdi/khichri",
+"sago khitchdi/khichri (sabudana khitchdi/khichri)"
+]
+},
+{
+"code": "ASC098",
+"name": "Potato parantha/paratha (Aloo ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 205.0,
+"protein_g": 3.7,
+"carbs_g": 23.92,
+"fat_g": 10.22,
+"fibre_g": 4.18,
+"sugar_g": 1.15
+},
+"unit": "piece",
+"grams": 93.4,
+"kcal_1": 191.4,
+"aliases": [
+"aloo ka parantha",
+"potato parantha/paratha",
+"potato parantha/paratha (aloo ka parantha/paratha)"
+]
+},
+{
+"code": "BFP269",
+"name": "Okra/Lady's fingers fry (Bhindi sabzi/sabji/subji)",
+"per_100g": {
+"energy_kcal": 110.8,
+"protein_g": 1.83,
+"carbs_g": 4.5,
+"fat_g": 9.27,
+"fibre_g": 3.57,
+"sugar_g": 1.42
+},
+"unit": "katori",
+"grams": 166.3,
+"kcal_1": 184.3,
+"aliases": [
+"bhindi sabzi",
+"okra/lady's fingers fry",
+"okra/lady's fingers fry (bhindi sabzi/sabji/subji)",
+"sabji",
+"subji"
+]
+},
+{
+"code": "ASC099",
+"name": "Radish parantha/paratha (Mooli ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 183.5,
+"protein_g": 3.3,
+"carbs_g": 20.54,
+"fat_g": 9.53,
+"fibre_g": 4.32,
+"sugar_g": 1.31
+},
+"unit": "piece",
+"grams": 100.0,
+"kcal_1": 183.6,
+"aliases": [
+"mooli ka parantha",
+"radish parantha/paratha",
+"radish parantha/paratha (mooli ka parantha/paratha)"
+]
+},
+{
+"code": "ASC274",
+"name": "Carrot and spinach raita (Gajar aur palak ka raita)",
+"per_100g": {
+"energy_kcal": 56.8,
+"protein_g": 4.0,
+"carbs_g": 5.83,
+"fat_g": 1.99,
+"fibre_g": 1.39,
+"sugar_g": 4.93
+},
+"unit": "katori",
+"grams": 177.7,
+"kcal_1": 101.0,
+"aliases": [
+"carrot and spinach raita",
+"carrot and spinach raita (gajar aur palak ka raita)"
+]
+},
+{
+"code": "ASC463",
+"name": "Split bengal gram sweet rice (Channa dal sweet rice)",
+"per_100g": {
+"energy_kcal": 190.2,
+"protein_g": 4.15,
+"carbs_g": 41.07,
+"fat_g": 0.64,
+"fibre_g": 2.23,
+"sugar_g": 19.41
+},
+"unit": "plate",
+"grams": 220.0,
+"kcal_1": 418.5,
+"aliases": [
+"split bengal gram sweet rice",
+"split bengal gram sweet rice (channa dal sweet rice)"
+]
+},
+{
+"code": "BFP052",
+"name": "Indian style egg bhujia (Anda bhujia (Indian style))",
+"per_100g": {
+"energy_kcal": 102.8,
+"protein_g": 6.1,
+"carbs_g": 3.76,
+"fat_g": 7.02,
+"fibre_g": 1.53,
+"sugar_g": 1.95
+},
+"unit": "katori_small",
+"grams": 126.0,
+"kcal_1": 129.5,
+"aliases": [
+"indian style egg bhujia",
+"indian style egg bhujia (anda bhujia (indian style))"
+]
+},
+{
+"code": "ASC460",
+"name": "Spinach peanut namak paras (Palak moongfali namak paras)",
+"per_100g": {
+"energy_kcal": 740.2,
+"protein_g": 1.65,
+"carbs_g": 6.62,
+"fat_g": 78.51,
+"fibre_g": 0.81,
+"sugar_g": 0.28
+},
+"unit": "plate",
+"grams": 316.1,
+"kcal_1": 2339.8,
+"aliases": [
+"spinach peanut namak paras",
+"spinach peanut namak paras (palak moongfali namak paras)"
+]
+},
+{
+"code": "ASC121",
+"name": "Green chickpeas pulao (Choliya pulao/Hare chane ka pulao)",
+"per_100g": {
+"energy_kcal": 173.4,
+"protein_g": 4.88,
+"carbs_g": 27.57,
+"fat_g": 4.82,
+"fibre_g": 3.15,
+"sugar_g": 2.48
+},
+"unit": "plate",
+"grams": 357.9,
+"kcal_1": 620.7,
+"aliases": [
+"choliya pulao",
+"green chickpeas pulao",
+"green chickpeas pulao (choliya pulao/hare chane ka pulao)"
+]
+},
+{
+"code": "BFP178",
+"name": "Green gram whole with baghar (Sabut moong dal with tadka)",
+"per_100g": {
+"energy_kcal": 63.4,
+"protein_g": 3.23,
+"carbs_g": 6.8,
+"fat_g": 2.48,
+"fibre_g": 3.02,
+"sugar_g": 0.15
+},
+"unit": "katori",
+"grams": 225.7,
+"kcal_1": 143.2,
+"aliases": [
+"green gram whole with baghar",
+"green gram whole with baghar (sabut moong dal with tadka)"
+]
+},
+{
+"code": "ASC161",
+"name": "Black channa curry/Bengal gram curry (Kale chane ki curry)",
+"per_100g": {
+"energy_kcal": 140.7,
+"protein_g": 5.67,
+"carbs_g": 14.11,
+"fat_g": 6.61,
+"fibre_g": 7.99,
+"sugar_g": 2.36
+},
+"unit": "katori",
+"grams": 119.9,
+"kcal_1": 168.7,
+"aliases": [
+"bengal gram curry",
+"black channa curry",
+"black channa curry/bengal gram curry",
+"black channa curry/bengal gram curry (kale chane ki curry)"
+]
+},
+{
+"code": "ASC467",
+"name": "Sweet split chickpea roti (Sweet channa dal roti/Puranpoli)",
+"per_100g": {
+"energy_kcal": 366.6,
+"protein_g": 9.51,
+"carbs_g": 62.66,
+"fat_g": 7.93,
+"fibre_g": 8.16,
+"sugar_g": 24.73
+},
+"unit": "piece",
+"grams": 53.4,
+"kcal_1": 195.7,
+"aliases": [
+"puranpoli",
+"sweet split chickpea roti",
+"sweet split chickpea roti (sweet channa dal roti/puranpoli)"
+]
+},
+{
+"code": "BFP138",
+"name": "Black channa pulao/ Bengal gram pulao (Kale chane ka pulao)",
+"per_100g": {
+"energy_kcal": 125.5,
+"protein_g": 3.44,
+"carbs_g": 21.55,
+"fat_g": 2.58,
+"fibre_g": 2.69,
+"sugar_g": 1.99
+},
+"unit": "plate",
+"grams": 396.9,
+"kcal_1": 498.2,
+"aliases": [
+"bengal gram pulao",
+"black channa pulao",
+"black channa pulao/ bengal gram pulao",
+"black channa pulao/ bengal gram pulao (kale chane ka pulao)"
+]
+},
+{
+"code": "ASC100",
+"name": "Cauliflower parantha/paratha (Phoolgobhi ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 178.1,
+"protein_g": 3.73,
+"carbs_g": 18.84,
+"fat_g": 9.47,
+"fibre_g": 4.68,
+"sugar_g": 1.15
+},
+"unit": "piece",
+"grams": 101.9,
+"kcal_1": 181.4,
+"aliases": [
+"cauliflower parantha/paratha",
+"cauliflower parantha/paratha (phoolgobhi ka parantha/paratha)",
+"phoolgobhi ka parantha"
+]
+},
+{
+"code": "ASC465",
+"name": "Wheat flour and moong dal burfi (Atta aur moong dal ki burfi)",
+"per_100g": {
+"energy_kcal": 441.1,
+"protein_g": 9.84,
+"carbs_g": 60.0,
+"fat_g": 18.41,
+"fibre_g": 6.02,
+"sugar_g": 31.12
+},
+"unit": "piece",
+"grams": 26.3,
+"kcal_1": 115.8,
+"aliases": [
+"wheat flour and moong dal burfi",
+"wheat flour and moong dal burfi (atta aur moong dal ki burfi)"
+]
+},
+{
+"code": "BFP176",
+"name": "Rasam with tamarind (Puli rasam/ Chintapandu rasam/ Charu/Saaru)",
+"per_100g": {
+"energy_kcal": 26.7,
+"protein_g": 1.13,
+"carbs_g": 3.37,
+"fat_g": 0.88,
+"fibre_g": 1.6,
+"sugar_g": 0.83
+},
+"unit": "bowl",
+"grams": 389.9,
+"kcal_1": 104.3,
+"aliases": [
+"charu",
+"chintapandu rasam",
+"puli rasam",
+"rasam",
+"rasam with tamarind",
+"rasam with tamarind (puli rasam/ chintapandu rasam/ charu/saaru)",
+"saaru"
+]
+},
+{
+"code": "ASC153",
+"name": "Split bengal gram with bottle gourd (Channa dal with ghiya/lauki)",
+"per_100g": {
+"energy_kcal": 73.3,
+"protein_g": 2.79,
+"carbs_g": 7.1,
+"fat_g": 3.6,
+"fibre_g": 2.72,
+"sugar_g": 1.05
+},
+"unit": "katori",
+"grams": 278.8,
+"kcal_1": 204.3,
+"aliases": [
+"lauki",
+"split bengal gram with bottle gourd",
+"split bengal gram with bottle gourd (channa dal with ghiya/lauki)"
+]
+},
+{
+"code": "ASC127",
+"name": "Tamarind rice (Chintapandu pulihora/Puliyodharai/Puli sadam/Huli anna)",
+"per_100g": {
+"energy_kcal": 373.0,
+"protein_g": 7.45,
+"carbs_g": 65.08,
+"fat_g": 8.53,
+"fibre_g": 5.12,
+"sugar_g": 11.65
+},
+"unit": "plate",
+"grams": 127.8,
+"kcal_1": 476.9,
+"aliases": [
+"chintapandu pulihora",
+"huli anna",
+"puli sadam",
+"puliyodharai",
+"tamarind rice",
+"tamarind rice (chintapandu pulihora/puliyodharai/puli sadam/huli anna)"
+]
+},
+{
+"code": "BFP276",
+"name": "Cauliflower, pea and potato bhujia (Phoolgobhi, matar aur aloo bhujia)",
+"per_100g": {
+"energy_kcal": 95.7,
+"protein_g": 2.75,
+"carbs_g": 8.23,
+"fat_g": 5.54,
+"fibre_g": 3.26,
+"sugar_g": 1.47
+},
+"unit": "katori",
+"grams": 191.2,
+"kcal_1": 182.9,
+"aliases": [
+"cauliflower, pea and potato bhujia",
+"cauliflower, pea and potato bhujia (phoolgobhi, matar aur aloo bhujia)"
+]
+},
+{
+"code": "ASC106",
+"name": "Besan and spinach parantha/paratha (Besan aur palak ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 216.5,
+"protein_g": 5.54,
+"carbs_g": 21.39,
+"fat_g": 12.09,
+"fibre_g": 4.39,
+"sugar_g": 1.31
+},
+"unit": "piece",
+"grams": 82.3,
+"kcal_1": 178.1,
+"aliases": [
+"besan and spinach parantha/paratha",
+"besan and spinach parantha/paratha (besan aur palak ka parantha/paratha)"
+]
+},
+{
+"code": "ASC126",
+"name": "Curd rice (Dahi bhaat/Dahi chawal/ Perugu annam/Daddojanam/Thayir saadam)",
+"per_100g": {
+"energy_kcal": 195.7,
+"protein_g": 5.75,
+"carbs_g": 32.93,
+"fat_g": 4.32,
+"fibre_g": 2.13,
+"sugar_g": 3.91
+},
+"unit": "plate",
+"grams": 216.2,
+"kcal_1": 423.1,
+"aliases": [
+"curd rice",
+"curd rice (dahi bhaat/dahi chawal/ perugu annam/daddojanam/thayir saadam)",
+"daddojanam",
+"dahi bhaat",
+"dahi chawal",
+"perugu annam",
+"thayir saadam"
+]
+},
+{
+"code": "BFP137",
+"name": "Split bengal gram dal and vegetable pulao (Channa dal and vegetable pulao)",
+"per_100g": {
+"energy_kcal": 116.5,
+"protein_g": 3.6,
+"carbs_g": 19.72,
+"fat_g": 2.3,
+"fibre_g": 3.16,
+"sugar_g": 1.59
+},
+"unit": "plate",
+"grams": 441.9,
+"kcal_1": 514.9,
+"aliases": [
+"split bengal gram dal and vegetable pulao",
+"split bengal gram dal and vegetable pulao (channa dal and vegetable pulao)"
+]
+},
+{
+"code": "BFP108",
+"name": "Onion-green chilli parantha/paratha (Pyaaz aur hari mirch ka parantha/paratha)",
+"per_100g": {
+"energy_kcal": 191.3,
+"protein_g": 4.37,
+"carbs_g": 26.37,
+"fat_g": 7.27,
+"fibre_g": 5.16,
+"sugar_g": 2.71
+},
+"unit": "piece",
+"grams": 76.4,
+"kcal_1": 146.2,
+"aliases": [
+"onion-green chilli parantha/paratha",
+"onion-green chilli parantha/paratha (pyaaz aur hari mirch ka parantha/paratha)"
+]
+},
+{
+"code": "BFP177",
+"name": "Rasam with lemon (Nimmakaya rasam/Nimmakaya charu/Elumichai rasam/Nimbe hannina saaru)",
+"per_100g": {
+"energy_kcal": 24.4,
+"protein_g": 1.11,
+"carbs_g": 2.85,
+"fat_g": 0.87,
+"fibre_g": 1.54,
+"sugar_g": 0.44
+},
+"unit": "bowl",
+"grams": 394.4,
+"kcal_1": 96.3,
+"aliases": [
+"elumichai rasam",
+"nimbe hannina saaru",
+"nimmakaya charu",
+"nimmakaya rasam",
+"rasam with lemon",
+"rasam with lemon (nimmakaya rasam/nimmakaya charu/elumichai rasam/nimbe hannina saaru)"
+]
+},
+{
+"code": "BFP026",
+"name": "Gingo",
+"per_100g": {
+"energy_kcal": 48.0,
+"protein_g": 0.14,
+"carbs_g": 12.42,
+"fat_g": 0.06,
+"fibre_g": 0.17,
+"sugar_g": 12.08
+},
+"unit": "glass",
+"grams": 291.0,
+"kcal_1": 139.7,
+"aliases": [
+"gingo"
+]
+},
+{
+"code": "OSR148",
+"name": "Papdi",
+"per_100g": {
+"energy_kcal": 709.0,
+"protein_g": 1.83,
+"carbs_g": 12.89,
+"fat_g": 72.11,
+"fibre_g": 0.56,
+"sugar_g": 0.31
+},
+"unit": "plate",
+"grams": 173.7,
+"kcal_1": 1231.4,
+"aliases": [
+"papdi"
+]
+},
+{
+"code": "ASC292",
+"name": "Phirni",
+"per_100g": {
+"energy_kcal": 116.1,
+"protein_g": 3.49,
+"carbs_g": 16.11,
+"fat_g": 4.34,
+"fibre_g": 0.36,
+"sugar_g": 10.79
+},
+"unit": "katori",
+"grams": 290.2,
+"kcal_1": 337.0,
+"aliases": [
+"phirni"
+]
+},
+{
+"code": "BFP029",
+"name": "Canjee",
+"per_100g": {
+"energy_kcal": 6.6,
+"protein_g": 0.24,
+"carbs_g": 0.44,
+"fat_g": 0.42,
+"fibre_g": 0.36,
+"sugar_g": 0.21
+},
+"unit": "glass",
+"grams": 170.2,
+"kcal_1": 11.3,
+"aliases": [
+"canjee"
+]
+},
+{
+"code": "OSR005",
+"name": "Thandai",
+"per_100g": {
+"energy_kcal": 101.2,
+"protein_g": 3.59,
+"carbs_g": 9.13,
+"fat_g": 5.89,
+"fibre_g": 0.8,
+"sugar_g": 8.21
+},
+"unit": "glass",
+"grams": 253.5,
+"kcal_1": 256.5,
+"aliases": [
+"thandai"
+]
+},
+{
+"code": "OSR076",
+"name": "Gobi 65",
+"per_100g": {
+"energy_kcal": 278.3,
+"protein_g": 0.56,
+"carbs_g": 3.59,
+"fat_g": 29.11,
+"fibre_g": 0.57,
+"sugar_g": 0.29
+},
+"unit": "plate",
+"grams": 857.5,
+"kcal_1": 2386.5,
+"aliases": [
+"gobi 65"
+]
+},
+{
+"code": "ASC004",
+"name": "Iced tea",
+"per_100g": {
+"energy_kcal": 10.3,
+"protein_g": 0.03,
+"carbs_g": 2.7,
+"fat_g": 0.01,
+"fibre_g": 0.0,
+"sugar_g": 2.7
+},
+"unit": "glass",
+"grams": 320.0,
+"kcal_1": 33.1,
+"aliases": [
+"iced tea"
+]
+},
+{
+"code": "ASC008",
+"name": "Lemonade",
+"per_100g": {
+"energy_kcal": 20.8,
+"protein_g": 0.03,
+"carbs_g": 5.48,
+"fat_g": 0.01,
+"fibre_g": 0.02,
+"sugar_g": 5.47
+},
+"unit": "glass",
+"grams": 349.3,
+"kcal_1": 72.6,
+"aliases": [
+"lemonade"
+]
+},
+{
+"code": "ASC264",
+"name": "Coleslaw",
+"per_100g": {
+"energy_kcal": 76.7,
+"protein_g": 1.24,
+"carbs_g": 5.59,
+"fat_g": 5.32,
+"fibre_g": 2.34,
+"sugar_g": 3.62
+},
+"unit": "katori",
+"grams": 152.5,
+"kcal_1": 117.0,
+"aliases": [
+"coleslaw"
+]
+},
+{
+"code": "ASC009",
+"name": "Lem-o-gin",
+"per_100g": {
+"energy_kcal": 21.5,
+"protein_g": 0.08,
+"carbs_g": 5.55,
+"fat_g": 0.03,
+"fibre_g": 0.13,
+"sugar_g": 5.38
+},
+"unit": "glass",
+"grams": 356.8,
+"kcal_1": 76.8,
+"aliases": [
+"lem-o-gin"
+]
+},
+{
+"code": "ASC014",
+"name": "Hot cocoa",
+"per_100g": {
+"energy_kcal": 90.1,
+"protein_g": 3.36,
+"carbs_g": 9.23,
+"fat_g": 4.56,
+"fibre_g": 0.0,
+"sugar_g": 9.01
+},
+"unit": "cup",
+"grams": 191.0,
+"kcal_1": 172.1,
+"aliases": [
+"hot cocoa"
+]
+},
+{
+"code": "OSR114",
+"name": "Bhel puri",
+"per_100g": {
+"energy_kcal": 509.9,
+"protein_g": 3.52,
+"carbs_g": 16.47,
+"fat_g": 47.91,
+"fibre_g": 2.24,
+"sugar_g": 3.41
+},
+"unit": "plate",
+"grams": 700.9,
+"kcal_1": 3573.6,
+"aliases": [
+"bhel puri"
+]
+},
+{
+"code": "OSR129",
+"name": "Whey soup",
+"per_100g": {
+"energy_kcal": 68.9,
+"protein_g": 3.45,
+"carbs_g": 6.26,
+"fat_g": 3.34,
+"fibre_g": 0.84,
+"sugar_g": 5.87
+},
+"unit": "katori",
+"grams": 223.4,
+"kcal_1": 154.0,
+"aliases": [
+"whey soup"
+]
+},
+{
+"code": "ASC220",
+"name": "Al yakhani",
+"per_100g": {
+"energy_kcal": 147.5,
+"protein_g": 2.86,
+"carbs_g": 4.65,
+"fat_g": 13.14,
+"fibre_g": 1.27,
+"sugar_g": 3.56
+},
+"unit": "katori",
+"grams": 232.0,
+"kcal_1": 342.3,
+"aliases": [
+"al yakhani"
+]
+},
+{
+"code": "ASC251",
+"name": "Fish tikka",
+"per_100g": {
+"energy_kcal": 117.3,
+"protein_g": 16.0,
+"carbs_g": 3.91,
+"fat_g": 4.15,
+"fibre_g": 1.18,
+"sugar_g": 1.18
+},
+"unit": "piece",
+"grams": 35.5,
+"kcal_1": 41.7,
+"aliases": [
+"fish tikka"
+]
+},
+{
+"code": "ASC422",
+"name": "Fruit Loaf",
+"per_100g": {
+"energy_kcal": 324.2,
+"protein_g": 5.36,
+"carbs_g": 46.49,
+"fat_g": 13.31,
+"fibre_g": 0.87,
+"sugar_g": 24.54
+},
+"unit": "slice",
+"grams": 55.9,
+"kcal_1": 181.1,
+"aliases": [
+"fruit loaf"
+]
+},
+{
+"code": "BFP404",
+"name": "Khoa ladoo",
+"per_100g": {
+"energy_kcal": 396.0,
+"protein_g": 12.21,
+"carbs_g": 34.43,
+"fat_g": 24.09,
+"fibre_g": 3.08,
+"sugar_g": 33.37
+},
+"unit": "piece",
+"grams": 45.0,
+"kcal_1": 178.2,
+"aliases": [
+"khoa ladoo"
+]
+},
+{
+"code": "BFP489",
+"name": "Lemon cake",
+"per_100g": {
+"energy_kcal": 373.9,
+"protein_g": 5.29,
+"carbs_g": 43.1,
+"fat_g": 20.63,
+"fibre_g": 0.62,
+"sugar_g": 25.84
+},
+"unit": "piece",
+"grams": 61.0,
+"kcal_1": 228.0,
+"aliases": [
+"lemon cake"
+]
+},
+{
+"code": "OSR092",
+"name": "Kale salad",
+"per_100g": {
+"energy_kcal": 177.7,
+"protein_g": 4.86,
+"carbs_g": 5.01,
+"fat_g": 15.33,
+"fibre_g": 1.36,
+"sugar_g": 3.31
+},
+"unit": "katori_small",
+"grams": 53.7,
+"kcal_1": 95.4,
+"aliases": [
+"kale salad"
+]
+},
+{
+"code": "OSR120",
+"name": "Wheat cake",
+"per_100g": {
+"energy_kcal": 314.6,
+"protein_g": 4.79,
+"carbs_g": 41.13,
+"fat_g": 14.95,
+"fibre_g": 2.76,
+"sugar_g": 25.79
+},
+"unit": "piece",
+"grams": 66.8,
+"kcal_1": 210.2,
+"aliases": [
+"wheat cake"
+]
+},
+{
+"code": "ASC080",
+"name": "Lentil soup",
+"per_100g": {
+"energy_kcal": 31.2,
+"protein_g": 9.65,
+"carbs_g": 3.94,
+"fat_g": 11.68,
+"fibre_g": 2.57,
+"sugar_g": 1.06
+},
+"unit": "bowl",
+"grams": 389.2,
+"kcal_1": 121.3,
+"aliases": [
+"lentil soup"
+]
+},
+{
+"code": "ASC227",
+"name": "Roghan josh",
+"per_100g": {
+"energy_kcal": 139.6,
+"protein_g": 9.56,
+"carbs_g": 4.93,
+"fat_g": 9.02,
+"fibre_g": 2.08,
+"sugar_g": 2.66
+},
+"unit": "katori",
+"grams": 236.0,
+"kcal_1": 329.4,
+"aliases": [
+"roghan josh"
+]
+},
+{
+"code": "ASC419",
+"name": "Marble cake",
+"per_100g": {
+"energy_kcal": 354.1,
+"protein_g": 6.3,
+"carbs_g": 46.88,
+"fat_g": 16.27,
+"fibre_g": 0.71,
+"sugar_g": 27.56
+},
+"unit": "piece",
+"grams": 53.6,
+"kcal_1": 189.8,
+"aliases": [
+"marble cake"
+]
+},
+{
+"code": "ASC421",
+"name": "Orange cake",
+"per_100g": {
+"energy_kcal": 357.6,
+"protein_g": 6.1,
+"carbs_g": 48.28,
+"fat_g": 16.21,
+"fibre_g": 0.83,
+"sugar_g": 28.38
+},
+"unit": "piece",
+"grams": 52.1,
+"kcal_1": 186.2,
+"aliases": [
+"orange cake"
+]
+}
+]
+}

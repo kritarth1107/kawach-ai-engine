@@ -90,3 +90,48 @@ async def test_the_same_generic_food_written_twice_is_one_row(db, at, nfake):
 def test_model_json_is_read_from_fences():
     assert lookup.parse_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert lookup.parse_json("no json") == {}
+
+
+async def test_a_blank_estimate_is_asked_once_more(monkeypatch):
+    calls = {"n": 0}
+
+    async def fake_ask(role, system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {}
+        return {"items": [{"i": 0, "name": "Jalebi", "kind": "generic",
+                           "per_100g": {"energy_kcal": 300, "protein_g": 4, "carbs_g": 55, "fat_g": 12},
+                           "default_unit": "piece", "units": {"piece": 30}}]}
+
+    monkeypatch.setattr(lookup, "ask", fake_ask)
+    out = await lookup.estimate_all([({"name": "jalebi"}, {})], timeout_s=6)
+    assert calls["n"] == 2 and out[0] is not None and out[0]["per_100g"]["energy_kcal"] == 300
+
+
+async def test_a_common_dish_is_the_databank_value_with_no_model(db, at, nfake):
+    at("2026-10-16 12:00")
+    got = await lookup.resolve(db, FAM, [{"name": "chapati", "quantity": 1, "unit": "piece"}])
+    food = got[0].food
+    assert food is not None and food.source == "indb" and food.checked["rough"] is False
+    assert nfake.web.asked == [] and "estimate" not in nfake.calls
+    portion = lookup.P.grams_for(food, 1, "piece")
+    kcal = lookup.N.kcal(lookup.N.scale(food.per_100g, portion.grams))
+    assert 70 <= kcal <= 76
+    assert abs(food.units["piece"] - 36) < 1
+
+
+async def test_a_blank_photo_is_read_again(monkeypatch):
+    from app.nutrition import vision
+
+    calls = {"n": 0}
+
+    async def fake_ask(role, system, user, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {}
+        return {"food": True, "items": [{"name": "jalebi", "also": "imarti", "quantity": 2, "unit": "piece", "grams": 40, "confidence": 0.6}]}
+
+    monkeypatch.setattr(vision, "ask", fake_ask)
+    reading = await vision.read_meal([{"mime": "image/jpeg", "data": "AAAA"}])
+    assert calls["n"] == 2 and reading["items"][0]["name"] == "jalebi" and reading["items"][0]["also"] == "imarti"
+    assert "or it might be imarti" in vision.describe(reading)

@@ -24,11 +24,19 @@ Say only what is visible. List each food or drink on the plate or in the picture
 (one of: piece katori bowl plate cup glass tsp tbsp slice handful scoop pack serving ml g) and your estimate of its grams.
 Count pieces you can see. confidence 0-1 for each item. If it is not food (a medicine strip, a report, a person), say so.
 If a pack's nutrition label or a barcode is visible, say so.
+name is the dish you think it is. also is one close dish it could be instead, or null. Chapati and paratha, poori and
+bhatura, samosa and pakora, gulab jamun and lyangcha are the kind of pair that means.
 
 HINTS (what the person or the companion said about it, may be empty): {hints}
 
-Return only JSON: {"food": true, "items": [{"name": "...", "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8}],
+Return only JSON: {"food": true, "items": [{"name": "...", "also": null, "quantity": 2, "unit": "piece", "grams": 100, "confidence": 0.8}],
 "description": "one short line of what is on the plate", "label_visible": false, "barcode": null, "unsure": false}"""
+
+# Used only when the full reading comes back empty (a cut-off answer, a refusal, or no JSON).
+FALLBACK_PROMPT = """Name the main food in this photo.
+
+Return only JSON: {"food": true, "items": [{"name": "the dish", "also": "one close alternative, or null", "quantity": 1, "unit": "piece", "grams": 80, "confidence": 0.5}]}
+If it is not food, return {"food": false, "items": []}."""
 
 LABEL_PROMPT = """You read the nutrition label on the photo of a food pack, exactly as printed.
 
@@ -56,12 +64,11 @@ async def read_meal(images: list[dict] | None, hints: str = "", *, essential: bo
     imgs = _images(images)
     if not imgs:
         return None
-    try:
-        d = await ask("vision", MEAL_PROMPT.replace("{hints}", hints[:400] or "(none)"), "The photo is attached.", images=imgs,
-                      essential=essential, max_tokens=2000)
-    except router.AllModelsFailed:
-        logger.warning("meal photo: no vision model answered")
-        return None
+    prompt = MEAL_PROMPT.replace("{hints}", hints[:400] or "(none)")
+    d = await _ask_meal(prompt, imgs, essential=essential, max_tokens=4000)
+    if not _named(d):
+        # The long answer was empty: a timeout, a refusal, or JSON cut off before the items. One shorter ask.
+        d = await _ask_meal(FALLBACK_PROMPT, imgs, essential=essential, max_tokens=1500)
     if not isinstance(d, dict):
         return None
     items = []
@@ -69,10 +76,27 @@ async def read_meal(images: list[dict] | None, hints: str = "", *, essential: bo
         if not isinstance(it, dict) or not str(it.get("name") or "").strip():
             continue
         unit = it.get("unit") if it.get("unit") in P.UNITS else None
-        items.append({"name": str(it["name"]).strip()[:120], "quantity": N.number(it.get("quantity")), "unit": unit,
+        also = str(it.get("also") or "").strip()[:80]
+        items.append({"name": str(it["name"]).strip()[:120], **({"also": also} if also and also.lower() != "null" else {}),
+                      "quantity": N.number(it.get("quantity")), "unit": unit,
                       "grams": N.number(it.get("grams")), "confidence": max(0.0, min(1.0, N.number(it.get("confidence")) or 0.5))})
     return {"food": bool(d.get("food", True)) and bool(items), "items": items[:12], "description": str(d.get("description") or "")[:300],
             "label_visible": bool(d.get("label_visible")), "barcode": _digits(d.get("barcode")), "unsure": bool(d.get("unsure"))}
+
+
+async def _ask_meal(prompt: str, imgs: list[dict], *, essential: bool, max_tokens: int) -> dict:
+    try:
+        d = await ask("vision", prompt, "The photo is attached.", images=imgs, essential=essential, max_tokens=max_tokens)
+    except router.AllModelsFailed:
+        logger.warning("meal photo: no vision model answered")
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
+def _named(d) -> bool:
+    if not isinstance(d, dict):
+        return False
+    return any(isinstance(it, dict) and str(it.get("name") or "").strip() for it in d.get("items") or [])
 
 
 async def read_label(images: list[dict] | None, *, essential: bool = True) -> dict | None:
@@ -116,5 +140,8 @@ def describe(reading: dict) -> str:
     parts = []
     for it in reading.get("items") or []:
         q = P.qty_label(it.get("quantity"), it.get("unit"))
-        parts.append(f"{q} {it['name']}".strip())
+        bit = f"{q} {it['name']}".strip()
+        if it.get("also"):
+            bit += f", or it might be {it['also']}"
+        parts.append(bit)
     return ", ".join(parts) or (reading.get("description") or "")

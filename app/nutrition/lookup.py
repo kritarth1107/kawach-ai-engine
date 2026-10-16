@@ -413,10 +413,11 @@ async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True
     body = json.dumps({"ask": may_ask, "FOODS": [{"i": i, "food": _describe(item, str(decision.get("canonical") or "") or None),
                                               **({"candidates": cards[i]} if cards[i] else {})}
                                               for i, ((item, decision), _c) in enumerate(zip(pairs, cards))]}, ensure_ascii=False)
+    started = time.monotonic()
     try:
         got = await ask("nutrition", ESTIMATE_PROMPT, body, essential=essential, max_tokens=2000, timeout_s=timeout_s)
     except router.AllModelsFailed:
-        return [None] * len(pairs)
+        got = {}
     rows = got.get("items") if isinstance(got, dict) else None
     out: list[dict | None] = [None] * len(pairs)
     if isinstance(rows, list):
@@ -442,6 +443,53 @@ async def estimate_all(pairs: list[tuple[dict, dict]], *, essential: bool = True
         food = _food_from_json(got, source="model")
         if food is not None:
             out[0] = _decorate(pairs[0][0], pairs[0][1], food)
+    # A cut-off answer leaves a food empty. Ask once more, only for those, with what time is left.
+    missing = [i for i, row in enumerate(out) if row is None]
+    left = timeout_s - (time.monotonic() - started)
+    if missing and left > 2.0:
+        again = [(pairs[i][0], pairs[i][1]) for i in missing]
+        again_cards = [cards[i] for i in missing]
+        body = json.dumps({"ask": may_ask, "FOODS": [{"i": j, "food": _describe(item, str(decision.get("canonical") or "") or None),
+                                                      **({"candidates": again_cards[j]} if again_cards[j] else {})}
+                                                     for j, (item, decision) in enumerate(again)]}, ensure_ascii=False)
+        try:
+            got = await ask("nutrition", ESTIMATE_PROMPT, body, essential=essential, max_tokens=4000, timeout_s=left)
+        except router.AllModelsFailed:
+            got = {}
+        retried = _estimate_rows(got, again)
+        for j, food in zip(missing, retried):
+            if food is not None:
+                out[j] = _decorate(pairs[j][0], pairs[j][1], food)
+    return out
+
+
+def _estimate_rows(got, pairs: list[tuple[dict, dict]]) -> list[dict | None]:
+    """One estimate answer → one food per item, or None where it had no energy."""
+    rows = got.get("items") if isinstance(got, dict) else None
+    out: list[dict | None] = [None] * len(pairs)
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict) and isinstance(row.get("i"), int) and 0 <= row["i"] < len(pairs):
+                if row.get("medicine") is True:
+                    out[row["i"]] = {"medicine": True}
+                    continue
+                if isinstance(row.get("match"), str) and row.get("match"):
+                    out[row["i"]] = {"match": row["match"]}
+                    continue
+                if row.get("needs") == "label":
+                    out[row["i"]] = {"needs": "label", "options": [str(o)[:60] for o in row.get("options") or []][:4]}
+                    continue
+                food = _food_from_json(row, source="model")
+                if food is not None:
+                    if row.get("assumed") is True:
+                        food["_assumed"] = True
+                    out[row["i"]] = food
+                elif row.get("kind") in KINDS:
+                    out[row["i"]] = {"kind": row.get("kind")}
+    elif len(pairs) == 1 and isinstance(got, dict):
+        food = _food_from_json(got, source="model")
+        if food is not None:
+            out[0] = food
     return out
 
 
@@ -558,12 +606,17 @@ async def save_food(session: AsyncSession, food: dict, *, family_id: str | None,
     per = N.clean(food.get("per_100g"))
     chk = N.check_per_100g(per)
     rough = bool(food.get("rough")) or not chk.ok
-    conf = {"label": 0.95, "off": 0.85, "ifct": 0.9, "usda": 0.9, "web": 0.8, "caregiver": 0.9, "seed": 0.9}.get(food.get("source") or "", 0.4)
+    # A published dish stays as published. A web refine must not replace it when its macros sit outside Atwater.
+    if food.get("source") == "indb":
+        rough = False
+    conf = {"label": 0.95, "off": 0.85, "ifct": 0.9, "usda": 0.9, "web": 0.8, "caregiver": 0.9, "seed": 0.9, "indb": 0.9}.get(food.get("source") or "", 0.4)
     if rough:
         conf = min(conf, 0.45)
     name = (food.get("name") or alias or "food").strip()[:200]
+    extra = [str(a).strip().lower()[:120] for a in food.get("aliases") or [] if str(a).strip()]
     row = NutritionFood(
-        id=uuid.uuid4(), family_id=family_id, name=name, aliases=sorted({a for a in [alias and alias.lower()[:120], name.lower()] if a}),
+        id=uuid.uuid4(), family_id=family_id, name=name,
+        aliases=sorted({a for a in [alias and alias.lower()[:120], name.lower(), *extra] if a})[:40],
         brand=food.get("brand"), restaurant=food.get("restaurant"), kind=food.get("kind") if food.get("kind") in KINDS else "generic",
         per_100g=per, per_serving=N.clean(food.get("per_serving")) or None, serving_g=N.number(food.get("serving_g")),
         units=P.clean_units(food.get("units")), default_unit=food.get("default_unit") if food.get("default_unit") in P.UNITS else None,
@@ -674,6 +727,9 @@ async def resolve(session: AsyncSession, family_id: str, items: list[dict], *, p
                   estimates_only: bool = False, cache_only: bool = False) -> list[Resolved]:
     """Find every item's food. Raises Slow when a web look-up does not fit before `deadline` (time.monotonic()).
     no_questions: the meal has had its two questions; a vague or unlabelled item is looked up (or estimated) as it is."""
+    from app.nutrition import catalogue
+
+    await catalogue.ensure(session)
     pantry_rows = list(pantry_rows or [])
     by_id = {str(p.id): p for p in pantry_rows}
     by_food = {p.food_id: p for p in pantry_rows if p.food_id}

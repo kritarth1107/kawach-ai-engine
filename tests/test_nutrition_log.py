@@ -197,7 +197,7 @@ async def test_a_food_found_once_needs_no_model_or_web_next_time(db, at, nfake):
     nfake.decisions["boiled egg"] = EGG_D
     await call(db, "log_food", {"items": [{"name": "boiled egg", "quantity": 2, "unit": "piece"}]})
     assert nfake.web.asked == [] and nfake.calls.count("estimate") == 1 and "normalise" not in nfake.calls
-    food = (await db.execute(NutritionFood.__table__.select())).first()
+    food = (await db.execute(NutritionFood.__table__.select().where(NutritionFood.name == "Egg, whole, boiled"))).first()
     assert food.family_id == FAM and food.source == "model"  # the reply's estimate; the web search is after they are told
     nfake.calls.clear()
     r, _ = await call(db, "log_food", {"items": [{"name": "Boiled egg", "quantity": 1, "unit": "piece"}]})
@@ -218,7 +218,7 @@ async def test_the_web_search_runs_after_the_reply_and_shares_the_food(db, at, n
 
     await agent.refine_saved(sessions, saved["job_id"])
     assert nfake.web.asked == ["egg"]
-    food = (await db.execute(NutritionFood.__table__.select())).first()
+    food = (await db.execute(NutritionFood.__table__.select().where(NutritionFood.name == "Egg, whole, boiled"))).first()
     assert food.family_id is None and food.source == "usda" and food.source_urls
 
 
@@ -491,7 +491,7 @@ async def test_her_own_answer_replaces_the_caregivers_estimate_of_the_same_meal(
     r, _ = await call(db, "log_food", {"meal": "lunch", "items": [{"name": "dal", "quantity": 1, "unit": "katori"}]})
     assert r["replaced"].startswith("This replaces what a caregiver logged")
     rows = await active(db)
-    assert [e.name for e in rows if e.status == "active"] == ["Dal, toor, cooked"]
+    assert [e.name for e in rows if e.status == "active"] == ["Washed moong dal (Dhuli moong ki dal)"]
 
 
 async def test_last_night_is_logged_on_yesterday_as_dinner(db, at, nfake):
@@ -634,7 +634,9 @@ async def test_a_slow_new_food_finishes_in_the_background(db, at, nfake, monkeyp
     nfake.web.slow = True
     nfake.calls.clear()
     nfake.web.asked.clear()
-    r, _ = await call(db, "log_food", {"items": [{"name": "chicken biryani", "quantity": 1, "unit": "plate"}]})
+    nfake.estimates["cedar stew"] = {"name": "Cedar stew", "per_100g": {"energy_kcal": 90, "protein_g": 4, "carbs_g": 8, "fat_g": 4},
+                                     "units": {"katori": 150}, "default_unit": "katori"}
+    r, _ = await call(db, "log_food", {"items": [{"name": "cedar stew", "quantity": 1, "unit": "katori"}]})
     assert r["result"] == "saved" and r["say"].startswith("Saved:"), r
     assert nfake.web.asked == [] and nfake.calls.count("estimate") == 1
     assert len(await active(db)) == 1
@@ -673,10 +675,10 @@ async def test_a_grocery_order_answered_yes_is_never_logged_as_eaten(db, at, nfa
 async def test_only_the_items_that_broke_a_strict_limit_are_marked(db, at, nfake):
     at("2026-10-14 13:00")
     await call(db, "nutrition_target", {"for_whom": MAA["id"], "set": {"kcal": 150}, "set_by": "doctor", "how": "strict"}, speaker=SON)
-    r, _ = await call(db, "log_food", {"items": [{"name": "chapati", "quantity": 2, "unit": "piece"}, {"name": "water", "quantity": 1, "unit": "glass"}]})
+    r, _ = await call(db, "log_food", {"items": [{"name": "chapati", "quantity": 3, "unit": "piece"}, {"name": "water", "quantity": 1, "unit": "glass"}]})
     assert r["result"] == "saved" and "Energy today" in r["deviation"], r
     rows = {e.name: e for e in await active(db)}
-    assert rows["Chapati (whole wheat)"].flags.get("deviation") and not rows["Water"].flags.get("deviation")
+    assert rows["Chapati/Roti"].flags.get("deviation") and not rows["Water"].flags.get("deviation")
 
 
 async def test_the_tracking_line_is_said_once_to_each_person_who_logs(db, at, nfake):
@@ -1039,6 +1041,8 @@ async def test_a_slow_search_does_not_hold_the_reply_or_start_a_second_wave(db, 
     monkeypatch.setattr(jobs, "kick_nutrition", lambda: None)
     nfake.web.slow = True
     nfake.calls.clear()
+    nfake.estimates["pongal"] = {"name": "Pongal", "per_100g": {"energy_kcal": 140, "protein_g": 4, "carbs_g": 22, "fat_g": 4},
+                                 "units": {"katori": 150}, "default_unit": "katori"}
     started = time.monotonic()
     out, _ = await call(db, "log_food", {"items": [
         {"name": "idli", "quantity": 2, "unit": "piece"},
@@ -1096,11 +1100,11 @@ async def test_a_slow_model_is_waited_for_and_a_timeout_is_not_saved_as_zero(db,
     import time
 
     at("2026-10-16 16:30")
-    nfake.estimates["poha"] = {"name": "Poha", "per_100g": {"energy_kcal": 180, "protein_g": 3, "carbs_g": 30, "fat_g": 5},
-                               "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
+    nfake.estimates["thekua"] = {"name": "Thekua", "per_100g": {"energy_kcal": 180, "protein_g": 3, "carbs_g": 30, "fat_g": 5},
+                                 "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
     nfake.estimate_delay = 3.2
     started = time.monotonic()
-    saved, err = await call(db, "log_food", {"items": [{"name": "poha", "quantity": 1, "unit": "plate"}]})
+    saved, err = await call(db, "log_food", {"items": [{"name": "thekua", "quantity": 1, "unit": "plate"}]})
     assert not err and saved["result"] == "saved", saved
     assert time.monotonic() - started >= 3.0
     assert saved["saved"][0]["kcal"] and saved["saved"][0]["confidence"] != "pending"
@@ -1109,18 +1113,18 @@ async def test_a_slow_model_is_waited_for_and_a_timeout_is_not_saved_as_zero(db,
     monkeypatch.setattr(lookup, "ESTIMATE_BUDGET", 0.2)
     nfake.estimate_delay = 1.0
     nfake.web.slow = True
-    out, err = await call(db, "log_food", {"items": [{"name": "upma", "quantity": 1, "unit": "plate"}]})
+    out, err = await call(db, "log_food", {"items": [{"name": "soan papdi", "quantity": 1, "unit": "plate"}]})
     assert not err and out["result"] == "saved", out
     assert out["saved"][0]["confidence"] == "pending" and out["saved"][0]["kcal"] is None, out
     assert "adding the numbers" in out["say"]
     assert " 0 kcal" not in f" {out['say']}" and "0 calories" not in out["say"]
-    row = next(e for e in await active(db) if "upma" in (e.name or "").lower() or "upma" in (e.name_said or "").lower())
+    row = next(e for e in await active(db) if "soan" in (e.name or "").lower() or "soan" in (e.name_said or "").lower())
     assert row.nutrients == {} and row.confidence == "pending"
 
     nfake.estimate_delay = 0
     nfake.web.slow = False
-    nfake.estimates["upma"] = {"name": "Upma", "per_100g": {"energy_kcal": 160, "protein_g": 4, "carbs_g": 28, "fat_g": 4},
-                               "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
+    nfake.estimates["soan papdi"] = {"name": "Soan papdi", "per_100g": {"energy_kcal": 160, "protein_g": 4, "carbs_g": 28, "fat_g": 4},
+                                     "units": {"plate": 200}, "default_unit": "plate", "typical_qty": 1}
     got = await agent.fill_missing(db)
     assert got["filled"] == 1, got
     await db.refresh(row)
