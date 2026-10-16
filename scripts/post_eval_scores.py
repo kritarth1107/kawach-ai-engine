@@ -1,12 +1,12 @@
-"""Post a night's scores.json to the engine (/v2/admin/eval-scores), and email the team when it cannot be stored.
+"""Post a night's scores.json to the engine (/v2/admin/eval-scores), and print the night's summary when it cannot be stored.
 
 The engine may be between deploys (13 Oct 00:34: a 404 because no deploy carrying the route had landed, and the score was
 lost without a word). So: retry while the engine answers 404, 5xx or not at all (up to POST_TRIES, every POST_WAIT_S);
-stop at once on 401/403/422 (a setup problem); on a final failure email the team through Resend with the night's verdict
-and the broken bars (the engine never got to email a failing night), and how to post it again
-(gh workflow run nightly-saheli.yml -f repost_run=<run id>). Never fails the job: the night's gate decides that.
+stop at once on 401/403/422 (a setup problem); on a final failure print the night's verdict, the broken bars and how to
+post it again (gh workflow run nightly-saheli.yml -f repost_run=<run id>) to the job log. Nothing is emailed: founder,
+17 Oct 2026, the team gets email only for a crisis alert. Never fails the job: the night's gate decides that.
 
-    ID_TOKEN=... ENGINE_URL=... RESEND_API_KEY=... python3 scripts/post_eval_scores.py scores.json --kind nightly \
+    ID_TOKEN=... ENGINE_URL=... python3 scripts/post_eval_scores.py scores.json --kind nightly \
         --run-id 123 --commit <sha> --branch master
 """
 
@@ -39,35 +39,10 @@ def post(url: str, token: str, body: bytes) -> tuple[int, str]:
 
 
 def email(subject: str, text: str) -> bool:
-    key = os.environ.get("RESEND_API_KEY", "")
-    if not key:
-        print("::warning::no RESEND_API_KEY: the team could not be emailed")
-        return False
-    to = [x.strip() for x in os.environ.get("TEAM_REPORT_TO", "kritarth@kavach.care").split(",") if x.strip()]
-    body = json.dumps({"from": "Kavach nightly <alerts@emails.kavach.care>", "to": to, "subject": subject[:160], "text": text[:20000]}).encode()
-    # Cloudflare in front of Resend answers 403 / error 1010 to Python-urllib and to a missing User-Agent.
-    # That is not a bad key or an unverified domain. A named agent gets through.
-    req = urllib.request.Request("https://api.resend.com/emails", data=body, method="POST",
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "User-Agent": "kavach-nightly"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as r:  # noqa: S310
-            return 200 <= r.status < 300
-    except urllib.error.HTTPError as exc:
-        # The body says which (a restricted key, a bad from address, or Cloudflare 1010). The key is not printed.
-        detail = exc.read().decode(errors="replace")[:300]
-        print(f"::warning::the team email failed: HTTP {exc.code} from {body_from(body)}: {detail}")
-        return False
-    except Exception as exc:  # noqa: BLE001
-        print(f"::warning::the team email failed: {exc}")
-        return False
-
-
-def body_from(body: bytes) -> str:
-    try:
-        return str(json.loads(body).get("from") or "")
-    except json.JSONDecodeError:
-        return ""
+    """Not sent (founder, 17 Oct 2026: only a crisis alert emails the team). The note stays in the job log and the artifact."""
+    print(f"::notice::not emailed (only a crisis alert emails the team): {subject[:160]}")
+    print(text[:20000])
+    return False
 
 
 def main(argv: list[str]) -> int:
@@ -105,7 +80,7 @@ def main(argv: list[str]) -> int:
             break  # a setup problem: waiting will not fix it
         if attempt < tries:
             time.sleep(wait)
-    print(f"::warning::the night's score could not be stored on the engine ({status}): emailing the team")
+    print(f"::warning::the night's score could not be stored on the engine ({status})")
     if sc.get("unavailable"):
         verdict = "UNAVAILABLE (not a quality failure; deploys go on if the tests passed)"
     elif sc.get("passed"):
