@@ -118,6 +118,22 @@ def test_a_cut_off_list_is_the_schedule_the_tool_returned():
     assert "21:30" in logged and "Montelukast" in logged
 
 
+def test_a_clock_time_they_did_not_give_is_not_said():
+    from app.brain import guards
+    from app.learn.situations import tag
+
+    said = "I avoid messaging between 10 PM and 7 AM."
+    assert guards.invented_clock(said, "sleeps at night\nWhen is a bad time to message me?")
+    assert not guards.invented_clock("Metformin is at 08:00.", "Metformin times 08:00")
+    bare = "I don't have any quiet hours saved on your record yet."
+    assert guards.quiet_unasked(bare, situation="relay", sent=False)
+    assert not guards.quiet_unasked(bare + " When should I stay quiet?", situation="relay", sent=False)
+    assert not guards.quiet_unasked(bare, situation="chit_chat", sent=False)
+    assert tag(text="When is a bad time to message me?", role="caregiver", tools=[]) == "relay"
+    assert guards.ask_time({"saved": {"language": "en"}}) == "I don't have a time for that yet. When should I stay quiet?"
+    assert "10" not in guards.ask_time({"saved": {"language": "hi"}, "now": "devanagari"})
+
+
 def test_a_saved_name_is_said_in_their_language():
     from app.brain import guards
 

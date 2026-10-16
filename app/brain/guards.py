@@ -1353,6 +1353,48 @@ _CALL_YOU = {
 }
 
 
+_CLOCK_SAID = re.compile(r"\b[0-9०-९]{1,2}\s*(?:बजे|वाजता)\b")
+
+_ASK_TIME = {
+    "english": "I don't have a time for that yet. When should I stay quiet?",
+    "indic": "Abhi mere paas yeh time nahi hai. Kab message nahi karun?",
+    "devanagari": "अभी मेरे पास यह समय नहीं है। कब मैसेज न करूँ?",
+    "mr": "अजून हा वेळ माझ्याकडे नाही. केव्हा मेसेज करू नये?",
+    "bengali": "এই সময়টা এখন আমার কাছে নেই। কখন মেসেজ করব না?",
+    "tamil": "அந்த நேரம் என்னிடம் இல்லை. எப்போது மெசேஜ் செய்யக்கூடாது?",
+    "telugu": "ఆ సమయం నా దగ్గర లేదు. ఎప్పుడు మెసేజ్ చేయకూడదు?",
+    "kannada": "ಆ ಸಮಯ ನನ್ನ ಬಳಿ ಇಲ್ಲ. ಯಾವಾಗ ಮೆಸೇಜ್ ಮಾಡಬಾರದು?",
+    "malayalam": "ആ സമയം എന്റെ കൈയിൽ ഇല്ല. എപ്പോൾ മെസേജ് ചെയ്യരുത്?",
+    "gujarati": "એ સમય મારી પાસે નથી. ક્યારે મેસેજ ન કરું?",
+    "gurmukhi": "ਇਹ ਸਮਾਂ ਮੇਰੇ ਕੋਲ ਨਹੀਂ। ਕਦੋਂ ਮੈਸੇਜ ਨਾ ਕਰਾਂ?",
+    "odia": "ଏହି ସମୟ ମୋ ପାଖରେ ନାହିଁ। କେବେ ମେସେଜ କରିବି ନାହିଁ?",
+}
+
+
+def invented_clock(reply: str, sources: str) -> bool:
+    """A clock time in her reply that is not in what they said, the record, or a tool result."""
+    src = re.sub(r"\s+", "", (sources or "").lower())
+    for pat in (_CLOCK, _CLOCK_SAID):
+        for match in pat.finditer(reply or ""):
+            token = re.sub(r"\s+", "", match.group(0).lower())
+            if token not in src:
+                return True
+    return False
+
+
+def quiet_unasked(reply: str, *, situation: str, sent: bool) -> bool:
+    """They asked, she named no clock and asked nothing back, and she did not message anyone this turn."""
+    if sent or "?" in (reply or "") or "？" in (reply or ""):
+        return False
+    if _CLOCK.search(reply or "") or _CLOCK_SAID.search(reply or ""):
+        return False
+    return situation == "relay"
+
+
+def ask_time(profile: dict | None) -> str:
+    return canned(profile, _ASK_TIME)
+
+
 def call_you(profile: dict | None, name: str) -> str:
     """The name they asked to be called, in their language. The name itself is the one they gave."""
     return canned(profile, _CALL_YOU).format(name=name)

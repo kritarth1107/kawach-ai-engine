@@ -1610,6 +1610,13 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # "On time" is only true when the reply names the time the record holds.
             final = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
             guarded = True
+        asked = "?" in (req.text or "") or "？" in (req.text or "")
+        sources = "\n".join([req.text or "", *tool_texts, *(str(x) for x in ctx.known)])
+        sent = any(a.get("ok") and a.get("tool") == "send_message" for a in ctx.actions)
+        if asked and (guards.invented_clock(final or "", sources) or guards.quiet_unasked(final or "", situation=ctx.situation or "", sent=sent)):
+            # A clock they did not give, or a question about when to message with no time and no question back.
+            final = guards.ask_time(profile)
+            guarded = True
         report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
         if report:
             try:
