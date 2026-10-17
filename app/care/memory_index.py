@@ -372,10 +372,17 @@ async def search(session: AsyncSession, family_id: str, subject_ids: list[str], 
         hits[h.ref] = h
     vec = await embed([query], query=True) if query.strip() else None
     if vec:
+        # The HNSW index is global while recall filters to one family/subject. Raise
+        # the candidate breadth and continue scanning through filtered-out rows where
+        # supported, so the per-family result set is complete before it is ranked.
+        await session.execute(text("SELECT set_config('hnsw.ef_search', '200', true)"))
+        iterative_scan = await session.scalar(text("SELECT current_setting('hnsw.iterative_scan', true)"))
+        if iterative_scan is not None:
+            await session.execute(text("SELECT set_config('hnsw.iterative_scan', 'strict_order', true)"))
         rows = list((await session.execute(
             select(MemoryVector).where(MemoryVector.family_id == family_id, MemoryVector.subject_id.in_(subject_ids),
                                        MemoryVector.embedding.is_not(None))
-            .order_by(MemoryVector.embedding.cosine_distance(vec[0])).limit(VECTOR_POOL * 3)
+            .order_by(MemoryVector.embedding.cosine_distance(vec[0]), MemoryVector.key).limit(VECTOR_POOL * 3)
         )).scalars())
         lines = await _current_note_lines(session, family_id, subject_ids) if any(r.source == "note" for r in rows) else {}
         facts = await _facts_by_ref(session, family_id, [r.ref for r in rows if r.source == "fact"])

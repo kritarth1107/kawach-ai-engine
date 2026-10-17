@@ -172,8 +172,20 @@ async def test_recall_benchmark(db, at, meaning):
     await db.execute(sql("DROP INDEX IF EXISTS ix_memory_vectors_embedding_hnsw"))
     before = {query: [h.text for h in await memory_index.search(db, FAM, [ELDER], query, limit=3)]
               for _, _, query in BENCH}
+    await db.execute(sql("DROP INDEX IF EXISTS ix_memory_vectors_subject"))
     await db.execute(sql("CREATE INDEX IF NOT EXISTS ix_memory_vectors_embedding_hnsw "
                          "ON memory_vectors USING hnsw (embedding vector_cosine_ops)"))
+    # Exercise the ANN path even with this small deterministic fixture. Production tables
+    # are large enough for the planner to choose HNSW naturally.
+    await db.execute(sql("SET LOCAL enable_seqscan = off"))
+    probe = (await memory_index.embed(["pet kharab"], query=True))[0]
+    vector = "[" + ",".join(str(value) for value in probe) + "]"
+    plan = (await db.execute(sql(
+        "EXPLAIN SELECT key FROM memory_vectors "
+        f"WHERE family_id = '{FAM}' AND subject_id = '{ELDER}' AND embedding IS NOT NULL "
+        f"ORDER BY embedding <=> '{vector}'::vector LIMIT 90"
+    ))).scalars().all()
+    assert any("ix_memory_vectors_embedding_hnsw" in row for row in plan), plan
     after = {query: [h.text for h in await memory_index.search(db, FAM, [ELDER], query, limit=3)]
              for _, _, query in BENCH}
     assert after == before, "adding HNSW must preserve the memory search top results"
