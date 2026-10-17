@@ -438,6 +438,10 @@ async def test_end_to_end(db, at, sessions, model, monkeypatch):
     at("2026-10-01 10:00")
     await db.execute(delete(PlaybookVersion))
     await db.execute(delete(FamilyRoster))
+    # The nightly job counts every unscored reply in the database: replies other tests committed (in any order, in any
+    # test part) would be counted as these 30.
+    await db.execute(delete(ReplyLog))
+    await db.execute(delete(LearningExample))
     monkeypatch.setenv("LEARN_MIN_EXAMPLES", "20")
     fams = [f"fam-e{i}" for i in range(4)]
     for fam in fams:

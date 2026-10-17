@@ -28,7 +28,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        # Six parts balanced by measured time (.test_durations, pytest-split; each part checked to pass on its own, 17 Oct).
+        # A test not in that list still runs,
+        # counted at the average time. Refresh the list with --store-durations when parts drift apart.
+        shard: [1, 2, 3, 4, 5, 6]
     services:
       db:
         image: pgvector/pgvector:pg16
@@ -47,16 +50,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt pytest pytest-asyncio
-      - name: Shard ${{ matrix.shard }} of 4
-        env:
-          SHARD: ${{ matrix.shard }}
-        run: |
-          mapfile -t files < <(find tests -name 'test_*.py' | sort)
-          pick=()
-          for ((i=SHARD; i<${#files[@]}; i+=4)); do pick+=("${files[i]}"); done
-          if [ ${#pick[@]} -eq 0 ]; then echo "shard $SHARD has no files"; exit 0; fi
-          python -m pytest -q "${pick[@]}"
+      - run: pip install -r requirements.txt pytest pytest-asyncio pytest-split==0.11.0
+      - name: Part ${{ matrix.shard }} of 6
+        run: python -m pytest -q --splits 6 --group ${{ matrix.shard }} --splitting-algorithm least_duration --durations-path .test_durations
 
   lint:
     runs-on: ubuntu-latest
@@ -82,8 +78,9 @@ jobs:
           SHA: ${{ github.sha }}
         run: python3 scripts/owners_check.py
 
-  deploy:
-    needs: [test, lint, owners]
+  # The image is built and pushed while the tests run. It is only an image in ECR until deploy, which waits for the tests,
+  # lint and the owner check, rolls it out; a failed test leaves it unused.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -108,6 +105,19 @@ jobs:
           printf 'FROM app:build\nUSER root\nCOPY --chmod=644 rds-ca.pem /etc/ssl/certs/rds-global-bundle.pem\nUSER %s\n' "$user" > /tmp/ca-wrap/Dockerfile
           docker build -t "$IMAGE" /tmp/ca-wrap
           docker push "$IMAGE"
+
+  deploy:
+    needs: [test, lint, owners, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::743887469650:role/gh-deploy-kawach-ai-engine
+          aws-region: ap-south-1
       - name: Roll the live service (image only)
         env:
           IMAGE: ${{ env.ECR }}:${{ github.sha }}
