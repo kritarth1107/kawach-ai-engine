@@ -107,6 +107,10 @@ SKILLS: dict[str, dict] = {
 
 SERVICES = sorted(SKILLS)
 
+# Why a store run stopped, as the agent reports it (the admin and the rollup count these instead of free text).
+PROBLEM_KINDS = ("none", "not_deliverable", "no_cod", "out_of_stock", "strength_unavailable", "not_found", "needs_prescription",
+                 "login_failed", "otp_refused", "site_blocked", "captcha", "price_changed", "cart_lost", "other")
+
 
 def schema_for(kind: str, phase: str) -> dict:
     """What the agent must report back, per phase."""
@@ -116,6 +120,8 @@ def schema_for(kind: str, phase: str) -> dict:
         "otp_sent_to": {"type": "string"},
         "blocked": {"type": "boolean"},
         "problem": {"type": "string", "description": "What stopped you, in one sentence; empty if nothing"},
+        "problem_kind": {"type": "string", "enum": list(PROBLEM_KINDS),
+                         "description": "What kind of thing stopped you: none if nothing did"},
     }
     if kind == "checkin":
         return {"type": "object", "properties": {**base, "checked_in": {"type": "boolean"}, "free_seat": {"type": "boolean"},

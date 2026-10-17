@@ -4084,6 +4084,7 @@ async def _count_tick_error(session: AsyncSession, task_id, final: str | None = 
                        "tell the caregiver to check the app.") if task.phase in ("place", "cancel") else (
                 final or "Something went wrong while working on it, so it was stopped; nothing was placed.")
             note(task, f"stopped after {n} errors")
+            task.details = {**(task.details or {}), "fail_code": "kavach_error"}
             metrics.on_milestone(task, "failed")
             await store.record_event(
                 session, family_id=task.family_id, subject_id=task.subject_id, kind="task_failed",
@@ -4168,6 +4169,7 @@ async def tick(
                         message = None if any((t.details or {}).get("compare_expired") for t in group if t.id != task.id) else (
                             "Nobody picked one of the options in time, so the look-up on every store was stopped; nothing was ordered.")
                         task.details = {**(task.details or {}), "compare_expired": True}
+                    task.details = {**(task.details or {}), "fail_code": "no_reply"}
                     metrics.on_milestone(task, "failed")
                     stats["expired"] += 1
                 elif task.status == "queued" and task.phase == "place" and not _confirm_still_valid(task):
@@ -4184,6 +4186,7 @@ async def tick(
                         "It is not clear whether it was placed (the last attempt was interrupted). Do not order again; tell the "
                         "caregiver to check the app."))
                     note(task, "place interrupted; not retried")
+                    task.details = {**(task.details or {}), "fail_code": "place_interrupted"}
                     metrics.on_milestone(task, "failed")
                 elif task.status == "queued":
                     if task.phase == "place":

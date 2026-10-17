@@ -70,7 +70,34 @@ def on_milestone(task: Task, name: str) -> None:
     m.setdefault(f"{name}_at", clock.now().isoformat())
     if name == "failed":
         m["failure"] = (task.history or [{}])[-1].get("note", "")[:200] if task.history else ""
+        m["failure_code"] = failure_code(task)
     _save(task, m)
+
+
+def failure_code(task: Task) -> str:
+    """One code for why a task failed, from data only: a code Kavach set (details.fail_code), then the agent's own
+    report (problem_kind, or the structured fields it filled), then the browser service's error."""
+    d = task.details or {}
+    if d.get("fail_code"):
+        return str(d["fail_code"])[:40]
+    r = task.result or {}
+    kind = str(r.get("problem_kind") or "")
+    if kind and kind not in ("none", "other"):
+        return kind
+    if r.get("blocked"):
+        return "site_blocked"
+    if r.get("deliverable") is False:
+        return "not_deliverable"
+    if r.get("cod_available") is False:
+        return "no_cod"
+    if r.get("needs_prescription"):
+        return "needs_prescription"
+    items = r.get("items") or []
+    if items and all(i.get("available") is False for i in items if isinstance(i, dict)):
+        return "out_of_stock"
+    if "session not found" in str(r.get("error") or "").lower():  # the browser service's own error text, not a person's words
+        return "session_lost"
+    return kind or "other"
 
 
 def _secs(a: str | None, b: str | None) -> float | None:
@@ -99,7 +126,7 @@ async def rollup(session: AsyncSession, days: int = 7) -> dict:
                 channels[c["channel"]] += 1
         reasons = defaultdict(int)
         for t in failed:
-            reasons[(_m(t).get("failure") or "unknown")[:80]] += 1
+            reasons[_m(t).get("failure_code") or (_m(t).get("failure") or "unknown")[:80]] += 1
         decided = len(ok) + len(failed)
         rate = (len(ok) / decided) if decided else None
         row = {
