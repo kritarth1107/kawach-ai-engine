@@ -91,8 +91,12 @@ async def test_unsure_voice_note_from_a_caregiver_cannot_change_a_dose_directly(
     await db.commit()
     change = ToolCall("c1", "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Metformin", "details": {"name": "Metformin", "dose": "1000 mg"},
                                          "sentence": "Metformin 1000 mg"})
-    model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Aapne 1000 mg kaha? Pakka?", tool_calls=[], model="fake")])
-    out = await run_turn(db, SimHost(), req("metformin hazaar", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2"))
+    # Read back first (app.brain.confirm); the yes is also an unsure voice note, so the change still waits as pending.
+    model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="मेटफॉर्मिन 1000 mg कर दूँ?", tool_calls=[], model="fake"),
+           LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Aapne 1000 mg kaha? Pakka?", tool_calls=[], model="fake")])
+    first = await run_turn(db, SimHost(), req("metformin hazaar", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2a"))
+    assert first.actions[0].get("held")
+    out = await run_turn(db, SimHost(), req("haan", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2"))
     act = await store.active_fact(db, FAM, ELDER["id"], "medicine:metformin")
     assert act.value["dose"] == "500 mg" and out.actions[0]["ok"]
     pending = await store.facts(db, FAM, ELDER["id"], statuses=("pending",))
@@ -104,8 +108,12 @@ async def test_sure_voice_note_from_a_caregiver_applies_as_usual(db, at, model):
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])
     change = ToolCall("c1", "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Metformin",
                                          "details": {"name": "Metformin", "dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin 500 mg at 08:00"})
-    model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Save kar diya.", tool_calls=[], model="fake")])
-    await run_turn(db, SimHost(), req("metformin paanch sau subah aath baje", speaker=SON, modality="voice", voice_confidence=0.95, ref="v3"))
+    model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="मेटफॉर्मिन 500 mg सुबह 8 बजे, सेव करूँ?", tool_calls=[], model="fake"),
+           LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Kamla ke liye save kar diya.", tool_calls=[], model="fake")])
+    await run_turn(db, SimHost(), req("metformin paanch sau subah aath baje", speaker=SON, modality="voice", voice_confidence=0.95, ref="v3a"))
+    assert await store.active_fact(db, FAM, ELDER["id"], "medicine:metformin") is None, "held until the yes"
+    # A one-word voice "haan" is short (unsure), but it answers the read-back, which was the check: it applies.
+    await run_turn(db, SimHost(), req("haan", speaker=SON, modality="voice", voice_confidence=0.95, ref="v3"))
     assert (await store.active_fact(db, FAM, ELDER["id"], "medicine:metformin")).value["dose"] == "500 mg"
 
 

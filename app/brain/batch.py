@@ -76,6 +76,7 @@ def _payload(req) -> dict:
         "modality": req.modality,
         "voice_confidence": req.voice_confidence,
         "voice_language": req.voice_language,
+        "reply_to": req.reply_to,
     }
 
 
@@ -100,11 +101,14 @@ def _joined(rows: list[TurnInbox], req):
     modality = req.modality
     voice_confidence = req.voice_confidence
     voice_language = req.voice_language
+    reply_to = req.reply_to
     for row in rows:
         extra = row.payload or {}
         images.extend(extra.get("images") or [])
         if extra.get("media_note"):
             notes.append(extra["media_note"])
+        if extra.get("reply_to") and not reply_to:
+            reply_to = extra["reply_to"]  # a quoted photo in a burst still comes back
         if extra.get("location") and location is None:
             location = extra["location"]
         if extra.get("modality") == "voice":
@@ -122,6 +126,7 @@ def _joined(rows: list[TurnInbox], req):
         modality=modality,
         voice_confidence=voice_confidence,
         voice_language=voice_language,
+        reply_to=reply_to,
     )
 
 

@@ -16,7 +16,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.brain import grounding, guards, policy, tools
+from app.brain import confirm, grounding, guards, photos, policy, tools
 from app.brain.context import (
     HISTORY_TURNS,
     LIGHT_HISTORY,
@@ -100,6 +100,8 @@ class TurnRequest:
     # messages that could not reach the speaker while their WhatsApp chat was closed (they got a template notice):
     # [{"purpose", "text", "at"}] from the backend, given in this turn
     waiting: list[dict] = field(default_factory=list)
+    # the WhatsApp message id this one quotes (a reply to their earlier photo): its kept reading comes back with it
+    reply_to: str | None = None
 
     @property
     def voice(self) -> bool:
@@ -638,12 +640,16 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         await session.commit()
         return TurnResult(reply="none", actions=[], alerts=[], model="none", stale=True)
 
+    user_meta = {"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None,
+                 **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
+                 **({"location": req.location} if req.location else {}), **({"reply_to": req.reply_to} if req.reply_to else {})}
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
-        speaker_id=req.speaker["id"], message_ref=req.message_ref,
-        meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
-              **({"location": req.location} if req.location else {})},
+        speaker_id=req.speaker["id"], message_ref=req.message_ref, meta=user_meta,
     )
+    # A photo is listed (every item it shows) beside the turn's own model call, so the reply is not slower; the reading is
+    # kept on this message for later turns (app.brain.photos).
+    photo_task = photos.start_read(req.images, req.text) if req.images and req.speaker.get("role") != "system" else None
     if inserted is not None and req.speaker.get("role") != "system":
         from app.care import nudges
 
@@ -739,13 +745,26 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     wrong_terms = [w.removeprefix("__rejected__") for w in avoid if w.startswith("__rejected__")]
     avoid = [w for w in avoid if not w.startswith(("__unreachable__", "__rejected__"))]
     dynamic, known_turn = await turn_context(session, req, data)
+    speaker_turns = await data.turns(req.speaker["id"]) if req.speaker.get("role") != "system" else []
+    photo_block = photos.block(speaker_turns)
+    if photo_block:
+        dynamic += "\n\n" + photo_block
+        known_turn += "\n" + photo_block
+    pending_before = confirm.pending_from(speaker_turns)
+    waiting_yes = confirm.waiting_block(pending_before)
+    if waiting_yes:
+        dynamic += "\n\n" + waiting_yes
     data.history_full = True
     msgs = await history(session, req, data)
     said = f"(voice note, transcript) {req.text}" if req.voice else req.text
     if req.images:
         kinds = ", ".join(sorted({i["mime"].split("/")[0].replace("application", "document") for i in req.images}))
         said = f"(they sent a {kinds}, attached; look at it) {said}".rstrip()
-    if req.media_note:
+    quoted_photo = photos.quoted(speaker_turns, req.reply_to) if not req.images else None
+    if quoted_photo:
+        shown = photos.reading_text(quoted_photo.get("read")) or "it could not be read then"
+        said = f"(they are replying to the photo they sent at {quoted_photo['at']}; it showed: {shown}) {said}".rstrip()
+    elif req.media_note:
         said = f"({req.media_note}) {said}".rstrip()
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {said}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
@@ -782,6 +801,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
         voice=req.voice,
         location=req.location, images=list(req.images or []),
+        confirm_gate=not is_system and req.channel in ("whatsapp", "call") and os.getenv("SAVE_CONFIRM", "on").strip().lower() != "off",
+        pending_before=pending_before, photo_turns=speaker_turns,
+        voice_low_score=bool(req.voice and req.voice_confidence is not None and req.voice_confidence < VOICE_SURE),
     )
     ctx.system_about = req.about if is_system and req.about in {m.get("id") for m in [req.elder, *req.members]} else None
     if not is_system and req.speaker.get("id"):
@@ -821,6 +843,22 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     # that is a source too.
     grounding_memory = "\n".join(p for p in (fam_block, known_record, known_turn, dynamic, req.text if is_system else "") if p)
     their_msgs = [_msg_text(m) for m in msgs if m.get("role") == "user"] + ([req.text] if req.text and not is_system else [])
+    photo_read: dict | None = None
+    photo_known = False
+
+    async def _photo_into_sources(wait_s: float) -> None:
+        # What the photo showed is a source for the checks: names read from it are not inventions (live 17 Oct: three of four
+        # strips were cut from the reply as "not in memory or this chat").
+        nonlocal photo_read, photo_known
+        if photo_known or photo_task is None:
+            return
+        photo_read = await photos.settle(photo_task, wait_s)
+        text = photos.reading_text(photo_read)
+        if text:
+            photo_known = True
+            line = f"(the photo they sent now shows: {text})"
+            their_msgs.append(line)
+            ctx.known.append(line)
     degraded = ""
     tool_text_retried = False
     reply: router.LLMReply | None = None
@@ -862,7 +900,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 logger.error("turn budget spent family=%s step=%d", req.family_id, step)
                 raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent") from exc
         except router.AllModelsFailed:
-            draft = "" if is_system else _last_draft(msgs)
+            # Only a reply written in THIS turn: her previous message in the history is not this turn's answer (a "Save it?"
+            # read-back was sent again after the yes had saved it, when the next call failed).
+            draft = "" if is_system else _last_draft(msgs[turn_start:])
             if draft:
                 # A later call ran out of time. The reply already written still goes out (a night of empty replies
                 # was five turns that had a draft and then spent the budget).
@@ -894,6 +934,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             if is_system or not text_now or last:
                 break
             checked_at = time.monotonic()
+            await _photo_into_sources(min(6.0, max(0.0, TURN_BUDGET_S[kind] - (time.monotonic() - started) - MIN_CALL_S)))
             # Length and a bookkeeping opener are cut here. A second brain call for that was 5–17 s on live turns.
             # Two questions, an invention, the wrong language or a missing name still go back to the model.
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
@@ -1199,10 +1240,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []
     stored = "\n\n".join(bubbles) if bubbles else final
+    held = [p for p in ctx.pending_saves if p["sig"] not in ctx.confirmed_saves]
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=stored,
-        meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
+        meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions],
+              **({"pending_saves": held[:10]} if held else {})},
     )
+    if photo_task is not None:
+        await _keep_photo(session, photo_task, photo_read, inserted, user_meta, req)
     if not is_system:
         await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final), guarded=guarded)
     # Folding the thread is another model call. A turn that is already slow sends the reply first; the next one folds.
@@ -1247,6 +1292,32 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         location_request=bool(ctx.location_request and final and final != "none" and not ctx.buttons),
     )
 
+
+async def _keep_photo(session: AsyncSession, task, read: dict | None, turn_id: int | None, meta: dict, req: TurnRequest) -> None:
+    """Keeps what the photo showed on their message. A read still running after the reply finishes on its own session."""
+    mimes = [i["mime"] for i in req.images]
+    if read is None and task.done():
+        read = await photos.settle(task, 0)
+    if read is not None or task.done():
+        await photos.keep(session, turn_id, meta, photos.photo_meta(read, ref=req.message_ref, mimes=mimes, caption=req.text))
+        return
+
+    async def later() -> None:
+        late = await photos.settle(task, photos.READ_TIMEOUT_S)
+        try:
+            from app.db.session import SessionLocal
+
+            async with SessionLocal() as s2:
+                await photos.keep(s2, turn_id, meta, photos.photo_meta(late, ref=req.message_ref, mimes=mimes, caption=req.text))
+                await s2.commit()
+        except Exception:  # noqa: BLE001 — the reply is already out; the photo is only not listed for later turns
+            logger.exception("keeping a photo reading failed family=%s", req.family_id)
+
+    _BACKGROUND.add(t := asyncio.create_task(later()))
+    t.add_done_callback(_BACKGROUND.discard)
+
+
+_BACKGROUND: set = set()
 
 TRACE_RESULT_CHARS = 4000  # the judge grades against these results: at 1500 a record's medicine list was cut and read as made up (13 Oct)
 

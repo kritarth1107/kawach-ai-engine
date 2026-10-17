@@ -56,16 +56,19 @@ async def test_a_v2_turn_that_remembers_notes_and_recalls_writes_no_instinct_row
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])
     await db.commit()
     before = await counts(db)
+    saves = [ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {}, "sentence": "Low salt diet"}),
+             ToolCall("c2", "note", {"topic": "family", "text": "Her grandson Arjun studies in Pune"})]
+    # Saves are read back first and written after the yes (app.brain.confirm).
     model([
-        LLMReply(text="", tool_calls=[
-            ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {}, "sentence": "Low salt diet"}),
-            ToolCall("c2", "note", {"topic": "family", "text": "Her grandson Arjun studies in Pune"}),
-            ToolCall("c3", "recall", {"query": "grandson"}),
-        ], model="fake"),
+        LLMReply(text="", tool_calls=[*saves, ToolCall("c3", "recall", {"query": "grandson"})], model="fake"),
+        LLMReply(text="नमक कम वाली डाइट और अर्जुन का पुणे में पढ़ना याद रखूँ?", tool_calls=[], model="fake"),
+        LLMReply(text="", tool_calls=saves, model="fake"),
         LLMReply(text="Theek hai, yaad rakhungi.", tool_calls=[], model="fake"),
     ])
+    await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, SON],
+                                              text="Doctor ne namak kam bola. Arjun Pune mein padhta hai.", message_ref="nl0"))
     out = await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, SON],
-                                                    text="Doctor ne namak kam bola. Arjun Pune mein padhta hai.", message_ref="nl1"))
+                                                    text="haan", message_ref="nl1"))
     assert out.reply
     assert [f for f in await store.facts(db, FAM, ELDER["id"]) if f.key == "diet:low_salt"]
     assert await counts(db) == before

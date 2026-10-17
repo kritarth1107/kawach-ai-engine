@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, cast
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.brain import guards
+from app.brain import guards, photos
 from app.care import digest, freshness, links, store
 from app.care.models import Turn
 from app.core import clock
@@ -177,6 +177,7 @@ async def turn_context(session: AsyncSession, req: TurnRequest, data: TurnData |
         if tasks else "ACTIVE TASKS: none.",
         await reminders_block(session, req),
         *([dose] if dose else []),
+        await medicines_block(session, req, data),
         onboarding_block(req),
         waiting_block(req),
     ]
@@ -399,6 +400,60 @@ async def dose_answer_block(data: TurnData, req: TurnRequest) -> str:
     return dose_answer_line(last.text, meds)
 
 
+async def medicines_block(session: AsyncSession, req: TurnRequest, data: TurnData) -> str:
+    """Every saved medicine with what is known about it: dose, times, course dates, purpose, and the tablets left the family
+    counted (the dashboard's Stock & refills). Saheli does not ask for what is listed here (live 17 Oct: she asked a
+    caregiver for a medicine count the dashboard already showed)."""
+    from sqlalchemy import select as _select
+
+    from app.care import features
+    from app.care.models import CareEvent
+
+    people = [req.elder["id"]]
+    if req.speaker.get("role") != "system" and req.speaker["id"] != req.elder["id"]:
+        people.insert(0, req.speaker["id"])
+    names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
+    lines: list[str] = []
+    for pid in people:
+        meds = [f for f in await data.facts(pid) if f.domain == "medicine" and f.status == "active" and (f.value or {}).get("name")]
+        if not meds:
+            continue
+        stock: dict[str, dict] = {}
+        counted = (await session.execute(_select(CareEvent.id).where(
+            CareEvent.family_id == req.family_id, CareEvent.subject_id == pid, CareEvent.kind == "stock_set").limit(1))).first()
+        if counted:
+            try:
+                async with session.begin_nested():
+                    stock = {r["key"]: r for r in await features.stock(session, req.family_id, pid)}
+            except Exception:  # noqa: BLE001 — the list still shows without counts
+                logger.exception("stock for context failed family=%s", req.family_id)
+        who = "the speaker" if pid == req.speaker["id"] else (names.get(pid) or "them")
+        lines.append(f"  {who}:")
+        for n, f in enumerate(sorted(meds, key=lambda x: x.key)[:15], 1):
+            v = f.value or {}
+            bits = [" ".join(str(x) for x in (v.get("name"), v.get("strength") or "", v.get("dose") or "") if x).strip()]
+            if v.get("salt"):
+                bits.append(str(v["salt"]))
+            bits.append("at " + ", ".join(map(str, v["times"])) if v.get("times") else "no reminder times")
+            if v.get("food_timing"):
+                bits.append(str(v["food_timing"]).replace("_", " "))
+            if v.get("purpose"):
+                bits.append(f"for {v['purpose']}")
+            if v.get("ends_on"):
+                bits.append(f"course {v.get('starts_on') or ''} to {v['ends_on']}".replace("  ", " "))
+            row = stock.get(f.key)
+            if row and row.get("stock") is not None:
+                bits.append(f"{row['stock']} left" + (f", about {row['daysLeft']} days" if row.get("daysLeft") is not None else "")
+                            + (f" (counted {clock.ist(datetime.fromisoformat(row['asOf'])).strftime('%d %b')})" if row.get("asOf") else ""))
+            lines.append(f"    {n}. [{f.key}] " + "; ".join(b for b in bits if b))
+    if not lines:
+        return ""
+    return ("MEDICINES ON RECORD (what the dashboard shows; numbered as you would list them). Use these: never ask for a count, "
+            "dose, time or stock listed here. To stop or delete one: stop with domain medicine and its name. When they ask to "
+            "delete or stop medicines without saying which, list that person's medicines with these numbers plus 'all', and ask "
+            "which:\n" + "\n".join(lines))
+
+
 async def reminders_block(session: AsyncSession, req: TurnRequest) -> str:
     """Reminders due in the next hours, so one the person says is already done is skipped instead of going out anyway
     (live 2026-10-12: "i had the medicine" at 00:12, and the reminder for it still came at 00:15).
@@ -477,6 +532,10 @@ async def history(session: AsyncSession, req: TurnRequest, data: TurnData | None
         if len(said) > PROMPT_TURN_CHARS:
             said = said[:PROMPT_TURN_CHARS].rstrip() + "…"
         if t.role == "user":
+            # A photo they sent stays in the thread as what it showed (app.brain.photos), not as an empty line.
+            seen = photos.history_note(t.meta)
+            if seen:
+                said = f"{seen[:900]} {said}".rstrip()
             msgs.append({"role": "user", "content": [{"type": "text", "text": f"[{stamp}] {said}"}]})
         else:
             msgs.append({"role": "assistant", "text": said, "tool_calls": []})
