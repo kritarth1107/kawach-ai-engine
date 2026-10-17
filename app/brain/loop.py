@@ -16,7 +16,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.brain import grounding, guards, policy, tools
+from app.brain import confirm, grounding, guards, photos, policy, tools
 from app.brain.context import (
     HISTORY_TURNS,
     LIGHT_HISTORY,
@@ -100,6 +100,8 @@ class TurnRequest:
     # messages that could not reach the speaker while their WhatsApp chat was closed (they got a template notice):
     # [{"purpose", "text", "at"}] from the backend, given in this turn
     waiting: list[dict] = field(default_factory=list)
+    # the WhatsApp message id this one quotes (a reply to their earlier photo): its kept reading comes back with it
+    reply_to: str | None = None
 
     @property
     def voice(self) -> bool:
@@ -638,12 +640,16 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         await session.commit()
         return TurnResult(reply="none", actions=[], alerts=[], model="none", stale=True)
 
+    user_meta = {"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None,
+                 **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
+                 **({"location": req.location} if req.location else {}), **({"reply_to": req.reply_to} if req.reply_to else {})}
     inserted = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="user", text=req.text,
-        speaker_id=req.speaker["id"], message_ref=req.message_ref,
-        meta={"channel": req.channel, "images": len(req.images), "media": [i["mime"] for i in req.images] or None, **({"voice": True, "voice_confidence": req.voice_confidence} if req.voice else {}),
-              **({"location": req.location} if req.location else {})},
+        speaker_id=req.speaker["id"], message_ref=req.message_ref, meta=user_meta,
     )
+    # A photo is listed (every item it shows) beside the turn's own model call, so the reply is not slower; the reading is
+    # kept on this message for later turns (app.brain.photos).
+    photo_task = photos.start_read(req.images, req.text) if req.images and req.speaker.get("role") != "system" else None
     if inserted is not None and req.speaker.get("role") != "system":
         from app.care import nudges
 
@@ -739,13 +745,31 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     wrong_terms = [w.removeprefix("__rejected__") for w in avoid if w.startswith("__rejected__")]
     avoid = [w for w in avoid if not w.startswith(("__unreachable__", "__rejected__"))]
     dynamic, known_turn = await turn_context(session, req, data)
+    speaker_turns = await data.turns(req.speaker["id"]) if req.speaker.get("role") != "system" else []
+    photo_block = photos.block(speaker_turns)
+    if photo_block:
+        dynamic += "\n\n" + photo_block
+        known_turn += "\n" + photo_block
+    pending_before = confirm.pending_from(speaker_turns)
+    waiting_yes = confirm.waiting_block(pending_before)
+    if waiting_yes:
+        dynamic += "\n\n" + waiting_yes
     data.history_full = True
     msgs = await history(session, req, data)
     said = f"(voice note, transcript) {req.text}" if req.voice else req.text
     if req.images:
         kinds = ", ".join(sorted({i["mime"].split("/")[0].replace("application", "document") for i in req.images}))
         said = f"(they sent a {kinds}, attached; look at it) {said}".rstrip()
-    if req.media_note:
+    quoted_photo = photos.quoted(speaker_turns, req.reply_to) if not req.images else None
+    if quoted_photo:
+        shown = photos.reading_text(quoted_photo.get("read")) or "it could not be read then"
+        said = f"(they are replying to the photo they sent at {quoted_photo['at']}; it showed: {shown}) {said}".rstrip()
+    elif photos.quoted_unread(speaker_turns, req.reply_to) and not req.images:
+        # A quoted photo whose reading was not kept: she cannot see it now, and says so (never a guess).
+        when = photos.quoted_unread(speaker_turns, req.reply_to)["at"]
+        said = (f"(they are replying to the photo they sent at {when}; you cannot see it now and what it showed was not kept: "
+                f"say so honestly and ask them to send it again or type the names; never guess what it showed) {said}").rstrip()
+    elif req.media_note:
         said = f"({req.media_note}) {said}".rstrip()
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {said}"}]
     content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in req.images]
@@ -782,7 +806,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         situation=situation, playbook_version=pb.version if pb else 0, arm=arm, voice_unsure=req.voice_unsure,
         voice=req.voice,
         location=req.location, images=list(req.images or []),
+        confirm_gate=not is_system and req.channel in ("whatsapp", "call") and os.getenv("SAVE_CONFIRM", "on").strip().lower() != "off",
+        pending_before=pending_before, photo_turns=speaker_turns,
+        voice_low_score=bool(req.voice and req.voice_confidence is not None and req.voice_confidence < VOICE_SURE),
     )
+    if pending_before and ctx.confirm_gate:
+        ctx.tool_groups.add("confirm")  # answer_pending, only while a read-back waits
     ctx.system_about = req.about if is_system and req.about in {m.get("id") for m in [req.elder, *req.members]} else None
     if not is_system and req.speaker.get("id"):
         earlier = await data.turns(req.speaker["id"])
@@ -821,7 +850,24 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     # that is a source too.
     grounding_memory = "\n".join(p for p in (fam_block, known_record, known_turn, dynamic, req.text if is_system else "") if p)
     their_msgs = [_msg_text(m) for m in msgs if m.get("role") == "user"] + ([req.text] if req.text and not is_system else [])
+    photo_read: dict | None = None
+    photo_known = False
+
+    async def _photo_into_sources(wait_s: float) -> None:
+        # What the photo showed is a source for the checks: names read from it are not inventions (live 17 Oct: three of four
+        # strips were cut from the reply as "not in memory or this chat").
+        nonlocal photo_read, photo_known
+        if photo_known or photo_task is None:
+            return
+        photo_read = await photos.settle(photo_task, wait_s)
+        text = photos.reading_text(photo_read)
+        if text:
+            photo_known = True
+            line = f"(the photo they sent now shows: {text})"
+            their_msgs.append(line)
+            ctx.known.append(line)
     degraded = ""
+    degraded_draft = False  # the degraded reply is her own draft of this turn (a read-back in it was written by her)
     tool_text_retried = False
     reply: router.LLMReply | None = None
     trace.note_step("context", (time.monotonic() - context_at) * 1000)
@@ -862,12 +908,15 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 logger.error("turn budget spent family=%s step=%d", req.family_id, step)
                 raise router.AllModelsFailed(f"turn budget of {TURN_BUDGET_S[kind]:.0f}s spent") from exc
         except router.AllModelsFailed:
-            draft = "" if is_system else _last_draft(msgs)
+            # Only a reply written in THIS turn: her previous message in the history is not this turn's answer (a "Save it?"
+            # read-back was sent again after the yes had saved it, when the next call failed).
+            draft = "" if is_system else _last_draft(msgs[turn_start:])
             if draft:
                 # A later call ran out of time. The reply already written still goes out (a night of empty replies
                 # was five turns that had a draft and then spent the budget).
                 logger.error("turn budget spent family=%s; sending the draft already written", req.family_id)
                 degraded = draft
+                degraded_draft = True
                 reply = None
                 break
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
@@ -894,6 +943,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             if is_system or not text_now or last:
                 break
             checked_at = time.monotonic()
+            await _photo_into_sources(min(6.0, max(0.0, TURN_BUDGET_S[kind] - (time.monotonic() - started) - MIN_CALL_S)))
             # Length and a bookkeeping opener are cut here. A second brain call for that was 5–17 s on live turns.
             # Two questions, an invention, the wrong language or a missing name still go back to the model.
             problems = await guard_problems(session, req, ctx, text_now, avoid=avoid, unreachable=unreachable, data=data,
@@ -958,6 +1008,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             logger.info("hard turn family=%s effort=%s", req.family_id, effort)
         results = []
         searches = sum(1 for a in ctx.actions if a["tool"] in ("recall", "search_records"))
+        if photo_task is not None and not photo_task.done() and any(
+                c.name == "log_food" and ((c.args or {}).get("from_photo") or (c.args or {}).get("label_photo")) for c in reply.tool_calls):
+            photo_task.cancel()  # a plate or a label: the food flow reads it; no separate photo read is kept
+            photo_task = None
         for call in reply.tool_calls:
             if call.name in ("recall", "search_records") and searches >= 4:
                 # Searching memory again rarely finds what four searches did not: answer with what you have.
@@ -1013,11 +1067,15 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
 
     if not is_system:
         await cover_red_flag(ctx, situation)
+    # A held save may be confirmed later only if its read-back really went out: any line below that replaces her reply
+    # (the fixed reading line, the name line, the emergency line, a fallback) drops what this turn held.
+    replaced = reply is None and not degraded_draft
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Before any tidy: joining lines can hide "thought" on its own line. The model's notes never reach a person.
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
+        replaced = True
         guarded = True
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
@@ -1027,6 +1085,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
+            replaced = replaced or ("?" in final and "?" not in grounding.strip(final, still))
             final = grounding.strip(final, still) or ("none" if is_system else "")
             guarded = True
         opened = guards.without_bookkeeping(final)
@@ -1036,10 +1095,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     if final and final != "none" and not is_system and guards.code_in_reply(final):
         logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line
         final = guards.canned(ctx.profiles.get(req.speaker["id"]), SCOPE)
+        replaced = True
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # A tidy that joined lines can hide a note. Check again.
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
+        replaced = True
         guarded = True
     profile = ctx.profiles.get(req.speaker["id"])
     saved = any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions)
@@ -1053,6 +1114,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 messages=msgs, tools=None, max_tokens=600, effort=effort, essential=True, timeout_s=CALL_CAP_S,
             )
             final = guards.strip_tool_chrome((again.text or "").strip())
+            replaced = True
         except router.AllModelsFailed:
             final = ""
         if final and final != "none":
@@ -1064,20 +1126,24 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     elif guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(profile)
+        replaced = True
     if not is_system and guards.food_line_problems(final, ctx.known):
         # The rewrite still dropped the saved numbers. Send the tool's line, in their script, and keep a question
         # already in the reply (the water ask). Never replace a Bengali reply with the English "Saved:" line.
         say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
         asked = [s for s in guards.sentences(final) if "?" in s or "？" in s]
         final = (say + " " + " ".join(asked)).strip() if say else final
+        replaced = True
         guarded = True
     elif not is_system and guards.language_problems(final, ctx.profiles.get(req.speaker["id"])):
         say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
         if say and say != final:
             final = say
+            replaced = True
             guarded = True
     elif not is_system and guards.logged_nutrient_problems(final, ctx.known):
         final = guards.logged_nutrient_line(ctx.known)
+        replaced = True
         guarded = True
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
@@ -1105,12 +1171,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text,
             medicines=saved_meds, last_assistant=ctx.last_assistant)
         if settled != final:
+            replaced = replaced or ("?" in final and "?" not in settled)
             final = settled
             guarded = True
         if req.onboarding:
             hello = guards.first_hello(ctx.profiles.get(req.speaker["id"]), req.text)
             if hello:
                 final = hello
+                replaced = True
                 guarded = True
         profile = ctx.profiles.get(req.speaker["id"])
         told = _told(ctx)
@@ -1123,10 +1191,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # Their own new name, and a draft that leaves it out, copies the prompt ("Roman letters", "35 words") or is in
             # the wrong language: the confirmation line instead. A good draft that also answers the rest of the message stays.
             final = guards.call_you(profile, asked_name)
+            replaced = True
             guarded = True
         if vital:
             # A reading is noted. The number is not called fine, high or low: that judgement is not hers.
             final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
+            replaced = True
             guarded = True
         elif ctx.situation == "emergency" and not any(a.get("reason") == "crisis" for a in ctx.alerts):
             # A non-crisis alert: her own answer stays when it is a short, plain reply. Only an empty, framed or long
@@ -1134,10 +1204,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # Roman Hinglish; the language guard above already checked the draft's script).
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
+                replaced = True
                 guarded = True
         elif ctx.situation == "emergency":
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
+                replaced = True
             elif told and told not in (final or ""):
                 final = f"{final.rstrip()} {told}".strip()
             guarded = True
@@ -1151,6 +1223,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             full = guards.due_today(profile, due)
             if full:
                 final = full
+                replaced = True
                 guarded = True
         dose = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"), None)
         dose_data = _json_result(dose) if dose else {}
@@ -1160,6 +1233,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             logged = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
             if logged:
                 final = logged
+                replaced = True
                 guarded = True
         asked = "?" in (req.text or "") or "？" in (req.text or "")
         sources = "\n".join([req.text or "", *tool_texts, *(str(x) for x in ctx.known)])
@@ -1167,6 +1241,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         if asked and (guards.invented_clock(final or "", sources) or guards.quiet_unasked(final or "", situation=ctx.situation or "", sent=sent)):
             # A clock they did not give, or a question about when to message with no time and no question back.
             final = guards.ask_time(profile)
+            replaced = True
             guarded = True
         report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
         if report:
@@ -1179,30 +1254,42 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             bodies = [b for b in bodies if b]
             if bodies and any(b[:24] not in (final or "") for b in bodies):
                 final = ". ".join(bodies[:3]) + "."
+                replaced = True
                 guarded = True
         same = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "remember" and _json_result(a).get("result") == "unchanged"), None)
         if same:
             note = str(_json_result(same).get("note") or "")
             what = note.split("Already on the record as ", 1)[-1].split(".", 1)[0].strip()
             final = guards.already_on_record(profile, what)
+            replaced = True
             guarded = True
         reminder = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "reminder_log"), None)
         if reminder and situation == "med_question":
             attempts = _json_result(reminder).get("reminder_attempts") or []
             if not any(isinstance(row, dict) and row.get("delivered") for row in attempts):
                 final = guards.missed_reminder_line(profile)
+                replaced = True
                 guarded = True
 
     if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):
         final = guards.missed_reminder_line(ctx.profiles.get(req.speaker["id"])) if situation == "med_question" else ack_reply(ctx.profiles.get(req.speaker["id"]))
+        replaced = True
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []
     stored = "\n\n".join(bubbles) if bubbles else final
+    held = [p for p in ctx.pending_saves if p["sig"] not in ctx.confirmed_saves]
+    if held and replaced:
+        logger.info("held saves dropped: their read-back was not sent family=%s tools=%s", req.family_id, [p["tool"] for p in held])
+        held = []
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=stored,
-        meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions]},
+        meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions],
+              **({"pending_saves": held[:10]} if held else {}),
+              **({"declined_saves": ctx.declined_saves[:10]} if ctx.declined_saves else {})},
     )
+    if photo_task is not None:
+        await _keep_photo(session, photo_task, photo_read, inserted, user_meta, req)
     if not is_system:
         await _learn_from_turn(session, req, ctx, final, turn_id, role, lang, trace=turn_trace(msgs, turn_start, final), guarded=guarded)
     # Folding the thread is another model call. A turn that is already slow sends the reply first; the next one folds.
@@ -1247,6 +1334,32 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         location_request=bool(ctx.location_request and final and final != "none" and not ctx.buttons),
     )
 
+
+async def _keep_photo(session: AsyncSession, task, read: dict | None, turn_id: int | None, meta: dict, req: TurnRequest) -> None:
+    """Keeps what the photo showed on their message. A read still running after the reply finishes on its own session."""
+    mimes = [i["mime"] for i in req.images]
+    if read is None and task.done():
+        read = await photos.settle(task, 0)
+    if read is not None or task.done():
+        await photos.keep(session, turn_id, meta, photos.photo_meta(read, ref=req.message_ref, mimes=mimes, caption=req.text))
+        return
+
+    async def later() -> None:
+        late = await photos.settle(task, photos.READ_TIMEOUT_S)
+        try:
+            from app.db.session import SessionLocal
+
+            async with SessionLocal() as s2:
+                await photos.keep(s2, turn_id, meta, photos.photo_meta(late, ref=req.message_ref, mimes=mimes, caption=req.text))
+                await s2.commit()
+        except Exception:  # noqa: BLE001 — the reply is already out; the photo is only not listed for later turns
+            logger.exception("keeping a photo reading failed family=%s", req.family_id)
+
+    _BACKGROUND.add(t := asyncio.create_task(later()))
+    t.add_done_callback(_BACKGROUND.discard)
+
+
+_BACKGROUND: set = set()
 
 TRACE_RESULT_CHARS = 4000  # the judge grades against these results: at 1500 a record's medicine list was cut and read as made up (13 Oct)
 

@@ -281,13 +281,19 @@ async def test_a_stall_after_a_save_promises_a_reply_and_opens_a_loop(db, monkey
         async def complete(self, route, **kw):
             self.calls += 1
             if self.calls == 1:
-                return LLMReply(text="", tool_calls=[ToolCall(
-                    id="c1", name="remember",
-                    args={"domain": "dish", "name": "khichdi", "details": {"food": "khichdi"}, "sentence": "Likes khichdi"},
-                )], model="fake")
+                return LLMReply(text="", tool_calls=[ToolCall(id="c1", name="answer_pending", args={"id": pid, "answer": "yes"})],
+                                model="fake")
             await asyncio.sleep(2)
             return LLMReply(text="Saved.", tool_calls=[], model="fake")
 
+    # The save was read back in her last message and the model marks "ok" as their yes (answer_pending), so it runs now.
+    from app.brain import confirm
+
+    args = {"domain": "dish", "name": "khichdi", "details": {"food": "khichdi"}, "sentence": "Likes khichdi"}
+    pid = confirm.pending_id(confirm.signature("remember", args))
+    await store.add_turn(db, family_id=FAM, thread_id=ME["id"], role="assistant", text="Save that you like khichdi?",
+                         meta={"pending_saves": [{"id": pid, "tool": "remember", "sig": confirm.signature("remember", args), "args": args,
+                                                  "what": "Likes khichdi", "for": ME["name"]}]})
     p = ThenStuck()
     router.register_provider("fake", p)
     monkeypatch.setenv("MODEL_ROUTES", '{"brain": ["fake:m"], "extract": ["fake:m"], "judge_fast": ["fake:m"], "worker": ["fake:m"]}')

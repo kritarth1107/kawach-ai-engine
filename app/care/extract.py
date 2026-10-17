@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time as dtime, timedelta
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -89,6 +89,54 @@ def filed_on(about, elder: dict, members: list[dict], default: str | None = None
         return None
 
 
+async def _held_keys(session: AsyncSession, family_id: str, turns: list) -> set[str]:
+    """Fact keys a re-read must not save: what someone said no to in the chat lately, and what Saheli read back and is
+    still waiting on (app.brain.confirm keeps both on her messages)."""
+    since = clock.now() - timedelta(hours=48)
+    mine = list((await session.execute(select(Turn).where(Turn.family_id == family_id, Turn.role == "assistant", Turn.at >= since)
+                                       .order_by(Turn.id))).scalars())
+    seen = {t.id for t in mine}
+    mine += [t for t in turns if t.role == "assistant" and t.id not in seen]
+    keys: set[str] = set()
+    for t in mine:
+        meta = t.meta or {}
+        for p in [*(meta.get("pending_saves") or []), *(meta.get("declined_saves") or [])]:
+            args = (p or {}).get("args") or {}
+            if (p or {}).get("tool") in ("remember", "stop") and args.get("domain") and args.get("name"):
+                keys.add(fact_key(str(args["domain"]), str(args["name"])))
+    return keys
+
+
+async def _ask_about_reading(session: AsyncSession, family_id: str, subject: str, r: dict, roster) -> bool:
+    from app.care import readings
+
+    kind = str(r.get("kind") or "").strip().lower().replace(" ", "_")
+    value = str(r.get("value") or "").strip()[:30]
+    if kind not in readings.KINDS or readings._num(value) is None or (kind == "other" and not str(r.get("name") or "").strip()):
+        return False
+    at = clock.now()
+    if r.get("taken_on"):
+        try:
+            at = datetime.combine(datetime.strptime(str(r["taken_on"])[:10], "%Y-%m-%d").date(), dtime(12, 0), tzinfo=clock.IST)
+        except ValueError:
+            pass
+    if await readings._seen(session, family_id, subject, {"kind": kind, "value": value, "name": r.get("name")}, at):
+        return False  # already logged (in the chat, at once)
+    label = str(r.get("name") or kind).strip()[:40] if kind == "other" else kind.replace("_", " ")
+    who = next((m.get("name") for m in [roster.elder, *roster.members] if m.get("id") == subject), "") or "them"
+    unit = str(r.get("unit") or "").strip()[:12]
+    owner = next((m["id"] for m in roster.members if "caregiver" in str(m.get("role") or "") and m.get("id") != subject), None) or subject
+    loop = await store.open_loop(
+        session, family_id=family_id, subject_id=subject, kind="memory_check",
+        title=f"Was {who}'s {label} {value}{(' ' + unit) if unit else ''}" + (f" on {r['taken_on']}" if r.get("taken_on") else "")
+              + "? (heard in the chat, not logged yet)",
+        detail={"reading": {"kind": kind, "value": value, "unit": unit or None, "taken_on": r.get("taken_on")}, "max_wakes": 1},
+        owner_id=owner, wake_at=clock.ist().replace(hour=11, minute=0, second=0, microsecond=0) + timedelta(days=1),
+        alert_rule="dashboard", dedupe_key=f"reading:{subject}:{kind}:{slug(value)}:{r.get('taken_on') or ''}",
+    )
+    return bool(loop)
+
+
 async def extract_family(session: AsyncSession, family_id: str) -> dict:
     roster = await store.roster(session, family_id)
     if not roster:
@@ -129,6 +177,7 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
     )
     data = parse_json(reply.text)
     counts = {"facts": 0, "pending": 0, "stops": 0, "notes": 0}
+    held = await _held_keys(session, family_id, pending)
 
     async def save_links(f: dict, subject: str, key: str, with_fact=None) -> None:
         # what a re-read heard about how it connects: a health link always waits for a caregiver (app.care.links)
@@ -151,6 +200,9 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
                                                          if not is_none_key(x.key)]:
             continue  # the record lists real ones: "none" is for an empty list
         key = fact_key(domain, f["name"])
+        if key in held:
+            counts["held"] = counts.get("held", 0) + 1
+            continue  # they said no to it, or Saheli read it back and is waiting for their answer: never saved here
         same = await dedupe.check(session, family_id=family_id, subject_id=subject, domain=domain, key=key, text=f["sentence"],
                                   value=f.get("details") or {})
         if same and same.rejected:
@@ -203,6 +255,11 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
             if subject is None:
                 counts["not_member"] = counts.get("not_member", 0) + 1
                 continue
+            if s["domain"] in HEALTH_DOMAINS or fact_key(s["domain"], s["name"]) in held:
+                # Stopping a medicine, allergy or condition on a re-read's word is not done: the chat (with a read-back and
+                # their yes) or a caregiver does it.
+                counts["stops_held"] = counts.get("stops_held", 0) + 1
+                continue
             w = await store.stop_fact(
                 session, family_id=family_id, subject_id=subject, key=fact_key(s["domain"], s["name"]),
                 reason=str(s.get("reason") or "mentioned in conversation"), source_kind="inferred",
@@ -227,16 +284,15 @@ async def extract_family(session: AsyncSession, family_id: str) -> dict:
         await store.upsert_note(session, family_id=family_id, subject_id=subject, slug=s_, title=n["topic"].strip().title(), body_md=body)
         counts["notes"] += 1
 
-    from app.care import readings
-
     for r in (data.get("readings") or [])[:12]:
         who = filed_on(r.get("about"), elder, roster.members, sole) if isinstance(r, dict) else None
         if who is None:
             counts["not_member"] = counts.get("not_member", 0) + 1
             continue
-        if await readings.save(session, ShadowHost() if family_id.startswith("shadow:") else host_for_readings, family_id,
-                               who, r, source="re-read"):
-            counts["readings"] = counts.get("readings", 0) + 1
+        # A reading the re-read heard is not logged on its word (the chat logs a reading at once with log_vital): a caregiver
+        # is asked once, through the memory-check path, and the answer is logged in the chat.
+        if await _ask_about_reading(session, family_id, who, r, roster):
+            counts["readings_to_confirm"] = counts.get("readings_to_confirm", 0) + 1
 
     for pl in (data.get("plans") or [])[:8]:
         if not isinstance(pl, dict) or not str(pl.get("what") or "").strip():

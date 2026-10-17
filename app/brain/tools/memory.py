@@ -31,7 +31,7 @@ from app.core import clock
     "nothing, never a dish fact), a routine, a naming preference or correction, family rules (who to call first, who pays, who must "
     "not be told), doctors, hospital, helpers. The same domain+name updates the existing fact. For medicine, give "
     "details {name, dose, times: ['HH:MM', ...], food_timing, days: [0-6, Monday=0] or omit for daily, "
-    "instructions}; their reminders follow these times. For naming, use name 'address_as' with details "
+    "instructions, salt, strength, purpose, duration_days, stock}; their reminders follow these times. For naming, use name 'address_as' with details "
     "{name: what to call them, avoid: [every word they asked never to be called]}; the avoid list only grows, so add "
     "unavoid: [word] only when the person themselves says that word is fine again. For an allergy, details "
     "{allergen, reaction}. For family rules, names like 'call_first', 'payer', 'do_not_tell', 'neighbour'. When they say "
@@ -78,7 +78,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     if domain in TOOL_DOMAINS:
         raise ToolRefused(f"Use the {TOOL_DOMAINS[domain]} tool for this.")
     subject = ctx.own(a.get("about"))
-    details = dict(a.get("details") or {})
+    details: dict = dict(a.get("details") or {})
     if a.get("none"):
         if domain not in NONE_DOMAINS:
             raise ToolRefused(f"'none' is only for {', '.join(sorted(NONE_DOMAINS))}. Save what they said in the domain that fits.")
@@ -110,6 +110,13 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
                               "(e.g. '10 mg', '1 tablet', '1/2 tablet'); keep the full medicine name in name (e.g. 'Cilacar T').")
         if details.get("food_timing") not in FOOD_TIMING:
             details.pop("food_timing", None)
+        details.update(_course(details))
+        if not details.get("photo_ref"):
+            from app.brain import photos
+
+            ref = photos.ref_for(ctx.photo_turns, str(details.get("name") or ""))
+            if ref:
+                details["photo_ref"] = ref
     from app.care import dedupe
 
     key, sentence = fact_key(domain, a["name"]), a["sentence"]
@@ -165,6 +172,15 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
         out["reminders"] = await features.appointment_loops(ctx.session, family_id=ctx.family_id, subject_id=subject, f=w.fact, owner_id=ctx.speaker.get("id"))
     if domain == "medicine" and w.result in ("created", "superseded") and not is_none_key(w.fact.key):
         out["reminders"] = await _sync_medicine(ctx, subject, w.fact.key, w.fact.value, active=True)
+        stock = details.get("stock")
+        if isinstance(stock, (int, float)) and not isinstance(stock, bool) and 0 <= stock <= 2000:
+            from app.care import features
+
+            out["stock"] = await features.set_stock(ctx.session, family_id=ctx.family_id, subject_id=subject, key=w.fact.key,
+                                                    name=str(details.get("name") or a["name"]), count=int(stock),
+                                                    actor_id=ctx.speaker.get("id"))
+        if details.get("ends_on"):
+            out["ends_on"] = details["ends_on"]
     if a.get("links"):
         from app.care import links
 
@@ -178,6 +194,41 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
             out["links_not_saved"] = saved["skipped"]
         if any(x["result"] == "pending" for x in saved["links"]):
             out["links_note"] = "A link marked pending waits for a caregiver to confirm (confirm_change with link_to)."
+    return out
+
+
+def _course(details: dict) -> dict:
+    """A course with a number of days or an end date: ends_on is the last day (reminders stop after it,
+    app.care.records.end_finished_courses). starts_on defaults to today."""
+    from datetime import date, timedelta
+
+    out: dict = {}
+    today = clock.ist_day()
+    start = str(details.get("starts_on") or "").strip()
+    try:
+        start_day = date.fromisoformat(start) if start else None
+    except ValueError:
+        raise ToolRefused("starts_on is YYYY-MM-DD.") from None
+    ends = str(details.get("ends_on") or "").strip()
+    if ends:
+        try:
+            date.fromisoformat(ends)
+        except ValueError:
+            raise ToolRefused("ends_on is YYYY-MM-DD (the last day of the course).") from None
+    days = details.get("duration_days")
+    if days not in (None, ""):
+        try:
+            n = int(days)
+        except (TypeError, ValueError):
+            raise ToolRefused("duration_days is a whole number of days.") from None
+        if not 1 <= n <= 730:
+            raise ToolRefused("duration_days is between 1 and 730.")
+        out["duration_days"] = n
+        if not ends:
+            first = start_day or date.fromisoformat(today)
+            out["ends_on"] = (first + timedelta(days=n - 1)).isoformat()
+    if (days not in (None, "") or ends) and not start_day:
+        out["starts_on"] = today
     return out
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.brain import tools
 from app.care import extract, readings, store
-from app.care.models import CareEvent, MemoryNote
+from app.care.models import CareEvent, MemoryNote, OpenLoop
 from app.core import clock
 from app.llm import router
 from app.llm.router import LLMReply
@@ -69,7 +69,9 @@ async def test_an_old_reading_is_history_not_an_alarm(db, at):
     assert json.loads(out)["red_flag"]
 
 
-async def test_the_re_read_logs_readings_said_in_chat_once(db, at, monkeypatch):
+async def test_the_re_read_asks_about_readings_said_in_chat_and_logs_none(db, at, monkeypatch):
+    # Review 17 Oct: nothing the background re-read finds saves health on its own. A reading the chat did not log is put to a
+    # caregiver once (memory check); one already logged is skipped; one with no number is dropped.
     at("2026-10-13 15:00")
     await store.save_roster(db, FAM, ME, [ME])
     host = SimHost()
@@ -83,9 +85,10 @@ async def test_the_re_read_logs_readings_said_in_chat_once(db, at, monkeypatch):
     try:
         await store.add_turn(db, family_id=FAM, thread_id=ME["id"], role="user", text="90.3 kg, I am 5 ft 10")
         counts = await extract.extract_family(db, FAM)
-        assert counts["readings"] == 1
-        assert [r.payload["kind"] for r in await vitals(db)] == ["weight", "height"]
-        assert host.world.vitals[-1]["kind"] == "height"
+        assert counts.get("readings_to_confirm") == 1 and not counts.get("readings")
+        assert [r.payload["kind"] for r in await vitals(db)] == ["weight"]
+        loops = (await db.execute(select(OpenLoop).where(OpenLoop.family_id == FAM, OpenLoop.kind == "memory_check"))).scalars().all()
+        assert len(loops) == 1 and "height 178" in loops[0].title
     finally:
         router._providers.pop("fake", None)
 

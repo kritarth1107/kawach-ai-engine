@@ -84,6 +84,8 @@ class TurnIn(BaseModel):
     location: Location | None = None  # a WhatsApp location pin in this message
     # messages that waited while the speaker's WhatsApp chat was closed (backend; they got a template notice)
     waiting: list[Waiting] = Field(default_factory=list, max_length=8)
+    # the WhatsApp message id this message quotes (a reply to an earlier photo): Saheli gets what that photo showed
+    reply_to: str | None = Field(default=None, max_length=160)
     # shadow: runs beside the live path on separate memory; writes are recorded, not executed.
     mode: str = Field(default="live", pattern="^(live|shadow)$")
 
@@ -109,6 +111,7 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
         location=body.location.model_dump() if body.location else None,
         onboarding=body.onboarding,
         waiting=[w.model_dump() for w in body.waiting],
+        reply_to=body.reply_to,
     )
     try:
         result = await run_turn(session, host, req)
@@ -295,6 +298,19 @@ async def wake_job() -> dict:
         out_plan = None
     out = await wake_due(SessionLocal, host_for)
     out["activities_planned"] = out_plan
+    from app.core import clock as _clock
+
+    if _clock.ist().hour == 0 and _clock.ist().minute < 10:
+        # A course ends after its last day: stopped just past midnight, before the next morning's dose would go out (the
+        # 10:00 daily job is the backstop). Running twice is harmless: an ended course is no longer active.
+        try:
+            from app.care import records
+
+            async with SessionLocal() as session:
+                out["courses_ended"] = await records.end_finished_courses(session, host_for, _clock.ist_day())
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("end finished courses (midnight) failed")
     try:
         from app.care import careteam
 

@@ -41,6 +41,31 @@ def sentences(text: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?।])\s+|\n+", text or "") if s.strip() and not re.fullmatch(r"-{3,}", s.strip())]
 
 
+_LIST_LINE = re.compile(r"^\s*(?:\d{1,2}[.)]|[-•▪*])\s+\S")
+
+
+def units(text: str) -> list[str]:
+    """Sentences, except that a list (numbered or bulleted lines) counts as one unit with the line that introduces it.
+    Live 17 Oct: a reply naming four medicines from a photo was cut to its first line because each list line counted
+    as a sentence."""
+    out: list[str] = []
+    in_list = False
+    for line in (text or "").split("\n"):
+        if not line.strip() or re.fullmatch(r"\s*-{3,}\s*", line):
+            in_list = False if not line.strip() else in_list
+            continue
+        if _LIST_LINE.match(line):
+            if out and (in_list or out[-1].rstrip().endswith(":")):
+                out[-1] = out[-1] + "\n" + line.strip()
+            else:
+                out.append(line.strip())
+            in_list = True
+            continue
+        in_list = False
+        out += sentences(line)
+    return out
+
+
 def words(text: str) -> list[str]:
     return re.findall(r"[^\W\d_]+", (text or "").lower())
 
@@ -652,9 +677,9 @@ def clip_reply(text: str, *, cap: int) -> str:
     chunks = whatsapp_messages(cleaned) or ([cleaned] if (cleaned or "").strip() else [])
     out = []
     for chunk in chunks:
-        kept = sentences(chunk)[:cap]
+        kept = units(chunk)[:cap]
         if kept:
-            out.append(" ".join(kept))
+            out.append(" ".join(kept) if not any("\n" in k for k in kept) else "\n".join(kept))
     return "\n---\n".join(out)
 
 
@@ -663,7 +688,7 @@ def length_problems(text: str, *, cap: int = 3) -> list[str]:
     a health answer is left to the doctor-note check). Sentence breaks in her text only."""
     out = []
     for part in whatsapp_messages(text) or [text or ""]:
-        n = len(sentences(part))
+        n = len(units(part))
         if n > cap:
             out.append(f"this message is {n} sentences; keep it to {cap}")
     return out

@@ -60,16 +60,25 @@ async def test_model_down_before_anything_raises_for_fallback(db, at, model):
 async def test_model_down_after_a_save_keeps_it_and_says_so(db, at, model):
     at("2026-10-02 10:00")
     await _seed(db)
+    from app.brain import confirm
+
+    save = ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {}, "sentence": "Low salt diet"})
+    yes = ToolCall("c2", "answer_pending", {"id": confirm.pending_id(confirm.signature("remember", save.args)), "answer": "yes"})
+    # A save is read back first and runs after their yes (app.brain.confirm); the model goes down after that save.
     model([
-        LLMReply(text="", tool_calls=[ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {},
-                                                                   "sentence": "Low salt diet"})], model="fake"),
+        LLMReply(text="", tool_calls=[save], model="fake"),
+        LLMReply(text="नमक कम वाली डाइट नोट कर लूँ?", tool_calls=[], model="fake"),
+        LLMReply(text="", tool_calls=[yes], model="fake"),
         ModelUnavailable(503, "down"),
     ])
-    out = await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a2"))
+    await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a1b"))
+    assert not [f for f in await store.facts(db, FAM, ELDER["id"]) if f.key == "diet:low_salt"], "held until the yes"
+    at("2026-10-02 10:01")
+    out = await run_turn(db, SimHost(), _req("haan", "a2"))
     assert "नोट कर ली" in out.reply  # she writes Hinglish: Hindi, in Devanagari
     assert [f for f in await store.facts(db, FAM, ELDER["id"]) if f.key == "diet:low_salt"]
     # The same message again (a retry) is a duplicate: answered from the stored reply, nothing redone.
-    again = await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a2"))
+    again = await run_turn(db, SimHost(), _req("haan", "a2"))
     assert again.duplicate and again.reply == out.reply
 
 

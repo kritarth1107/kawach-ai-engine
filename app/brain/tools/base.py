@@ -79,6 +79,18 @@ class TurnCtx:
     prior_assistant: bool = False
     # A scheduled turn's person (TurnRequest.about): a save with no about in that turn is theirs.
     system_about: str | None = None
+    # Saves wait for the person's yes (app.brain.confirm). On only in a person's live turn (the loop sets it).
+    confirm_gate: bool = False
+    pending_before: list[dict] = field(default_factory=list)  # saves her recent messages read back and asked about
+    pending_saves: list[dict] = field(default_factory=list)  # saves held in this turn (kept on her reply)
+    confirmed_saves: set = field(default_factory=set)
+    answered_ids: set = field(default_factory=set)  # answer_pending ids already answered this turn
+    declined_saves: list[dict] = field(default_factory=list)  # read-backs they said no to (kept on her reply)
+    confirm_running: str | None = None  # the signature answer_pending is saving right now
+    # Their recent photo messages (turns with a kept reading): a saved medicine notes the photo it was read from.
+    photo_turns: list = field(default_factory=list)
+    # The speech engine scored this voice note low (not just a short one): a yes in it does not confirm a health change.
+    voice_low_score: bool = False
 
     @property
     def elder_id(self) -> str:
@@ -224,6 +236,8 @@ _GROUPS = {
     "activity": frozenset({"activity", "log_activity"}),
     "chat": frozenset({"sing", "voice_replies", "feedback"}),
     "system": frozenset({"weekly_report", "service_status"}),
+    # Only on a turn with a read-back waiting (app.brain.confirm): never in the cold prefix.
+    "confirm": frozenset({"answer_pending"}),
 }
 _HEALTH_SITUATIONS = frozenset({
     "emergency", "med_question", "dose_report", "vital_report", "symptom", "low_mood", "grief",
@@ -330,6 +344,20 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
     if name not in _TOOLS:
         ctx.actions.append({"tool": name, "args": args, "ok": False, "unknown": True, "error": f"unknown tool {name}"})
         return json.dumps({"error": f"unknown tool {name}"}), True
+    from app.brain import confirm
+
+    held = confirm.check(ctx, name, args if isinstance(args, dict) else {})
+    if held is not None:
+        ctx.actions.append({"tool": name, "args": args, "ok": False, "held": True})
+        return json.dumps(held, ensure_ascii=False), False
+    # A short voice "haan" to her read-back is the check an unsure voice note asks for (the read-back named exactly what
+    # changes); only a low speech score still makes a health change wait.
+    relax_voice = bool(getattr(ctx, "voice_unsure", False) and not getattr(ctx, "voice_low_score", False) and isinstance(args, dict)
+                       and confirm.signature(name, args) in (getattr(ctx, "confirmed_saves", None) or ()))
+    if isinstance(args, dict) and "said_yes" in args:
+        args = {k: v for k, v in args.items() if k != "said_yes"}
+    if relax_voice:
+        ctx.voice_unsure = False
     try:
         from app.care import versions
 
@@ -370,6 +398,9 @@ async def run(ctx: TurnCtx, name: str, args: dict) -> tuple[str, bool]:
         logger.exception("tool %s failed", name)
         ctx.actions.append({"tool": name, "args": args, "ok": False, "error": str(exc)[:200]})
         return json.dumps({"error": "this did not work right now", "detail": str(exc)[:200]}), True
+    finally:
+        if relax_voice:
+            ctx.voice_unsure = True
 
 
 class ToolRefused(Exception):
@@ -399,3 +430,7 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
             "groceries, food or medicine it is; who rides). Read it from their words and the conversation; never assume the care "
             "recipient: a caregiver ordering something for themselves gives their own id. If it is not clear, give \"\": for an order, "
             "start_task then asks whom it is for in the same line as the delivery address."}
+
+
+# answer_pending (app.brain.confirm) registers itself; imported here so every tool is known wherever tools are.
+from app.brain import confirm as _confirm  # noqa: E402,F401
