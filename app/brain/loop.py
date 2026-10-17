@@ -966,7 +966,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 break
             guarded = True
             guard_rounds += 1
-            logger.warning("reply guard family=%s problems=%s", req.family_id, problems)
+            logger.warning("reply guard family=%s problem_count=%d", req.family_id[:8], len(problems))
             profile = ctx.profiles.get(req.speaker["id"])
             if any(c.source in ("unwanted_apology", "tease_as_question") for c in claims):
                 reply.text = guards.light_reply(profile)
@@ -1084,7 +1084,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         still = await _judge_claims(ctx, final, memory=grounding_memory, theirs=their_msgs, tool_texts=tool_texts, situation=situation)
         trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
-            logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
+            logger.warning("ungrounded sentences removed family=%s claim_count=%d", req.family_id[:8], len(still))
             replaced = replaced or ("?" in final and "?" not in grounding.strip(final, still))
             final = grounding.strip(final, still) or ("none" if is_system else "")
             guarded = True

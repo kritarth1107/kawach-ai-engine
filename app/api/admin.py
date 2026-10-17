@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -253,9 +254,10 @@ async def admin_care_record(family_id: str, subject: str, session: DB) -> dict:
         select(CareFact).where(CareFact.family_id == family_id, CareFact.subject_id == subject).order_by(CareFact.recorded_at.desc()).limit(400)
     )).scalars().all()
     # the change that made each row, for the "Why?" link
-    made = dict((await session.execute(select(MemoryVersion.ref, func.min(MemoryVersion.id)).where(
+    made_rows = (await session.execute(select(MemoryVersion.ref, func.min(MemoryVersion.id)).where(
         MemoryVersion.family_id == family_id, MemoryVersion.subject_id == subject, MemoryVersion.kind == "fact",
-        MemoryVersion.ref.in_([str(f.id) for f in rows])).group_by(MemoryVersion.ref))).all()) if rows else {}
+        MemoryVersion.ref.in_([str(f.id) for f in rows])).group_by(MemoryVersion.ref))).tuples().all() if rows else []
+    made: dict[str | None, int] = {ref: version_id for ref, version_id in made_rows}
     linked = links.by_from(await links.links_for(session, family_id, subject, statuses=("active", "pending")))
     return {"facts": [{"domain": f.domain, "key": f.key, "text": f.text, "status": f.status, "source": f.source_kind,
                        "confidence": f.confidence, "recordedAt": f.recorded_at.isoformat(),
@@ -367,7 +369,7 @@ async def admin_telemetry(session: DB, hours: int = 24) -> dict:
                                          TraceTurn.timing, TraceTurn.tools).where(
         TraceTurn.at >= since, ~TraceTurn.family_id.startswith("shadow:"), ~TraceTurn.family_id.startswith("sim-")))).all()
 
-    def pct(values: list[float], q: float):
+    def pct(values: Sequence[int | float], q: float) -> int | float | None:
         v = sorted(values)
         return v[min(len(v) - 1, max(0, math.ceil(q * len(v)) - 1))] if v else None
 

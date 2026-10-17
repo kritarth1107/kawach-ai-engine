@@ -169,6 +169,8 @@ COLUMNS = [  # every one is required: the models select it
 ]
 
 INDEXES = [
+    # HNSW cosine search matches MemoryVector.embedding.cosine_distance() in care.memory_index.
+    ("ix_memory_vectors_embedding_hnsw", "memory_vectors", "", "USING hnsw (embedding vector_cosine_ops)"),
     ("ix_turns_thread_id", "turns", "", "(family_id, thread_id, id)"),
     ("uq_service_logins_profile", "service_logins", "UNIQUE", "(profile_id) WHERE profile_id IS NOT NULL"),
     ("ix_care_events_trace", "care_events", "", "(trace_id) WHERE trace_id IS NOT NULL"),

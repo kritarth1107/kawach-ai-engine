@@ -230,7 +230,7 @@ async def _grounded_send(ctx: TurnCtx, to: str, text: str) -> str:
     if tries == 0:
         raise ToolRefused("Not sent: " + "; ".join(grounding.problems(claims)) + ". Write it again without those, then send it.")
     kept = grounding.strip(text, claims)
-    logger.warning("ungrounded sentences removed from a message family=%s claims=%s", ctx.family_id, [c.quote for c in claims])
+    logger.warning("ungrounded sentences removed from a message family=%s claim_count=%d", ctx.family_id[:8], len(claims))
     if not kept:
         raise ToolRefused("Not sent: nothing in it is supported by memory, this chat or a tool result.")
     return kept

@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text as sql
 
 from app.brain import tools
 from app.care import baselines, digest, memory_index, memory_upkeep, store
@@ -169,6 +169,14 @@ async def test_recall_benchmark(db, at, meaning):
         await ev(db, "dose_taken", ist(d, "08:05"), "Metformin: taken")
     clock.set_now(ist(28))
     await memory_index.index_subject(db, FAM, ELDER)
+    await db.execute(sql("DROP INDEX IF EXISTS ix_memory_vectors_embedding_hnsw"))
+    before = {query: [h.text for h in await memory_index.search(db, FAM, [ELDER], query, limit=3)]
+              for _, _, query in BENCH}
+    await db.execute(sql("CREATE INDEX IF NOT EXISTS ix_memory_vectors_embedding_hnsw "
+                         "ON memory_vectors USING hnsw (embedding vector_cosine_ops)"))
+    after = {query: [h.text for h in await memory_index.search(db, FAM, [ELDER], query, limit=3)]
+             for _, _, query in BENCH}
+    assert after == before, "adding HNSW must preserve the memory search top results"
     found = 0
     for _, text, query in BENCH:
         hits = await memory_index.search(db, FAM, [ELDER], query, limit=3)

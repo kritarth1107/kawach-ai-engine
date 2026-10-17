@@ -118,11 +118,11 @@ async def turn(body: TurnIn, session: Annotated[AsyncSession, Depends(get_db)]) 
     except Draining as exc:
         raise HTTPException(status_code=503, detail="draining") from exc
     except AllModelsFailed as exc:
-        logger.error("brain down family=%s: %s", body.family_id, exc)
+        logger.error("brain down family=%s: %s", body.family_id[:8], exc)
         raise HTTPException(status_code=503, detail="Saheli is unavailable") from exc
     logger.info(
         "brain turn family=%s mode=%s model=%s ms=%s actions=%s alerts=%s",
-        body.family_id, body.mode, result.model, result.ms, [a["tool"] for a in result.actions], len(result.alerts),
+        body.family_id[:8], body.mode, result.model, result.ms, [a["tool"] for a in result.actions], len(result.alerts),
     )
     return result_json(result)
 

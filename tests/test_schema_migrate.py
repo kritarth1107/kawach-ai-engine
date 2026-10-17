@@ -74,3 +74,16 @@ async def test_a_half_built_index_is_built_again(engine):
     finally:
         async with engine.begin() as c:
             await c.execute(text("DROP TABLE IF EXISTS zz_index_probe"))
+
+
+async def test_memory_vector_cosine_hnsw_index_is_created_concurrently(engine):
+    await migrate.ensure_schema(engine)
+    await migrate.ensure_indexes(engine)
+    cat = await catalog(engine)
+    assert cat.indexes.get("ix_memory_vectors_embedding_hnsw") is True
+    async with engine.connect() as c:
+        definition = (await c.execute(text(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+            "AND indexname = 'ix_memory_vectors_embedding_hnsw'"
+        ))).scalar_one()
+    assert "USING hnsw" in definition and "vector_cosine_ops" in definition
