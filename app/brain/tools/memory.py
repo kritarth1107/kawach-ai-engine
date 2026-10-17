@@ -78,7 +78,7 @@ async def remember(ctx: TurnCtx, a: dict) -> dict:
     if domain in TOOL_DOMAINS:
         raise ToolRefused(f"Use the {TOOL_DOMAINS[domain]} tool for this.")
     subject = ctx.own(a.get("about"))
-    details = dict(a.get("details") or {})
+    details: dict = dict(a.get("details") or {})
     if a.get("none"):
         if domain not in NONE_DOMAINS:
             raise ToolRefused(f"'none' is only for {', '.join(sorted(NONE_DOMAINS))}. Save what they said in the domain that fits.")

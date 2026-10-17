@@ -60,12 +60,15 @@ async def test_model_down_before_anything_raises_for_fallback(db, at, model):
 async def test_model_down_after_a_save_keeps_it_and_says_so(db, at, model):
     at("2026-10-02 10:00")
     await _seed(db)
+    from app.brain import confirm
+
     save = ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {}, "sentence": "Low salt diet"})
+    yes = ToolCall("c2", "answer_pending", {"id": confirm.pending_id(confirm.signature("remember", save.args)), "answer": "yes"})
     # A save is read back first and runs after their yes (app.brain.confirm); the model goes down after that save.
     model([
         LLMReply(text="", tool_calls=[save], model="fake"),
         LLMReply(text="नमक कम वाली डाइट नोट कर लूँ?", tool_calls=[], model="fake"),
-        LLMReply(text="", tool_calls=[save], model="fake"),
+        LLMReply(text="", tool_calls=[yes], model="fake"),
         ModelUnavailable(503, "down"),
     ])
     await run_turn(db, SimHost(), _req("Doctor ne kaha namak kam karo", "a1b"))

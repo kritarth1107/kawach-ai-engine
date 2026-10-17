@@ -58,11 +58,14 @@ async def test_a_v2_turn_that_remembers_notes_and_recalls_writes_no_instinct_row
     before = await counts(db)
     saves = [ToolCall("c1", "remember", {"domain": "diet", "name": "low_salt", "details": {}, "sentence": "Low salt diet"}),
              ToolCall("c2", "note", {"topic": "family", "text": "Her grandson Arjun studies in Pune"})]
-    # Saves are read back first and written after the yes (app.brain.confirm).
+    # The saved fact is read back first and written after the yes (app.brain.confirm); a diary note is not held.
+    from app.brain import confirm
+
+    yes = ToolCall("c4", "answer_pending", {"id": confirm.pending_id(confirm.signature("remember", saves[0].args)), "answer": "yes"})
     model([
         LLMReply(text="", tool_calls=[*saves, ToolCall("c3", "recall", {"query": "grandson"})], model="fake"),
-        LLMReply(text="नमक कम वाली डाइट और अर्जुन का पुणे में पढ़ना याद रखूँ?", tool_calls=[], model="fake"),
-        LLMReply(text="", tool_calls=saves, model="fake"),
+        LLMReply(text="नमक कम वाली डाइट याद रखूँ?", tool_calls=[], model="fake"),
+        LLMReply(text="", tool_calls=[yes], model="fake"),
         LLMReply(text="Theek hai, yaad rakhungi.", tool_calls=[], model="fake"),
     ])
     await run_turn(db, SimHost(), TurnRequest(family_id=FAM, elder=ELDER, speaker=ELDER, members=[ELDER, SON],

@@ -805,6 +805,8 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         pending_before=pending_before, photo_turns=speaker_turns,
         voice_low_score=bool(req.voice and req.voice_confidence is not None and req.voice_confidence < VOICE_SURE),
     )
+    if pending_before and ctx.confirm_gate:
+        ctx.tool_groups.add("confirm")  # answer_pending, only while a read-back waits
     ctx.system_about = req.about if is_system and req.about in {m.get("id") for m in [req.elder, *req.members]} else None
     if not is_system and req.speaker.get("id"):
         earlier = await data.turns(req.speaker["id"])
@@ -860,6 +862,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             their_msgs.append(line)
             ctx.known.append(line)
     degraded = ""
+    degraded_draft = False  # the degraded reply is her own draft of this turn (a read-back in it was written by her)
     tool_text_retried = False
     reply: router.LLMReply | None = None
     trace.note_step("context", (time.monotonic() - context_at) * 1000)
@@ -908,6 +911,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 # was five turns that had a draft and then spent the budget).
                 logger.error("turn budget spent family=%s; sending the draft already written", req.family_id)
                 degraded = draft
+                degraded_draft = True
                 reply = None
                 break
             if not any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions):
@@ -1054,11 +1058,15 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
 
     if not is_system:
         await cover_red_flag(ctx, situation)
+    # A held save may be confirmed later only if its read-back really went out: any line below that replaces her reply
+    # (the fixed reading line, the name line, the emergency line, a fallback) drops what this turn held.
+    replaced = reply is None and not degraded_draft
     final = guards.strip_tool_chrome((reply.text if reply else degraded).strip())
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # Before any tidy: joining lines can hide "thought" on its own line. The model's notes never reach a person.
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
+        replaced = True
         guarded = True
     if final and final != "none" and reply is not None and (guard_rounds >= 2 or is_system):
         # A second rewrite (or a scheduled message, which is not rewritten) that still states something memory, the chat
@@ -1068,6 +1076,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         trace.note_step("check", (time.monotonic() - checked_at) * 1000)
         if still:
             logger.warning("ungrounded sentences removed family=%s claims=%s", req.family_id, [c.quote for c in still])
+            replaced = replaced or ("?" in final and "?" not in grounding.strip(final, still))
             final = grounding.strip(final, still) or ("none" if is_system else "")
             guarded = True
         opened = guards.without_bookkeeping(final)
@@ -1077,10 +1086,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     if final and final != "none" and not is_system and guards.code_in_reply(final):
         logger.error("code in reply blocked family=%s", req.family_id)  # the rewrite kept it: the person gets the scope line
         final = guards.canned(ctx.profiles.get(req.speaker["id"]), SCOPE)
+        replaced = True
     if final and final != "none" and (guards.leaked_reasoning(final) or guards.leaked_tool_call(final, set(tools.names()))):
         # A tidy that joined lines can hide a note. Check again.
         logger.error("leaked reasoning blocked family=%s", req.family_id)
         final = "none" if is_system else ""
+        replaced = True
         guarded = True
     profile = ctx.profiles.get(req.speaker["id"])
     saved = any(a.get("ok") and a["tool"] in WRITE_TOOLS for a in ctx.actions)
@@ -1094,6 +1105,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 messages=msgs, tools=None, max_tokens=600, effort=effort, essential=True, timeout_s=CALL_CAP_S,
             )
             final = guards.strip_tool_chrome((again.text or "").strip())
+            replaced = True
         except router.AllModelsFailed:
             final = ""
         if final and final != "none":
@@ -1105,20 +1117,24 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     elif guarded and not final and not is_system:
         # The rewrite came back empty. The earlier text failed the checks, so it is not sent: a short, true acknowledgement is.
         final = ack_reply(profile)
+        replaced = True
     if not is_system and guards.food_line_problems(final, ctx.known):
         # The rewrite still dropped the saved numbers. Send the tool's line, in their script, and keep a question
         # already in the reply (the water ask). Never replace a Bengali reply with the English "Saved:" line.
         say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
         asked = [s for s in guards.sentences(final) if "?" in s or "？" in s]
         final = (say + " " + " ".join(asked)).strip() if say else final
+        replaced = True
         guarded = True
     elif not is_system and guards.language_problems(final, ctx.profiles.get(req.speaker["id"])):
         say = guards.saved_line_for(ctx.profiles.get(req.speaker["id"]), guards.saved_food_line(ctx.known))
         if say and say != final:
             final = say
+            replaced = True
             guarded = True
     elif not is_system and guards.logged_nutrient_problems(final, ctx.known):
         final = guards.logged_nutrient_line(ctx.known)
+        replaced = True
         guarded = True
     if final and final != "none" and not is_system:
         greeted, mid = guards.opening_state(await data.turns(req.speaker["id"]), clock.now(), day_of=clock.ist_day)
@@ -1146,12 +1162,14 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             prior_assistant=ctx.prior_assistant, naming=naming, user_text=req.text,
             medicines=saved_meds, last_assistant=ctx.last_assistant)
         if settled != final:
+            replaced = replaced or ("?" in final and "?" not in settled)
             final = settled
             guarded = True
         if req.onboarding:
             hello = guards.first_hello(ctx.profiles.get(req.speaker["id"]), req.text)
             if hello:
                 final = hello
+                replaced = True
                 guarded = True
         profile = ctx.profiles.get(req.speaker["id"])
         told = _told(ctx)
@@ -1164,10 +1182,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # Their own new name, and a draft that leaves it out, copies the prompt ("Roman letters", "35 words") or is in
             # the wrong language: the confirmation line instead. A good draft that also answers the rest of the message stays.
             final = guards.call_you(profile, asked_name)
+            replaced = True
             guarded = True
         if vital:
             # A reading is noted. The number is not called fine, high or low: that judgement is not hers.
             final = guards.noted_reading(profile, str(vital_data.get("logged") or "the reading"), told if vital_data.get("red_flag") else "")
+            replaced = True
             guarded = True
         elif ctx.situation == "emergency" and not any(a.get("reason") == "crisis" for a in ctx.alerts):
             # A non-crisis alert: her own answer stays when it is a short, plain reply. Only an empty, framed or long
@@ -1175,10 +1195,12 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             # Roman Hinglish; the language guard above already checked the draft's script).
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
+                replaced = True
                 guarded = True
         elif ctx.situation == "emergency":
             if not (final or "").strip() or guards.has_framing(final) or len(guards.sentences(final)) > 2:
                 final = guards.calm_noted(profile, told)
+                replaced = True
             elif told and told not in (final or ""):
                 final = f"{final.rstrip()} {told}".strip()
             guarded = True
@@ -1192,6 +1214,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             full = guards.due_today(profile, due)
             if full:
                 final = full
+                replaced = True
                 guarded = True
         dose = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"), None)
         dose_data = _json_result(dose) if dose else {}
@@ -1201,6 +1224,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             logged = guards.dose_logged(profile, str(dose_data.get("medicine") or ""), dose_times)
             if logged:
                 final = logged
+                replaced = True
                 guarded = True
         asked = "?" in (req.text or "") or "？" in (req.text or "")
         sources = "\n".join([req.text or "", *tool_texts, *(str(x) for x in ctx.known)])
@@ -1208,6 +1232,7 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         if asked and (guards.invented_clock(final or "", sources) or guards.quiet_unasked(final or "", situation=ctx.situation or "", sent=sent)):
             # A clock they did not give, or a question about when to message with no time and no question back.
             final = guards.ask_time(profile)
+            replaced = True
             guarded = True
         report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
         if report:
@@ -1220,31 +1245,39 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             bodies = [b for b in bodies if b]
             if bodies and any(b[:24] not in (final or "") for b in bodies):
                 final = ". ".join(bodies[:3]) + "."
+                replaced = True
                 guarded = True
         same = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "remember" and _json_result(a).get("result") == "unchanged"), None)
         if same:
             note = str(_json_result(same).get("note") or "")
             what = note.split("Already on the record as ", 1)[-1].split(".", 1)[0].strip()
             final = guards.already_on_record(profile, what)
+            replaced = True
             guarded = True
         reminder = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "reminder_log"), None)
         if reminder and situation == "med_question":
             attempts = _json_result(reminder).get("reminder_attempts") or []
             if not any(isinstance(row, dict) and row.get("delivered") for row in attempts):
                 final = guards.missed_reminder_line(profile)
+                replaced = True
                 guarded = True
 
     if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):
         final = guards.missed_reminder_line(ctx.profiles.get(req.speaker["id"])) if situation == "med_question" else ack_reply(ctx.profiles.get(req.speaker["id"]))
+        replaced = True
 
     after_at = time.monotonic()
     bubbles = guards.whatsapp_messages(final) if final and final != "none" and not is_system else []
     stored = "\n\n".join(bubbles) if bubbles else final
     held = [p for p in ctx.pending_saves if p["sig"] not in ctx.confirmed_saves]
+    if held and replaced:
+        logger.info("held saves dropped: their read-back was not sent family=%s tools=%s", req.family_id, [p["tool"] for p in held])
+        held = []
     turn_id = await store.add_turn(
         session, family_id=req.family_id, thread_id=req.speaker["id"], role="assistant", text=stored,
         meta={"reply_to": req.message_ref, "model": reply.model if reply else "", "actions": [a["tool"] for a in ctx.actions],
-              **({"pending_saves": held[:10]} if held else {})},
+              **({"pending_saves": held[:10]} if held else {}),
+              **({"declined_saves": ctx.declined_saves[:10]} if ctx.declined_saves else {})},
     )
     if photo_task is not None:
         await _keep_photo(session, photo_task, photo_read, inserted, user_meta, req)

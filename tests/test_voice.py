@@ -82,6 +82,12 @@ async def test_turn_marks_the_voice_note_in_history_and_prompt(db, at, model):
     assert user.meta.get("voice") is True and user.meta.get("voice_confidence") == 0.9
 
 
+def _yes(call: ToolCall) -> ToolCall:
+    from app.brain import confirm
+
+    return ToolCall("y1", "answer_pending", {"id": confirm.pending_id(confirm.signature(call.name, call.args)), "answer": "yes"})
+
+
 async def test_unsure_voice_note_from_a_caregiver_cannot_change_a_dose_directly(db, at, model):
     at("2026-10-02 10:00")
     await store.save_roster(db, FAM, ELDER, [ELDER, SON])
@@ -93,12 +99,12 @@ async def test_unsure_voice_note_from_a_caregiver_cannot_change_a_dose_directly(
                                          "sentence": "Metformin 1000 mg"})
     # Read back first (app.brain.confirm); the yes is also an unsure voice note, so the change still waits as pending.
     model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="मेटफॉर्मिन 1000 mg कर दूँ?", tool_calls=[], model="fake"),
-           LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Aapne 1000 mg kaha? Pakka?", tool_calls=[], model="fake")])
+           LLMReply(text="", tool_calls=[_yes(change)], model="fake"), LLMReply(text="Aapne 1000 mg kaha? Pakka?", tool_calls=[], model="fake")])
     first = await run_turn(db, SimHost(), req("metformin hazaar", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2a"))
     assert first.actions[0].get("held")
     out = await run_turn(db, SimHost(), req("haan", speaker=SON, modality="voice", voice_confidence=0.4, ref="v2"))
     act = await store.active_fact(db, FAM, ELDER["id"], "medicine:metformin")
-    assert act.value["dose"] == "500 mg" and out.actions[0]["ok"]
+    assert act.value["dose"] == "500 mg" and [a for a in out.actions if a["tool"] == "remember"][0]["ok"]
     pending = await store.facts(db, FAM, ELDER["id"], statuses=("pending",))
     assert pending and pending[0].value["dose"] == "1000 mg"
 
@@ -109,7 +115,7 @@ async def test_sure_voice_note_from_a_caregiver_applies_as_usual(db, at, model):
     change = ToolCall("c1", "remember", {"about": ELDER["id"], "domain": "medicine", "name": "Metformin",
                                          "details": {"name": "Metformin", "dose": "500 mg", "times": ["08:00"]}, "sentence": "Metformin 500 mg at 08:00"})
     model([LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="मेटफॉर्मिन 500 mg सुबह 8 बजे, सेव करूँ?", tool_calls=[], model="fake"),
-           LLMReply(text="", tool_calls=[change], model="fake"), LLMReply(text="Kamla ke liye save kar diya.", tool_calls=[], model="fake")])
+           LLMReply(text="", tool_calls=[_yes(change)], model="fake"), LLMReply(text="Kamla ke liye save kar diya.", tool_calls=[], model="fake")])
     await run_turn(db, SimHost(), req("metformin paanch sau subah aath baje", speaker=SON, modality="voice", voice_confidence=0.95, ref="v3a"))
     assert await store.active_fact(db, FAM, ELDER["id"], "medicine:metformin") is None, "held until the yes"
     # A one-word voice "haan" is short (unsure), but it answers the read-back, which was the check: it applies.

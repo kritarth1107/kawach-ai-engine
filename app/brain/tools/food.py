@@ -667,8 +667,8 @@ def _reminder_line(r: dict) -> dict:
     "Activities and habits, the person's daily life: gym, walks, yoga, pooja, classes, hobbies, things they are giving up "
     "(smoking), and routine (meals, wake-up, sleep). Not reminders: around each habit you nudge lightly before (fitness) and "
     "check in after (did it happen, what did they do, follow-ups), and log what they say. When someone tells you a routine "
-    "with a time ('gym 9:30 Mon-Sat', 'I walk at 6', 'pooja at 7', 'class till 4'), call it with action add (it is held "
-    "until they say yes: read back what you will set, then call again after their yes); never ask whether to add a reminder. A one-off or plain chore (call someone, pay a bill) is set_reminder. "
+    "with a time ('gym 9:30 Mon-Sat', 'I walk at 6', 'pooja at 7', 'class till 4'), save it at once with action add and say "
+    "what you set; never ask whether to add a reminder. A one-off or plain chore (call someone, pay a bill) is set_reminder. "
     "action: add | change | pause | resume | stop. type: one id from " + acts_catalog_line() + " (custom with a label when none "
     "fits). kind decides what you do (habit, quit, task, routine); leave it out for the type's usual kind.",
     {

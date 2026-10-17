@@ -84,6 +84,9 @@ class TurnCtx:
     pending_before: list[dict] = field(default_factory=list)  # saves her recent messages read back and asked about
     pending_saves: list[dict] = field(default_factory=list)  # saves held in this turn (kept on her reply)
     confirmed_saves: set = field(default_factory=set)
+    answered_ids: set = field(default_factory=set)  # answer_pending ids already answered this turn
+    declined_saves: list[dict] = field(default_factory=list)  # read-backs they said no to (kept on her reply)
+    confirm_running: str | None = None  # the signature answer_pending is saving right now
     # Their recent photo messages (turns with a kept reading): a saved medicine notes the photo it was read from.
     photo_turns: list = field(default_factory=list)
     # The speech engine scored this voice note low (not just a short one): a yes in it does not confirm a health change.
@@ -233,6 +236,8 @@ _GROUPS = {
     "activity": frozenset({"activity", "log_activity"}),
     "chat": frozenset({"sing", "voice_replies", "feedback"}),
     "system": frozenset({"weekly_report", "service_status"}),
+    # Only on a turn with a read-back waiting (app.brain.confirm): never in the cold prefix.
+    "confirm": frozenset({"answer_pending"}),
 }
 _HEALTH_SITUATIONS = frozenset({
     "emergency", "med_question", "dose_report", "vital_report", "symptom", "low_mood", "grief",
@@ -425,3 +430,7 @@ FOR_WHOM = {"type": "string", "description": "Person id from HOUSEHOLD this orde
             "groceries, food or medicine it is; who rides). Read it from their words and the conversation; never assume the care "
             "recipient: a caregiver ordering something for themselves gives their own id. If it is not clear, give \"\": for an order, "
             "start_task then asks whom it is for in the same line as the delivery address."}
+
+
+# answer_pending (app.brain.confirm) registers itself; imported here so every tool is known wherever tools are.
+from app.brain import confirm as _confirm  # noqa: E402,F401

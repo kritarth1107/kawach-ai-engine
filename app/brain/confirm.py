@@ -1,29 +1,35 @@
 """Nothing is saved until the person said yes to it (founder 2026-10-17: "be sure before adding anything, do not assume
 or guess; confirm everything, not just medicine but food and other stuff, before saving").
 
-The rule lives in the tool contract, not in a reply guard:
-  1. A save tool called in a person's WhatsApp turn does not write. It returns what it WOULD save and for whom, and the
-     call is kept on Saheli's reply (turn meta "pending_saves").
-  2. Her reply reads it back and asks one yes/no (all held items of the turn in one read-back).
-  3. In a later turn the same call (same tool, same key fields) runs only when that read-back was in one of her last
-     messages and their message is a yes (in any of the usual words; said_yes=true is also taken when a model sends it), and is not a no.
-said_yes is not put in the tool schemas: the cold prompt prefix has a token budget (tests/test_gemini_prefix.py).
-A call cannot confirm itself in the turn it was first made. Scheduled turns, the dashboard (its own dialogs) and a call
-that answers a tool's own question (log_food answer_to) are not held.
+The rule lives in the tool contract, not in a reply guard, and never in a word list on what people wrote:
+  1. A save tool called in a person's WhatsApp turn does not write. It returns what it WOULD save, for whom, and an id,
+     and the call is kept on Saheli's reply (turn meta "pending_saves") only when that reply was really sent.
+  2. Her reply reads it back and asks one yes/no.
+  3. In a LATER turn the model reads their answer and calls answer_pending(id, yes | no | change). On yes the code runs
+     exactly the saved arguments that were read back (so what is saved is what they agreed to); on no it is dropped and
+     kept as declined (the background re-read never saves it either); on change the model calls the tool again with the
+     change, which is read back once more.
+The model decides what their words mean; the code only checks that the id was read back in an earlier sent message.
+answer_pending is sent only on turns that have something waiting, so the fixed prompt prefix does not grow.
+Not held: scheduled turns, the dashboard (its own dialogs), readings (a dangerous reading must alert at once), diary notes
+and habits, and calls that answer a tool's own question (log_food answer_to).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from datetime import timedelta
 
+from app.brain.tools.base import ToolRefused, TurnCtx, tool
 from app.core import clock
 
-# Tools that write something about a person: held for a yes.
+# Tools that write something about a person: held for a yes. log_vital is not here: a reading the person reported is
+# not a guess, and a dangerous one alerts the family in the same turn. note and note_habit are low-risk diary lines.
 CONFIRM_FIRST = frozenset({
-    "remember", "note", "stop", "forget", "set_reminder", "change_reminder", "set_stock", "log_food", "change_food",
-    "log_vital", "save_place", "add_person", "note_habit", "activity", "nutrition_target", "pantry", "save_family_skill",
+    "remember", "stop", "forget", "set_reminder", "change_reminder", "set_stock", "log_food", "change_food",
+    "save_place", "add_person", "activity", "nutrition_target", "pantry", "save_family_skill",
     "add_doctor_question", "assign_family_task",
 })
 PENDING_HOURS = 6
@@ -41,30 +47,24 @@ _SIG = {
     "add_doctor_question": ("appointment", "about"), "assign_family_task": ("title", "to"),
 }
 
-_NO = re.compile(
-    r"(?i)(^|\b)(no|nope|nah|nahi|nahin|nai|mat|don'?t|do not|galat|wrong|not now|later|baad mein|ruko|wait|rehne do|abhi nahi)(\b|$)"
-    r"|नहीं|नही|मत|रुको|गलत|रहने दो")
-# "no problem, go ahead" is not a no
-_NOT_A_NO = re.compile(r"(?i)\b(no problem|no worries|no issues?|koi baat nahi(n)?|no doubt)\b|कोई बात नहीं")
-_YES = re.compile(
-    r"(?i)(^|\b)(yes|yeah|yea|yep|yup|ya|yaa|yah|ok|okay|okk|okie|k|sure|haan|haa|han|ha|hanji|haanji|ji|jee|theek|thik|thick|"
-    r"sahi|correct|right|done|confirm|confirmed|go ahead|kar do|kardo|kr do|krdo|save|save it|add|add it|please do|do it|"
-    r"bilkul|zaroor|haan ji|perfect|fine|yes please)(\b|$)|👍|✅|👌|🙏|हाँ|हां|हा\b|जी|ठीक|सही|कर दो|करदो|बिल्कुल|ज़रूर|जरूर")
 
 
-def says_no(text: str) -> bool:
-    return bool(_NO.search(_NOT_A_NO.sub(" ", text or "")))
-
-
-def says_yes(text: str) -> bool:
-    return bool(_YES.search(text or "")) and not says_no(text)
+def _word(w: str) -> str:
+    """One token of a structured value, singular: 'rotis' and 'roti' are the same item (not a list of what people say)."""
+    if len(w) > 4 and w.endswith("ies"):
+        return w[:-3] + "y"
+    if len(w) > 3 and w.endswith("es") and w[-3] in "sxz":
+        return w[:-2]
+    if len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        return w[:-1]
+    return w
 
 
 def _norm(v):
     if isinstance(v, str):
-        return re.sub(r"[^a-z0-9:]+", "_", v.strip().lower()).strip("_")
+        return "_".join(_word(w) for w in re.split(r"[^a-z0-9:]+", v.strip().lower()) if w)
     if isinstance(v, list):
-        return sorted(_norm(x) for x in v)
+        return sorted((_norm(x) for x in v), key=lambda x: json.dumps(x, sort_keys=True))
     if isinstance(v, dict):
         return {k: _norm(x) for k, x in sorted(v.items())}
     return v
@@ -72,13 +72,17 @@ def _norm(v):
 
 def signature(name: str, args: dict) -> str:
     keys = _SIG.get(name, ("about",))
-    sig = {k: _norm(args.get(k)) for k in keys if args.get(k) not in (None, "", [], {})}
+    sig: dict = {k: _norm(args.get(k)) for k in keys if args.get(k) not in (None, "", [], {})}
     if name == "log_food":  # what was eaten: the item names
-        sig["items"] = sorted(_norm(str((i or {}).get("name") or "")) for i in (args.get("items") or []) if isinstance(i, dict))
+        sig["items"] = sorted(str(_norm(str((i or {}).get("name") or ""))) for i in (args.get("items") or []) if isinstance(i, dict))
     if name == "remember" and args.get("domain") == "medicine":  # the schedule read back: another time or length is asked again
-        d = args.get("details") if isinstance(args.get("details"), dict) else {}
+        d: dict = (args.get("details") or {}) if isinstance(args.get("details"), dict) else {}
         sig["schedule"] = {k: _norm(d.get(k)) for k in ("times", "dose", "duration_days", "ends_on") if d.get(k) not in (None, "", [])}
     return name + ":" + json.dumps(sig, sort_keys=True, ensure_ascii=False)
+
+
+def pending_id(sig: str) -> str:
+    return "s" + hashlib.sha1(sig.encode()).hexdigest()[:6]
 
 
 def exempt(name: str, args: dict) -> bool:
@@ -148,55 +152,106 @@ def readback(ctx, name: str, args: dict) -> tuple[str, str]:
 
 
 def pending_from(turns: list, now=None) -> list[dict]:
-    """The saves her recent messages read back and asked about (newest message first, at most PENDING_TURNS of hers)."""
+    """The saves her recent SENT messages read back and asked about (at most PENDING_TURNS of hers, newest first wins)."""
     now = now or clock.now()
     mine = [t for t in turns if t.role == "assistant"][-PENDING_TURNS:]
-    out: list[dict] = []
+    out: dict[str, dict] = {}
     for t in mine:
         if t.at < now - timedelta(hours=PENDING_HOURS):
             continue
         for p in (t.meta or {}).get("pending_saves") or []:
-            if isinstance(p, dict) and p.get("sig"):
-                out.append(p)
+            if isinstance(p, dict) and p.get("sig") and p.get("tool") in CONFIRM_FIRST:
+                out[p.get("id") or pending_id(p["sig"])] = {**p, "id": p.get("id") or pending_id(p["sig"])}
+    return list(out.values())
+
+
+def declined_from(turns: list, now=None, hours: int = 48) -> list[dict]:
+    """What they said no to lately (turn meta "declined_saves"), for the background re-read."""
+    now = now or clock.now()
+    out = []
+    for t in turns:
+        if t.role == "assistant" and t.at >= now - timedelta(hours=hours):
+            out += [p for p in (t.meta or {}).get("declined_saves") or [] if isinstance(p, dict)]
     return out
 
 
 def check(ctx, name: str, args: dict) -> dict | None:
-    """None: run the tool now. A dict: the save is held; this is the tool's result for the model."""
+    """None: run the tool now. A dict: the save is held (or was already saved after their yes this turn)."""
     if not getattr(ctx, "confirm_gate", False) or name not in CONFIRM_FIRST or ctx.is_system or ctx.confirmed:
         return None
     if ctx.channel not in ("whatsapp", "call") or exempt(name, args):
         return None
     sig = signature(name, args)
-    asked = {p["sig"] for p in getattr(ctx, "pending_before", []) or []}
-    text = ctx.user_text or ""
-    if sig in asked and not says_no(text) and (args.get("said_yes") is True or says_yes(text)):
-        ctx.confirmed_saves.add(sig)
-        return None
+    if getattr(ctx, "confirm_running", None) == sig:
+        return None  # answer_pending is running the read-back's own arguments after their yes
+    if sig in ctx.confirmed_saves:
+        return {"saved": True, "already": True, "note": "Already saved after their yes in this turn; do not save it again."}
     what, who = readback(ctx, name, args)
     clean = {k: v for k, v in args.items() if k != "said_yes"}
+    pid = pending_id(sig)
     if not any(p["sig"] == sig for p in ctx.pending_saves):
-        ctx.pending_saves.append({"tool": name, "sig": sig, "args": clean, "what": what, "for": who})
-    why = ("Nothing is saved yet: they have not said yes to this exact save." if sig not in asked else
-           "Nothing is saved: their message is not a clear yes to it.")
+        ctx.pending_saves.append({"id": pid, "tool": name, "sig": sig, "args": clean, "what": what, "for": who})
+    waiting = any(p["sig"] == sig for p in getattr(ctx, "pending_before", []) or [])
     return {
-        "saved": False, "waiting_for_yes": True, "would_save": what, "for": who,
-        "next": (why + " In your reply, read back in one short line what will be saved and for whom (every item you are holding "
-                 "this turn, together, one read-back), and ask one yes/no question. Do not say it is saved, noted, added or set. "
-                 "When they say yes, call this tool again with the same arguments."),
+        "saved": False, "waiting_for_yes": True, "id": pid, "would_save": what, "for": who,
+        "next": (("This is already waiting for their answer: if their message answers it, call answer_pending with id " + pid
+                  + ". " if waiting else "Nothing is saved yet. ")
+                 + "In your reply, read back in one short line what will be saved and for whom (every item you are holding "
+                 "this turn, together), and ask one yes/no question. Do not say it is saved, noted, added or set."),
     }
 
 
 def waiting_block(pending: list[dict]) -> str:
-    """For the next turn: the saves her last message asked about."""
+    """For the next turn: the saves her last sent message asked about, with their ids."""
     if not pending:
         return ""
-    lines = []
-    for p in pending[:10]:
-        lines.append(f"  - {p.get('tool')} for {p.get('for') or 'them'}: {p.get('what')}  args={json.dumps(p.get('args') or {}, ensure_ascii=False)[:500]}")
-    return ("WAITING FOR THEIR YES (your last message read these back; NOTHING is saved yet):\n" + "\n".join(lines) + "\n"
-            "If their message says yes (any language: yes, haan, ok, theek hai, kar do, 👍), call each one again NOW with exactly "
-            "these args, then say in one line what was saved and for whom. Yes to only some: call only those. "
-            "A change (another time, another person, fewer days): call it with the change; it is read back once more. "
-            "No, or a new topic: save nothing and do not ask again.")
+    lines = [f"  - id {p['id']}: {p.get('tool')} for {p.get('for') or 'them'}: {p.get('what')}" for p in pending[:10]]
+    return ("WAITING FOR THEIR ANSWER (your last message read these back; NOTHING is saved yet):\n" + "\n".join(lines) + "\n"
+            "Read their message. If it agrees to one (in any words or language), call answer_pending with that id and answer "
+            "yes: exactly what was read back is saved; then say in one line what was saved and for whom. If it refuses, "
+            "answer no and do not ask again. If it changes something (another time, person, amount), answer change and call "
+            "the save tool with the change (it is read back once more). A question back, unclear words, or another topic is "
+            "none of these: call nothing for it, and answer what they said.")
 
+
+@tool(
+    "answer_pending",
+    "Their answer to a save you read back in an earlier message (listed in WAITING FOR THEIR ANSWER). yes: saves exactly "
+    "what was read back. no: nothing is saved. change: they want it different; then call the save tool with the change.",
+    {"id": {"type": "string", "description": "the id from WAITING FOR THEIR ANSWER"},
+     "answer": {"type": "string", "enum": ["yes", "no", "change"]}},
+    ["id", "answer"],
+)
+async def answer_pending(ctx: TurnCtx, a: dict) -> dict:
+    from app.brain.tools.base import run
+
+    pid, answer = str(a.get("id") or ""), str(a.get("answer") or "")
+    if any(p["id"] == pid for p in ctx.pending_saves):
+        raise ToolRefused("That save was read back in this same turn: wait for their answer in their next message.")
+    p = next((x for x in getattr(ctx, "pending_before", []) or [] if x.get("id") == pid), None)
+    if p is None:
+        raise ToolRefused("No save with that id is waiting (only ones your earlier sent message read back). Nothing was saved.")
+    if pid in ctx.answered_ids:
+        return {"result": "already answered in this turn"}
+    ctx.answered_ids.add(pid)
+    if answer == "no":
+        ctx.declined_saves.append({k: p.get(k) for k in ("id", "tool", "sig", "args", "what", "for")})
+        return {"saved": False, "declined": True, "next": "Nothing saved. Say so in a few words; do not ask about it again."}
+    if answer == "change":
+        return {"saved": False, "next": "Call the save tool with what they changed; it is read back once more."}
+    if answer != "yes":
+        raise ToolRefused("answer is yes, no or change.")
+    ctx.confirmed_saves.add(p["sig"])
+    ctx.confirm_running = p["sig"]
+    try:
+        out, err = await run(ctx, p["tool"], dict(p.get("args") or {}))
+    finally:
+        ctx.confirm_running = None
+    ctx.pending_saves[:] = [x for x in ctx.pending_saves if x["sig"] != p["sig"]]
+    try:
+        result = json.loads(out)
+    except json.JSONDecodeError:
+        result = {"raw": out[:300]}
+    if err:
+        ctx.confirmed_saves.discard(p["sig"])
+    return {"saved": not err, "what": p.get("what"), "for": p.get("for"), "result": result}
