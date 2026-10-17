@@ -601,8 +601,9 @@ async def _fall_back_to_other_stores(session: AsyncSession, task: Task, why: str
     busy = {t.service for t in await live_tasks(session, task.family_id) if t.kind == task.kind}
     gid, started = uuid.uuid4().hex[:10], []
     why = re.split(r"; nothing was ordered|\. Offer|; looking on", re.sub(r"\s+", " ", why or "").strip())[0][:200]
+    known = await skip_known(session, task.family_id, (d.get("limits") or {}).get("place"), COMPARE_STORES[cat])
     for service in COMPARE_STORES[cat]:
-        if service == task.service or service in busy:
+        if service == task.service or service in busy or service in known:
             continue
         try:
             await create(session, family_id=task.family_id, subject_id=task.subject_id, requested_by=task.requested_by, service=service,
@@ -3100,6 +3101,41 @@ def _closed_note(out: dict) -> str:
     return "; ".join(bits[:4])
 
 
+REMEMBER_UNSERVICEABLE = timedelta(days=30)
+REMEMBER_NO_COD = timedelta(days=7)
+
+
+def _location_matches(place: dict, out: dict) -> bool:
+    """The location the store set is the family's: its pincode shows in what the site set. No pincode known, or the site
+    shows none: taken as set (live 17 Oct: Zepto set "Patna, Chhattisgarh 497331" for a Patna, Bihar home and said no)."""
+    pin, shown = str(place.get("pincode") or "").strip(), str(out.get("location_set") or "")
+    found = re.findall(r"\b\d{6}\b", shown)
+    return not pin or not found or pin in found
+
+
+async def skip_known(session: AsyncSession, family_id: str, place: dict | None, stores: tuple[str, ...] | list[str]) -> dict[str, str]:
+    """Stores that recently could not serve this family's place: did not deliver there (30 days) or offered no cash on
+    delivery there (7 days). From their own failed look-ups and carts at the same pincode; {service: why}."""
+    pin = str((place or {}).get("pincode") or "").strip()
+    if not pin:
+        return {}
+    now = clock.now()
+    rows = (await session.execute(select(Task).where(
+        Task.family_id == family_id, Task.status == "failed", Task.service.in_(list(stores)),
+        Task.updated_at >= now - REMEMBER_UNSERVICEABLE))).scalars().all()
+    out: dict[str, str] = {}
+    for t in rows:
+        d = t.details or {}
+        if str(((d.get("limits") or {}).get("place") or {}).get("pincode") or "") != pin:
+            continue
+        code = str(d.get("fail_code") or (d.get("metrics") or {}).get("failure_code") or "")
+        if code == "not_deliverable":
+            out[t.service] = "does not deliver there"
+        elif code == "no_cod" and t.updated_at >= now - REMEMBER_NO_COD:
+            out.setdefault(t.service, "no cash on delivery there")
+    return out
+
+
 def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     """What the look-up found (no login yet): not delivered there, not found, or the options for the person to pick."""
     d = task.details or {}
@@ -3107,7 +3143,12 @@ def _browse_outcome(task: Task, out: dict) -> tuple[str, str]:
     place = (d.get("limits") or {}).get("place") or {}
     where = place.get("nickname") or place.get("pincode") or "their place"
     task.details = {**d, "browsed": True}
+    if out.get("deliverable") is False and not _location_matches(place, out):
+        task.details = {**task.details, "fail_code": "wrong_location"}
+        return "failed", (f"{label} set another place than {where} ({out.get('location_set')}), so it is not known whether it "
+                          "delivers there; nothing was ordered. Offer another service.")
     if out.get("deliverable") is False:
+        task.details = {**task.details, "fail_code": "not_deliverable"}
         return "failed", (f"{label} does not deliver to {where} ({out.get('location_set') or out.get('problem') or 'not serviceable'}); "
                           "nothing was ordered. Offer another service.")
     if task.kind == "ride":

@@ -458,6 +458,11 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: 
                           + "; ".join(runtime.describe(busy[s]) for s in stores))
     gid = uuid.uuid4().hex[:10]
     place = place if place and place.get("addressId") else await _delivery_place(ctx, a)
+    # A store that recently did not deliver to this place (or offered no cash on delivery there) is not looked up again,
+    # unless they named it; when every store is ruled out, they are all looked up (it may have changed).
+    known = {} if named or a["kind"] == "ride" else await runtime.skip_known(ctx.session, ctx.family_id, place, free)
+    if known and len(known) < len(free):
+        free = [s for s in free if s not in known]
     started = [await _create_task(ctx, a, s, extra={"compare": gid, **({"named": True} if named else {})}, place=place) for s in free]
     out: dict = {"looking_on": [SKILLS[s]["label"] for s in free], "task_ids": [str(t.id) for t in started], "update_coming": True,
                  "next": ("A task update brings the fares from every app, numbered with your suggestion marked, usually within a "
@@ -466,8 +471,10 @@ async def _start_compare(ctx: TurnCtx, a: dict, stores: tuple[str, ...], place: 
                           "A task update brings what every store found, numbered with your suggestion marked, usually within a "
                           "minute or two: they pick, then the one confirm with the total (a store login code may be asked first). "
                           "Nothing is ordered before they say yes to it.")}
-    if len(free) < len(stores):
+    if len(free) < len(stores) and busy:
         out["already_running"] = [runtime.describe(busy[s]) for s in stores if s in busy]
+    if known and all(s not in free for s in known):
+        out["skipped"] = [f"{SKILLS[s]['label']}: {why} (recently)" for s, why in known.items()]
     return out
 
 

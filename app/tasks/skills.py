@@ -109,7 +109,7 @@ SERVICES = sorted(SKILLS)
 
 # Why a store run stopped, as the agent reports it (the admin and the rollup count these instead of free text).
 PROBLEM_KINDS = ("none", "not_deliverable", "no_cod", "out_of_stock", "strength_unavailable", "not_found", "needs_prescription",
-                 "login_failed", "otp_refused", "site_blocked", "captcha", "price_changed", "cart_lost", "other")
+                 "min_order", "login_failed", "otp_refused", "site_blocked", "captcha", "price_changed", "cart_lost", "other")
 
 
 def schema_for(kind: str, phase: str) -> dict:

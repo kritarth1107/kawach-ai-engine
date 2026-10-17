@@ -90,6 +90,8 @@ def failure_code(task: Task) -> str:
         return "not_deliverable"
     if r.get("cod_available") is False:
         return "no_cod"
+    if "minimum" in str(r.get("problem") or "").lower() and "order" in str(r.get("problem") or "").lower():
+        return "min_order"  # the store's own message (PharmEasy: "Minimum MRP of ₹199 required to place an order")
     if r.get("needs_prescription"):
         return "needs_prescription"
     items = r.get("items") or []

@@ -169,7 +169,11 @@ class Specialist:
                     f"pincode {place.get('pincode')}" if place.get("pincode") else d.get("area") or "the family's area")
             # numbered, so for_item can be the number (live 2026-10-11: the agent wrote "4 x <name>" and the picker saw nothing)
             numbered = "; ".join(f"item {n}: {i.get('name')} ({i.get('qty', 1)} wanted)" for n, i in enumerate(d.get("items") or [], 1)) or task.goal
-            return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker, then "
+            pin = place.get("pincode")
+            check = (f"Type the pincode {pin} (or the full address with it) in the location box and pick the suggestion with that "
+                     f"pincode in the right state, never one that only matches the town name; report location_set exactly as the "
+                     f"site shows it, with its pincode. ") if pin else ""
+            return (f"On {label}, without logging in: set the delivery location to {spot} with the site's location picker. {check}Then "
                     f"search for each of these: {numbered}. For each item report up to 3 matching products, best match first (for example a single "
                     f"can and a pack of 6): the exact name, the pack size exactly as the product card shows it (e.g. '6 x 300 ml'), "
                     f"the price of that pack, whether it is in stock, for_item (the item's number, e.g. '1') and exact_match (false for a "
