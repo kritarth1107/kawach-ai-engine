@@ -764,6 +764,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
     if quoted_photo:
         shown = photos.reading_text(quoted_photo.get("read")) or "it could not be read then"
         said = f"(they are replying to the photo they sent at {quoted_photo['at']}; it showed: {shown}) {said}".rstrip()
+    elif photos.quoted_unread(speaker_turns, req.reply_to) and not req.images:
+        # A quoted photo whose reading was not kept: she cannot see it now, and says so (never a guess).
+        when = photos.quoted_unread(speaker_turns, req.reply_to)["at"]
+        said = (f"(they are replying to the photo they sent at {when}; you cannot see it now and what it showed was not kept: "
+                f"say so honestly and ask them to send it again or type the names; never guess what it showed) {said}").rstrip()
     elif req.media_note:
         said = f"({req.media_note}) {said}".rstrip()
     content = [{"type": "text", "text": f"[{clock.ist().strftime('%d %b %H:%M')}] {said}"}]
@@ -1003,6 +1008,10 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
             logger.info("hard turn family=%s effort=%s", req.family_id, effort)
         results = []
         searches = sum(1 for a in ctx.actions if a["tool"] in ("recall", "search_records"))
+        if photo_task is not None and not photo_task.done() and any(
+                c.name == "log_food" and ((c.args or {}).get("from_photo") or (c.args or {}).get("label_photo")) for c in reply.tool_calls):
+            photo_task.cancel()  # a plate or a label: the food flow reads it; no separate photo read is kept
+            photo_task = None
         for call in reply.tool_calls:
             if call.name in ("recall", "search_records") and searches >= 4:
                 # Searching memory again rarely finds what four searches did not: answer with what you have.

@@ -413,13 +413,21 @@ async def medicines_block(session: AsyncSession, req: TurnRequest, data: TurnDat
     if req.speaker.get("role") != "system" and req.speaker["id"] != req.elder["id"]:
         people.insert(0, req.speaker["id"])
     names = {m.get("id"): m.get("name") for m in [req.elder, *req.members]}
+    from app.learn import situations
+
+    if req.speaker.get("role") == "system" or situations.tag(text=req.text, role="caregiver", tools=[]) == "thanks":
+        return ""  # a greeting or a thank-you: no medicine list, no reads
     lines: list[str] = []
     for pid in people:
+        # data.facts is the turn's cached read (the care record already loaded it): the list itself costs no query
         meds = [f for f in await data.facts(pid) if f.domain == "medicine" and f.status == "active" and (f.value or {}).get("name")]
         if not meds:
             continue
         stock: dict[str, dict] = {}
-        counted = (await session.execute(_select(CareEvent.id).where(
+        # Tablets left need the ledger: read only when this turn is about their medicines (a photo, a quoted message, or
+        # a saved medicine named in the message), never for "good morning".
+        named = any(features.mentions(req.text or "", str((f.value or {}).get("name") or "")) for f in meds)
+        counted = (req.images or req.reply_to or named) and (await session.execute(_select(CareEvent.id).where(
             CareEvent.family_id == req.family_id, CareEvent.subject_id == pid, CareEvent.kind == "stock_set").limit(1))).first()
         if counted:
             try:

@@ -529,3 +529,26 @@ def test_the_reading_keeps_no_usual_use():
     assert all("usual_use" not in i for i in photos._clean_items(FOUR["items"]))
     assert "acidity" not in text and "fever" not in text and "Sompraz 40" in text
     assert "usual_use" not in photos.PROMPT and "used for" in photos.PROMPT
+
+
+@pytest.mark.parametrize("saved,read,same", [
+    ("Vitamin D3", "Vitamin B12", False), ("Sompraz 40", "Sompraz 20", False), ("Sompraz", "Sompraz 40", True),
+    ("Dolo 650", "DOLO-650", True), ("Montair", "Montair LC", False), ("Telma 40", "Telma 40 mg", True),
+])
+def test_a_photo_link_needs_the_whole_name(saved, read, same):
+    assert photos.same_medicine(saved, read) is same
+
+
+async def test_a_quoted_photo_with_no_kept_reading_is_asked_for_again_never_guessed(db, at, fake):
+    await setup(db, at)
+    await store.add_turn(db, family_id=FAM, thread_id=SON["id"], role="user", text="", speaker_id=SON["id"],
+                         meta={"images": 1, "media": ["image/jpeg"]}, message_ref="wamid.old")
+    await db.commit()
+    at("2026-10-17 12:55")
+    fake.brain = [say("I can't see that photo now. Could you send it again or type the names?")]
+    await turn(db, "which ones are these", "wamid.q1", reply_to="wamid.old")
+    assert "you cannot see it now" in fake.prompts[-1] and "never guess" in fake.prompts[-1]
+
+
+async def test_a_pdf_gets_no_extra_photo_read(db, at, fake):
+    assert photos.start_read([{"mime": "application/pdf", "data": "aGVsbG8="}], "") is None

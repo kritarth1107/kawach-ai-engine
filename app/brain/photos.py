@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 from datetime import datetime, timedelta
 
@@ -67,7 +68,7 @@ async def read_photo(images: list[dict], caption: str = "") -> dict | None:
     from app.llm import router
 
     content: list[dict] = [{"type": "text", "text": f"What they wrote with it (may be empty): {caption[:300]!r}"}]
-    content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in images[:4] if i.get("mime", "").startswith(("image/", "application/pdf"))]
+    content += [{"type": "image", "mime": i["mime"], "data": i["data"]} for i in images[:4] if i.get("mime", "").startswith("image/")]
     if len(content) == 1:
         return None
     try:
@@ -88,10 +89,12 @@ async def read_photo(images: list[dict], caption: str = "") -> dict | None:
 
 
 def start_read(images: list[dict], caption: str = "") -> asyncio.Task | None:
-    """Starts the read beside the turn. Only photos and PDFs: a voice note or a video's stills are not listed."""
-    if not images or not any(str(i.get("mime", "")).startswith(("image/", "application/pdf")) for i in images):
+    """Starts the read beside the turn. Only photos: a PDF has its own record flow, and a voice note or a video's stills are
+    not listed. A food photo cannot be told apart before looking; its read is cancelled once the turn takes the food flow."""
+    photos_only = [i for i in images or [] if str(i.get("mime", "")).startswith("image/")]
+    if not photos_only:
         return None
-    return asyncio.create_task(read_photo(images, caption))
+    return asyncio.create_task(read_photo(photos_only, caption))
 
 
 async def settle(task: asyncio.Task | None, wait_s: float) -> dict | None:
@@ -200,13 +203,40 @@ def quoted(turns: list, reply_to: str | None) -> dict | None:
     return None
 
 
+_UNITS = frozenset({"mg", "mcg", "g", "ml", "iu", "tab", "tablet", "tablets", "cap", "capsule", "capsules"})  # label units
+
+
+def _tokens(name: str) -> list[str]:
+    return [w for w in re.split(r"[^a-z0-9]+", (name or "").lower()) if w and w not in _UNITS]
+
+
+def same_medicine(saved: str, read: str) -> bool:
+    """The saved medicine is the one read from the photo: the whole name matches (word for word, strength included when
+    both give one). 'Vitamin D3' is not 'Vitamin B12'; 'Sompraz' matches 'Sompraz 40'."""
+    a, b = _tokens(saved), _tokens(read)
+    if not a or not b:
+        return False
+    words_a, words_b = [w for w in a if not any(c.isdigit() for c in w)], [w for w in b if not any(c.isdigit() for c in w)]
+    nums_a, nums_b = {w for w in a if any(c.isdigit() for c in w)}, {w for w in b if any(c.isdigit() for c in w)}
+    if words_a != words_b:
+        return False
+    return not (nums_a and nums_b) or nums_a == nums_b
+
+
 def ref_for(turns: list, name: str) -> str | None:
-    """The photo a saved medicine was read from (its WhatsApp message id), when a recent photo listed it."""
-    first = (name or "").strip().lower().split(" ")[0]
-    if len(first) < 3:
-        return None
+    """The photo a saved medicine was read from (its WhatsApp message id), when a recent photo listed exactly it."""
     for t, p in reversed(recent(turns)):
         for it in (p.get("read") or {}).get("items") or []:
-            if first in str(it.get("name") or "").lower():
+            if same_medicine(name, str(it.get("name") or "")):
                 return p.get("ref") or str(t.id)
+    return None
+
+
+def quoted_unread(turns: list, reply_to: str | None) -> dict | None:
+    """Their reply quotes a photo of theirs whose reading was not kept: she cannot see it now."""
+    if not reply_to:
+        return None
+    for t in turns:
+        if t.role == "user" and t.message_ref == reply_to and (t.meta or {}).get("images") and not isinstance((t.meta or {}).get("photo"), dict):
+            return {"at": _at(t)}
     return None
