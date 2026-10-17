@@ -12,6 +12,7 @@ scored). Rows are kept 180 days, like the rest of the conversation-level history
 from __future__ import annotations
 
 import logging
+import random
 import uuid
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -30,6 +31,34 @@ TEXT_CHARS = 800
 MAX_TOOLS = 40
 # what a confirm / place / cancel looks like in the ledger (the F4 audit)
 AUDIT_KINDS = ("task_confirmed", "task_approved", "task_cancelled", "task_cancel_requested", "task_done", "task_failed", "task_placed")
+
+
+class JobRun(Base):
+    """One run of a scheduled job (a /v2/jobs/* call from the cron service, or the nightly dream task): when, how long,
+    and whether it worked. Read by the admin's Scheduled work table. No personal data."""
+
+    __tablename__ = "job_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    job: Mapped[str] = mapped_column(String(80))  # the path without /v2/jobs/ ("tasks", "wake", "weekly"), or "dream"
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ms: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(default=True)
+    code: Mapped[int] = mapped_column(Integer, default=200)
+
+    __table_args__ = (Index("ix_job_runs_job_at", "job", "at"),)
+
+
+async def record_job(sessions, job: str, at: datetime, ms: int, code: int) -> None:
+    """Keep one job run; never fails the job itself. Runs older than 14 days are dropped now and then."""
+    try:
+        async with sessions() as s:
+            s.add(JobRun(job=job[:80], at=at, ms=int(ms), ok=200 <= code < 300, code=int(code)))
+            if random.random() < 0.02:
+                await s.execute(delete(JobRun).where(JobRun.at < clock.now() - timedelta(days=14)))
+            await s.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("job run not recorded job=%s", job, exc_info=True)
 
 
 class TraceTurn(Base):

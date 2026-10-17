@@ -349,6 +349,118 @@ async def admin_latency(session: DB, hours: int = 1) -> dict:
             "timedTurns": len(timed), "steps": steps}
 
 
+@router.get("/telemetry")
+async def admin_telemetry(session: DB, hours: int = 24) -> dict:
+    """Where Saheli's tokens, model calls, money and time go (founder 2026-10-17: the admin is for debugging infra and
+    AI). Built from the why-trail (one row per turn: models with tokens and cost, timing with cached tokens). Message
+    turns (a person wrote) and Saheli's own messages (system) apart; sims and shadow families left out. No text."""
+    import math
+    from collections import defaultdict
+    from datetime import timedelta
+
+    from app.care.why import TraceTurn
+    from app.core import clock
+
+    hours = max(1, min(hours, 168))
+    since = clock.now() - timedelta(hours=hours)
+    rows = (await session.execute(select(TraceTurn.at, TraceTurn.kind, TraceTurn.family_id, TraceTurn.ms, TraceTurn.cost_inr, TraceTurn.models,
+                                         TraceTurn.timing, TraceTurn.tools).where(
+        TraceTurn.at >= since, ~TraceTurn.family_id.startswith("shadow:"), ~TraceTurn.family_id.startswith("sim-")))).all()
+
+    def pct(values: list[float], q: float):
+        v = sorted(values)
+        return v[min(len(v) - 1, max(0, math.ceil(q * len(v)) - 1))] if v else None
+
+    def summary(turns: list) -> dict:
+        calls, tin, tout, cost, ms, cached, prompt = [], [], [], [], [], 0, 0
+        for r in turns:
+            models = r.models or []
+            calls.append(sum(int(m.get("calls") or 0) for m in models))
+            tin.append(sum(int(m.get("tokensIn") or 0) for m in models))
+            tout.append(sum(int(m.get("tokensOut") or 0) for m in models))
+            cost.append(float(r.cost_inr or 0))
+            ms.append(int(r.ms or 0))
+            t = r.timing if isinstance(r.timing, dict) else {}
+            cached += int(t.get("cacheRead") or 0)
+            prompt += int(t.get("promptTok") or 0)
+        n = len(turns)
+        avg = lambda v: round(sum(v) / n, 2) if n else None  # noqa: E731
+        return {
+            "turns": n, "costInr": round(sum(cost), 2),
+            "callsPerTurn": {"avg": avg(calls), "p90": pct(calls, 0.9)},
+            "tokensInPerTurn": {"avg": avg(tin), "p50": pct(tin, 0.5), "p90": pct(tin, 0.9)},
+            "tokensOutPerTurn": {"avg": avg(tout), "p90": pct(tout, 0.9)},
+            "costPerTurn": {"avg": avg(cost), "p90": pct(cost, 0.9)},
+            "ms": {"p50": pct(ms, 0.5), "p90": pct(ms, 0.9), "max": max(ms) if ms else None},
+            "cache": {"readTokens": cached, "promptTokens": prompt, "hitPct": round(100 * cached / prompt, 1) if prompt else None},
+        }
+
+    msg = [r for r in rows if r.kind == "message"]
+    own = [r for r in rows if r.kind == "system"]
+    roles: dict[str, dict] = defaultdict(lambda: {"calls": 0, "tokensIn": 0, "tokensOut": 0, "costInr": 0.0, "ms": []})
+    models: dict[str, dict] = defaultdict(lambda: {"calls": 0, "tokensIn": 0, "tokensOut": 0, "costInr": 0.0})
+    tools: dict[str, list[int]] = defaultdict(list)
+    for r in rows:
+        for m in r.models or []:
+            for key, box in ((m.get("role") or "?", roles), (m.get("model") or "?", models)):
+                b = box[key]
+                b["calls"] += int(m.get("calls") or 0)
+                b["tokensIn"] += int(m.get("tokensIn") or 0)
+                b["tokensOut"] += int(m.get("tokensOut") or 0)
+                b["costInr"] += float(m.get("costInr") or 0)
+        t = r.timing if isinstance(r.timing, dict) else {}
+        for role, ms in t.get("model") or []:
+            roles[role]["ms"].append(int(ms))
+        for name, ms in t.get("tool") or []:
+            tools[name].append(int(ms))
+    by_role = sorted(({"role": k, "calls": v["calls"], "tokensIn": v["tokensIn"], "tokensOut": v["tokensOut"], "costInr": round(v["costInr"], 2),
+                       "p50Ms": pct(v["ms"], 0.5), "p90Ms": pct(v["ms"], 0.9)} for k, v in roles.items()), key=lambda x: -x["costInr"])
+    by_model = sorted(({"model": k, **{**v, "costInr": round(v["costInr"], 2)}} for k, v in models.items()), key=lambda x: -x["costInr"])
+    by_tool = sorted(({"tool": k, "calls": len(v), "p50Ms": pct(v, 0.5), "p90Ms": pct(v, 0.9)} for k, v in tools.items()), key=lambda x: -x["calls"])[:15]
+    fams: dict[str, dict] = defaultdict(lambda: {"turns": 0, "costInr": 0.0, "tokensIn": 0})
+    for r in rows:
+        f = fams[r.family_id]
+        f["turns"] += 1
+        f["costInr"] += float(r.cost_inr or 0)
+        f["tokensIn"] += sum(int(m.get("tokensIn") or 0) for m in r.models or [])
+    by_family = sorted(({"family": k[:8], **{**v, "costInr": round(v["costInr"], 2)}} for k, v in fams.items()), key=lambda x: -x["costInr"])[:15]
+    hourly: dict[str, list] = defaultdict(list)
+    for r in msg:
+        hourly[clock.ist(r.at).strftime("%Y-%m-%dT%H:00")].append(r)
+    series = [{"hour": h, "turns": len(v), "tokensIn": round(sum(sum(int(m.get("tokensIn") or 0) for m in x.models or []) for x in v) / len(v)),
+               "costInr": round(sum(float(x.cost_inr or 0) for x in v), 2), "p90Ms": pct([int(x.ms or 0) for x in v], 0.9)} for h, v in sorted(hourly.items())]
+    slow = sorted(msg, key=lambda r: -(r.ms or 0))[:10]
+    slowest = [{"at": r.at.isoformat(), "family": r.family_id[:8], "ms": int(r.ms or 0), "calls": sum(int(m.get("calls") or 0) for m in r.models or []),
+                "tokensIn": sum(int(m.get("tokensIn") or 0) for m in r.models or []), "costInr": round(float(r.cost_inr or 0), 2),
+                "timing": {k: v for k, v in (r.timing or {}).items() if k.endswith("Ms")} if isinstance(r.timing, dict) else {}} for r in slow]
+    return {"hours": hours, "messages": summary(msg), "proactive": summary(own), "byRole": by_role, "byModel": by_model, "byTool": by_tool,
+            "byFamily": by_family, "hourly": series, "slowest": slowest}
+
+
+@router.get("/job-runs")
+async def admin_job_runs(session: DB, days: int = 3) -> dict:
+    """The latest run of each scheduled job, and its last 24 hours (runs, failures, p90 time)."""
+    from datetime import timedelta
+
+    from app.care.why import JobRun
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 14)))
+    rows = (await session.execute(select(JobRun).where(JobRun.at >= since).order_by(JobRun.at.desc()))).scalars().all()
+    day = clock.now() - timedelta(hours=24)
+    out: dict[str, dict] = {}
+    for r in rows:
+        j = out.setdefault(r.job, {"job": r.job, "lastAt": r.at.isoformat(), "lastMs": r.ms, "lastOk": r.ok, "lastCode": r.code, "runs24h": 0, "failed24h": 0, "ms": []})
+        if r.at >= day:
+            j["runs24h"] += 1
+            j["failed24h"] += 0 if r.ok else 1
+            j["ms"].append(r.ms)
+    for j in out.values():
+        ms = sorted(j.pop("ms"))
+        j["p90Ms"] = ms[int(0.9 * (len(ms) - 1))] if ms else None
+    return {"jobs": list(out.values())}
+
+
 @router.get("/live")
 async def admin_live(session: DB, minutes: int = 30) -> dict:
     """What is going on right now (founder 2026-10-13: "watch live, every session ongoing"): conversations in the last

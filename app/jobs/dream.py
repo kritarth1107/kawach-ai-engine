@@ -44,7 +44,23 @@ def main() -> None:
     if not args.all:
         parser.print_help()
         return
-    print(json.dumps(asyncio.run(run_all()), indent=2, default=str))
+    print(json.dumps(asyncio.run(_timed()), indent=2, default=str))
+
+
+async def _timed() -> dict:
+    """The night run, kept as a job run (dream) for the admin's Scheduled work table."""
+    import time
+
+    from app.care.why import record_job
+    from app.core import clock
+
+    at, t0, code = clock.now(), time.monotonic(), 500
+    try:
+        out = await run_all()
+        code = 200
+        return out
+    finally:
+        await record_job(SessionLocal, "dream", at, int((time.monotonic() - t0) * 1000), code)
 
 
 if __name__ == "__main__":

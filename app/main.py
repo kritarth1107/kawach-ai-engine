@@ -92,6 +92,26 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def job_runs(request, call_next):
+        """Every /v2/jobs/* call (the cron service) is kept as a job run: when, how long, and the status."""
+        path = request.url.path
+        if not path.startswith("/v2/jobs/") or request.method != "POST":
+            return await call_next(request)
+        import time
+
+        from app.care.why import record_job
+        from app.core import clock
+        from app.db.session import SessionLocal
+
+        at, t0, code = clock.now(), time.monotonic(), 500
+        try:
+            response = await call_next(request)
+            code = response.status_code
+            return response
+        finally:
+            await record_job(SessionLocal, path.removeprefix("/v2/jobs/"), at, int((time.monotonic() - t0) * 1000), code)
+
     @app.get("/")
     async def root():
         return {
