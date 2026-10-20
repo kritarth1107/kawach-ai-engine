@@ -296,8 +296,8 @@ async def setup_progress(ctx: TurnCtx, a: dict) -> dict:
 async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
     from app.care import brief
 
-    me = ctx.speaker.get("id")
-    if ctx.is_system or not ctx.is_caregiver or me == ctx.elder_id:
+    me = str(ctx.speaker.get("id") or "")
+    if ctx.is_system or not ctx.is_caregiver or not me or me == ctx.elder_id:
         raise ToolRefused("Only a caregiver gets the daily brief, and changes only their own.")
     action = a["action"]
     if action == "sections":
