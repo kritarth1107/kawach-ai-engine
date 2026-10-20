@@ -212,7 +212,7 @@ jobs:
           # The nightly trainer (eval/trainer.py, 04:00 IST from the cron): replays the open cases with edited instruction text on
           # Gemini in kavach-eval-1015 and opens pull requests from the kavach-trainer GitHub App. It reads production's
           # anonymised replay cases and nothing else, so it gets the database URL and the App key only, no other secret.
-          jq --arg key "kavach/trainer-github-app-key" --arg app "${{ vars.TRAINER_APP_ID }}" '.family = "kavach-trainer"
+          jq --arg key "arn:aws:secretsmanager:ap-south-1:743887469650:secret:kavach/trainer-github-app-key-FzNKRI" --arg app "${{ vars.TRAINER_APP_ID }}" '.family = "kavach-trainer"
             | .cpu = "1024"
             | .memory = "4096"
             | .containerDefinitions |= map(
