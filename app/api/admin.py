@@ -570,3 +570,66 @@ async def admin_task_live_url(task_id: str, session: DB) -> dict:
         return {"url": await tools.task_agent().live_url(t.agent_session)}
     except Exception:  # noqa: BLE001 — the browser may already be closed
         return {"url": None}
+
+
+@router.get("/trainer-runs")
+async def admin_trainer_runs(session: DB, limit: int = 30) -> dict:
+    """The nightly trainer's runs, newest first, each with its full report (eval/trainer.py)."""
+    from app.quality.models import TrainerRun
+
+    rows = (await session.execute(select(TrainerRun).order_by(TrainerRun.started_at.desc()).limit(max(1, min(limit, 90))))).scalars().all()
+    return {"runs": [{"id": r.id, "day": r.day, "startedAt": r.started_at.isoformat(), "finishedAt": r.finished_at.isoformat() if r.finished_at else None,
+                      "status": r.status, "dryRun": r.dry_run, "spentInr": round(float(r.spent_inr or 0), 2), "capInr": float(r.cap_inr or 0),
+                      "cases": r.cases, "tried": r.tried, "kept": r.kept, "prs": r.prs or [], "error": r.error or "", "taskId": r.task_id or "",
+                      "report": r.report or {}} for r in rows]}
+
+
+@router.get("/db-stats")
+async def admin_db_stats(session: DB) -> dict:
+    """Postgres (Aurora) as the engine sees it: size, connections, cache, activity, the biggest tables and the vector
+    indexes. Catalog numbers only; no row content and no query text."""
+    from sqlalchemy import text as sql
+
+    async def one(q: str) -> dict:
+        r = (await session.execute(sql(q))).mappings().first()
+        return dict(r) if r else {}
+
+    async def many(q: str) -> list[dict]:
+        return [dict(r) for r in (await session.execute(sql(q))).mappings().all()]
+
+    db = await one("""SELECT version() AS version, current_database() AS name, pg_database_size(current_database()) AS bytes,
+        pg_postmaster_start_time() AS started_at, current_setting('max_connections')::int AS max_connections,
+        current_setting('shared_buffers') AS shared_buffers, current_setting('work_mem') AS work_mem,
+        current_setting('statement_timeout') AS statement_timeout, (SELECT count(*) FROM pg_stat_activity) AS connections""")
+    stat = await one("""SELECT xact_commit, xact_rollback, blks_read, blks_hit, tup_returned, tup_fetched, tup_inserted, tup_updated,
+        tup_deleted, conflicts, temp_files, temp_bytes, deadlocks, stats_reset FROM pg_stat_database WHERE datname = current_database()""")
+    hit = (stat.get("blks_hit") or 0) / max(1, (stat.get("blks_hit") or 0) + (stat.get("blks_read") or 0))
+    states = await many("""SELECT coalesce(state, 'background') AS state, coalesce(application_name, '') AS app, count(*) AS n,
+        max(extract(epoch FROM now() - coalesce(query_start, backend_start)))::int AS oldest_s
+        FROM pg_stat_activity WHERE datname = current_database() GROUP BY 1, 2 ORDER BY n DESC""")
+    waits = await many("""SELECT wait_event_type AS type, wait_event AS event, count(*) AS n FROM pg_stat_activity
+        WHERE wait_event IS NOT NULL AND state = 'active' GROUP BY 1, 2 ORDER BY n DESC LIMIT 10""")
+    tables = await many("""SELECT c.relname AS name, pg_total_relation_size(c.oid) AS total_bytes, pg_relation_size(c.oid) AS table_bytes,
+        pg_indexes_size(c.oid) AS index_bytes, greatest(c.reltuples, 0)::bigint AS rows_est, s.n_live_tup AS live, s.n_dead_tup AS dead,
+        s.seq_scan, s.idx_scan, s.n_tup_ins AS inserts, s.n_tup_upd AS updates, s.n_tup_del AS deletes,
+        greatest(s.last_autovacuum, s.last_vacuum) AS last_vacuum, greatest(s.last_autoanalyze, s.last_analyze) AS last_analyze
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+        WHERE c.relkind = 'r' AND n.nspname = 'public' ORDER BY pg_total_relation_size(c.oid) DESC LIMIT 40""")
+    count = await one("SELECT count(*) AS tables FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'r' AND n.nspname = 'public'")
+    vectors = await many("""SELECT i.relname AS name, t.relname AS table_name, am.amname AS method, pg_relation_size(i.oid) AS bytes,
+        coalesce(s.idx_scan, 0) AS scans FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid JOIN pg_class t ON t.oid = x.indrelid
+        JOIN pg_am am ON am.oid = i.relam LEFT JOIN pg_stat_user_indexes s ON s.indexrelid = i.oid
+        WHERE am.amname IN ('hnsw', 'ivfflat') ORDER BY bytes DESC""")
+    unused = await many("""SELECT s.indexrelname AS name, s.relname AS table_name, pg_relation_size(s.indexrelid) AS bytes FROM pg_stat_user_indexes s
+        JOIN pg_index x ON x.indexrelid = s.indexrelid WHERE s.idx_scan = 0 AND NOT x.indisunique AND NOT x.indisprimary
+        ORDER BY pg_relation_size(s.indexrelid) DESC LIMIT 10""")
+    ext = await many("SELECT extname AS name, extversion AS version FROM pg_extension ORDER BY extname")
+    locks = await one("SELECT count(*) FILTER (WHERE NOT granted) AS waiting, count(*) AS held FROM pg_locks")
+    for r in [db, stat, *states, *tables, *vectors]:
+        for k, v in list(r.items()):
+            if hasattr(v, "isoformat"):
+                r[k] = v.isoformat()
+            elif v is not None and not isinstance(v, (int, float, str, bool)):
+                r[k] = float(v) if str(v).replace(".", "", 1).isdigit() else str(v)
+    return {"database": db, "activity": {**stat, "cacheHitRatio": round(hit, 4)}, "connections": states, "waits": waits, "locks": locks,
+            "tables": tables, "tableCount": count.get("tables", 0), "vectorIndexes": vectors, "unusedIndexes": unused, "extensions": ext}

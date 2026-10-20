@@ -8,6 +8,7 @@ All new tables (created by create_all at start; nothing here changes an existing
 - replay_cases: every failure as a case that can be run again: the context snapshot, the bad reply, what must hold.
 - eval_scores: the nightly world score (scores.json from the 1,000-family probes) and later the replay runs.
 - judge_labels: people's yes/no on the judge's verdicts (the monthly calibration), and the fixture-set runs.
+- trainer_runs: one night of the trainer (eval/trainer.py): what it tried, what it kept, its pull requests and cost.
 """
 
 from __future__ import annotations
@@ -162,3 +163,29 @@ class JudgeLabel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (Index("uq_judge_labels", "batch", "verdict_id", unique=True),)
+
+
+class TrainerRun(Base):
+    """One run of the nightly trainer: the full report (kinds, cases, every edit tried and why it was kept or not, the
+    regression, pull requests, notes) for the admin's Trainer page. Anonymised case ids only, no message text of real
+    families beyond the anonymised replies the report quotes."""
+
+    __tablename__ = "trainer_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    day: Mapped[str] = mapped_column(String(10))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | done | failed
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=False)
+    spent_inr: Mapped[float] = mapped_column(Float, default=0.0)
+    cap_inr: Mapped[float] = mapped_column(Float, default=0.0)
+    cases: Mapped[int] = mapped_column(Integer, default=0)  # open and fixed cases it could see
+    tried: Mapped[int] = mapped_column(Integer, default=0)
+    kept: Mapped[int] = mapped_column(Integer, default=0)
+    prs: Mapped[list] = mapped_column(JSONB, default=list)
+    error: Mapped[str] = mapped_column(Text, default="")
+    report: Mapped[dict] = mapped_column(JSONB, default=dict)
+    task_id: Mapped[str] = mapped_column(String(64), default="")
+
+    __table_args__ = (Index("ix_trainer_runs_started", "started_at"),)

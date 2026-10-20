@@ -210,25 +210,37 @@ def room(texts: dict[str, str]) -> str:
     return always + f"; every edit adds at most {MAX_ADDED} characters."
 
 
+def _edit_tools():
+    """The editor answers by calling one of these (structured, never prose to parse)."""
+    from app.llm.router import ToolSpec
+
+    return [ToolSpec("propose_edit", "One exact edit to one instruction file.", {"type": "object", "properties": {
+                "file": {"type": "string", "enum": list(ALLOWED)}, "find": {"type": "string", "description": "exact text from that file, once"},
+                "replace": {"type": "string"}, "why": {"type": "string", "description": "one sentence"}}, "required": ["file", "find", "replace", "why"]}),
+            ToolSpec("skip", "No instruction change can fix this.", {"type": "object", "properties": {"why": {"type": "string"}}, "required": ["why"]})]
+
+
 async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts: dict[str, str], rejected: list[str]) -> Edit | str:
     """One edit from this lane's editor; when it is unusable or locked, the editor hears why and gets one more try."""
     from app.llm import router
     from eval.family_sim import parse_json
 
     avoid = ("The founder already rejected these changes; propose something different:\n" + "\n".join(f"- {r[:200]}" for r in rejected[:10])) if rejected else ""
-    system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED), room=room(texts))
+    system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED), room=room(texts)) + "\nAnswer by calling propose_edit or skip."
     files = "\n\n".join(f"=== FILE {f} ===\n{t}" for f, t in texts.items())
     fails = "\n\n".join(brief(c, r) for c, r in failing)
-    messages = [{"role": "user", "content": [{"type": "text", "text": f"FILES:\n{files}\n\nFAILURES:\n{fails}"}]}]
+    ask = f"FILES:\n{files}\n\nFAILURES:\n{fails}"
     why = ""
     for _ in range(2):
         try:
-            rep = await router.complete("learn", system_stable=system, messages=messages, max_tokens=4000, effort="medium", timeout_s=120)
-            g = parse_json(rep.text) or {}
+            rep = await router.complete("learn", system_stable=system, messages=[{"role": "user", "content": [{"type": "text", "text": ask}]}],
+                                        tools=_edit_tools(), max_tokens=6000, effort="medium", timeout_s=180)
         except Exception as exc:  # noqa: BLE001
             return f"editor error: {str(exc)[:120]}"
-        if g.get("skip"):
-            return f"editor: {str(g['skip'])[:200]}"
+        call = next((c for c in rep.tool_calls if c.name in ("propose_edit", "skip")), None)
+        g = call.args if call else parse_json(rep.text) or {}
+        if (call and call.name == "skip") or (not call and g.get("skip")):
+            return f"editor: {str(g.get('why') or g.get('skip') or '')[:200]}"
         if not all(isinstance(g.get(k), str) for k in ("file", "find", "replace")):
             why = f"answer not usable: {(rep.text or '')[:160]!r}"
         else:
@@ -236,8 +248,7 @@ async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts:
             why = lock(e, texts, rejected) or ""
             if not why:
                 return e
-        messages += [{"role": "assistant", "content": [{"type": "text", "text": rep.text or ""}]},
-                     {"role": "user", "content": [{"type": "text", "text": f"That edit cannot be used: {why}. Answer one corrected edit as JSON only."}]}]
+        ask += f"\n\nYOUR LAST EDIT COULD NOT BE USED: {why}. Call propose_edit once more with a corrected edit, or skip."
     return f"editor: {why}"
 
 
@@ -343,6 +354,17 @@ def _reply(r: dict | None) -> str:
     return str((((r or {}).get("runs") or [{}])[-1]).get("reply") or "")
 
 
+def _case_view(c: dict, r: dict | None) -> dict:
+    """What the admin's Trainer page shows for one case run (anonymised cases only)."""
+    runs = (r or {}).get("runs") or []
+    return {"id": c["id"], "kind": c.get("kind"), "source": c.get("source"), "status": c.get("status"),
+            "message": str(c.get("message") or (c.get("context") or {}).get("message") or "")[:300], "badReply": str(c.get("bad_reply") or "")[:300],
+            "mustHold": c.get("assertion") or [], "rubric": str(c.get("rubric") or "")[:300],
+            "passed": (r or {}).get("passed"), "skipped": (r or {}).get("skipped"), "passes": sum(1 for x in runs if x.get("passed")), "runs": len(runs),
+            "why": str((runs[-1] if runs else {}).get("why") or "")[:300], "reply": _reply(r)[:400],
+            "tools": (runs[-1] if runs else {}).get("tools") or []}
+
+
 async def night(argv: list[str]) -> dict:
     from app.learn.replay import EVAL_PROJECT, REFUSED_PROJECTS
     from app.llm import spend
@@ -369,12 +391,24 @@ async def night(argv: list[str]) -> dict:
     if not dry:
         await gh.login()
         busy, rejected = await gh.trainer_prs()
-    report: dict = {"day": day, "dry_run": dry, "kinds": {}, "prs": [], "notes": []}
+    report: dict = {"day": day, "dry_run": dry, "kinds": {}, "prs": [], "notes": [], "cap_inr": cap, "busy_kinds": sorted(busy),
+                    "rejected_before": len(rejected), "phases": {}, "settings": {"groups": int(os.getenv("TRAINER_GROUPS", "3")),
+                    "per_kind": int(os.getenv("TRAINER_PER_KIND", "3")), "regression_max": int(os.getenv("TRAINER_REGRESSION_MAX", "40")),
+                    "max_added": MAX_ADDED, "prefix_limit": PREFIX_TOKENS, "files": list(ALLOWED), "model": "gemini-3.5-flash (kavach-eval-1015)"}}
+    t0 = time.monotonic()
     if await runner.preflight():
         report["notes"].append("the model did not answer; nothing ran")
         return report
     cases = await load(files)
+    open_kinds: dict[str, int] = defaultdict(int)
+    for c in cases:
+        if c.get("status") == "open":
+            open_kinds[str(c.get("kind") or "other")] += 1
+    report["cases"] = {"total": len(cases), "open": sum(open_kinds.values()), "fixed": sum(1 for c in cases if c.get("status") == "fixed"),
+                       "open_by_kind": dict(sorted(open_kinds.items(), key=lambda kv: -kv[1]))}
     groups = pick(cases, groups=int(os.getenv("TRAINER_GROUPS", "3")), per=int(os.getenv("TRAINER_PER_KIND", "3")), kinds=kinds, busy=busy)
+    report["chosen"] = {k: [c["id"] for c in v] for k, v in groups.items()}
+    report["phases"]["load_s"] = round(time.monotonic() - t0)
     texts = originals()
     use_texts(texts)
 
@@ -382,13 +416,15 @@ async def night(argv: list[str]) -> dict:
         return cap - spend.process_spent()
 
     kept: list[Edit] = []
+    t1 = time.monotonic()
     for kind, group in groups.items():
         if left() < cap * 0.35:
             report["notes"].append(f"budget: stopped before {kind}")
             break
         base = {r["id"]: r for r in await runner.run_cases(group, url, min(left(), cap * 0.1), parallel=3, deadline_s=900)}
         failing = [(c, base[c["id"]]) for c in group if base.get(c["id"], {}).get("passed") is False]
-        info: dict = {"cases": [c["id"] for c in group], "failing": [c["id"] for c, _ in failing], "tried": []}
+        info: dict = {"cases": [c["id"] for c in group], "failing": [c["id"] for c, _ in failing], "tried": [],
+                      "baseline": [_case_view(c, base.get(c["id"])) for c in group], "room": room(texts)}
         report["kinds"][kind] = info
         if not failing:
             continue
@@ -396,7 +432,7 @@ async def night(argv: list[str]) -> dict:
         for lane in LANES:
             e = await propose(lane, kind, failing, texts, rejected)
             if isinstance(e, str):
-                info["tried"].append({"lane": lane, "result": e})
+                info["tried"].append({"lane": lane, "result": e, "spent_inr": round(spend.process_spent(), 2)})
                 continue
             use_texts(apply(texts, [e]))
             try:
@@ -407,13 +443,19 @@ async def night(argv: list[str]) -> dict:
             broke = [cid for cid, r in base.items() if r.get("passed") is True and probe.get(cid, {}).get("passed") is False]
             e.before = {c["id"]: _reply(base.get(c["id"])) for c, _ in failing}
             e.after = {cid: _reply(probe.get(cid)) for cid in e.fixed}
-            info["tried"].append({"lane": lane, "file": e.file, "why": e.why, "fixed": e.fixed, "broke": broke})
+            info["tried"].append({"lane": lane, "file": e.file, "why": e.why, "fixed": e.fixed, "broke": broke, "find": e.find, "replace": e.replace,
+                                  "added_chars": len(e.replace) - len(e.find), "probe": [_case_view(c, probe.get(c["id"])) for c in group],
+                                  "result": "kept candidate" if e.fixed and not broke else "broke a case" if broke else "fixed nothing",
+                                  "spent_inr": round(spend.process_spent(), 2)})
             if e.fixed and not broke and (best is None or (len(e.fixed), -len(e.replace)) > (len(best.fixed), -len(best.replace))):
                 best = e
         if best:
             kept.append(best)
+            info["kept"] = best.lane
+    report["phases"]["edits_s"] = round(time.monotonic() - t1)
 
     results: dict = {}
+    t2 = time.monotonic()
     if kept:
         fixed_cases = runner.choose([c for c in cases if c.get("status") == "fixed"], int(os.getenv("TRAINER_REGRESSION_MAX", "40")))
         known = runner.model_baseline()
@@ -439,8 +481,13 @@ async def night(argv: list[str]) -> dict:
                     kept.remove(e)
                     report["notes"].append(f"dropped the {e.kind} edit: it broke {', '.join(k for k, r in solo.items() if r.get('passed') is False)}")
         ran = [r for r in after.values() if r.get("passed") is not None]
-        results = {"fixed_total": len(ran), "fixed_pass": sum(1 for r in ran if r["passed"]), "known": sum(1 for r in ran if not r["passed"] and r["id"] in known)}
+        results = {"fixed_total": len(ran), "fixed_pass": sum(1 for r in ran if r["passed"]), "known": sum(1 for r in ran if not r["passed"] and r["id"] in known),
+                   "failed": [cid for cid, r in after.items() if r.get("passed") is False], "skipped": sum(1 for r in after.values() if r.get("passed") is None)}
         report["regression"] = results
+        if ran and len(ran) < 0.8 * len(fixed_cases):  # a PR only after nearly every fixed case got a verdict
+            report["notes"].append(f"regression incomplete ({len(ran)} of {len(fixed_cases)} fixed cases ran): no pull request tonight")
+            kept = []
+    report["phases"]["regression_s"] = round(time.monotonic() - t2)
     report["spent_inr"] = round(spend.process_spent(), 2)
     report["kept"] = [{"kind": e.kind, "file": e.file, "lane": e.lane, "why": e.why, "fixed": e.fixed, "find": e.find, "replace": e.replace} for e in kept]
     if not dry:
@@ -452,16 +499,76 @@ async def night(argv: list[str]) -> dict:
     return report
 
 
+async def _store(row_id: int | None, **values) -> int | None:
+    """The run in production's trainer_runs (the AWS task only): the admin's Trainer page reads it. Never fails the run."""
+    if os.getenv("TRAINER_PROD_CASES", "off") != "on":
+        return None
+    try:
+        from sqlalchemy import update
+
+        from app.db.session import SessionLocal
+        from app.quality.models import TrainerRun
+
+        async with SessionLocal() as s:
+            if row_id is None:
+                row = TrainerRun(**values)
+                s.add(row)
+                await s.commit()
+                return row.id
+            await s.execute(update(TrainerRun).where(TrainerRun.id == row_id).values(**values))
+            await s.commit()
+            return row_id
+    except Exception as exc:  # noqa: BLE001
+        print(f"trainer run not stored: {str(exc)[:200]}", flush=True)
+        return row_id
+
+
+def _task_id() -> str:
+    meta = os.getenv("ECS_CONTAINER_METADATA_URI_V4", "")
+    if not meta:
+        return ""
+    try:
+        import httpx
+
+        return str(httpx.get(f"{meta}/task", timeout=2).json().get("TaskARN", "")).rsplit("/", 1)[-1]
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 async def main_async(argv: list[str]) -> int:
+    from app.core import clock
     from app.jobs.learn_gate import wait_replay_db
 
-    await wait_replay_db()
-    report = await night(argv)
+    started = clock.now()
+    cap = float(os.getenv("TRAINER_MAX_INR", "300"))
+    row = await _store(None, day=time.strftime("%Y-%m-%d"), started_at=started, status="running", dry_run="--dry-run" in argv, cap_inr=cap, task_id=_task_id())
+    t0 = time.monotonic()
+    try:
+        await wait_replay_db()
+        report = await night(argv)
+    except BaseException as exc:
+        await _store(row, finished_at=clock.now(), status="failed", error=f"{type(exc).__name__}: {str(exc)[:500]}")
+        await _job(started, t0, 500)
+        raise
+    tried = sum(len(k.get("tried") or []) for k in report["kinds"].values())
+    await _store(row, finished_at=clock.now(), status="done", spent_inr=report.get("spent_inr") or 0.0, cases=(report.get("cases") or {}).get("total", 0),
+                 tried=tried, kept=len(report.get("kept") or []), prs=report.get("prs") or [], report=json.loads(json.dumps(report, default=str)))
+    await _job(started, t0, 200)
     print(json.dumps(report, ensure_ascii=False, indent=1, default=str), flush=True)
     out = Path(os.getenv("TRAINER_OUT", "runs/trainer"))
     out.mkdir(parents=True, exist_ok=True)
     (out / f"{report['day']}.json").write_text(json.dumps(report, ensure_ascii=False, indent=1, default=str))
     return 0
+
+
+async def _job(started, t0: float, code: int) -> None:
+    """The run in job_runs too, so the admin's Scheduled work shows its last run beside the other jobs."""
+    if os.getenv("TRAINER_PROD_CASES", "off") != "on":
+        return
+    from app.care.why import record_job
+    from app.db.session import SessionLocal
+
+    await record_job(SessionLocal, "trainer", started, int((time.monotonic() - t0) * 1000), code)
 
 
 if __name__ == "__main__":
