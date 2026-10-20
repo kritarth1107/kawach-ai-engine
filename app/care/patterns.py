@@ -435,12 +435,12 @@ def feedback_key(p: dict) -> str:
 
 
 def context_block(items: list[dict], names: dict[str, str]) -> str:
-    if not items:
+    if not any(p.get("title") for p in items):
         return ""
     lines = ["PATTERNS NOTICED (from the last two weeks of logs; facts, not diagnoses):"]
-    for p in items[:6]:
+    for p in [p for p in items if p.get("title")][:6]:  # a record without its text (a replay copy) is not shown, never a crash
         tag = "NEW, not mentioned yet" if p.get("new") else "known"
-        lines.append(f"  - [{tag}] {names.get(p.get('subject_id'), 'them')}: {p['title']}. {p.get('detail', '')} Suggest: {p['suggestion']} "
+        lines.append(f"  - [{tag}] {names.get(p.get('subject_id'), 'them')}: {p['title']}. {p.get('detail', '')} Suggest: {p.get('suggestion') or ''} "
                      f"(feedback key {p.get('target') or feedback_key(p)})")
     lines.append("  Mention a NEW pattern once to a caregiver, in one or two lines, when it fits the conversation, then call "
                  "offer_buttons kind feedback with its feedback key so they can tap 👍/👎. To the elder only as a gentle offer (for "

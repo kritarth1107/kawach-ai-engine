@@ -65,6 +65,7 @@ Rules:
 - "find" must be copied exactly from one file and appear in it once; "replace" is the new text for it (it may keep "find"
   and add after it).
 - If no instruction change can fix this (it is a code bug or the case itself is wrong), answer {{"skip": "<why>"}}.
+- Room: {room}
 {avoid}
 Answer only JSON: {{"file": "<one of {files}>", "find": "<exact text>", "replace": "<new text>", "why": "<one sentence>"}}"""
 
@@ -199,25 +200,45 @@ def brief(case: dict, result: dict | None) -> str:
         f"Why it still fails: {str(last.get('why') or '')[:300]}"])
 
 
+def room(texts: dict[str, str]) -> str:
+    """How much the always-sent instructions may grow (core.md and reply.md are on every call; the others only with their tools)."""
+    left = PREFIX_TOKENS - prefix_tokens(texts)
+    use_texts(texts)
+    always = f"core.md and reply.md are sent on every call and have about {max(left, 0) * 4} characters of room left"
+    if left < 60:
+        always += ", so an edit there must not make the file longer (replace wording; put a new rule in the topic file it belongs to)"
+    return always + f"; every edit adds at most {MAX_ADDED} characters."
+
+
 async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts: dict[str, str], rejected: list[str]) -> Edit | str:
+    """One edit from this lane's editor; when it is unusable or locked, the editor hears why and gets one more try."""
     from app.llm import router
     from eval.family_sim import parse_json
 
     avoid = ("The founder already rejected these changes; propose something different:\n" + "\n".join(f"- {r[:200]}" for r in rejected[:10])) if rejected else ""
-    system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED))
+    system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED), room=room(texts))
     files = "\n\n".join(f"=== FILE {f} ===\n{t}" for f, t in texts.items())
     fails = "\n\n".join(brief(c, r) for c, r in failing)
-    try:
-        rep = await router.complete("learn", system_stable=system, messages=[{"role": "user", "content": [{"type": "text", "text": f"FILES:\n{files}\n\nFAILURES:\n{fails}"}]}],
-                                    max_tokens=3000, effort="medium", timeout_s=120)
-        g = parse_json(rep.text) or {}
-    except Exception as exc:  # noqa: BLE001
-        return f"editor error: {str(exc)[:120]}"
-    if g.get("skip"):
-        return f"editor: {str(g['skip'])[:200]}"
-    if not all(isinstance(g.get(k), str) for k in ("file", "find", "replace")):
-        return "editor answer not usable"
-    return Edit(file=g["file"].strip(), find=g["find"], replace=g["replace"], why=str(g.get("why") or "")[:300], lane=lane, kind=kind)
+    messages = [{"role": "user", "content": [{"type": "text", "text": f"FILES:\n{files}\n\nFAILURES:\n{fails}"}]}]
+    why = ""
+    for _ in range(2):
+        try:
+            rep = await router.complete("learn", system_stable=system, messages=messages, max_tokens=4000, effort="medium", timeout_s=120)
+            g = parse_json(rep.text) or {}
+        except Exception as exc:  # noqa: BLE001
+            return f"editor error: {str(exc)[:120]}"
+        if g.get("skip"):
+            return f"editor: {str(g['skip'])[:200]}"
+        if not all(isinstance(g.get(k), str) for k in ("file", "find", "replace")):
+            why = f"answer not usable: {(rep.text or '')[:160]!r}"
+        else:
+            e = Edit(file=g["file"].strip(), find=g["find"], replace=g["replace"], why=str(g.get("why") or "")[:300], lane=lane, kind=kind)
+            why = lock(e, texts, rejected) or ""
+            if not why:
+                return e
+        messages += [{"role": "assistant", "content": [{"type": "text", "text": rep.text or ""}]},
+                     {"role": "user", "content": [{"type": "text", "text": f"That edit cannot be used: {why}. Answer one corrected edit as JSON only."}]}]
+    return f"editor: {why}"
 
 
 # ── GitHub (the kavach-trainer App) ──────────────────────────────────────────
@@ -376,10 +397,6 @@ async def night(argv: list[str]) -> dict:
             e = await propose(lane, kind, failing, texts, rejected)
             if isinstance(e, str):
                 info["tried"].append({"lane": lane, "result": e})
-                continue
-            why = lock(e, texts, rejected)
-            if why:
-                info["tried"].append({"lane": lane, "file": e.file, "result": f"locked: {why}"})
                 continue
             use_texts(apply(texts, [e]))
             try:

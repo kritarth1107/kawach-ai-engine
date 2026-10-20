@@ -21,7 +21,8 @@ DATA = Path(__file__).parent / "data"
 
 PHONE = re.compile(r"(?<!\d)(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}(?!\d)")
 EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]+\b")
-PINCODE = re.compile(r"(?<!\d)[1-9]\d{2}\s?\d{3}(?!\d)")
+# Not the fraction of a timestamp ("18:02:23.123456"): that masked every case's time, so replays ran at the wrong hour.
+PINCODE = re.compile(r"(?<!\d)(?<!\d\.)[1-9]\d{2}\s?\d{3}(?!\d)")
 URL = re.compile(r"https?://\S+")
 IDS = re.compile(r"\b[A-Z]{2,5}-?\d{4,}\b|\b\d{8,}\b")
 # "Flat 4B", "house no. 12", "H.No 7/3"; "MG Road", "Lajpat Nagar" (a capitalised word before the street word).

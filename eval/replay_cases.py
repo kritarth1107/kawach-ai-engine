@@ -136,7 +136,7 @@ def choose(cases: list[dict], max_cases: int) -> list[dict]:
 
 def _t(v: str | None, default: datetime) -> datetime:
     try:
-        d = datetime.fromisoformat(str(v))
+        d = datetime.fromisoformat(re.sub(r"\.\[PIN\]", "", str(v)))  # cases anonymised before 21 Oct masked the fraction
         return d if d.tzinfo else d.replace(tzinfo=clock.IST)
     except (TypeError, ValueError):
         return default

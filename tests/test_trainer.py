@@ -90,3 +90,23 @@ def test_open_prs_block_their_kind_and_closed_ones_are_remembered():
     gh.call = call  # type: ignore[method-assign]
     busy, rejected = asyncio.run(gh.trainer_prs())
     assert busy == {"quote"} and rejected == ["never tell the end"]
+
+
+def test_replay_copies_keep_their_time_and_do_not_crash_on_bare_patterns():
+    """21 Oct trainer run: every real-chat case replayed at the wrong hour (the anonymiser masked the fraction of each
+    timestamp as a PIN code), and patterns copied without their text crashed the turn (KeyError 'title')."""
+    from datetime import datetime, timezone
+
+    from app.care.patterns import context_block
+    from app.learn.anonymise import PINCODE
+    from eval.replay_cases import _t
+
+    assert PINCODE.sub("[PIN]", "2026-10-19T18:02:23.123456+00:00") == "2026-10-19T18:02:23.123456+00:00"
+    assert PINCODE.sub("[PIN]", "Delhi 110001") == "Delhi [PIN]"
+    assert _t("2026-10-19T18:02:23.[PIN]+00:00", datetime(2020, 1, 1, tzinfo=timezone.utc)).hour == 18
+    assert context_block([{"key": "x", "subject_id": "p1"}], {}) == ""
+    assert "Walks less" in context_block([{"key": "x"}, {"title": "Walks less", "subject_id": "p1"}], {"p1": "Maa"})
+
+
+def test_the_editor_hears_how_much_room_is_left(texts):
+    assert "characters of room" in trainer.room(texts)
