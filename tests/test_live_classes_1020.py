@@ -75,7 +75,42 @@ def test_background_work_waits_after_a_429_and_replies_do_not(monkeypatch):
 
     monkeypatch.setattr(router.asyncio, "sleep", sleep)
     monkeypatch.setattr(router, "_throttled_at", time.monotonic())
+    monkeypatch.setattr(router, "BACKGROUND_PAUSE_S", 30.0)
     asyncio.run(router._yield_to_live("brain"))
     assert slept == []
     asyncio.run(router._yield_to_live("extract"))
     assert slept and 0 < slept[0] <= router.BACKGROUND_PAUSE_S
+
+
+def test_a_skip_asks_why_and_tells_family_only_for_a_care_recipient():
+    from app.brain.tools.health import skip_next
+
+    elder = SimpleNamespace(elder_id="e1", members=[{"id": "e1", "role": "elder"}, {"id": "c1", "role": "primary caregiver"}])
+    out = skip_next(elder, "e1", "Metformin", "skipped")
+    assert "ask" in out and "why" in out and "alert_caregiver" in out and "encourage once" in out
+    own = skip_next(elder, "c1", "Magnesium", "skipped")
+    assert "nobody else is told" in own and "alert_caregiver" not in own
+    assert "They said: doctor paused it" in skip_next(elder, "e1", "Metformin", "doctor paused it")
+
+
+def test_a_repeated_nudge_topic_gives_way_to_another(monkeypatch):
+    from app.care.nudges import compose as C
+
+    drafts = iter([{"option_id": "o1", "text": "Who is your favourite character?"}, {"option_id": "o2", "text": "How many glasses of water so far?"}])
+    seen = []
+
+    async def fake_compose(ctx, problems=None):
+        seen.append(problems)
+        return next(drafts)
+
+    async def fine(ctx, text):
+        return []
+
+    monkeypatch.setattr(C, "compose", fake_compose)
+    monkeypatch.setattr(C, "grounded", fine)
+    monkeypatch.setattr(C, "verify", fine)
+    monkeypatch.setattr(C, "check", lambda d, ctx: ["this question was already asked today: 'Who is'"] if d["option_id"] == "o1" else [])
+    ctx = SimpleNamespace(options=[SimpleNamespace(id="o1"), SimpleNamespace(id="o2")], off=set())
+    draft, problems = asyncio.run(C.write_and_check(ctx))
+    assert draft["option_id"] == "o2" and not problems
+    assert "o1" in seen[1][-1] and "different option_id" in seen[1][-1]

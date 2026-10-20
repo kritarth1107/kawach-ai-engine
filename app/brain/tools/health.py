@@ -145,7 +145,33 @@ async def log_dose(ctx: TurnCtx, a: dict) -> dict:
         )
     if a["outcome"] == "empty_strip":
         out["next"] = "Ask how many tablets are left or whether to reorder (set_stock, then start_task with a pharmacy)."
+    if a["outcome"] in ("skipped", "refused"):
+        out["next"] = skip_next(ctx, subject, name, a.get("note") or "")
     return out
+
+
+def _cared_for(ctx: TurnCtx, subject: str) -> bool:
+    """A care recipient's medicine (family is told of a refusal), not a caregiver's own (self-care: only recorded)."""
+    if subject == ctx.elder_id:
+        return True
+    role = next((str(m.get("role") or "") for m in ctx.members if m.get("id") == subject), "")
+    return "caregiver" not in role.lower()
+
+
+def skip_next(ctx: TurnCtx, subject: str, name: str, said_reason: str) -> str:
+    """A skip is a conversation, not only a record (founder 20 Oct): why, then the right next step, for any medicine."""
+    family = ("If they still do not want to take it, tell the caregivers once (alert_caregiver reason safety, issue "
+              f"'{name[:30]}-not-taken', with the reason they gave)." if _cared_for(ctx, subject) else
+              "If they still do not want to take it, it stays recorded as skipped with their reason; nobody else is told "
+              "(it is their own medicine).")
+    known = f" They said: {said_reason[:120]}." if said_reason and said_reason not in ("skipped", "refused") else ""
+    return (f"Recorded {name} as not taken.{known} Do not stop at recording it: unless their words already gave the reason, ask "
+            "kindly why, in one short question (did the doctor say to stop or pause it, a side effect, run out, feeling unwell, "
+            "or just not feeling like it). When they answer, log_dose again with the same outcome and their reason as note. "
+            "A doctor's instruction or a side effect: accept it, never argue; a side effect is worth telling their doctor. "
+            "Run out: offer to reorder. Just not feeling like it: encourage once, warmly and briefly (it was prescribed for "
+            "them; you will remind them gently next time), never pressure, never medical advice. If they then take it, log "
+            f"it as taken. {family}")
 
 
 VITAL_KINDS = ["bp", "sugar", "weight", "height", "bmi", "body_fat", "muscle_mass", "waist", "temperature", "spo2", "pulse", "other"]

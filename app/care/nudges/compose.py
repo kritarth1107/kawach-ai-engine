@@ -60,6 +60,7 @@ class Context:
     sent_texts: list[str] = field(default_factory=list)  # lines sent to them in the last few days: do not send one again
     medicines: list[str] = field(default_factory=list)  # names on their record: a regular nudge may not ask about them
     today_asks: list[str] = field(default_factory=list)  # questions we already asked today and they have not answered
+    off: set[str] = field(default_factory=set)  # option ids a draft repeated this run (write_and_check moves on)
 
 
 def _medicine_reminder(reminder: dict) -> bool:
@@ -609,7 +610,13 @@ async def verify(ctx: Context, text: str) -> list[str]:
     return [] if got.get("ok", True) else [str(x)[:160] for x in (got.get("problems") or ["the reviewer found a problem"])][:4]
 
 
+REPEAT_PROBLEMS = ("this question was already asked today", "this line already went to them", "too close to an earlier message")
+
+
 async def write_and_check(ctx: Context) -> tuple[dict | None, list[str]]:
+    """Write, check, and try again with the problems. A draft blocked for repeating something already asked or said
+    drops its topic for this run, so the next try writes about another one (live 17-19 Oct: up to 74 nudges a day were
+    the same unanswered question, blocked each time, so they heard nothing about water, gym or meals)."""
     problems: list[str] = []
     for _ in range(3):  # the first try and up to 2 more (the plan's §3.5)
         try:
@@ -620,6 +627,13 @@ async def write_and_check(ctx: Context) -> tuple[dict | None, list[str]]:
         problems = check(draft, ctx) or await grounded(ctx, text) or await verify(ctx, text)
         if not problems:
             return draft, []
+        if any(p.startswith(REPEAT_PROBLEMS) for p in problems) and len(ctx.options) > 1:
+            tried = draft.get("option_id") or ctx.options[0].id
+            ctx.options = [o for o in ctx.options if o.id != tried]
+            ctx.off.add(tried)
+            off = sorted(ctx.off)
+            problems = [*problems, f"option(s) {', '.join(off)} are off for now (already asked or said): choose a different "
+                                   "option_id and write about that one instead"]
     return None, problems
 
 

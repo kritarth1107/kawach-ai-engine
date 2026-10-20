@@ -1254,7 +1254,9 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 guarded = True
         # Every dose of the turn: "all medicines taken" logs several, and the line names each (live 17-20 Oct: seven
         # doses logged, the reply named one).
-        doses = [_json_result(a) for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"]
+        # Only doses taken: a skip or a refusal keeps her reply (it asks why; the fixed line says "as taken").
+        doses = [_json_result(a) for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"
+                 and str((a.get("args") or {}).get("outcome") or "taken") == "taken"]
         if len(doses) > 1:
             names = [str(d.get("medicine") or "") for d in doses if d.get("medicine")]
             if names and not all(n.lower() in (final or "").lower() for n in names):

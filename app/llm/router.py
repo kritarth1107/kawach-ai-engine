@@ -428,7 +428,7 @@ _hedge_off_until = 0.0
 # Work nobody is waiting on. After a 429 it waits, so live replies get the shared capacity (live 18 Oct: about 80
 # 429s in a day while fact extraction and the night jobs ran next to replies).
 BACKGROUND_ROLES = frozenset({"extract", "learn", "judge", "sim", "embed"})
-BACKGROUND_PAUSE_S = 30.0
+BACKGROUND_PAUSE_S = float(os.getenv("BACKGROUND_PAUSE_S", "30"))
 _throttled_at = 0.0
 
 

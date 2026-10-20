@@ -8,7 +8,8 @@ os.environ.setdefault("NUDGE_PARALLEL", "1")  # the same for regular nudges
 os.environ.setdefault("DREAM_PARALLEL", "1")  # the night queue shares that one connection too
 os.environ.setdefault("FACT_DEDUPE", "off")
 os.environ.setdefault("GROUNDING_CHECK", "off")
-os.environ.setdefault("EMERGENCY_CHECK", "off")  # the emergency check asks a model: its own test turns it on  # the no-invention check asks a model: its own tests turn it on  # the write-time duplicate check asks a model: its own tests turn it on
+os.environ.setdefault("EMERGENCY_CHECK", "off")
+os.environ.setdefault("BACKGROUND_PAUSE_S", "0")  # a simulated 429 must not make the rest of a test wait (its own test sets it)  # the emergency check asks a model: its own test turns it on  # the no-invention check asks a model: its own tests turn it on  # the write-time duplicate check asks a model: its own tests turn it on
 os.environ.setdefault("DAILY_SCORE", "off")  # the dream's daily score asks the judge and the backend: its own tests turn it on
 os.environ.setdefault("PERSON_SYNC", "off")  # naming/language changes are pushed to the backend after commit: its own tests turn it on
 from datetime import datetime, timezone
