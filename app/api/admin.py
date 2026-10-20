@@ -666,3 +666,259 @@ async def admin_family_week(family_id: str, session: DB, days: int = 7) -> dict:
     for r in last_in:
         people.setdefault(r["thread_id"], dict(blank))["lastInAt"] = r["at"].isoformat()
     return {"days": days, "total": total, "people": people, "daily": [{"day": d, **v} for d, v in sorted(daily.items())]}
+
+
+# ── Insights (founder 21 Oct: "build everything") ──────────────────────────────────
+# Counts and money only: no message text leaves these routes (reasons are cut before any quoted words).
+
+_TEST_PREFIXES = ("sim-", "shadow:", "replay-", "founder-", "lab-", "eval-", "world-", "fw-")
+
+
+def _is_test(fid: str) -> bool:
+    return fid.startswith(_TEST_PREFIXES)
+
+
+def _reason(r: str) -> str:
+    import re
+
+    return re.sub(r"[\"“'].*$", "", r or "").strip(" :") or "—"
+
+
+@router.get("/insights/family-costs")
+async def insights_family_costs(session: DB, days: int = 30) -> dict:
+    """Model cost per family and per day from each turn's trace (live families named by id; test families grouped), and
+    the model spend not tied to a family (night jobs, extraction, judge) as the ledger minus the traced turns."""
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 120)))
+    rows = (await session.execute(sql("""SELECT family_id, kind, to_char(at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, count(*) AS turns,
+        sum(cost_inr) AS cost, count(DISTINCT thread_id) AS people FROM trace_turns WHERE at >= :s GROUP BY 1, 2, 3"""), {"s": since})).mappings().all()
+    ledger = (await session.execute(sql("SELECT day::text AS day, role, sum(cost_inr) AS cost, sum(calls) AS calls FROM llm_spend WHERE day >= :d GROUP BY 1, 2"),
+                                    {"d": since.date()})).mappings().all()
+    fams: dict[str, dict] = {}
+    for r in rows:
+        key = "tests and simulations" if _is_test(r["family_id"]) else r["family_id"]
+        f = fams.setdefault(key, {"familyId": key, "test": key == "tests and simulations", "costInr": 0.0, "turns": 0, "byKind": {}, "daily": {}})
+        c = float(r["cost"] or 0)
+        f["costInr"] += c
+        f["turns"] += int(r["turns"])
+        k = f["byKind"].setdefault(r["kind"], {"turns": 0, "costInr": 0.0})
+        k["turns"] += int(r["turns"])
+        k["costInr"] += c
+        f["daily"][r["day"]] = round(f["daily"].get(r["day"], 0) + c, 2)
+    traced_daily: dict[str, float] = {}
+    for f in fams.values():
+        f["costInr"] = round(f["costInr"], 2)
+        f["perTurn"] = round(f["costInr"] / f["turns"], 3) if f["turns"] else 0
+        for d, v in f["daily"].items():
+            traced_daily[d] = traced_daily.get(d, 0) + v
+    ledger_daily: dict[str, float] = {}
+    roles: dict[str, dict] = {}
+    for r in ledger:
+        ledger_daily[r["day"]] = ledger_daily.get(r["day"], 0) + float(r["cost"] or 0)
+        x = roles.setdefault(r["role"], {"costInr": 0.0, "calls": 0})
+        x["costInr"] = round(x["costInr"] + float(r["cost"] or 0), 2)
+        x["calls"] += int(r["calls"] or 0)
+    background = {d: round(max(0.0, v - traced_daily.get(d, 0)), 2) for d, v in ledger_daily.items()}
+    return {"days": days, "families": sorted(fams.values(), key=lambda f: -f["costInr"]), "ledgerDaily": {k: round(v, 2) for k, v in ledger_daily.items()},
+            "backgroundDaily": background, "byRole": roles,
+            "note": "The engine's own estimate (tokens × list price); Google's bill is about 1.45× higher. Background = night jobs, extraction, the judge and tests not traced to a family turn."}
+
+
+@router.get("/insights/people")
+async def insights_people(session: DB, days: int = 120) -> dict:
+    """Per person: first and last message to Saheli, days active, messages in the last 7 and 30 days, Saheli's messages
+    since their last reply, and briefs sent. For the growth funnel and the attention list. Live families only."""
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(7, min(days, 365)))
+    rows = (await session.execute(sql("""
+        WITH t AS (SELECT family_id, thread_id, role, at, coalesce((meta->>'proactive')::boolean, false) AS proactive FROM turns
+                   WHERE at >= :s AND thread_id <> 'saheli-scheduler' AND role IN ('user', 'assistant'))
+        SELECT family_id, thread_id,
+          min(at) FILTER (WHERE role = 'user') AS first_in, max(at) FILTER (WHERE role = 'user') AS last_in,
+          max(at) FILTER (WHERE role = 'assistant') AS last_out,
+          count(DISTINCT (at AT TIME ZONE 'Asia/Kolkata')::date) FILTER (WHERE role = 'user') AS active_days,
+          count(*) FILTER (WHERE role = 'user' AND at >= now() - interval '7 days') AS in7,
+          count(*) FILTER (WHERE role = 'user' AND at >= now() - interval '30 days') AS in30,
+          count(*) FILTER (WHERE role = 'user') AS in_all
+        FROM t GROUP BY 1, 2"""), {"s": since})).mappings().all()
+    unanswered = (await session.execute(sql("""
+        SELECT t.family_id, t.thread_id, count(*) AS n FROM turns t
+        LEFT JOIN LATERAL (SELECT max(at) AS last_in FROM turns u WHERE u.family_id = t.family_id AND u.thread_id = t.thread_id AND u.role = 'user') u ON true
+        WHERE t.role = 'assistant' AND coalesce((t.meta->>'proactive')::boolean, false) AND t.at >= now() - interval '14 days'
+          AND (u.last_in IS NULL OR t.at > u.last_in) GROUP BY 1, 2"""))).mappings().all()
+    briefs = (await session.execute(sql("""SELECT family_id, count(*) AS n, max(at) AS last FROM care_events WHERE kind = 'daily_brief'
+        AND at >= now() - interval '7 days' GROUP BY 1"""))).mappings().all()
+    un = {(r["family_id"], r["thread_id"]): int(r["n"]) for r in unanswered}
+    iso = lambda v: v.isoformat() if v else None  # noqa: E731
+    people = [{"familyId": r["family_id"], "personId": r["thread_id"], "firstInAt": iso(r["first_in"]), "lastInAt": iso(r["last_in"]),
+               "lastOutAt": iso(r["last_out"]), "activeDays": int(r["active_days"] or 0), "in7": int(r["in7"]), "in30": int(r["in30"]),
+               "inAll": int(r["in_all"]), "unansweredSinceLastReply": un.get((r["family_id"], r["thread_id"]), 0)}
+              for r in rows if not _is_test(r["family_id"])]
+    return {"people": people, "briefs": {r["family_id"]: {"sent7": int(r["n"]), "lastAt": iso(r["last"])} for r in briefs if not _is_test(r["family_id"])}}
+
+
+@router.get("/insights/quality")
+async def insights_quality(session: DB, days: int = 30) -> dict:
+    """The judge's pass rate per day and kind, the most common issues, replay cases open and fixed, and the trainer's nights."""
+    from collections import Counter
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 120)))
+    rows = (await session.execute(sql("""SELECT day, kind, passed, issues, family_id FROM reply_verdicts WHERE at >= :s"""), {"s": since})).mappings().all()
+    daily: dict[str, dict] = {}
+    issues: Counter = Counter()
+    by_kind: dict[str, dict] = {}
+    worst_fams: Counter = Counter()
+    for r in rows:
+        if _is_test(r["family_id"]):
+            continue
+        d = daily.setdefault(r["day"], {"day": r["day"], "judged": 0, "passed": 0})
+        d["judged"] += 1
+        d["passed"] += 1 if r["passed"] else 0
+        k = by_kind.setdefault(r["kind"], {"judged": 0, "passed": 0})
+        k["judged"] += 1
+        k["passed"] += 1 if r["passed"] else 0
+        if not r["passed"]:
+            worst_fams[r["family_id"]] += 1
+            for i in (r["issues"] or []):
+                issues[str(i)] += 1
+    cases = (await session.execute(sql("""SELECT status, kind, to_char(created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, count(*) AS n
+        FROM replay_cases GROUP BY 1, 2, 3"""))).mappings().all()
+    case_status: Counter = Counter()
+    case_kinds: Counter = Counter()
+    case_daily: dict[str, int] = {}
+    for c in cases:
+        case_status[c["status"]] += int(c["n"])
+        if c["status"] == "open":
+            case_kinds[c["kind"]] += int(c["n"])
+        case_daily[c["day"]] = case_daily.get(c["day"], 0) + int(c["n"])
+    trainer = (await session.execute(sql("""SELECT day, status, spent_inr, tried, kept, prs FROM trainer_runs ORDER BY started_at DESC LIMIT 30"""))).mappings().all()
+    return {"daily": sorted(daily.values(), key=lambda x: x["day"]), "byKind": by_kind, "issues": issues.most_common(20),
+            "familiesWithMostFailures": worst_fams.most_common(10), "cases": dict(case_status), "openByKind": case_kinds.most_common(20),
+            "casesCreatedDaily": dict(sorted(case_daily.items())[-days:]),
+            "trainer": [{"day": t["day"], "status": t["status"], "spentInr": round(float(t["spent_inr"] or 0), 2), "tried": t["tried"], "kept": t["kept"], "prs": t["prs"] or []} for t in trainer]}
+
+
+@router.get("/insights/outreach")
+async def insights_outreach(session: DB, days: int = 14) -> dict:
+    """Everything Saheli started: nudges (planned, sent, held and why, answered), reminders (sent, failed), briefs, and the
+    pre-send check's holds. Reasons are cut before any quoted words, so no message text is shown."""
+    from collections import Counter
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 60)))
+    ledger = (await session.execute(sql("""SELECT family_id, kind, status, reason, to_char(planned_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day,
+        replied_at IS NOT NULL AS replied, reaction FROM nudge_ledger WHERE planned_at >= :s"""), {"s": since})).mappings().all()
+    events = (await session.execute(sql("""SELECT family_id, kind, to_char(at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, summary FROM care_events
+        WHERE at >= :s AND kind IN ('reminder_sent', 'reminder_failed', 'daily_brief', 'nudge_held', 'checkin', 'alert_whatsapp', 'alert_dashboard')"""), {"s": since})).mappings().all()
+    nudges = {"total": 0, "sent": 0, "skipped": 0, "failed": 0, "answered": 0, "reactions": Counter(), "skipReasons": Counter(), "byKind": {}}
+    daily: dict[str, dict] = {}
+    blank = {"nudgesSent": 0, "nudgesSkipped": 0, "nudgesAnswered": 0, "remindersSent": 0, "remindersFailed": 0, "briefs": 0, "held": 0, "alerts": 0}
+    for r in ledger:
+        if _is_test(r["family_id"]):
+            continue
+        d = daily.setdefault(r["day"], dict(blank))
+        nudges["total"] += 1
+        k = nudges["byKind"].setdefault(r["kind"], {"sent": 0, "skipped": 0, "answered": 0})
+        if r["status"] in ("sent", "skipped", "failed"):
+            nudges[r["status"]] += 1
+        if r["status"] == "sent":
+            d["nudgesSent"] += 1
+            k["sent"] += 1
+            if r["replied"]:
+                nudges["answered"] += 1
+                d["nudgesAnswered"] += 1
+                k["answered"] += 1
+        elif r["status"] == "skipped":
+            d["nudgesSkipped"] += 1
+            k["skipped"] += 1
+            nudges["skipReasons"][_reason(r["reason"])[:80]] += 1
+        if r["reaction"]:
+            nudges["reactions"][r["reaction"]] += 1
+    held: Counter = Counter()
+    fail_reasons: Counter = Counter()
+    for e in events:
+        if _is_test(e["family_id"]):
+            continue
+        d = daily.setdefault(e["day"], dict(blank))
+        if e["kind"] == "reminder_sent":
+            d["remindersSent"] += 1
+        elif e["kind"] == "reminder_failed":
+            d["remindersFailed"] += 1
+            fail_reasons[_reason((e["summary"] or "").split("—")[-1])[:80]] += 1
+        elif e["kind"] == "daily_brief":
+            d["briefs"] += 1
+        elif e["kind"] == "nudge_held":
+            d["held"] += 1
+            held[_reason((e["summary"] or "")[:120])[:80]] += 1
+        elif e["kind"].startswith("alert_"):
+            d["alerts"] += 1
+    nudges["reactions"] = dict(nudges["reactions"])
+    nudges["skipReasons"] = nudges["skipReasons"].most_common(15)
+    return {"days": days, "nudges": nudges, "daily": [{"day": k, **v} for k, v in sorted(daily.items())], "heldReasons": held.most_common(10),
+            "reminderFailReasons": fail_reasons.most_common(10)}
+
+
+@router.get("/insights/orders")
+async def insights_orders(session: DB, days: int = 60) -> dict:
+    """Orders and rides per store: how many, done, failed, cancelled, why they failed, how long a done one took, and agent runs."""
+    from collections import Counter
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 180)))
+    rows = (await session.execute(sql("""SELECT family_id, service, kind, status, runs, created_at, updated_at, details->>'fail_code' AS code,
+        details->'metrics'->>'failure_code' AS code2, to_char(created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day FROM care_tasks WHERE created_at >= :s"""),
+        {"s": since})).mappings().all()
+    stores: dict[str, dict] = {}
+    codes: Counter = Counter()
+    daily: dict[str, dict] = {}
+    for r in rows:
+        if _is_test(r["family_id"]):
+            continue
+        s = stores.setdefault(r["service"], {"service": r["service"], "kind": r["kind"], "total": 0, "done": 0, "failed": 0, "cancelled": 0, "open": 0,
+                                             "runs": 0, "minutes": [], "codes": Counter()})
+        s["total"] += 1
+        s["runs"] += int(r["runs"] or 0)
+        st = r["status"]
+        bucket = "done" if st in ("done", "placed", "completed") else "failed" if st == "failed" else "cancelled" if st == "cancelled" else "open"
+        s[bucket] += 1
+        d = daily.setdefault(r["day"], {"day": r["day"], "total": 0, "done": 0, "failed": 0, "cancelled": 0})
+        d["total"] += 1
+        if bucket != "open":
+            d[bucket] += 1
+        if bucket == "done" and r["updated_at"] and r["created_at"]:
+            s["minutes"].append((r["updated_at"] - r["created_at"]).total_seconds() / 60)
+        code = r["code"] or r["code2"]
+        if bucket == "failed":
+            s["codes"][code or "unknown"] += 1
+            codes[code or "unknown"] += 1
+    out = []
+    for s in stores.values():
+        m = sorted(s.pop("minutes"))
+        s["medianMinutes"] = round(m[len(m) // 2], 1) if m else None
+        s["successRate"] = round(s["done"] / max(1, s["done"] + s["failed"]) * 100) if (s["done"] + s["failed"]) else None
+        s["codes"] = s["codes"].most_common(6)
+        out.append(s)
+    return {"days": days, "stores": sorted(out, key=lambda x: -x["total"]), "failCodes": codes.most_common(15), "daily": sorted(daily.values(), key=lambda x: x["day"])}
