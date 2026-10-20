@@ -284,23 +284,26 @@ async def log_event(ctx: TurnCtx, a: dict) -> dict:
 # ── alerts ─────────────────────────────────────────────────────────────────────
 
 
-async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
-    """Next morning, ask a caregiver how things turned out (one tap: all fine / saw doctor / hospital)."""
+async def _follow_up_alert(ctx: TurnCtx, a: dict, who: str | None = None) -> None:
+    """Next morning, ask a caregiver how things turned out (one tap: all fine / saw doctor / hospital). It is about the
+    person the alert was about (live 19 Oct: a caregiver's own alert left a follow-up on his mother, in her brief)."""
+    who = who or ctx.elder_id
+    name = next((m.get("name") for m in [ctx.elder, *ctx.members] if m.get("id") == who), None) or "they"
     # never the person the alert was about (caring for themselves, they are their own primary caregiver; founder
     # 2026-10-13: "he can not be caregiver for himself")
-    others = [m for m in ctx.members if m.get("id") != ctx.elder_id and m.get("role") not in ("elder", "family doctor")]
+    others = [m for m in ctx.members if m.get("id") not in (ctx.elder_id, who) and m.get("role") not in ("elder", "family doctor")]
     owner = next((m.get("id") for m in others if "primary" in str(m.get("role", "")).lower()), None) or next(
         (m.get("id") for m in others), None)
     if not owner:
         return
-    key = f"alert:{policy.issue_ref(a['reason'], a['issue'], clock.ist_day()).split(':', 2)[2]}:subj={ctx.elder_id}"
+    key = f"alert:{policy.issue_ref(a['reason'], a['issue'], clock.ist_day()).split(':', 2)[2]}:subj={who}"
     from app.learn import timing
 
     tomorrow = clock.ist().replace(hour=8, minute=0, second=0, microsecond=0) + timedelta(days=1)
     wake = await timing.next_send_at(ctx.session, ctx.family_id, owner, "followup", default_hour=10, earliest=tomorrow)
     await store.open_loop(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="followup",
-        title=f"Yesterday's alert ({a['issue']}): {a['message'][:140]}. Ask how {ctx.elder.get('name', 'they')} is now.",
+        ctx.session, family_id=ctx.family_id, subject_id=who, kind="followup",
+        title=f"Yesterday's alert ({a['issue']}): {a['message'][:140]}. Ask how {name} is now.",
         detail={"key": key, "set": "outcome", "max_wakes": 1}, owner_id=owner, wake_at=wake, alert_rule="dashboard",
         dedupe_key=f"followup:{key}",
     )
@@ -369,7 +372,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
             family_id=ctx.family_id, subject_id=who, actor_id=ctx.actor_id,
         )
     if decision.whatsapp and a["reason"] in ("red_flag", "safety", "crisis"):
-        await _follow_up_alert(ctx, a)
+        await _follow_up_alert(ctx, a, who)
     # A crisis over many messages is one WhatsApp to the family per half hour (the team gets every line by email): live
     # 2026-10-13 five alerts went out in six minutes, each under a new issue name.
     told_lately = crisis and await _crisis_told_lately(ctx)

@@ -15,6 +15,7 @@ Caregiver can change the time; by default after the elder is asleep").
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, time, timedelta
 
 from sqlalchemy import func, or_, select
@@ -258,14 +259,34 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
     return "\n\n".join(parts)
 
 
-def prompt_for(caregiver: dict, elder: dict, day: str, text: str, *, send: bool = True) -> str:
+SECTIONS = {
+    "medicines": "Medicines", "health": "Health & mood", "food": "Food", "day": "What {name} did and talked about",
+    "orders": "Orders & rides", "reminders": "Reminders", "needs_you": "Needs you",
+}
+LAYOUT = (
+    "LAYOUT (WhatsApp, never one paragraph): line 1 '🌙 *{name}'s day — <weekday> <day> <month>*', then a blank line; then "
+    "each section as its title on its own line in WhatsApp bold (*Title*, single asterisks) followed by one bullet per "
+    "item ('• 07:30 Thyronorm — taken'), and a blank line between sections; last line 'Tomorrow: …' only when the data has "
+    "something for tomorrow. Short bullets, no sentences joined into a paragraph, no '**'.")
+
+
+def sections_for(setting_value: dict, name: str) -> list[str]:
+    """The sections this caregiver gets, in order: all by default, minus what they left out; 'only' keeps just those."""
+    chosen = setting_value.get("sections") or {}
+    keys = [k for k in SECTIONS if k in (chosen.get("only") or SECTIONS)]
+    keys = [k for k in keys if k not in (chosen.get("leave_out") or [])] or ["needs_you"]
+    return [SECTIONS[k].format(name=name) for k in keys]
+
+
+def prompt_for(caregiver: dict, elder: dict, day: str, text: str, *, send: bool = True, setting_value: dict | None = None) -> str:
     cg, name = caregiver["id"], (elder.get("name") or "them")
-    how = "Write it for them with send_message: " if send else "Write the WhatsApp message: "
+    how = "Write it for them with send_message. " if send else "Write the WhatsApp message. "
     end = "Then reply none." if send else "Write only that message."
+    chosen = setting_value or {}
+    wish = str((chosen.get("sections") or {}).get("note") or "").strip()
     return (f"[Daily brief] Tonight's brief about {name}'s day ({day}) for person {cg} ({caregiver.get('name') or 'the caregiver'}). "
-            f"{how}one short opening line, then short sections with bold titles (medicines; health "
-            f"and mood; food and nutrition; what {name} did and talked about; orders and rides; reminders; anything that needs "
-            "them), skipping a section that has nothing, and one closing line about tomorrow. Use only the data below: times, "
+            f"{how}{LAYOUT.format(name=name)} Sections, in this order, skipping one that has nothing: "
+            f"{'; '.join(sections_for(chosen, name))}." + (f" They asked: {wish[:200]}." if wish else "") + " Use only the data below: times, "
             "names, doses and amounts exactly as given; a dose that is not marked is 'not marked', never 'taken'. Do not say "
             "how they feel, or that they are fine, stable, peaceful, or free of symptoms or complaints, unless the data says "
             "that. If the data has no mood or health, say there is no mood or health update. If they wrote and a later "
@@ -280,7 +301,8 @@ WRITER = (
     "Do not say how they feel, or that they are fine, stable, peaceful, or free of symptoms or complaints, unless the data says that. "
     "If the data has no mood or health, say there is no mood or health update. If a check-in has no reply, say that plainly. "
     "Times, names, doses and amounts exactly as given. A dose that is not marked is 'not marked', never 'taken'. "
-    "Skip a section that has nothing. Write only the message, no preamble."
+    "Skip a section that has nothing. Follow the LAYOUT in the user message exactly: a bold title line per section, one "
+    "bullet per item, blank lines between sections, never one paragraph. Write only the message, no preamble."
 )
 FOOD_WRITER = (
     "You write one short WhatsApp note of this person's own food, from the FOOD block only. "
@@ -306,15 +328,28 @@ async def write_text(prompt: str, *, food: bool = False) -> str:
 
 
 def keep(text: str, known: str) -> str:
-    """Drop brief sentences the day's data does not support (a mood, a reading, a time, a condition)."""
+    """Drop brief sentences the day's data does not support (a mood, a reading, a time, a condition), line by line, so
+    the layout stays (live 20 Oct: joining the kept sentences sent the whole brief as one paragraph)."""
     from app.brain import guards
 
-    kept = []
-    for s in guards.sentences(text):
-        if guards.brief_mood_claims(s, known) or guards.ungrounded(s, known=known):
+    out: list[str] = []
+    for line in whatsapp_bold(text).splitlines():
+        if not line.strip():
+            if out and out[-1] != "":
+                out.append("")
             continue
-        kept.append(s.strip())
-    return " ".join(kept).strip()
+        kept = [s.strip() for s in guards.sentences(line)
+                if not (guards.brief_mood_claims(s, known) or guards.ungrounded(s, known=known))]
+        if kept:
+            out.append(" ".join(kept))
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out).strip()
+
+
+def whatsapp_bold(text: str) -> str:
+    """WhatsApp bolds *this*, not **this**."""
+    return re.sub(r"\*\*(.+?)\*\*", r"*\1*", text or "")
 
 
 def _lines_under(digest: str, header: str) -> list[str]:
@@ -413,9 +448,10 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
         logger.error("brief refused: not a caregiver family=%s to=%s", fid, cg)
         return "empty"
     name = roster.elder.get("name") or "them"
+    chosen: dict = {}  # their own choices: time, sections left out or only these, a wish ("keep it short")
 
     async def wait_for_them(session: AsyncSession, text: str, why: str) -> None:
-        written = await _checked(await write_text(prompt_for(caregiver, roster.elder, day, text, send=False)), text)
+        written = await _checked(await write_text(prompt_for(caregiver, roster.elder, day, text, send=False, setting_value=chosen)), text)
         await store.open_loop(session, family_id=fid, subject_id=cg, kind="brief", owner_id=cg,
                               title=f"Daily brief about {name} for {day}: goes to {caregiver.get('name') or 'the caregiver'} when they next write on WhatsApp",
                               detail={"day": day, "text": text[:6000], "written": written[:4000], "max_wakes": 0}, alert_rule="dashboard",
@@ -427,6 +463,7 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
     async with sessions() as session:
         text = await digest(session, host, fid, roster.elder, day, now=now, to=cg,
                             summary_defaults=[m["id"] for m in caregivers(roster)])
+        chosen.update(await setting(session, fid, cg))
         open_now = on_request or await chat_open(host, session, fid, cg, now)
         if not open_now:
             await wait_for_them(session, text, "chat closed")
@@ -446,7 +483,7 @@ async def send(sessions: async_sessionmaker, host, roster, caregiver: dict, day:
     night = False  # set in the loop (it always runs); the type gate cannot see that
     for attempt in range(2):
         started = clock.now()
-        prompt = prompt_for(caregiver, roster.elder, day, text)
+        prompt = prompt_for(caregiver, roster.elder, day, text, setting_value=chosen)
         if attempt:
             prompt = "(Your last try sent nothing: write the brief now with send_message, in plain words.)\n" + prompt
         await system_turn(sessions, host, fid, prompt, ref, deliver_to=cg)

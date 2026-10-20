@@ -429,7 +429,7 @@ async def confirm_change(ctx: TurnCtx, a: dict) -> dict:
     if row and a["approve"] and row.status in ("active", "stopped"):
         from app.care import outcomes
 
-        await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, domain=row.domain,
+        await outcomes.note_fact_change(ctx.session, family_id=ctx.family_id, subject_id=row.subject_id, domain=row.domain,
                                         result="stopped" if row.status == "stopped" else "superseded", text=row.text,
                                         source_kind="caregiver_said", actor_id=ctx.speaker.get("id"))
     # reminders change only when a change was approved; a rejected proposal leaves the medicine (and its reminders) as they were

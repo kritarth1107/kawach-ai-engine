@@ -144,7 +144,10 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
     # state of the same order, so its words look alike (sim 2026-10-10: "delivered" was blocked as a repeat of "placed,
     # arriving in 10 min"); only a near-exact repeat is stopped.
     task_update = ctx.is_system and (ctx.message_ref or "").startswith("task:")
-    dup = guards.duplicate_message(text, sent, near=0.9 if task_update else 0.6)
+    # The nightly brief is a report they asked for, like an order update: never held because a nudge is unanswered (live
+    # 17 and 20 Oct: an unanswered 21:15 gym check-in held the 22:30 brief until he wrote).
+    report = ctx.is_system and str(ctx.message_ref or "").startswith(f"brief:{to}:")
+    dup = guards.duplicate_message(text, sent, near=0.9 if task_update or report else 0.6)
     if dup:
         problems.append(f"you already sent them this today and they have not answered yet: \"{dup[:120]}\". Do not send it again")
     # Only Saheli's own unanswered nudge asks for patience: an order's update or follow-up answers their order (live
@@ -154,7 +157,7 @@ async def send_problems(ctx: TurnCtx, to: str, text: str) -> list[str]:
                      and (t.meta or {}).get("via") != "reminder"  # a reminder in the chat is not her nudge (its own caps)
                      and not str((t.meta or {}).get("ref") or (t.meta or {}).get("fallback_delivery") or "").startswith("task:")), None)
     answered = last_out is not None and any(t.role == "user" and t.at > last_out.at for t in recent)
-    if ctx.is_system and not task_update and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
+    if ctx.is_system and not task_update and not report and last_out and not answered and clock.now() - last_out.at < SEND_COOLDOWN:
         problems.append(f"you messaged them at {clock.ist(last_out.at).strftime('%H:%M')} and they have not answered; give them time "
                         "(reply none now; alert_caregiver only if the loop's rule says so)")
     if ctx.is_system and not task_update:

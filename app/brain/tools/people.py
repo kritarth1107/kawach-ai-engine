@@ -283,10 +283,14 @@ async def setup_progress(ctx: TurnCtx, a: dict) -> dict:
     "The nightly brief caregivers get on WhatsApp about the care recipient's day (medicines, health and mood, what they did "
     "and talked about, orders, reminders, what needs a caregiver). By default it comes about 30 minutes after the care "
     "recipient's bedtime (22:00 if that is not known). action: set (time HH:MM: their own time; a morning time brings the "
-    "previous day's brief), off, on (back to their time or the default), now (send today's brief now), status. Only a "
-    "caregiver, for their own brief.",
-    {"action": {"type": "string", "enum": ["set", "off", "on", "now", "status"]},
-     "time": {"type": "string", "description": "set: HH:MM in IST"}},
+    "previous day's brief), off, on (back to their time or the default), now (send today's brief now), status, sections "
+    "(what goes in it: leave_out and/or only from medicines, health, food, day, orders, reminders, needs_you; note: a wish "
+    "in their words such as 'keep it short'; reset: back to everything). Only a caregiver, for their own brief.",
+    {"action": {"type": "string", "enum": ["set", "off", "on", "now", "status", "sections"]},
+     "time": {"type": "string", "description": "set: HH:MM in IST"},
+     "leave_out": {"type": "array", "items": {"type": "string", "enum": ["medicines", "health", "food", "day", "orders", "reminders", "needs_you"]}},
+     "only": {"type": "array", "items": {"type": "string", "enum": ["medicines", "health", "food", "day", "orders", "reminders", "needs_you"]}},
+     "note": {"type": "string"}, "reset": {"type": "boolean"}},
     ["action"],
 )
 async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
@@ -296,18 +300,35 @@ async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
     if ctx.is_system or not ctx.is_caregiver or me == ctx.elder_id:
         raise ToolRefused("Only a caregiver gets the daily brief, and changes only their own.")
     action = a["action"]
+    if action == "sections":
+        cur = await brief.setting(ctx.session, ctx.family_id, me)
+        sections = {} if a.get("reset") else dict(cur.get("sections") or {})
+        for k in ("leave_out", "only"):
+            if a.get(k) is not None:
+                sections[k] = [x for x in a[k] if x in brief.SECTIONS]
+        if a.get("note") is not None:
+            sections["note"] = str(a["note"]).strip()[:200]
+        value = {**{k: v for k, v in cur.items() if k != "sections"}, **({"sections": sections} if sections else {})}
+        shown = ", ".join(brief.sections_for(value, ctx.elder.get("name") or "them"))
+        await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=me, domain="routine", key=brief.SETTING_KEY, value=value,
+                               text=f"Nightly brief has: {shown}" + (f" ({sections['note']})" if sections.get("note") else ""),
+                               source_kind="caregiver_said", source_ref=ctx.message_ref, stated_by=me, confidence=1.0, replace=True)
+        return {"result": "saved", "sections": shown, "note": sections.get("note")}
     if action in ("set", "off", "on"):
         if action == "set":
             t = brief._hm(a.get("time"))
             if not t:
                 raise ToolRefused("Give the time as HH:MM (IST).")
-            value, text = {"time": t.strftime("%H:%M")}, f"Gets the nightly brief at {t.strftime('%H:%M')}"
+            cur = await brief.setting(ctx.session, ctx.family_id, me)
+            value = {"time": t.strftime("%H:%M"), **({"sections": cur["sections"]} if cur.get("sections") else {})}
+            text = f"Gets the nightly brief at {t.strftime('%H:%M')}"
         elif action == "off":  # their time is kept for when they turn it back on
             cur = await brief.setting(ctx.session, ctx.family_id, me)
-            value, text = {"off": True, **({"time": cur["time"]} if cur.get("time") else {})}, "Does not want the nightly brief"
+            value = {"off": True, **{k: cur[k] for k in ("time", "sections") if cur.get(k)}}
+            text = "Does not want the nightly brief"
         else:
             cur = await brief.setting(ctx.session, ctx.family_id, me)
-            value = {k: v for k, v in cur.items() if k == "time"}
+            value = {k: v for k, v in cur.items() if k in ("time", "sections")}
             text = f"Gets the nightly brief at {value['time']}" if value else "Gets the nightly brief at the default time"
         await store.write_fact(ctx.session, family_id=ctx.family_id, subject_id=me, domain="routine", key=brief.SETTING_KEY, value=value,
                                text=text, source_kind="caregiver_said", source_ref=ctx.message_ref, stated_by=me, confidence=1.0, replace=True)
@@ -318,8 +339,9 @@ async def daily_brief(ctx: TurnCtx, a: dict) -> dict:
         text = await brief.digest(ctx.session, ctx.host, ctx.family_id, roster.elder, clock.ist_day(), to=me,
                                   summary_defaults=[m["id"] for m in brief.caregivers(roster)])
         return {"result": "write it now", "brief_data": text,
-                "how": "Write the brief for them now as your reply (short sections with bold titles; only this data; a dose not "
-                       "marked is 'not marked'); no send_message needed."}
+                "how": "Write the brief for them now as your reply, in this layout: " + brief.LAYOUT.format(name=roster.elder.get("name") or "them")
+                       + " Sections: " + "; ".join(brief.sections_for(await brief.setting(ctx.session, ctx.family_id, me), roster.elder.get("name") or "them"))
+                       + ". Only this data; a dose not marked is 'not marked'; no send_message needed."}
     at = await brief.brief_time(ctx.session, ctx.family_id, me, ctx.elder_id)
     return {"result": "off" if at is None else "on", "time": at.strftime("%H:%M") if at else None,
             "default": not (await brief.setting(ctx.session, ctx.family_id, me)).get("time")}

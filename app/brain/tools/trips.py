@@ -89,6 +89,14 @@ async def _logged_nutrient(ctx: TurnCtx, question: str) -> bool:
     return False
 
 
+def _asker(ctx: TurnCtx) -> str:
+    """A search is the asker's: their brief and record show it, not the care recipient's (live 20 Oct: a caregiver's TV
+    show searches were listed in his mother's daily brief). A scheduled turn keeps the care recipient."""
+    me = ctx.speaker.get("id")
+    household = {ctx.elder_id, *(m.get("id") for m in ctx.members)}
+    return me if me and not ctx.is_system and me in household else ctx.elder_id
+
+
 # Every web result, whatever it is about (live 18 Oct: a search about Legacies gave away its finale to someone on S1E4).
 SEARCH_NOTE = ("From the internet. Tell it simply; name the source only if they ask or it matters. A show, film, book, game "
                "or match they are still watching or have not seen: never say what happens after the point they told you "
@@ -128,7 +136,7 @@ async def web_search(ctx: TurnCtx, a: dict) -> dict:
                           "and precautions as its label gives them, general self-care, warning signs that need a doctor) as general "
                           "information, with when to see the doctor; guess nothing specific to them, and never mention looking it up, "
                           "searching or tools.") from exc
-    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=_asker(ctx), kind="web_search",
                              summary=f"Looked up: {q[:160]}", payload={"question": q[:300], "sources": out["sources"]},
                              actor_id=ctx.speaker.get("id") or "saheli")
     return {**out, "note": SEARCH_NOTE}
@@ -166,7 +174,7 @@ async def ways_there(ctx: TurnCtx, a: dict) -> dict:
         logger.warning("ways look-up failed: %s", exc)
         return {"found": False, "messages": [ways.NOT_FOUND]}
     options = ways.options_from(proposed, raw, at=at, elder=bool(a.get("elder")))
-    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
+    await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=_asker(ctx), kind="web_search",
                              summary=f"Ways from {origin[:80]} to {dest[:80]}", payload={"sources": sources},
                              actor_id=ctx.speaker.get("id") or "saheli")
     if not options:
