@@ -20,11 +20,11 @@ def test_the_layout_survives_the_no_invention_check():
 def test_sections_follow_their_choices():
     assert brief.sections_for({}, "Maa")[0] == "Medicines" and len(brief.sections_for({}, "Maa")) == 7
     left = brief.sections_for({"sections": {"leave_out": ["food", "orders"]}}, "Maa")
-    assert "Food" not in left and "Orders & rides" not in left and "Medicines" in left
+    assert "Food & nutrition" not in left and "Orders & rides" not in left and "Medicines" in left
     assert brief.sections_for({"sections": {"only": ["medicines", "needs_you"]}}, "Maa") == ["Medicines", "Needs you"]
     p = brief.prompt_for({"id": "c1", "name": "Arun"}, {"id": "e1", "name": "Maa"}, "2026-10-20", KNOWN,
                          setting_value={"sections": {"leave_out": ["food"], "note": "keep it short"}})
-    assert "never one paragraph" in p and "Food;" not in p and "keep it short" in p and "*Title*" in p
+    assert "never one paragraph" in p and "Food & nutrition" not in p and "keep it short" in p and "*Title*" in p
 
 
 def test_a_search_is_filed_on_whoever_asked():

@@ -260,7 +260,7 @@ async def digest(session: AsyncSession, host, family_id: str, elder: dict, day: 
 
 
 SECTIONS = {
-    "medicines": "Medicines", "health": "Health & mood", "food": "Food", "day": "What {name} did and talked about",
+    "medicines": "Medicines", "health": "Health & mood", "food": "Food & nutrition", "day": "What {name} did and talked about",
     "orders": "Orders & rides", "reminders": "Reminders", "needs_you": "Needs you",
 }
 LAYOUT = (

@@ -121,7 +121,7 @@ async def test_the_nightly_brief_has_a_food_block_and_section(db, at, nfake):
     text = await brief.digest(db, SimHost(World()), FAM, NANI, "2026-10-14")
     assert "FOOD (from the food log" in text and "breakfast (08:30): 2 boiled egg [said]" in text
     assert "dinner: skipped (they said)" in text and "totals:" in text
-    assert "food and nutrition" in brief.prompt_for(SON, NANI, "2026-10-14", text)
+    assert "food & nutrition" in brief.prompt_for(SON, NANI, "2026-10-14", text).lower()
 
 
 async def test_the_brief_says_not_logged_and_waiting_order_meals(db, at, nfake):
