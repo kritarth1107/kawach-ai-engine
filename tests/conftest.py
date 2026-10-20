@@ -46,6 +46,16 @@ def _drain_closes_with_the_process():
 
 
 @pytest.fixture(autouse=True)
+def _no_429_carries_over():
+    """A 429 one test simulated must not make the next test's background call wait (router._yield_to_live)."""
+    from app.llm import router
+
+    router._throttled_at = 0.0
+    yield
+    router._throttled_at = 0.0
+
+
+@pytest.fixture(autouse=True)
 def _keep_eval_env_inside_the_test():
     saved = {key: os.environ.get(key) for key in _EVAL_ENV}
     yield
