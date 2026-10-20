@@ -120,6 +120,14 @@ def near_dose(times, now: datetime, *, before: int = 45, after: int = 30) -> boo
     return False
 
 
+_GENERIC = {"tablet", "tablets", "tab", "capsule", "capsules", "cap", "syrup", "mg", "with", "and", "pure", "nutrition", "strip"}
+
+
+def _med_words(name: str) -> set[str]:
+    """The words that name a medicine ("Pure Nutrition Magnesium Glycinate with Zinc" -> magnesium, glycinate, zinc)."""
+    return {w for w in re.split(r"[^a-z]+", str(name).lower().split(":", 1)[-1].replace("_", " ")) if len(w) > 3 and w not in _GENERIC}
+
+
 async def stock_ask(session: AsyncSession, person: Person, facts: list, now: datetime) -> tuple[str, str, str, str] | None:
     """One medicine with no count, at a quiet hour that is not its dose time. One a day. Two sent asks with no reply
     and that medicine is left alone. The answer is a count, never a dose."""
@@ -135,13 +143,23 @@ async def stock_ask(session: AsyncSession, person: Person, facts: list, now: dat
     for asked, replied, _at in sent:
         if asked and replied is None:
             silent[asked] = silent.get(asked, 0) + 1
-    known = {r["key"] for r in await features.stock(session, person.family_id, person.id) if r.get("stock") is not None}
+    rows = await features.stock(session, person.family_id, person.id)
+    known = {r["key"] for r in rows if r.get("stock") is not None}
+    counted_words = [_med_words(r.get("name") or r["key"]) for r in rows if r.get("stock") is not None]
+    week = now - timedelta(days=7)
+    asked_week: dict[str, int] = {}
+    for asked, _replied, at in sent:
+        if asked and at and at >= week:
+            asked_week[asked] = asked_week.get(asked, 0) + 1
+    # Only a medicine as the record and the dashboard show it (it has a name); a nameless fragment the chat re-read saved
+    # ("magnesium_tablet": 23:00, after meal) is not asked about (live 16-20 Oct: asked daily while the dashboard had 60).
     meds = [f for f in facts if getattr(f, "domain", None) == "medicine" and getattr(f, "status", "active") == "active"
-            and not str(f.key).endswith(":none") and f.key not in known]
+            and not str(f.key).endswith(":none") and f.key not in known and (f.value or {}).get("name")
+            and not any(_med_words(f.value["name"]) & w for w in counted_words)]
     for f in sorted(meds, key=lambda x: x.key):
         fld = f"stock:{f.key}"
-        if silent.get(fld, 0) >= 2:
-            continue
+        if silent.get(fld, 0) >= 2 or asked_week.get(fld, 0) >= 2:
+            continue  # two asks a week at most, whatever the reply was
         times = [t for t in ((f.value or {}).get("times") or []) if isinstance(t, str)]
         if near_dose(times, now):
             continue

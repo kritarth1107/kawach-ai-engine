@@ -424,10 +424,9 @@ async def medicines_block(session: AsyncSession, req: TurnRequest, data: TurnDat
         if not meds:
             continue
         stock: dict[str, dict] = {}
-        # Tablets left need the ledger: read only when this turn is about their medicines (a photo, a quoted message, or
-        # a saved medicine named in the message), never for "good morning".
-        named = any(features.mentions(req.text or "", str((f.value or {}).get("name") or "")) for f in meds)
-        counted = (req.images or req.reply_to or named) and (await session.execute(_select(CareEvent.id).where(
+        # Tablets left, whenever a count was ever saved (one indexed read): "don't you have the med count?" names no
+        # medicine and was answered "not on file" while the dashboard showed 60 (live 20 Oct).
+        counted = (await session.execute(_select(CareEvent.id).where(
             CareEvent.family_id == req.family_id, CareEvent.subject_id == pid, CareEvent.kind == "stock_set").limit(1))).first()
         if counted:
             try:

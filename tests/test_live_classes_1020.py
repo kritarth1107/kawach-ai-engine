@@ -94,7 +94,9 @@ def test_a_skip_asks_why_and_tells_family_only_for_a_care_recipient():
 
 
 def test_a_repeated_nudge_topic_gives_way_to_another(monkeypatch):
-    from app.care.nudges import compose as C
+    import importlib
+
+    C = importlib.import_module("app.care.nudges.compose")
 
     drafts = iter([{"option_id": "o1", "text": "Who is your favourite character?"}, {"option_id": "o2", "text": "How many glasses of water so far?"}])
     seen = []
@@ -114,3 +116,12 @@ def test_a_repeated_nudge_topic_gives_way_to_another(monkeypatch):
     draft, problems = asyncio.run(C.write_and_check(ctx))
     assert draft["option_id"] == "o2" and not problems
     assert "o1" in seen[1][-1] and "different option_id" in seen[1][-1]
+
+
+def test_a_medicine_counted_under_another_name_is_known():
+    from app.care.nudges.compose import _med_words
+
+    full = _med_words("Pure Nutrition Magnesium Glycinate with Zinc")
+    assert full == {"magnesium", "glycinate", "zinc"}
+    assert _med_words("medicine:magnesium_tablet") & full
+    assert not (_med_words("Metformin 500") & full)
