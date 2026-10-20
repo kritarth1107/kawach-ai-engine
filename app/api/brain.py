@@ -192,6 +192,22 @@ class ComposeIn(BaseModel):
     item: str | None = None
 
 
+class PresendIn(BaseModel):
+    family_id: str
+    subject_id: str
+    about: str = Field(max_length=600)
+
+
+@router.post("/brain/presend")
+async def presend_check(body: PresendIn, session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
+    """Every scheduled message the backend sends (reminders, dose messages) asks here first: did they say or log anything
+    today that cancels, covers or postpones it? {"send": false, "why": …} holds it (app.care.presend)."""
+    from app.care import presend
+
+    send, why = await presend.still_right(session, body.family_id, body.subject_id, body.about)
+    return {"send": send, "why": why}
+
+
 @router.post("/brain/compose-reminder")
 async def compose_reminder(body: ComposeIn, session: Annotated[AsyncSession, Depends(get_db)]) -> dict:
     """The backend's reminder scheduler asks for the line just before it sends: written for this moment, never a repeat

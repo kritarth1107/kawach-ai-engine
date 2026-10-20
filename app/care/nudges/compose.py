@@ -679,6 +679,17 @@ async def send(sessions: async_sessionmaker, host, p: Person, ctx: Context, draf
                        context=ctx.text)
             await session.commit()
             return "talking"
+        if about and opt is not None:
+            # A nudge about a planned thing (a reminder, an activity, an appointment, a thread) passes the same check as
+            # every scheduled message: nothing they said today cancels or covers it (app.care.presend).
+            from app.care import presend
+
+            ok, why = await presend.still_right(session, p.family_id, p.id, f"{opt.why} (they would get: {text[:160]})")
+            if not ok:
+                await _log(session, p, now, kind=kind, status="skipped", reason=f"changed:{why}"[:160], text=text, fld=fld, about=about,
+                           run=run, cost=ctx.cost, context=ctx.text)
+                await session.commit()
+                return "changed"
         greeted, mid = guards.opening_state(await store.recent_turns(session, p.family_id, p.id, limit=12), clock.now(), day_of=clock.ist_day)
         text = guards.tidy_opening(text, greeted_today=greeted, mid_conversation=mid)
         if mode != "on":

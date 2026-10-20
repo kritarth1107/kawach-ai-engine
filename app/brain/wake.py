@@ -498,6 +498,19 @@ async def wake_due(sessions: async_sessionmaker, host_for: Callable[[str], ToolH
                     await session.commit()
                     continue
             prompt = await wake_prompt(session, loop, roster.elder["id"])
+            if prompt is not None and not owes and loop.kind not in ("delivery", "finish"):
+                # The same check as every scheduled message: something they said or logged today may have cancelled or
+                # covered it (live 20 Oct: "Skipping gym" at 19:15, then "are you back from the gym?" at 21:15).
+                from app.care import presend
+
+                send, why = await presend.still_right(session, family_id, loop.owner_id or loop.subject_id, loop.title or prompt[:200])
+                if not send:
+                    loop.status, loop.closed_note, loop.updated_at = "done", f"not sent: {why or 'changed today'}", clock.now()
+                    await store.record_event(session, family_id=family_id, subject_id=loop.subject_id, kind="nudge_held",
+                                             summary=f"{loop.title}: not sent ({why or 'changed today'})")
+                    await session.commit()
+                    stats["held"] = stats.get("held", 0) + 1
+                    continue
             kind = loop.kind
             loop_subject = loop.subject_id
             if prompt is not None and loop.owner_id:
