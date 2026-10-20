@@ -36,6 +36,11 @@ def owner_of(path: str, rows: list[tuple[str, str]]) -> str | None:
     return None
 
 
+# An author whose changes to these paths are reviewed on the pull request by the founder, not by the owner: the nightly
+# trainer (eval/trainer.py) may only edit Saheli's instruction text, and its PR is merged by the founder.
+DELEGATES = {"Saheli Trainer": ("app/brain/persona/",)}
+
+
 def needed(files: list[str], message: str, rows: list[tuple[str, str]]) -> list[str]:
     author = ""
     for line in message.splitlines():
@@ -46,6 +51,8 @@ def needed(files: list[str], message: str, rows: list[tuple[str, str]]) -> list[
         problems.append("missing Author-agent")
     owners = []
     for path in files:
+        if path.startswith(DELEGATES.get(author, ())):
+            continue
         who = owner_of(path, rows)
         if who and who != author and who not in owners:
             owners.append(who)
@@ -70,6 +77,9 @@ def main() -> int:
     rows = rules(Path("OWNERS.md").read_text())
     failed = False
     for sha in commits():
+        parents = subprocess.check_output(["git", "log", "-1", "--format=%P", sha], text=True).split()
+        if len(parents) > 1:  # a merge commit: its parents' commits are checked, it adds no change of its own
+            continue
         message = subprocess.check_output(["git", "log", "-1", "--format=%B", sha], text=True)
         names = subprocess.check_output(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], text=True)
         files = [line for line in names.splitlines() if line]

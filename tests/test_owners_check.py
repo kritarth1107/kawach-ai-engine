@@ -39,3 +39,11 @@ def test_author_is_required():
     rows = rules(TEXT)
     assert needed(["app/jobs/x.py"], "no trailer\n", rows) == [
         "missing Author-agent", "missing Reviewed-by: Reliability Engineer"]
+
+
+def test_the_trainer_edits_only_the_instructions_without_a_trailer():
+    rows = rules(TEXT.replace("eval/", "app/brain/persona/\tBrain Engineer\neval/"))
+    assert owner_of("app/brain/persona/core.md", rows) == "Brain Engineer"
+    msg = "Saheli: x\n\nAuthor-agent: Saheli Trainer\n"
+    assert needed(["app/brain/persona/core.md"], msg, rows) == []
+    assert needed(["app/brain/loop.py"], msg, rows) == ["missing Reviewed-by: Brain Engineer"]

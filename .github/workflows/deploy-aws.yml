@@ -3,6 +3,9 @@ name: Deploy AI engine to AWS
 on:
   push:
     branches: [master]
+  # A pull request (the trainer's, or anyone's) gets the tests, lint and the owner check; nothing is built or deployed.
+  pull_request:
+    branches: [master]
   workflow_dispatch:
     inputs:
       override_nightly:
@@ -13,7 +16,8 @@ concurrency:
   # Pushes share one queue. GitHub drops an older pending run when a newer one arrives, even with
   # cancel-in-progress false, and a running deploy is left to finish. A founder override is its own
   # group, so a later untagged push cannot cancel that pending override.
-  group: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.override_nightly == 'true' && format('deploy-engine-aws-override-{0}', github.run_id) || 'deploy-engine-aws' }}
+  # A pull request has its own group, so it never cancels a waiting deploy.
+  group: ${{ github.event_name == 'pull_request' && format('engine-pr-{0}', github.event.pull_request.number) || github.event_name == 'workflow_dispatch' && github.event.inputs.override_nightly == 'true' && format('deploy-engine-aws-override-{0}', github.run_id) || 'deploy-engine-aws' }}
   cancel-in-progress: false
 
 env:
@@ -74,13 +78,14 @@ jobs:
           fetch-depth: 0
       - name: Owner trailer
         env:
-          BEFORE: ${{ github.event.before }}
-          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
         run: python3 scripts/owners_check.py
 
   # The image is built and pushed while the tests run. It is only an image in ECR until deploy, which waits for the tests,
   # lint and the owner check, rolls it out; a failed test leaves it unused.
   build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -107,6 +112,7 @@ jobs:
           docker push "$IMAGE"
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: [test, lint, owners, build]
     runs-on: ubuntu-latest
     permissions:
@@ -203,6 +209,21 @@ jobs:
                     environment:[{name:"POSTGRES_USER",value:"postgres"},{name:"POSTGRES_PASSWORD",value:"postgres"},{name:"POSTGRES_DB",value:"kawach_replay"}],
                     portMappings:[{containerPort:5432,protocol:"tcp"}]}])' /tmp/td.json > /tmp/learn-gate.json
           aws ecs register-task-definition --cli-input-json file:///tmp/learn-gate.json --query taskDefinition.revision --output text
+          # The nightly trainer (eval/trainer.py, 04:00 IST from the cron): replays the open cases with edited instruction text on
+          # Gemini in kavach-eval-1015 and opens pull requests from the kavach-trainer GitHub App. It reads production's
+          # anonymised replay cases and nothing else, so it gets the database URL and the App key only, no other secret.
+          jq --arg key "kavach/trainer-github-app-key" --arg app "${{ vars.TRAINER_APP_ID }}" '.family = "kavach-trainer"
+            | .cpu = "1024"
+            | .memory = "4096"
+            | .containerDefinitions |= map(
+                if .name == "engine" then
+                  .command = ["timeout", "7200", "python", "-m", "eval.trainer"]
+                  | .logConfiguration.options["awslogs-stream-prefix"] = "trainer"
+                  | .secrets = ([(.secrets // [])[] | select(.name == "DATABASE_URL")] + [{name:"TRAINER_APP_KEY", valueFrom:$key}])
+                  | .environment = ((.environment // []) | map(select(.name != "TRAINER_PROD_CASES" and .name != "TRAINER_MAX_INR" and .name != "TRAINER_APP_ID"))
+                      + [{name:"TRAINER_PROD_CASES",value:"on"},{name:"TRAINER_MAX_INR",value:"300"},{name:"TRAINER_APP_ID",value:$app}])
+                else . end)' /tmp/learn-gate.json > /tmp/trainer.json
+          aws ecs register-task-definition --cli-input-json file:///tmp/trainer.json --query taskDefinition.revision --output text
           # The night. Cron starts this family. The deploy does not wait for it.
           bash scripts/saheli_check.sh
           aws ecs wait services-stable --cluster kavach --service "$SERVICE"
