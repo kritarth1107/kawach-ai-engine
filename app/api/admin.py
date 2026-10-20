@@ -755,7 +755,8 @@ async def insights_people(session: DB, days: int = 120) -> dict:
         SELECT t.family_id, t.thread_id, count(*) AS n FROM turns t
         LEFT JOIN LATERAL (SELECT max(at) AS last_in FROM turns u WHERE u.family_id = t.family_id AND u.thread_id = t.thread_id AND u.role = 'user') u ON true
         WHERE t.role = 'assistant' AND coalesce((t.meta->>'proactive')::boolean, false) AND t.at >= now() - interval '14 days'
-          AND (u.last_in IS NULL OR t.at > u.last_in) GROUP BY 1, 2"""))).mappings().all()
+          AND NOT (t.meta ? 'reminder_id') AND t.thread_id <> 'saheli-scheduler'
+          AND (u.last_in IS NULL OR t.at > u.last_in) GROUP BY 1, 2"""))).mappings().all()  # reminders never stop (founder 16 Oct): not counted
     briefs = (await session.execute(sql("""SELECT family_id, count(*) AS n, max(at) AS last FROM care_events WHERE kind = 'daily_brief'
         AND at >= now() - interval '7 days' GROUP BY 1"""))).mappings().all()
     un = {(r["family_id"], r["thread_id"]): int(r["n"]) for r in unanswered}

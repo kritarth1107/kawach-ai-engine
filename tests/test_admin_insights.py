@@ -19,7 +19,9 @@ F = "fam-insights-1"
 async def test_every_insight_route_answers_with_counts_only(db):
     now = clock.now()
     await store.add_turn(db, family_id=F, thread_id="p1", role="user", text="hello", speaker_id="p1")
+    await store.add_turn(db, family_id=F, thread_id="p1", role="user", text="hello", speaker_id="p1")
     await store.add_turn(db, family_id=F, thread_id="p1", role="assistant", text="nudge", meta={"proactive": True})
+    await store.add_turn(db, family_id=F, thread_id="p1", role="assistant", text="your 8 pm tablet", meta={"proactive": True, "reminder_id": "r1"})
     await store.add_turn(db, family_id="sim-1", thread_id="p9", role="user", text="test", speaker_id="p9")
     db.add(TraceTurn(trace_id="t1", family_id=F, thread_id="p1", kind="message", at=now, ms=900, cost_inr=1.5, models=[]))
     db.add(TraceTurn(trace_id="t2", family_id="sim-2", thread_id="p9", kind="message", at=now, ms=900, cost_inr=4.0, models=[]))
@@ -39,7 +41,8 @@ async def test_every_insight_route_answers_with_counts_only(db):
 
     people = await admin.insights_people(db, days=30)
     me = next(p for p in people["people"] if p["familyId"] == F)
-    assert me["in7"] == 1 and all(p["familyId"] != "sim-1" for p in people["people"])
+    assert me["in7"] == 2 and all(p["familyId"] != "sim-1" for p in people["people"])
+    assert me["unansweredSinceLastReply"] == 1  # the reminder is not counted
 
     out = await admin.insights_outreach(db, days=7)
     assert out["nudges"]["sent"] == 1 and out["nudges"]["answered"] == 1
