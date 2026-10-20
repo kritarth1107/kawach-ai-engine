@@ -32,8 +32,7 @@ CONFIRM_FIRST = frozenset({
     "save_place", "add_person", "activity", "nutrition_target", "pantry", "save_family_skill",
     "add_doctor_question", "assign_family_task",
 })
-PENDING_HOURS = 6
-PENDING_TURNS = 2  # her last two messages: a yes can come after one short side question
+PENDING_MINUTES = 30  # a yes hours later belongs to whatever she asked last, not a read-back from the morning
 
 # The fields that say WHAT is saved. A yes confirms a call whose key fields match the read-back.
 _SIG = {
@@ -151,13 +150,23 @@ def readback(ctx, name: str, args: dict) -> tuple[str, str]:
     return what.strip()[:400], who
 
 
+def _asks(turn) -> bool:
+    text = getattr(turn, "text", "") or ""
+    return "?" in text or "？" in text
+
+
 def pending_from(turns: list, now=None) -> list[dict]:
-    """The saves her recent SENT messages read back and asked about (at most PENDING_TURNS of hers, newest first wins)."""
+    """The saves her latest SENT message read back and asked about. An answer belongs to the newest question she asked
+    (live 20 Oct: "Yup" to the 17:15 snack question saved the 10:48 rasam read-back). Her message before the latest one
+    counts only when the latest asked nothing (a short aside after the read-back); both within PENDING_MINUTES."""
     now = now or clock.now()
-    mine = [t for t in turns if t.role == "assistant"][-PENDING_TURNS:]
+    mine = [t for t in turns if t.role == "assistant"]
+    if not mine:
+        return []
+    look = mine[-1:] if _asks(mine[-1]) and not (mine[-1].meta or {}).get("pending_saves") else mine[-2:]
     out: dict[str, dict] = {}
-    for t in mine:
-        if t.at < now - timedelta(hours=PENDING_HOURS):
+    for t in look:
+        if t.at < now - timedelta(minutes=PENDING_MINUTES):
             continue
         for p in (t.meta or {}).get("pending_saves") or []:
             if isinstance(p, dict) and p.get("sig") and p.get("tool") in CONFIRM_FIRST:

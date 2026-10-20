@@ -89,6 +89,13 @@ async def _logged_nutrient(ctx: TurnCtx, question: str) -> bool:
     return False
 
 
+# Every web result, whatever it is about (live 18 Oct: a search about Legacies gave away its finale to someone on S1E4).
+SEARCH_NOTE = ("From the internet. Tell it simply; name the source only if they ask or it matters. A show, film, book, game "
+               "or match they are still watching or have not seen: never say what happens after the point they told you "
+               "(an ending, a death, a twist, a cameo, a later season, a result); if you do not know where they are, ask "
+               "first. Only on their clear ask for that exact spoiler.")
+
+
 @tool(
     "web_search",
     "Look something up on the internet when you need facts you do not have and cannot see: what a thing, food, plant or "
@@ -124,7 +131,7 @@ async def web_search(ctx: TurnCtx, a: dict) -> dict:
     await store.record_event(ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="web_search",
                              summary=f"Looked up: {q[:160]}", payload={"question": q[:300], "sources": out["sources"]},
                              actor_id=ctx.speaker.get("id") or "saheli")
-    return {**out, "note": "From the internet. Tell it simply; name the source only if they ask or it matters."}
+    return {**out, "note": SEARCH_NOTE}
 
 
 @tool(

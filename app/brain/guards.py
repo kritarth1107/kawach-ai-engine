@@ -1560,6 +1560,35 @@ def due_today(profile: dict | None, medicines: list[dict]) -> str:
     return line.format(list="; ".join(bits))
 
 
+_DOSES = {
+    "english": "Logged as taken: {list}.",
+    "indic": "Le li, likh liya: {list}.",
+    "devanagari": "ले ली, लिख लिया: {list}।",
+    "mr": "घेतली, नोंद केली: {list}.",
+    "bengali": "নেওয়া লিখে নিয়েছি: {list}।",
+    "tamil": "எடுத்தது குறித்துவிட்டேன்: {list}.",
+    "telugu": "తీసుకున్నారు, రాసుకున్నాను: {list}.",
+    "kannada": "ತೆಗೆದುಕೊಂಡದ್ದು ಬರೆದುಕೊಂಡಿದ್ದೇನೆ: {list}.",
+    "malayalam": "കഴിച്ചത് കുറിച്ചു: {list}.",
+    "gujarati": "લીધી, લખી લીધી: {list}.",
+    "gurmukhi": "ਲੈ ਲਈ, ਲਿਖ ਲਿਆ: {list}।",
+    "odia": "ନିଆଯାଇଛି, ଲେଖିଲି: {list}।",
+}
+
+
+def doses_logged(profile: dict | None, doses: list[tuple[str, list[str]]]) -> str:
+    """Several doses taken in one message: each medicine with its time on the record. Empty when the sentence was not
+    written for their language."""
+    line = authored(profile, _DOSES)
+    items = [f"{n} ({', '.join(t)})" if t else n for n, t in doses if n]
+    return line.format(list=", ".join(items)) if line and items else ""
+
+
+def readable(logged: str) -> str:
+    """A reading as a person says it: "water_intake_glasses 6" is "water intake glasses 6"."""
+    return logged.replace("_", " ").strip()
+
+
 def dose_logged(profile: dict | None, name: str, times: list[str]) -> str:
     """Taken is logged. The time is the one on the record, not a claim that this taking matched it.
     Empty when that sentence was not written for their language."""

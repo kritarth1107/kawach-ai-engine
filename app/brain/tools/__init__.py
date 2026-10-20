@@ -635,6 +635,10 @@ from app.brain.tools.views import (
     wellbeing_tool as wellbeing_tool,
 )
 
+from app.brain.tools.exact import (  # noqa: E402,F401
+    compute as compute,
+)
+
 # The order the model sees the tools in (as before the split).
 _ORDER = ['need_tools', 'remember', 'stop', 'note', 'recall', 'confirm_change', 'fact_still_true', 'note_habit', 'log_dose', 'log_vital', 'log_event', 'log_food', 'food_log', 'change_food', 'nutrition_target', 'pantry', 'nutrition_settings', 'nutrition_report', 'reminder_log', 'set_reminder', 'activity', 'log_activity', 'reminders', 'change_reminder', 'today_schedule', 'open_loop', 'gap_asked', 'close_loop', 'send_message', 'alert_caregiver', 'search_records', 'lab_trend', 'health_record', 'start_task', 'places', 'save_place', 'map_link', 'ask_location', 'remove_place', 'task_input', 'whats_pending', 'find_lab_test', 'web_search', 'ways_there', 'note_trip', 'accept_trip', 'read_trip', 'find_doctor', 'boundaries', 'set_boundaries', 'cancel_task', 'done_in_app', 'task_status', 'order_feedback', 'set_stock', 'medicine_stock', 'emergency_card', 'care_team', 'add_doctor_question', 'weekly_report', 'wellbeing', 'assign_family_task', 'family_tasks', 'spending', 'past_orders', 'patterns', 'log_outcome', 'offer_buttons', 'feedback', 'learning_consent', 'forget', 'memory_changes', 'undo_change', 'list_skills', 'save_family_skill', 'forget_skill', 'voice_replies', 'sing', 'language_preference', 'setup_progress', 'daily_brief', 'add_person', 'my_name', 'finish_setup', 'service_status']
 _TOOLS.update({k: _TOOLS.pop(k) for k in [*_ORDER, *[k for k in list(_TOOLS) if k not in _ORDER]] if k in _TOOLS})

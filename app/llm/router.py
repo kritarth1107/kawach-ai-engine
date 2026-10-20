@@ -218,6 +218,7 @@ async def complete(
 ) -> LLMReply:
     """system_stable blocks are cached in order (persona first, then the family's care record);
     system_dynamic is per-turn and never cached."""
+    await _yield_to_live(role)
     stable = [system_stable] if isinstance(system_stable, str) else list(system_stable)
     candidates = routes or routes_for(role)
     from app.llm import spend
@@ -424,10 +425,28 @@ HEDGE_PAUSE_S = 120.0
 _hedge_off_until = 0.0
 
 
+# Work nobody is waiting on. After a 429 it waits, so live replies get the shared capacity (live 18 Oct: about 80
+# 429s in a day while fact extraction and the night jobs ran next to replies).
+BACKGROUND_ROLES = frozenset({"extract", "learn", "judge", "sim", "embed"})
+BACKGROUND_PAUSE_S = 30.0
+_throttled_at = 0.0
+
+
+async def _yield_to_live(role: str) -> None:
+    if role not in BACKGROUND_ROLES:
+        return
+    wait = _throttled_at + BACKGROUND_PAUSE_S - time.monotonic()
+    if wait > 0:
+        logger.info("background %s waits %.0f s after a 429", role, wait)
+        await asyncio.sleep(wait)
+
+
 def note_throttled() -> None:
-    """A 429 just happened: do not start a second copy of any brain call until the shared capacity has had a moment."""
-    global _hedge_off_until
+    """A 429 just happened: do not start a second copy of any brain call until the shared capacity has had a moment,
+    and background work waits (BACKGROUND_PAUSE_S)."""
+    global _hedge_off_until, _throttled_at
     _hedge_off_until = time.monotonic() + HEDGE_PAUSE_S
+    _throttled_at = time.monotonic()
 
 
 def hedge_after(role: str) -> float:

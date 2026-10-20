@@ -1206,8 +1206,11 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 guarded = True
         profile = ctx.profiles.get(req.speaker["id"])
         told = _told(ctx)
-        vital = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"), None)
-        vital_data = _json_result(vital) if vital else {}
+        # Every reading of the turn, not only the first (one fixed line used to name one of several).
+        vitals = [_json_result(a) for a in ctx.actions if a.get("ok") and a.get("tool") == "log_vital"]
+        vital = bool(vitals)
+        vital_data = {"logged": "; ".join(guards.readable(str(v.get("logged") or "")) for v in vitals if v.get("logged")),
+                      "red_flag": next((v.get("red_flag") for v in vitals if v.get("red_flag")), None)} if vitals else {}
         asked_name = _asked_name(ctx)
         if asked_name and (asked_name not in (final or "") or guards.leaked_reasoning(final or "")
                            or guards.echoes_prompt(final or "", persona_text.for_groups(_groups()) + "\n" + REPLY_FORMAT)
@@ -1249,8 +1252,19 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 final = full
                 replaced = True
                 guarded = True
-        dose = next((a for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"), None)
-        dose_data = _json_result(dose) if dose else {}
+        # Every dose of the turn: "all medicines taken" logs several, and the line names each (live 17-20 Oct: seven
+        # doses logged, the reply named one).
+        doses = [_json_result(a) for a in ctx.actions if a.get("ok") and a.get("tool") == "log_dose"]
+        if len(doses) > 1:
+            names = [str(d.get("medicine") or "") for d in doses if d.get("medicine")]
+            if names and not all(n.lower() in (final or "").lower() for n in names):
+                listed = guards.doses_logged(profile, [(str(d.get("medicine") or ""), [str(t) for t in d.get("scheduled") or [] if t]) for d in doses])
+                if listed:
+                    final = listed
+                    replaced = True
+                    guarded = True
+            doses = []
+        dose_data = doses[0] if doses else {}
         dose_times = [str(t) for t in (dose_data.get("scheduled") or []) if t]
         if dose_times and not any(t in (final or "") for t in dose_times):
             # "On time" is only true when the reply names the time the record holds. A language with no fixed line keeps her reply.

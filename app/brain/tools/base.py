@@ -234,7 +234,7 @@ _GROUPS = {
         "family_tasks", "patterns", "change_reminder",
     }),
     "activity": frozenset({"activity", "log_activity"}),
-    "chat": frozenset({"sing", "voice_replies", "feedback"}),
+    "chat": frozenset({"sing", "voice_replies", "feedback", "compute"}),
     "system": frozenset({"weekly_report", "service_status"}),
     # Only on a turn with a read-back waiting (app.brain.confirm): never in the cold prefix.
     "confirm": frozenset({"answer_pending"}),
@@ -290,11 +290,11 @@ def specs_for(*, open_tasks: bool = False, system: bool = False, situation: str 
 
 @tool(
     "need_tools",
-    "Call this once when the next step needs a tool that is not listed on this call. "
+    "Call once when the next step needs a tool not listed here. "
     "group: order (buy, ride, trip, flight, a place), nutrition (a meal, a food change, a nutrition target or report), "
     "setup (onboarding, the daily brief, a person, a language change), memory (forget, history of a change, a family skill), "
     "health (a lab, a doctor, stock, the care team, a dose-time change), activity (a walk or a nap), "
-    "chat (they asked you to sing, or to change voice replies). The next step has that group. Then call the tool.",
+    "chat (sing, voice replies, or an exact count, spelling, sum or date: never guess those). Then call the tool.",
     {"group": {"type": "string", "enum": ["order", "nutrition", "setup", "memory", "health", "activity", "chat"]}},
     ["group"],
 )
