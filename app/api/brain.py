@@ -185,7 +185,9 @@ class ComposeIn(BaseModel):
     subject_id: str
     purpose: str = Field(max_length=600)
     at: str | None = None
-    recent: list[str] = Field(default_factory=list, max_length=12)
+    # The backend sends up to 24 recent lines; only the newest 12 are used. A longer list was refused with 422 and every
+    # reminder sent more than 12 times in 3 days (hourly water) stopped (live 15-20 Oct: "writer_down").
+    recent: list[str] = Field(default_factory=list, max_length=60)
     kind: str = "reminder"
     item: str | None = None
 
@@ -197,7 +199,7 @@ async def compose_reminder(body: ComposeIn, session: Annotated[AsyncSession, Dep
     from app.care import compose
 
     return await compose.reminder_text(session, family_id=body.family_id, subject_id=body.subject_id, purpose=body.purpose,
-                                       at=body.at, recent=body.recent, kind=body.kind, item=body.item)
+                                       at=body.at, recent=body.recent[:12], kind=body.kind, item=body.item)
 
 
 @router.post("/voice/prepare")

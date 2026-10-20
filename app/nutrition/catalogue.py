@@ -11,13 +11,18 @@ import json
 import uuid
 from pathlib import Path
 
+import logging
+
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import clock
 from app.nutrition import nutrients as N
 from app.nutrition import portions as P
 from app.nutrition.models import NutritionFood
+
+logger = logging.getLogger(__name__)
 
 _DISHES = Path(__file__).with_name("dishes.json")
 _FOODS = Path(__file__).with_name("foods.json")
@@ -47,11 +52,31 @@ def _row(name: str, per: dict, aliases: list, unit: str, grams: float, source: s
 
 
 async def _load(session: AsyncSession, source: str, rows: list[NutritionFood]) -> None:
+    """Insert the source's rows once. A shared food already in the catalogue under the same name (a web or model look-up
+    saved before the databank came: live 17 Oct, "Chilli paneer") keeps its row; the rest go in. A failure here never
+    fails the food save that called it (live 17-20 Oct: every log_food failed on that one name)."""
     n = await session.scalar(select(func.count()).select_from(NutritionFood).where(NutritionFood.source == source))
     if n or not rows:
         return
-    session.add_all(rows)
-    await session.flush()
+    have = {(a or "", b or "", c or "") for a, b, c in (await session.execute(select(
+        func.lower(NutritionFood.name), func.lower(NutritionFood.brand), func.lower(NutritionFood.restaurant)).where(
+        NutritionFood.family_id.is_(None)))).all()}
+    seen: set[tuple[str, str, str]] = set()
+    fresh = []
+    for r in rows:
+        key = (r.name.lower(), (r.brand or "").lower(), (r.restaurant or "").lower())
+        if key in have or key in seen:
+            continue
+        seen.add(key)
+        fresh.append(r)
+    if not fresh:
+        return
+    try:
+        async with session.begin_nested():
+            session.add_all(fresh)
+            await session.flush()
+    except IntegrityError:  # another turn loaded it at the same moment
+        logger.info("catalogue %s already loaded by another turn", source)
 
 
 async def ensure(session: AsyncSession) -> None:

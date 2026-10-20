@@ -484,6 +484,27 @@ def _told(ctx: tools.TurnCtx) -> str:
     return ""
 
 
+EMERGENCY_CHECK = (
+    "You read one WhatsApp message to an elder-care assistant. Answer only YES or NO: does it report a medical "
+    "emergency or an urgent health danger happening now to someone (a fall, chest pain, can't breathe, fainting, heavy "
+    "bleeding, a stroke sign, an overdose, a dangerous reading)? Rude, sexual, joking, past or improving things are NO.")
+
+
+async def is_emergency(text: str) -> bool:
+    """A fast model's yes or no. If the check cannot run, it counts as yes: an alert too many beats one missed."""
+    if not text.strip():
+        return False
+    if os.getenv("EMERGENCY_CHECK", "on").strip().lower() == "off":
+        return True  # tests that do not test this check: the word label alone alerts, as before
+    try:
+        out = await router.complete("judge_fast", system_stable=EMERGENCY_CHECK, effort="low", max_tokens=5, timeout_s=6,
+                                    messages=[{"role": "user", "content": [{"type": "text", "text": text[:600]}]}])
+    except Exception:  # noqa: BLE001
+        logger.warning("emergency check failed; alerting")
+        return True
+    return not (out.text or "").strip().upper().startswith("NO")
+
+
 async def cover_red_flag(ctx: tools.TurnCtx, situation: str) -> None:
     """A red-flag reading or a red-flag moment is logged and the caregiver is told, even when the draft skipped it."""
     alerted = any(a.get("ok") and a.get("tool") == "alert_caregiver" for a in ctx.actions)
@@ -492,9 +513,12 @@ async def cover_red_flag(ctx: tools.TurnCtx, situation: str) -> None:
         if action.get("ok") and action.get("tool") == "log_vital" and _json_result(action).get("red_flag"):
             vital_flag = str(_json_result(action)["red_flag"])
     logged = any(a.get("ok") and a.get("tool") in ("log_event", "log_vital") for a in ctx.actions)
-    if situation == "emergency" and not logged:
+    # The emergency label comes from words ("gir" matched "girls", live 19 Oct). When the draft itself did not alert,
+    # a fast model reads the message before code logs a symptom and alerts the family; a red-flag reading always does.
+    real = bool(vital_flag) or (situation == "emergency" and not alerted and await is_emergency(ctx.user_text or ""))
+    if situation == "emergency" and real and not logged:
         await tools.run(ctx, "log_event", {"kind": "symptom", "summary": (ctx.user_text or "symptom")[:160], "severity": "concern"})
-    if (vital_flag or situation == "emergency") and not alerted:
+    if real and not alerted:
         await tools.run(ctx, "alert_caregiver", {
             "reason": "red_flag", "issue": "red-flag",
             "message": (vital_flag or "A red flag was reported.")[:300], "confidence": 0.9,
@@ -1238,10 +1262,17 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
         asked = "?" in (req.text or "") or "？" in (req.text or "")
         sources = "\n".join([req.text or "", *tool_texts, *(str(x) for x in ctx.known)])
         sent = any(a.get("ok") and a.get("tool") == "send_message" for a in ctx.actions)
-        if asked and (guards.invented_clock(final or "", sources) or guards.quiet_unasked(final or "", situation=ctx.situation or "", sent=sent)):
-            # A clock they did not give, or a question about when to message with no time and no question back.
+        about_when = (ctx.situation or "") == "relay"  # they asked when to message or stay quiet
+        if asked and about_when and (guards.invented_clock(final or "", sources)
+                                     or guards.quiet_unasked(final or "", situation=ctx.situation or "", sent=sent)):
+            # A quiet time they did not give, or no time and no question back: ask for it (live 16 Oct: 10 PM to 7 AM).
             final = guards.ask_time(profile)
             replaced = True
+            guarded = True
+        elif guards.invented_clock(final or "", sources):
+            # Any other answer keeps everything but the sentence with the made-up time (live 17-19 Oct: "When should I
+            # stay quiet?" replaced answers about nutrition and a TV show).
+            final = guards.drop_invented_clocks(final or "", sources) or final
             guarded = True
         report = next((t for t in tool_texts if t.startswith("weekly_report:")), "")
         if report:
@@ -1270,6 +1301,16 @@ async def _run_turn(session: AsyncSession, host: ToolHost, req: TurnRequest, *, 
                 final = guards.missed_reminder_line(profile)
                 replaced = True
                 guarded = True
+
+    if not is_system and final and final != "none":
+        # A save that failed and was not done another way: never "saved" (live 17-20 Oct).
+        done = {a["tool"] for a in ctx.actions if a.get("ok")}
+        failed = {a["tool"] for a in ctx.actions if a.get("error") and a.get("tool") in WRITE_TOOLS} - done
+        if failed:
+            honest = guards.not_saved(final, ctx.profiles.get(req.speaker["id"]))
+            if honest != final:
+                logger.warning("save claimed but failed family=%s tools=%s", req.family_id, sorted(failed))
+                final, replaced, guarded = honest, True, True
 
     if not is_system and (not (final or "").strip() or (final or "").strip().lower() == "none"):
         final = guards.missed_reminder_line(ctx.profiles.get(req.speaker["id"])) if situation == "med_question" else ack_reply(ctx.profiles.get(req.speaker["id"]))

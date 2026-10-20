@@ -906,7 +906,7 @@ INJECTION = re.compile(
     re.I,
 )
 RED_FLAG_WORDS = re.compile(
-    r"\b(chest|seen[ae]|chh?aa?ti|heart|breath\w*|saans|fell|fall(en)?|gir\w*|unconscious|behosh|hosh|faint\w*|stroke|slurr\w*|droop\w*|numb\w*|paraly\w*|"
+    r"\b(chest|seen[ae]|chh?aa?ti|heart|breath\w*|saans|fell|fall(en)?|gir(?:a|i|e|na|ne|ta|ti|te|kar)?|unconscious|behosh|hosh|faint\w*|stroke|slurr\w*|droop\w*|numb\w*|paraly\w*|"
     r"bleed\w*|blood|khoon|vomit\w*|ulti|seizure|fits?|confus\w*|attack|dizz\w*|chakkar|severe|unbearable|bahut dard|overdose|"
     r"double dose|extra dose|two tablets|2 tablets|do goli|swell\w*|sujan|black stool|choking|burn\w*|hypo|shiver\w*|sweat\w*|paseena|"
     r"not responding|no response|unresponsive|not waking|isn'?t waking|won'?t wake|not breathing|jawab nahi|uth nahi|nahi uth|"
@@ -1348,6 +1348,36 @@ def already_on_record(profile: dict | None, what: str) -> str:
     return canned(profile, _SAME).format(what=what or "That")
 
 
+_NOT_SAVED = {
+    "english": "That did not save just now, so it is not in your record yet. Please tell me again in a little while.",
+    "indic": "Abhi yeh save nahi ho paya, isliye record mein nahi hai. Thodi der baad phir se bata dijiye.",
+    "devanagari": "अभी यह सेव नहीं हो पाया, इसलिए रिकॉर्ड में नहीं है। थोड़ी देर बाद फिर से बता दीजिए।",
+    "mr": "आत्ता हे सेव झालं नाही, त्यामुळे नोंदीत नाही. थोड्या वेळाने पुन्हा सांगा.",
+    "bengali": "এখন এটা সেভ হয়নি, তাই রেকর্ডে নেই। একটু পরে আবার বলবেন।",
+    "tamil": "இது இப்போது சேமிக்கப்படவில்லை, அதனால் பதிவில் இல்லை. சிறிது நேரம் கழித்து மீண்டும் சொல்லுங்கள்.",
+    "telugu": "ఇది ఇప్పుడు సేవ్ కాలేదు, అందుకే రికార్డులో లేదు. కాసేపటి తర్వాత మళ్ళీ చెప్పండి.",
+    "kannada": "ಇದು ಈಗ ಸೇವ್ ಆಗಲಿಲ್ಲ, ಹಾಗಾಗಿ ದಾಖಲೆಯಲ್ಲಿ ಇಲ್ಲ. ಸ್ವಲ್ಪ ಸಮಯದ ನಂತರ ಮತ್ತೆ ಹೇಳಿ.",
+    "malayalam": "ഇത് ഇപ്പോൾ സേവ് ആയില്ല, അതിനാൽ രേഖയിൽ ഇല്ല. കുറച്ച് കഴിഞ്ഞ് വീണ്ടും പറയൂ.",
+    "gujarati": "આ હમણાં સેવ થયું નહીં, એટલે રેકોર્ડમાં નથી. થોડી વાર પછી ફરી કહેજો.",
+    "gurmukhi": "ਇਹ ਹੁਣ ਸੇਵ ਨਹੀਂ ਹੋਇਆ, ਇਸ ਲਈ ਰਿਕਾਰਡ ਵਿੱਚ ਨਹੀਂ ਹੈ। ਥੋੜ੍ਹੀ ਦੇਰ ਬਾਅਦ ਫਿਰ ਦੱਸਣਾ।",
+    "odia": "ଏହା ଏବେ ସେଭ୍ ହେଲା ନାହିଁ, ତେଣୁ ରେକର୍ଡରେ ନାହିଁ। ଟିକେ ପରେ ପୁଣି କୁହନ୍ତୁ।",
+}
+# Her own words claiming a save (her reply, never what people wrote).
+_SAVE_CLAIM = re.compile(
+    r"\b(saved|logged|noted|recorded|added|updated|got it,? \d|save (?:kar|ho)\w*|log (?:kar|ho)\w*|note (?:kar|ho)\w*|"
+    r"likh (?:li|liya|diya)\w*|darj)\b|सेव|लिख (?:ली|लिया|दिया)|नोट कर|দিয়েছি|লিখে নিয়েছি|সেভ", re.I)
+
+
+def not_saved(reply: str, profile: dict | None) -> str:
+    """Her reply with every sentence that claims a save replaced by one honest line (a save failed and nothing was
+    saved; live 17-20 Oct: "Saved: 4 parathas…" when log_food had failed)."""
+    keep = [s for s in sentences(reply or "") if not _SAVE_CLAIM.search(s)]
+    line = canned(profile, _NOT_SAVED)
+    if len(keep) == len(sentences(reply or "")):
+        return reply
+    return " ".join([line, *keep]).strip()
+
+
 _NONE_SENT = {
     "english": "No reminder went out for that. I will not tell you to skip it or take an extra one.",
     "indic": "Uske liye koi reminder nahi gaya. Main skip karne ya extra lene ko nahi kahungi.",
@@ -1418,6 +1448,12 @@ def invented_clock(reply: str, sources: str) -> bool:
             if token not in src:
                 return True
     return False
+
+
+def drop_invented_clocks(reply: str, sources: str) -> str:
+    """Her reply without the sentences that name a clock time nobody gave (the rest of the answer stays)."""
+    keep = [s for s in sentences(reply or "") if not invented_clock(s, sources)]
+    return " ".join(keep).strip()
 
 
 def quiet_unasked(reply: str, *, situation: str, sent: bool) -> bool:

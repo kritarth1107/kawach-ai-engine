@@ -254,4 +254,6 @@ async def answer_pending(ctx: TurnCtx, a: dict) -> dict:
         result = {"raw": out[:300]}
     if err:
         ctx.confirmed_saves.discard(p["sig"])
-    return {"saved": not err, "what": p.get("what"), "for": p.get("for"), "result": result}
+        return {"saved": False, "what": p.get("what"), "for": p.get("for"), "result": result,
+                "next": "It was NOT saved (an error). Say plainly it did not save; never say saved, logged or noted."}
+    return {"saved": True, "what": p.get("what"), "for": p.get("for"), "result": result}

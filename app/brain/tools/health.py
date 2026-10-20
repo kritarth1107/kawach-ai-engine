@@ -286,17 +286,21 @@ async def _follow_up_alert(ctx: TurnCtx, a: dict) -> None:
     "no_answer (the elder did not answer a check that matters), safety (high-confidence mood or safety concern: "
     "confusion, a scam, an unusual or bulk order), approval (an order or booking needs their OK), crisis (any talk of "
     "suicide, self-harm, wanting to die, or harming or killing someone, even if it may be a joke or a test: the Kavach "
-    "care team is emailed at once too). Anything else goes to the dashboard. issue names the problem so the same issue "
-    "is sent once a day. The alert never goes to the person it is about; the result says who was told: say only that.",
+    "care team is emailed at once too). Else the dashboard. issue names the problem so the same issue "
+    "is sent once a day. Never sent to the person it is about; say only who the result says was told.",
     {
         "reason": {"type": "string", "enum": sorted(policy.ALERT_REASONS)},
         "issue": {"type": "string", "description": "Short stable name, e.g. 'fall-bathroom', 'bp-high', 'scam-call'"},
         "message": {"type": "string", "description": "What the caregiver reads: what happened, what you did, what they should do"},
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "about": {"type": "string", "description": "HOUSEHOLD id, blank: writer"},
     },
     ["reason", "issue", "message", "confidence"],
 )
 async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
+    # Whose emergency it is: the person named, else the one writing (live 19 Oct: a caregiver's own message was filed
+    # and sent as "Emergency alert from care recipient" about his mother). A scheduled turn keeps the care recipient.
+    who = ctx.own(a.get("about"))
     if ctx.told_by_tasks and a["reason"] != "red_flag":
         # cancel_task in this turn: the task system tells the caregivers about the order (one message each)
         raise ToolRefused("Not sent: the task system is telling the caregivers about this order right now, with what to do.")
@@ -305,7 +309,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
         if why:
             # Not an emergency: it goes to the dashboard as a note, never as a WhatsApp emergency.
             await store.record_event(
-                ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="alert_dashboard", summary=a["message"],
+                ctx.session, family_id=ctx.family_id, subject_id=who, kind="alert_dashboard", summary=a["message"],
                 payload={**a, "why": why, "downgraded": True}, actor_id=ctx.speaker.get("id"),
                 ref=policy.issue_ref("note", a["issue"], clock.ist_day()),
             )
@@ -313,7 +317,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
     decision = policy.alert_decision(a["reason"], float(a["confidence"]))
     ref = policy.issue_ref(a["reason"], a["issue"], clock.ist_day())
     fresh = await store.record_event(
-        ctx.session, family_id=ctx.family_id, subject_id=ctx.elder_id,
+        ctx.session, family_id=ctx.family_id, subject_id=who,
         kind="alert_whatsapp" if decision.whatsapp else "alert_dashboard",
         summary=a["message"], payload={**a, "why": decision.why}, actor_id=ctx.speaker.get("id"), ref=ref,
     )
@@ -323,7 +327,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
             # family was told about today
             from app.care import careteam
 
-            team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id, kind="crisis",
+            team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=who, kind="crisis",
                                          summary=a["message"], said=ctx.user_text, actor_id=ctx.speaker.get("id"))
             return {"sent": False, "why": "the family was told about this today already",
                     "told": guards.who_was_told(ctx.profiles.get(ctx.speaker.get("id")), team=team, already_today=True)}
@@ -333,9 +337,10 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
             "crisis": "crisis"}.get(a["reason"], "care_note")
     crisis = a["reason"] == "crisis"
     if a["reason"] == "red_flag":
+        # notify false: the caregivers get one WhatsApp, the notify_caregivers below (live 19 Oct: two for one red flag)
         await ctx.host.call(
-            "trigger_emergency_escalation", {"message": a["message"]},
-            family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+            "trigger_emergency_escalation", {"message": a["message"], "notify": False},
+            family_id=ctx.family_id, subject_id=who, actor_id=ctx.actor_id,
         )
     if decision.whatsapp and a["reason"] in ("red_flag", "safety", "crisis"):
         await _follow_up_alert(ctx, a)
@@ -346,7 +351,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
         "notify_caregivers",
         {"message": a["message"], "urgency": "high" if a["reason"] in ("red_flag", "crisis") else "medium",
          "kind": kind if decision.whatsapp else "care_note"},
-        family_id=ctx.family_id, subject_id=ctx.elder_id, actor_id=ctx.actor_id,
+        family_id=ctx.family_id, subject_id=who, actor_id=ctx.actor_id,
     )
     told = int((res or {}).get("notifiedCount") or 0)
     others = (res or {}).get("others")
@@ -355,7 +360,7 @@ async def alert_caregiver(ctx: TurnCtx, a: dict) -> dict:
     if crisis or (a["reason"] == "red_flag" and alone):
         from app.care import careteam
 
-        team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=ctx.elder_id,
+        team = await careteam.notify(ctx.session, ctx.host, family_id=ctx.family_id, subject_id=who,
                                      kind="crisis" if crisis else "emergency_alone", summary=a["message"], said=ctx.user_text,
                                      family_told=told, actor_id=ctx.speaker.get("id"))
     who = guards.who_was_told(
