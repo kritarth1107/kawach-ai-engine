@@ -633,3 +633,36 @@ async def admin_db_stats(session: DB) -> dict:
                 r[k] = float(v) if str(v).replace(".", "", 1).isdigit() else str(v)
     return {"database": db, "activity": {**stat, "cacheHitRatio": round(hit, 4)}, "connections": states, "waits": waits, "locks": locks,
             "tables": tables, "tableCount": count.get("tables", 0), "vectorIndexes": vectors, "unusedIndexes": unused, "extensions": ext}
+
+
+@router.get("/families/{family_id}/week")
+async def admin_family_week(family_id: str, session: DB, days: int = 7) -> dict:
+    """The family page's numbers from the conversation itself (turns), per person and per day: messages in, Saheli's
+    replies, messages she started, voice notes and photos, and when each person last wrote. Counts only, no text."""
+    from datetime import timedelta
+
+    from sqlalchemy import text as sql
+
+    from app.core import clock
+
+    since = clock.now() - timedelta(days=max(1, min(days, 90)))
+    rows = (await session.execute(sql("""
+        SELECT thread_id, role, (meta ? 'voice_confidence') AS voice, (coalesce(jsonb_array_length(CASE WHEN jsonb_typeof(meta->'images') = 'array' THEN meta->'images' END), 0) > 0) AS photo,
+               coalesce((meta->>'proactive')::boolean, false) AS proactive, to_char(at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day, count(*) AS n, max(at) AS last_at
+        FROM turns WHERE family_id = :f AND at >= :s AND thread_id <> 'saheli-scheduler' AND role IN ('user', 'assistant')
+        GROUP BY 1, 2, 3, 4, 5, 6"""), {"f": family_id, "s": since})).mappings().all()
+    last_in = (await session.execute(sql("""SELECT thread_id, max(at) AS at FROM turns WHERE family_id = :f AND role = 'user' AND thread_id <> 'saheli-scheduler'
+        GROUP BY 1"""), {"f": family_id})).mappings().all()
+    blank = {"messagesIn": 0, "replies": 0, "proactive": 0, "voiceNotes": 0, "photos": 0}
+    people: dict[str, dict] = {}
+    daily: dict[str, dict] = {}
+    total = dict(blank)
+    for r in rows:
+        n = int(r["n"])
+        keys = (["messagesIn"] + (["voiceNotes"] if r["voice"] else []) + (["photos"] if r["photo"] else [])) if r["role"] == "user" else (["proactive"] if r["proactive"] else ["replies"])
+        for target in (people.setdefault(r["thread_id"], dict(blank)), daily.setdefault(r["day"], dict(blank)), total):
+            for k in keys:
+                target[k] += n
+    for r in last_in:
+        people.setdefault(r["thread_id"], dict(blank))["lastInAt"] = r["at"].isoformat()
+    return {"days": days, "total": total, "people": people, "daily": [{"day": d, **v} for d, v in sorted(daily.items())]}
