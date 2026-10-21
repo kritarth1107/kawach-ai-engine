@@ -1186,3 +1186,18 @@ async def test_food_waiting_more_than_five_minutes_is_the_alarm_count(db, at, nf
     row.created_at = clock.now() - timedelta(minutes=6)
     await db.commit()
     assert await entries.pending_older_than(db, minutes=5) == 1
+
+
+@pytest.mark.asyncio
+async def test_two_days_come_back_day_by_day_with_empty_days_named(db):
+    """Live 21 Oct: 'today and yesterday's food diary' answered with yesterday only. Each day asked is its own section."""
+    from datetime import timedelta
+
+    from app.core import clock
+    from app.nutrition import report
+
+    today = clock.ist_day()
+    first = (clock.now() - timedelta(days=2)).astimezone(clock.IST).date().isoformat()
+    out = await report.for_brain(db, "fam-bd", "p-bd", first, today, what="entries", item=None, name="Asha")
+    assert [d["label"] for d in out["by_day"]][-2:] == ["yesterday", "today"]
+    assert all(d["what"] == "nothing logged" for d in out["by_day"]) and "answer_each_day" in out

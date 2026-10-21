@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -96,6 +96,13 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
         out["entries"] = [{**_entry_numbers(r.nutrients, pending=entries.numbers_pending(r)), "entry_id": str(r.id), "day": r.day,
                            "time": clock.ist(r.eaten_at).strftime("%H:%M"), "meal": r.meal, "what": entries.line(r),
                            "confidence": r.confidence} for r in rows][:60]
+        if len(days) > 1:
+            # Every day asked for, in order, with what was logged or that nothing was (live 21 Oct: "today and yesterday"
+            # came back as one flat list and the reply gave only yesterday). The reply covers each day here.
+            out["by_day"] = [{"day": d, "label": _day_label(d), "logged": len(by_day.get(d, [])),
+                              "what": [f"{clock.ist(r.eaten_at).strftime('%H:%M')} {r.meal or ''} {entries.line(r)}".strip() for r in by_day.get(d, [])]
+                              or "nothing logged"} for d in sorted(days)]
+            out["answer_each_day"] = "Cover every day in by_day, in order; say 'nothing logged' for a day with no entries."
     elif what == "counts":
         out["counts"] = entries.counters(rows, s)
         out["labels"] = {k: f"{v[0]} ({v[1]})" if v[1] else v[0] for k, v in entries.COUNTER_LABELS.items()}
@@ -134,6 +141,12 @@ async def for_brain(session: AsyncSession, family_id: str, subject_id: str, firs
 
 
 # ── the dashboard page ───────────────────────────────────────────────────────
+
+
+def _day_label(d: str) -> str:
+    today = clock.ist_day()
+    yday = (datetime.fromisoformat(today) - timedelta(days=1)).date().isoformat()
+    return "today" if d == today else "yesterday" if d == yday else datetime.fromisoformat(d).strftime("%a %d %b")
 
 
 def _carried(by_day: dict[str, list[NutritionEntry]], days: list[str], key: str) -> list[float]:
