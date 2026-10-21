@@ -45,6 +45,9 @@ ALLOWED = ("core.md", "reply.md", "memory.md", "nutrition.md", "order.md", "phot
 PROTECTED = re.compile(r"emergenc|crisis|suicid|self.?harm|ambulance|\b11[02]\b|\b108\b|alert|dose|overdose|insulin|dosage|mg\b|"
                        r"red.?flag|chest pain|stroke|faint|unconscious|bleed", re.I)
 MAX_ADDED = 600
+# Tool descriptions the trainer may edit too (founder 21 Oct): not tools about alerts, emergencies, doses, reminders, vitals.
+PROTECTED_TOOLS = re.compile(r"alert|emergenc|crisis|dose|reminder|vital|medic|escalat", re.I)
+TOOL = "tool:"
 PREFIX_TOKENS = 10000  # tests/test_gemini_prefix.py
 SKIP_KINDS = ("health", "safety", "crisis", "emergency", "medicine", "alert")  # kinds starting with these
 LABEL = "saheli-trainer"
@@ -62,6 +65,8 @@ Rules:
   case's people, food, places or words.
 - Prefer sharpening or replacing an existing sentence over adding a new one. Added text must be short and plain.
 - Never touch, add or remove text about emergencies, alerts, red flags, medicines or doses.
+- A wrong tool use (the wrong tool, a missing argument, misreading its result) is often fixed best in that tool's
+  description (file tool:<name>); how she talks and decides, in the instruction files.
 - "find" must be copied exactly from one file and appear in it once; "replace" is the new text for it (it may keep "find"
   and add after it).
 - If no instruction change can fix this (it is a code bug or the case itself is wrong), answer {{"skip": "<why>"}}.
@@ -93,7 +98,25 @@ class Edit:
 
 def originals() -> dict[str, str]:
     root = Path(__file__).resolve().parents[1] / PERSONA_DIR
-    return {f: (root / f).read_text() for f in ALLOWED}
+    out = {f: (root / f).read_text() for f in ALLOWED}
+    from app.brain.tools import base
+
+    for name, (spec, _fn) in sorted(base._TOOLS.items()):
+        if not PROTECTED_TOOLS.search(name):
+            out[f"{TOOL}{name}"] = spec.description
+    return out
+
+
+def tool_source(name: str) -> str | None:
+    """The repo path of the file that declares this tool (where a PR changes its description)."""
+    import inspect
+
+    from app.brain.tools import base
+
+    fn = base._TOOLS.get(name, (None, None))[1]
+    src = inspect.getsourcefile(fn) if fn else None
+    root = Path(__file__).resolve().parents[1]
+    return str(Path(src).resolve().relative_to(root)) if src else None
 
 
 def use_texts(texts: dict[str, str]) -> None:
@@ -106,6 +129,11 @@ def use_texts(texts: dict[str, str]) -> None:
         persona._BLOCKS[name] = texts[f"{name}.md"]
     persona.REPLY_FORMAT = texts["reply.md"]
     loop.REPLY_FORMAT = texts["reply.md"]
+    from app.brain.tools import base
+
+    for key, text in texts.items():
+        if key.startswith(TOOL) and key[len(TOOL):] in base._TOOLS:
+            base._TOOLS[key[len(TOOL):]][0].description = text
 
 
 def apply(texts: dict[str, str], edits: list[Edit]) -> dict[str, str]:
@@ -127,8 +155,15 @@ def prefix_tokens(texts: dict[str, str]) -> int:
 
 def lock(e: Edit, texts: dict[str, str], rejected: list[str]) -> str | None:
     """Why this edit may not be tried, or None."""
-    if e.file not in ALLOWED:
-        return f"{e.file} is not an instruction file the trainer may edit"
+    if e.file not in ALLOWED and not (e.file.startswith(TOOL) and e.file in texts):
+        return f"{e.file} is not an instruction file or editable tool description"
+    if e.file.startswith(TOOL):
+        src = tool_source(e.file[len(TOOL):])
+        code = (Path(__file__).resolve().parents[1] / src).read_text() if src else ""
+        if not src or code.count(e.find) != 1:
+            return "for a tool, the text to replace must sit on one line of its description in the source, once"
+        if any(ch in e.find + e.replace for ch in "\"\\\n{}"):
+            return "a tool description edit may not contain quotes, backslashes, braces or line breaks"
     if not e.find.strip() or texts[e.file].count(e.find) != 1:
         return "the text to replace is not in the file exactly once"
     if e.find == e.replace:
@@ -215,7 +250,7 @@ def _edit_tools():
     from app.llm.router import ToolSpec
 
     return [ToolSpec("propose_edit", "One exact edit to one instruction file.", {"type": "object", "properties": {
-                "file": {"type": "string", "enum": list(ALLOWED)}, "find": {"type": "string", "description": "exact text from that file, once"},
+                "file": {"type": "string", "description": "one of the FILE names, or tool:<name> for a TOOL description"}, "find": {"type": "string", "description": "exact text from that file, once"},
                 "replace": {"type": "string"}, "why": {"type": "string", "description": "one sentence"}}, "required": ["file", "find", "replace", "why"]}),
             ToolSpec("skip", "No instruction change can fix this.", {"type": "object", "properties": {"why": {"type": "string"}}, "required": ["why"]})]
 
@@ -227,7 +262,8 @@ async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts:
 
     avoid = ("The founder already rejected these changes; propose something different:\n" + "\n".join(f"- {r[:200]}" for r in rejected[:10])) if rejected else ""
     system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED), room=room(texts)) + "\nAnswer by calling propose_edit or skip."
-    files = "\n\n".join(f"=== FILE {f} ===\n{t}" for f, t in texts.items())
+    files = "\n\n".join(f"=== FILE {f} ===\n{t}" for f, t in texts.items() if not f.startswith(TOOL)) + "\n\nTOOLS (edit with file tool:<name>; " \
+        "only text that sits on one line of the description; no quotes):\n" + "\n".join(f"=== TOOL {f[len(TOOL):]} ===\n{t}" for f, t in texts.items() if f.startswith(TOOL))
     fails = "\n\n".join(brief(c, r) for c, r in failing)
     ask = f"FILES:\n{files}\n\nFAILURES:\n{fails}" + (f"\n\nYOUR EARLIER TRY THIS NIGHT:\n{feedback}" if feedback else "")
     why = ""
@@ -250,6 +286,26 @@ async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts:
                 return e
         ask += f"\n\nYOUR LAST EDIT COULD NOT BE USED: {why}. Call propose_edit once more with a corrected edit, or skip."
     return f"editor: {why}"
+
+
+TRIAGE = """You look at replay cases where Saheli, a WhatsApp care companion, still fails. Decide whether changing her written
+instructions or a tool's description could fix it, or whether it needs a code or data change (a tool returns the wrong
+data, a value is missing from what she is given, a check in code is wrong, the case itself is wrong). Answer only JSON:
+{"text_can_fix": true|false, "why": "<one sentence>", "where": "<for code: the likely tool, data or step>"}"""
+
+
+async def triage(kind: str, failing: list[tuple[dict, dict]], texts: dict[str, str]) -> dict:
+    """Wording or code? Code goes to the morning list instead of the editors (they cannot fix it and spend the budget)."""
+    from app.llm import router
+    from eval.family_sim import parse_json
+
+    try:
+        rep = await router.complete("learn", system_stable=TRIAGE, max_tokens=600, effort="low", timeout_s=90,
+                                    messages=[{"role": "user", "content": [{"type": "text", "text": "\n\n".join(brief(c, r) for c, r in failing)}]}])
+        g = parse_json(rep.text) or {}
+    except Exception as exc:  # noqa: BLE001 — unsure: let the editors try
+        return {"text_can_fix": True, "why": f"triage error: {str(exc)[:100]}"}
+    return {"text_can_fix": g.get("text_can_fix") is not False, "why": str(g.get("why") or "")[:300], "where": str(g.get("where") or "")[:200]}
 
 
 # ── GitHub (the kavach-trainer App) ──────────────────────────────────────────
@@ -315,7 +371,9 @@ class GitHub:
         """One commit on a new branch from master, then the pull request. The text is edited on master's copy."""
         ref = await self.call("GET", f"/repos/{REPO}/git/ref/heads/master")
         base = ref["object"]["sha"]  # type: ignore[index]
-        path = f"{PERSONA_DIR}/{e.file}"
+        path = tool_source(e.file[len(TOOL):]) if e.file.startswith(TOOL) else f"{PERSONA_DIR}/{e.file}"
+        if not path:
+            raise RuntimeError(f"no source file for {e.file}")
         cur = await self.call("GET", f"/repos/{REPO}/contents/{path}?ref={base}")
         text = base64.b64decode(cur["content"]).decode()  # type: ignore[index]
         if text.count(e.find) != 1:
@@ -427,6 +485,11 @@ async def night(argv: list[str]) -> dict:
                       "baseline": [_case_view(c, base.get(c["id"])) for c in group], "room": room(texts)}
         report["kinds"][kind] = info
         if not failing:
+            continue
+        tri = await triage(kind, failing, texts)
+        info["triage"] = tri
+        if not tri.get("text_can_fix", True):
+            report.setdefault("code_fixes", []).append({"kind": kind, "cases": [c["id"] for c, _ in failing], "why": tri.get("why"), "where": tri.get("where")})
             continue
         best: Edit | None = None
         tries = [(lane, "") for lane in LANES]

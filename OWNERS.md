@@ -2,7 +2,7 @@
 
 One owner reviews every change in an area. A commit that touches someone else's area carries
 `Reviewed-by: <owner>`. Every commit carries `Author-agent: <name>`. `scripts/owners_check.py` reads the table below.
-The nightly trainer (`Author-agent: Saheli Trainer`) may edit `app/brain/persona/` without the owner's trailer: the founder
+The nightly trainer (`Author-agent: Saheli Trainer`) may edit `app/brain/persona/` and tool descriptions in `app/brain/tools/` without the owner's trailer: the founder
 reviews and merges its pull request. Merge commits are not checked; their commits are.
 
 ```owners

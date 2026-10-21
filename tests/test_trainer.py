@@ -110,3 +110,30 @@ def test_replay_copies_keep_their_time_and_do_not_crash_on_bare_patterns():
 
 def test_the_editor_hears_how_much_room_is_left(texts):
     assert "characters of room" in trainer.room(texts)
+
+
+def test_tool_descriptions_are_editable_on_one_source_line_but_not_safety_tools(texts):
+    """Founder 21 Oct: the trainer may change a tool's description too (not alerts, emergencies, doses, reminders)."""
+    from pathlib import Path
+
+    assert not any(k.startswith("tool:") and trainer.PROTECTED_TOOLS.search(k) for k in texts)
+    assert "tool:alert_caregiver" not in texts and "tool:log_dose" not in texts
+    root = Path(trainer.__file__).resolve().parents[1]
+    for key, desc in texts.items():
+        if not key.startswith("tool:"):
+            continue
+        src = (root / trainer.tool_source(key[5:])).read_text()
+        chunk = next((desc[i:i + 40] for i in range(0, max(1, len(desc) - 40), 20)
+                      if src.count(desc[i:i + 40]) == 1 and desc.count(desc[i:i + 40]) == 1 and not trainer.PROTECTED.search(desc[i:i + 40])
+                      and not any(ch in desc[i:i + 40] for ch in "\"\\\n{}")), None)
+        if chunk:
+            break
+    assert chunk, "some tool description has a plain chunk"
+    assert trainer.lock(Edit(key, chunk, chunk + " Check the dates asked", "", "knowledge"), texts, []) is None
+    assert "quotes" in trainer.lock(Edit(key, chunk, chunk + ' say "x"', "", "knowledge"), texts, [])
+    from app.brain.tools import base
+
+    trainer.use_texts(trainer.apply(texts, [Edit(key, chunk, chunk + " TRAINER-TOOL-MARK", "", "knowledge")]))
+    assert "TRAINER-TOOL-MARK" in base._TOOLS[key[5:]][0].description
+    trainer.use_texts(texts)
+    assert "TRAINER-TOOL-MARK" not in base._TOOLS[key[5:]][0].description

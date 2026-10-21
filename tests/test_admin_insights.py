@@ -53,3 +53,22 @@ async def test_every_insight_route_answers_with_counts_only(db):
 
     o = await admin.insights_orders(db, days=7)
     assert o["stores"][0]["service"] == "blinkit" and o["failCodes"][0] == ("not_deliverable", 1)
+
+
+@pytest.mark.asyncio
+async def test_a_reported_reply_becomes_one_anonymised_open_case(db):
+    from app.learn.models import ReplyLog
+    from app.quality.models import ReplayCase
+    from sqlalchemy import select
+
+    await store.save_roster(db, "fam-report", {"id": "e1", "name": "Savitri"}, [{"id": "c1", "name": "Arjun", "role": "primary caregiver"}])
+    db.add(ReplyLog(family_id="fam-report", thread_id="c1", at=clock.now(), kind="reply", situation="chat", speaker_role="caregiver",
+                    user_text="aaj aur kal ka food diary", text="Kal: chawal, dal", tools=[]))
+    await db.flush()
+    body = admin.ReportReplyIn(family_id="fam-report", contains="chawal", note="Asked for today and yesterday; gave only yesterday.")
+    out = await admin.admin_case_from_reply(body, db)
+    assert out["created"] is True
+    again = await admin.admin_case_from_reply(body, db)
+    assert again["created"] is False
+    case = (await db.execute(select(ReplayCase).where(ReplayCase.source == "founder"))).scalars().one()
+    assert case.status == "open" and case.anonymised and "Savitri" not in str(case.context)

@@ -923,3 +923,47 @@ async def insights_orders(session: DB, days: int = 60) -> dict:
         s["codes"] = s["codes"].most_common(6)
         out.append(s)
     return {"days": days, "stores": sorted(out, key=lambda x: -x["total"]), "failCodes": codes.most_common(15), "daily": sorted(daily.values(), key=lambda x: x["day"])}
+
+
+class ReportReplyIn(BaseModel):
+    family_id: str = Field(min_length=4, max_length=80)
+    contains: str = Field(default="", max_length=200)  # part of Saheli's reply, to find it
+    reply_id: int | None = None
+    note: str = Field(min_length=8, max_length=600)  # what was wrong and what should have happened
+    kind: str = Field(default="", max_length=40)
+
+
+@router.post("/replay-cases/from-reply")
+async def admin_case_from_reply(body: ReportReplyIn, session: DB) -> dict:
+    """A bad reply the team reports (founder 21 Oct: "turn bugs I report into cases straight away"): the reply is found
+    (by id, or by a part of its text in the last 14 days), its moment is snapshotted and anonymised like every other
+    case, and it becomes an open replay case the nightly trainer and every deploy see."""
+    from datetime import timedelta
+
+    from app.care.models import FamilyRoster
+    from app.core import clock
+    from app.learn.models import ReplyLog
+    from app.quality import replay, snapshot
+
+    q = select(ReplyLog).where(ReplyLog.family_id == body.family_id)
+    if body.reply_id:
+        q = q.where(ReplyLog.id == body.reply_id)
+    elif body.contains.strip():
+        q = q.where(ReplyLog.at >= clock.now() - timedelta(days=14), ReplyLog.text.ilike(f"%{body.contains.strip()}%"))
+    else:
+        raise HTTPException(400, "give reply_id or part of the reply's text")
+    rows = list((await session.execute(q.order_by(ReplyLog.at.desc()).limit(3))).scalars())
+    if not rows:
+        raise HTTPException(404, "no reply found")
+    r = rows[0]
+    roster = await session.get(FamilyRoster, r.family_id)
+    if roster is None:
+        raise HTTPException(404, "family not found")
+    snap = await snapshot.take(session, roster, r.thread_id, r.at, message=r.user_text, speaker_role=r.speaker_role, trace=r.trace, kind=r.kind)
+    kind = (body.kind.strip() or "founder_report")[:40]
+    made = await replay.add_snapshot(session, source="founder", source_ref=f"founder:reply:{r.id}", kind=kind, day=clock.ist(r.at).strftime("%Y-%m-%d"),
+                                     snap=snap, message=r.user_text, bad_reply=r.text, assertion=[{"type": "grounded"}],
+                                     rubric=f"Reported by the Kavach team: {body.note.strip()}", family_id=r.family_id, subject_id=r.thread_id, thread_id=r.thread_id)
+    await session.commit()
+    return {"created": bool(made), "replyId": r.id, "at": r.at.isoformat(), "kind": kind, "matches": len(rows),
+            "note": None if made else "a case for this reply already exists"}

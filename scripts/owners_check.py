@@ -38,7 +38,7 @@ def owner_of(path: str, rows: list[tuple[str, str]]) -> str | None:
 
 # An author whose changes to these paths are reviewed on the pull request by the founder, not by the owner: the nightly
 # trainer (eval/trainer.py) may only edit Saheli's instruction text, and its PR is merged by the founder.
-DELEGATES = {"Saheli Trainer": ("app/brain/persona/",)}
+DELEGATES = {"Saheli Trainer": ("app/brain/persona/", "app/brain/tools/")}
 
 
 def needed(files: list[str], message: str, rows: list[tuple[str, str]]) -> list[str]:
