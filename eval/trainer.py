@@ -220,7 +220,7 @@ def _edit_tools():
             ToolSpec("skip", "No instruction change can fix this.", {"type": "object", "properties": {"why": {"type": "string"}}, "required": ["why"]})]
 
 
-async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts: dict[str, str], rejected: list[str]) -> Edit | str:
+async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts: dict[str, str], rejected: list[str], feedback: str = "") -> Edit | str:
     """One edit from this lane's editor; when it is unusable or locked, the editor hears why and gets one more try."""
     from app.llm import router
     from eval.family_sim import parse_json
@@ -229,9 +229,9 @@ async def propose(lane: str, kind: str, failing: list[tuple[dict, dict]], texts:
     system = EDITOR.format(lane=LANES[lane], avoid=avoid, files=", ".join(ALLOWED), room=room(texts)) + "\nAnswer by calling propose_edit or skip."
     files = "\n\n".join(f"=== FILE {f} ===\n{t}" for f, t in texts.items())
     fails = "\n\n".join(brief(c, r) for c, r in failing)
-    ask = f"FILES:\n{files}\n\nFAILURES:\n{fails}"
+    ask = f"FILES:\n{files}\n\nFAILURES:\n{fails}" + (f"\n\nYOUR EARLIER TRY THIS NIGHT:\n{feedback}" if feedback else "")
     why = ""
-    for _ in range(2):
+    for _ in range(3):
         try:
             rep = await router.complete("learn", system_stable=system, messages=[{"role": "user", "content": [{"type": "text", "text": ask}]}],
                                         tools=_edit_tools(), max_tokens=6000, effort="medium", timeout_s=180)
@@ -392,7 +392,7 @@ async def night(argv: list[str]) -> dict:
         await gh.login()
         busy, rejected = await gh.trainer_prs()
     report: dict = {"day": day, "dry_run": dry, "kinds": {}, "prs": [], "notes": [], "cap_inr": cap, "busy_kinds": sorted(busy),
-                    "rejected_before": len(rejected), "phases": {}, "settings": {"groups": int(os.getenv("TRAINER_GROUPS", "3")),
+                    "rejected_before": len(rejected), "phases": {}, "settings": {"groups": int(os.getenv("TRAINER_GROUPS", "8")),
                     "per_kind": int(os.getenv("TRAINER_PER_KIND", "3")), "regression_max": int(os.getenv("TRAINER_REGRESSION_MAX", "40")),
                     "max_added": MAX_ADDED, "prefix_limit": PREFIX_TOKENS, "files": list(ALLOWED), "model": "gemini-3.5-flash (kavach-eval-1015)"}}
     t0 = time.monotonic()
@@ -406,7 +406,7 @@ async def night(argv: list[str]) -> dict:
             open_kinds[str(c.get("kind") or "other")] += 1
     report["cases"] = {"total": len(cases), "open": sum(open_kinds.values()), "fixed": sum(1 for c in cases if c.get("status") == "fixed"),
                        "open_by_kind": dict(sorted(open_kinds.items(), key=lambda kv: -kv[1]))}
-    groups = pick(cases, groups=int(os.getenv("TRAINER_GROUPS", "3")), per=int(os.getenv("TRAINER_PER_KIND", "3")), kinds=kinds, busy=busy)
+    groups = pick(cases, groups=int(os.getenv("TRAINER_GROUPS", "8")), per=int(os.getenv("TRAINER_PER_KIND", "3")), kinds=kinds, busy=busy)
     report["chosen"] = {k: [c["id"] for c in v] for k, v in groups.items()}
     report["phases"]["load_s"] = round(time.monotonic() - t0)
     texts = originals()
@@ -429,8 +429,12 @@ async def night(argv: list[str]) -> dict:
         if not failing:
             continue
         best: Edit | None = None
-        for lane in LANES:
-            e = await propose(lane, kind, failing, texts, rejected)
+        tries = [(lane, "") for lane in LANES]
+        while tries:
+            lane, feedback = tries.pop(0)
+            if left() < cap * 0.2:
+                break
+            e = await propose(lane, kind, failing, texts, rejected, feedback)
             if isinstance(e, str):
                 info["tried"].append({"lane": lane, "result": e, "spent_inr": round(spend.process_spent(), 2)})
                 continue
@@ -449,6 +453,11 @@ async def night(argv: list[str]) -> dict:
                                   "spent_inr": round(spend.process_spent(), 2)})
             if e.fixed and not broke and (best is None or (len(e.fixed), -len(e.replace)) > (len(best.fixed), -len(best.replace))):
                 best = e
+            elif not feedback:  # Harness² step: the editor sees what its edit did and tries once more
+                seen = "\n".join(f"- {c['id']}: reply now {_reply(probe.get(c['id']))[:200]!r}; still fails because {str(((probe.get(c['id']) or {}).get('runs') or [{}])[-1].get('why') or '')[:200]}"
+                                  for c, _ in failing)
+                tries.append((lane, f"You changed {e.file}: {e.find[:160]!r} -> {e.replace[:240]!r}. Result: fixed {len(e.fixed)}, broke {len(broke)}.\n{seen}\n"
+                                    "Propose a different edit that addresses why it still fails (another file or wording), or skip."))
         if best:
             kept.append(best)
             info["kept"] = best.lane
